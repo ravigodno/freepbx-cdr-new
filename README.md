@@ -25,7 +25,7 @@
 ### Шаг 1: Клонирование и подготовка
 Перейдите в директорию, где будет размещаться проект, и скачайте исходные файлы:
 ```bash
-git clone <url-репозитория> /opt/asterisk-cdr-panel
+git clone https://github.com/ravigodno/freepbx-cdr-new.git /opt/asterisk-cdr-panel
 cd /opt/asterisk-cdr-panel
 ```
 
