@@ -1,0 +1,6 @@
+{
+  "name": "FreePBX CDR Missed Calls Dashboard",
+  "description": "Удобный веб-интерфейс для просмотра истории вызовов и детального отслеживания пропущенных звонков FreePBX / Asterisk CDR с поддержкой обработки и комментирования.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
