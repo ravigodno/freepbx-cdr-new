@@ -73,6 +73,10 @@ npm install
 
 # Компиляция Typescript сервера и сборка фронтенда React/Vite
 npm run build
+
+# 3.1 При потребности обнорвления
+cd /opt/asterisk-cdr-panel && git pull && npm install && npm run build
+
 ```
 
 ---
