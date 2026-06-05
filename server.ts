@@ -1485,11 +1485,20 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
 
       if (isIncomingMissed) {
         missedCalls++;
-        // "Обработанные" means missed call that was either called back within KPI SLA or manually marked as processed
-        if (c.wasKpiResolved || c.processed) {
+
+        const kpiMinutes = localDb.settings && localDb.settings.callbackKpiMinutes !== undefined
+          ? Number(localDb.settings.callbackKpiMinutes)
+          : 60;
+
+        const callTime = new Date(c.calldate).getTime();
+        const slaExpired = Number.isFinite(callTime) && (Date.now() - callTime) > kpiMinutes * 60 * 1000;
+
+        const isHandled = c.processed || c.wasCallbacked || c.wasKpiResolved;
+
+        if (isHandled) {
           processedCalls++;
-        } else {
-          lostCalls++; // "Потерянные" means missed call NOT answered within KPI and NOT manually marked processed
+        } else if (slaExpired) {
+          lostCalls++;
         }
       }
     });

@@ -1304,7 +1304,7 @@ export default function App() {
               </div>
 
               {/* Обработанные */}
-              <div className="bg-white border border-emerald-100 rounded-xl p-4 flex flex-col justify-between shadow-sm hover:shadow-md transition-shadow" title="Входящие пропущенные, которые перезвонены вовремя по KPI или закрыты вручную">
+              <div className="bg-white border border-emerald-100 rounded-xl p-4 flex flex-col justify-between shadow-sm hover:shadow-md transition-shadow" title="Обработанные = есть отзвон или вручную отмечен обработанным, даже если SLA превышен.">
                 <span className="text-xs text-emerald-600 font-semibold tracking-wide flex items-center gap-1">
                   Обработанные
                 </span>
@@ -1319,7 +1319,7 @@ export default function App() {
               </div>
 
               {/* Потерянные */}
-              <div className="bg-white border border-amber-150 rounded-xl p-4 flex flex-col justify-between shadow-sm hover:shadow-md transition-shadow" title="Входящие пропущенные, по которым не совершен звонок клиента/оператора за регламентный срок">
+              <div className="bg-white border border-amber-150 rounded-xl p-4 flex flex-col justify-between shadow-sm hover:shadow-md transition-shadow" title="Потерянные = пропущенные + SLA уже истёк + нет отзвона + не обработан вручную.">
                 <span className="text-xs text-amber-650 font-semibold tracking-wide">Потерянные</span>
                 <div className="mt-2 flex items-baseline justify-between">
                   {isLoadingStats ? (
