@@ -1,205 +1,430 @@
-# Инструкция по установке и настройке панели пропущенных вызовов (Asterisk / FreePBX CDR)
+# FreePBX CDR Panel
 
-Настоящее руководство описывает процесс установки, конфигурации и развертывания веб-панели управления пропущенными вызовами и контроля качества обработки звонков для АТС Asterisk / FreePBX.
-
-Приложение включает в себя:
-1. **Интерактивный CDR-лог:** отображение лога звонков с умной группировкой, фильтрацией и возможностью прослушивания записей разговоров.
-2. **Алгоритм автоматического контроля:** автораспознавание перезвоненных клиентов (как исходящих звонков операторов на мобильный клиента, так и повторных входящих успешных звонков от клиента) с сопоставлением по таймфрейму KPI SLA.
-3. **Click-To-Call (Звонок в один клик):** инициирование звонка со стороны оператора через Asterisk AMI (сначала звонит аппарат оператора, затем идет дозвон клиенту).
-4. **Интегрированный телефонный справочник:** удобное управление именами клиентов и внутренними номерами сотрудников компании. Возможность добавления номера в справочник прямо из списка звонящих в 1 клик.
-5. **Статистика KPI и SLA:** дашборд реального времени для контроля доли пропущенных звонков, среднего времени отзвона и процента реагирования в рамках SLA.
+Панель контроля пропущенных вызовов, обработки обращений клиентов, Click-to-Call через Asterisk AMI и прослушивания записей разговоров для FreePBX / Asterisk.
 
 ---
 
-## 1. Системные требования
+# Возможности системы
 
-* **Серверная ОС:** Ubuntu 20.04/22.04 LTS, Debian 11/12 или CentOS/AlmaLinux.
-* **Среда выполнения:** Node.js версии **18.x** или **20.x** и менеджер пакетов npm.
-* **База данных CDR:** Доступ (только чтение) к СУБД MySQL/MariaDB, на которой хранятся таблицы Asterisk CDR (по умолчанию база `asteriskcdrdb`).
-* **АТС:** Доступ к Asterisk AMI порту (обычно `5038`) для функции Click-To-Call.
+* Контроль пропущенных вызовов.
+* Автоматическое определение успешного перезвона клиенту.
+* SLA-контроль времени реакции операторов.
+* Статистика KPI отдела продаж.
+* Прослушивание записей разговоров.
+* Click-To-Call через Asterisk AMI.
+* Телефонный справочник клиентов и сотрудников.
+* Назначение ответственных за обработку пропущенных вызовов.
+* Комментарии к звонкам.
+* Разделение ролей Администратор / Оператор.
 
 ---
 
-## 2. Пошаговая установка приложения
+# Проверенная конфигурация
 
-### Шаг 1: Клонирование и подготовка
-Перейдите в директорию, где будет размещаться проект, и скачайте исходные файлы:
+Система успешно протестирована на:
+
+* FreePBX 16
+* FreePBX 17
+* Asterisk 18+
+* Sangoma Linux 7
+* MariaDB
+* Node.js 16.20.2
+* npm 8.19.4
+* PM2
+
+---
+
+# Установка
+
+## Клонирование проекта
+
 ```bash
-git clone <url-репозитория> /opt/asterisk-cdr-panel
+git clone https://github.com/ravigodno/freepbx-cdr-new.git /opt/asterisk-cdr-panel
+
 cd /opt/asterisk-cdr-panel
 ```
 
-### Шаг 2: Настройка переменных окружения
-Создайте файл `.env`, скопировав его из шаблона:
+---
+
+## Настройка файла окружения
+
+Создайте рабочий файл настроек:
+
 ```bash
 cp .env.example .env
 ```
 
-Отредактируйте параметры в файле `.env` под вашу конфигурацию:
-```env
-# Параметры подключения к MySQL (MariaDB) базе CDR Asterisk
-FREEPBX_DB_HOST="127.0.0.1"
-FREEPBX_DB_PORT="3306"
-FREEPBX_DB_NAME="asteriskcdrdb"
-FREEPBX_DB_USER="asterisk_cdr_ro"
-FREEPBX_DB_PASSWORD="your_secure_password"
+Отредактируйте:
 
-# Путь к записям разговоров на локальном диске (например, Centos/FreePBX)
-RECORDINGS_PATH="/var/spool/asterisk/monitor"
-
-# Префикс URL для прямого прослушивания записей через веб-прокси (если настроено)
-RECORDINGS_URL_PREFIX=""
-
-# Режим демонстрации (генерация виртуальных звонков, если нет доступа к реальной АТС)
-# Для реальной работы установите значение "false"
-DEMO_MODE="false"
-
-# Учетные записи для доступа в веб-интерфейс панели
-ADMIN_USERNAME="admin"
-ADMIN_PASSWORD="secure_admin_password_here"
-
-OPERATOR_USERNAME="operator"
-OPERATOR_PASSWORD="secure_operator_password_here"
-
-# Порт, на котором будет запущено приложение
-PORT="3000"
+```bash
+nano .env
 ```
 
-### Шаг 3: Установка зависимостей и сборка
-Установите необходимые пакеты Node.js и соберите оптимизированную сборку:
-```bash
-# Установка NPM-пакетов
-npm install
+Пример рабочей конфигурации:
 
-# Компиляция Typescript сервера и сборка фронтенда React/Vite
-npm run build
+```env
+FREEPBX_DB_HOST="localhost"
+FREEPBX_DB_PORT="3306"
+FREEPBX_DB_NAME="asteriskcdrdb"
+FREEPBX_DB_USER="cdrviewer"
+FREEPBX_DB_PASSWORD="YOUR_PASSWORD"
+
+RECORDINGS_PATH="/var/spool/asterisk/monitor"
+RECORDINGS_URL_PREFIX=""
+
+DEMO_MODE="false"
+
+ADMIN_USERNAME="admin"
+ADMIN_PASSWORD="admin"
+
+OPERATOR_USERNAME="operator"
+OPERATOR_PASSWORD="operator"
+
+PORT="3000"
 ```
 
 ---
 
-## 3. Интеграция с Asterisk и FreePBX
+# Настройка MariaDB
 
-### А. Настройка безопасного доступа к базе данных CDR
-Для работы веб-панели требуется только чтение таблицы `cdr`. Создайте в MariaDB безопасного пользователя с ограниченными правами. Зайдите в консоль MySQL под администратором:
+Войдите в MariaDB:
+
 ```bash
-mysql -u root -p
+mysql -u root
 ```
-Выполните следующие SQL-запросы:
+
+Создайте пользователя только для чтения:
+
 ```sql
--- Создание пользователя, доступного с IP-адреса веб-панели (замените IP или укажите localhost)
-CREATE USER 'asterisk_cdr_ro'@'localhost' IDENTIFIED BY 'your_secure_password';
+CREATE USER IF NOT EXISTS 'cdrviewer'@'localhost'
+IDENTIFIED BY 'YOUR_PASSWORD';
 
--- Предоставление прав ТОЛЬКО на чтение (SELECT) таблицы cdr
-GRANT SELECT ON asteriskcdrdb.cdr TO 'asterisk_cdr_ro'@'localhost';
+GRANT SELECT ON asteriskcdrdb.* TO 'cdrviewer'@'localhost';
+GRANT SELECT ON asterisk.* TO 'cdrviewer'@'localhost';
 
--- Применение изменений прав
 FLUSH PRIVILEGES;
-EXIT;
 ```
 
-### Б. Настройка Asterisk AMI (Click-To-Call)
-Для работы функции инициации звонка прямо из интерфейса (Click-To-Call), отредактируйте файл конфигурации Asterisk Manager Interface `/etc/asterisk/manager.conf` (или создайте файл `/etc/asterisk/manager_custom.conf` в FreePBX) и добавьте секцию нового пользователя:
+Проверка подключения:
+
+```bash
+mysql -u cdrviewer -p asteriskcdrdb
+```
+
+---
+
+# Настройка Asterisk AMI
+
+Создайте пользователя AMI:
+
+```bash
+nano /etc/asterisk/manager_custom.conf
+```
+
+Пример:
 
 ```ini
-[clicktocall]
-secret = your_ami_secret_key_123
+[999]
+secret = YOUR_AMI_PASSWORD
+
 deny = 0.0.0.0/0.0.0.0
-permit = 127.0.0.1/255.255.255.255  ; Ограничьте IP-адресом сервера веб-панели
-read = system,call,user
-write = system,call,originate
+
+permit = 127.0.0.1/255.255.255.255
+permit = 192.168.1.7/255.255.255.255
+
+read = all
+write = all
 ```
 
-После редактирования примените настройки в консоли Asterisk:
+Примените настройки:
+
 ```bash
 asterisk -rx "manager reload"
 ```
 
-При первом использовании данной функции в веб-панели перейдите в раздел **Настройки (доступно под учетной записью Админа)** и укажите параметры AMI-подключения (Хост, Порт, Имя пользователя `clicktocall` и Пароль).
+Проверка:
 
----
-
-## 4. Настройка раздачи и прослушивания записей разговоров
-
-Полноценное прослушивание через веб-интерфейс требует веб-доступа к медиафайлам разговоров. Существует два основных способа настроить прослушивание записей:
-
-### Вариант А: Использование встроенного в приложение стриминга
-Северная часть приложения имеет встроенный стриминг аудиозаписей по API (маршрут `/api/recordings/play?file=...`). Приложение ищет аудиофайлы на диске по пути, указанному в `.env` (параметр `RECORDINGS_PATH`), и напрямую отдает их в браузер.
-* **Плюсы:** Не требуется сторонняя конфигурация веб-серверов.
-* **Что нужно:** Убедиться, что системный пользователь, от лица которого запускается Node.js-приложение, имеет права на чтение директории `/var/spool/asterisk/monitor/` и вложенных файлов.
-  ```bash
-  # Разрешаем группе asterisk / другим пользователям чтение (пример настройки прав)
-  chmod -R o+r /var/spool/asterisk/monitor/
-  ```
-
-### Вариант Б: Использование внешнего Nginx для проксирования
-Если вы хотите снизить нагрузку на Node.js и отдавать файлы силами высокопроизводительного Nginx, добавьте следующую конструкцию в секцию вашего сервера Nginx:
-
-```nginx
-location /asterisk-monitor/ {
-    alias /var/spool/asterisk/monitor/;
-    autoindex off;
-    
-    # Рекомендуется ограничить доступ по IP-адресам внутренней сети
-    allow 192.168.0.0/16;
-    allow 10.0.0.0/8;
-    deny all;
-    
-    # Добавление необходимых заголовков CORS
-    add_header Access-Control-Allow-Origin *;
-}
+```bash
+printf "Action: Login\r\nUsername: 999\r\nSecret: YOUR_AMI_PASSWORD\r\n\r\n" | nc 127.0.0.1 5038
 ```
-В настройках панели (раздел администрирования в UI) или в файле `.env` укажите префикс URL:
-`RECORDINGS_URL_PREFIX="http://<your-asterisk-ip>/asterisk-monitor"`
+
+Ожидаемый результат:
+
+```text
+Response: Success
+Message: Authentication accepted
+```
 
 ---
 
-## 5. Запуск приложения в промышленную эксплуатацию (PM2)
+# Установка зависимостей
 
-Для обеспечения непрерывной фоновой работы приложения, мониторинга памяти и автоматического перезапуска при сбоях или перезагрузке сервера, рекомендуется использовать менеджер процессов **PM2**.
+```bash
+npm install --legacy-peer-deps
+```
 
-1. Установите PM2 глобально в систему:
-   ```bash
-   npm install -y -g pm2
-   ```
+Проверенные версии:
 
-2. Запустите приложение из корневой директории проекта:
-   ```bash
-   NODE_ENV=production pm2 start dist/server.cjs --name "asterisk-cdr-panel"
-   ```
+```text
+vite 4.5.14
+tailwindcss 3.4.19
+```
 
-3. Настройте сохранение списка процессов и автозапуск PM2 при старте операционной системы:
-   ```bash
-   pm2 save
-   pm2 startup
-   ```
-   *(Скопируйте и выполните предложенную системную команду `sudo systemctl enable pm2-...`)*
+Проверка:
 
-4. Полезные команды управления процессом:
-   ```bash
-   # Посмотреть статус и потребление ресурсов
-   pm2 status
-   
-   # Чтение логов в реальном времени
-   pm2 logs asterisk-cdr-panel
-   
-   # Перезапуск приложения (например, после обновления кода)
-   pm2 restart asterisk-cdr-panel
-   ```
+```bash
+npm list vite
+npm list | grep tailwind
+```
 
 ---
 
-## 6. Решение возможных проблем
+# Сборка проекта
 
-### Ошибка подключения к базе данных ("MySQL connection timeout")
-1. Убедитесь, что IP-адрес сервера с веб-панелью разрешен в конфигурационном файле MariaDB (`/etc/mysql/mariadb.conf.d/50-server.cnf` или `/etc/my.cnf.d/server.cnf` параметр `bind-address`).
-2. Проверьте сетевой доступ утилитой `telnet`: `telnet <IP-сервера-БД> 3306`.
-3. Убедитесь, что фаервол сервера Asterisk/FreePBX (iptables / firewalld / ufw) пропускает запросы на порт 3306 с хоста веб-приложения.
+```bash
+npm run build
+```
 
-### Функция Click-To-Call выдает ошибку AMI "Connection refused"
-1. Проверьте, включен ли Asterisk Manager в файле `/etc/asterisk/manager.conf` (`enabled = yes`).
-2. Убедитесь, что порт `5038` слушает на внешних интерфейсах или на нужном IP-адресе АТС.
-3. Проверьте правильность логина и пароля пользователя AMI.
+После успешной сборки должны появиться файлы:
+
+```bash
+dist/index.html
+dist/assets/*.js
+dist/assets/*.css
+```
+
+Проверка CSS:
+
+```bash
+ls -lh dist/assets/*.css
+```
+
+Размер CSS обычно составляет около 30 КБ.
 
 ---
 
-Разработано как производительное и надежное решение для отделов продаж и клиентской поддержки на базе АТС Asterisk. Позволяет свести упущенные входящие звонки к нулю!
+# Запуск через PM2
+
+Запуск:
+
+```bash
+NODE_ENV=production pm2 start npm --name "asterisk-cdr-panel" -- start
+```
+
+Сохранение конфигурации:
+
+```bash
+pm2 save
+```
+
+Настройка автозапуска:
+
+```bash
+pm2 startup
+```
+
+Выполните команду, которую предложит PM2.
+
+После этого:
+
+```bash
+pm2 save
+```
+
+---
+
+# Управление приложением
+
+Статус:
+
+```bash
+pm2 status
+```
+
+Просмотр логов:
+
+```bash
+pm2 logs asterisk-cdr-panel
+```
+
+Перезапуск:
+
+```bash
+pm2 restart asterisk-cdr-panel
+```
+
+Остановка:
+
+```bash
+pm2 stop asterisk-cdr-panel
+```
+
+Удаление процесса:
+
+```bash
+pm2 delete asterisk-cdr-panel
+```
+
+---
+
+# Обновление приложения
+
+```bash
+cd /opt/asterisk-cdr-panel
+
+git pull
+
+npm install --legacy-peer-deps
+
+npm run build
+
+pm2 restart asterisk-cdr-panel --update-env
+```
+
+---
+
+# Записи разговоров
+
+Путь к записям:
+
+```env
+RECORDINGS_PATH="/var/spool/asterisk/monitor"
+```
+
+Приложение автоматически ищет записи во вложенных каталогах вида:
+
+```text
+/var/spool/asterisk/monitor/2026/06/05/
+```
+
+Проверка существования файла:
+
+```bash
+find /var/spool/asterisk/monitor -name "*.wav"
+```
+
+Проверка формата записи:
+
+```bash
+file ИМЯ_ФАЙЛА.wav
+```
+
+Ожидаемый результат:
+
+```text
+RIFF (little-endian) data, WAVE audio, Microsoft PCM, 16 bit, mono 8000 Hz
+```
+
+API воспроизведения:
+
+```text
+/api/recordings/<filename>
+```
+
+Проверка:
+
+```bash
+curl -I "http://127.0.0.1:3000/api/recordings/FILE.wav"
+```
+
+Ожидаемый результат:
+
+```text
+HTTP/1.1 200 OK
+Content-Type: audio/wav
+```
+
+---
+
+# Решение проблем
+
+## Вместо реальных звонков отображаются демо-данные
+
+Проверьте:
+
+```env
+DEMO_MODE="false"
+```
+
+Также убедитесь, что в разделе настроек панели сохранены реальные параметры подключения к MariaDB.
+
+При необходимости очистите LocalStorage браузера.
+
+---
+
+## Не воспроизводятся записи разговоров
+
+Проверьте наличие файла:
+
+```bash
+find /var/spool/asterisk/monitor -name "ИМЯ_ФАЙЛА.wav"
+```
+
+Проверьте API:
+
+```bash
+curl -I http://127.0.0.1:3000/api/recordings/ИМЯ_ФАЙЛА.wav
+```
+
+---
+
+## Ошибка подключения к MariaDB
+
+Проверьте подключение:
+
+```bash
+mysql -u cdrviewer -p asteriskcdrdb
+```
+
+Проверьте права:
+
+```sql
+SHOW GRANTS FOR 'cdrviewer'@'localhost';
+```
+
+---
+
+## Ошибка AMI Authentication failed
+
+Проверьте:
+
+```bash
+asterisk -rx "manager show users"
+```
+
+Убедитесь, что пользователь существует и пароль совпадает с указанным в настройках панели.
+
+---
+
+# GitHub
+
+Настройка Git:
+
+```bash
+git config --global credential.helper store
+git config --global push.default simple
+
+git config --global user.name "Konstantin Grunin"
+git config --global user.email "ravigodno@gmail.com"
+```
+
+---
+
+# Безопасность
+
+Не храните в репозитории:
+
+```text
+.env
+node_modules/
+dist/
+data/
+```
+
+Они должны быть перечислены в `.gitignore`.
+
+---
+
+# Репозиторий проекта
+
+https://github.com/ravigodno/freepbx-cdr-new
