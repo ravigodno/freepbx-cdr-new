@@ -1137,7 +1137,7 @@ export default function App() {
               </div>
               <div>
                 <h1 className="text-base font-bold text-slate-900 tracking-tight flex items-center gap-2 font-sans">
-                  КИП Сервер
+                  Freepbx CDR-NEW
                   <span className="text-[10px] bg-slate-100 text-slate-600 font-normal px-2 py-0.5 rounded-md border border-slate-200">
                     CDR v1.0
                   </span>
