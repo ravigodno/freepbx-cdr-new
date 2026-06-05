@@ -109,6 +109,7 @@ export default function App() {
   // Settings Modal state
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [draftSettings, setDraftSettings] = useState<AppSettings | null>(null);
   const [isTestingDb, setIsTestingDb] = useState(false);
   const [dbTestResult, setDbTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
@@ -728,6 +729,7 @@ export default function App() {
       if (resp.ok) {
         const data = await resp.json();
         setSettings(data);
+        setDraftSettings(JSON.parse(JSON.stringify(data)));
       }
     } catch (e) {
       console.error('Error fetching admin system configurations:', e);
@@ -737,7 +739,7 @@ export default function App() {
   // Admin Settings Submitter
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!settings || !session || session.role !== 'admin') return;
+    if (!draftSettings || !session || session.role !== 'admin') return;
 
     setIsSavingSettings(true);
     try {
@@ -747,12 +749,13 @@ export default function App() {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${session.token}`
         },
-        body: JSON.stringify(settings)
+        body: JSON.stringify(draftSettings)
       });
 
       if (resp.ok) {
         setIsSettingsOpen(false);
         setDbTestResult(null);
+        setSettings(draftSettings);
         alert('Настройки успешно применены! Сервис перезагрузит список CDR.');
         reloadData();
       } else {
@@ -815,7 +818,7 @@ export default function App() {
 
   // Connection Test routine
   const testDbConnection = async () => {
-    if (!settings || !session) return;
+    if (!draftSettings || !session) return;
     setIsTestingDb(true);
     setDbTestResult(null);
     
@@ -827,7 +830,7 @@ export default function App() {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${session.token}`
         },
-        body: JSON.stringify(settings)
+        body: JSON.stringify(draftSettings)
       });
       
       if (resp.ok) {
@@ -2564,8 +2567,8 @@ export default function App() {
       {/* ADMIN CONNECTORS / CONFIGURATOR MODAL */}
       {isSettingsOpen && (
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="w-full max-w-lg bg-slate-900 border border-slate-850 rounded-2xl p-6 shadow-2xl relative max-h-[90vh] overflow-y-auto">
-            <div className="flex items-start justify-between border-b border-slate-800 pb-3 mb-4">
+          <div className="w-full max-w-lg bg-slate-900 border border-slate-850 rounded-2xl shadow-2xl relative max-h-[90vh] flex flex-col overflow-hidden z-50">
+            <div className="flex items-start justify-between border-b border-slate-800 p-6 pb-3 shrink-0">
               <div>
                 <h3 className="text-base font-bold text-white flex items-center gap-2">
                   <Database className="h-5 w-5 text-emerald-500" />
@@ -2580,304 +2583,306 @@ export default function App() {
                   setIsSettingsOpen(false);
                   setDbTestResult(null);
                 }}
-                className="text-slate-500 hover:text-white p-1 rounded"
+                className="text-slate-500 hover:text-white p-1 rounded-md cursor-pointer transition-colors"
               >
                 ✕
               </button>
             </div>
 
-            {settings ? (
-              <form onSubmit={handleSaveSettings} className="space-y-4">
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="col-span-2 space-y-1">
-                    <label className="text-slate-450 text-[11px] font-semibold uppercase tracking-wider">Хост MariaDB / IP</label>
-                    <input
-                      type="text"
-                      value={settings.dbHost}
-                      onChange={(e) => setSettings({ ...settings, dbHost: e.target.value })}
-                      className="w-full bg-slate-950 border border-slate-830 rounded-lg py-2 px-3 text-xs text-slate-100 font-mono"
-                      required
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-slate-450 text-[11px] font-semibold uppercase tracking-wider">Порт</label>
-                    <input
-                      type="number"
-                      value={settings.dbPort}
-                      onChange={(e) => setSettings({ ...settings, dbPort: parseInt(e.target.value, 10) })}
-                      className="w-full bg-slate-950 border border-slate-830 rounded-lg py-2 px-3 text-xs text-slate-100 font-mono"
-                      required
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                    <label className="text-slate-450 text-[11px] font-semibold uppercase tracking-wider">Имя базы данных</label>
-                    <input
-                      type="text"
-                      value={settings.dbName}
-                      onChange={(e) => setSettings({ ...settings, dbName: e.target.value })}
-                      className="w-full bg-slate-950 border border-slate-830 rounded-lg py-2 px-3 text-xs text-slate-100 font-mono"
-                      required
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-slate-450 text-[11px] font-semibold uppercase tracking-wider font-mono">User (Read-Only)</label>
-                    <input
-                      type="text"
-                      value={settings.dbUser}
-                      onChange={(e) => setSettings({ ...settings, dbUser: e.target.value })}
-                      className="w-full bg-slate-950 border border-slate-830 rounded-lg py-2 px-3 text-xs text-slate-100 font-mono"
-                      required
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-slate-450 text-[11px] font-semibold uppercase tracking-wider">Пароль базы данных</label>
-                  <input
-                    type="password"
-                    value={settings.dbPass}
-                    onChange={(e) => setSettings({ ...settings, dbPass: e.target.value })}
-                    placeholder="••••••••"
-                    className="w-full bg-slate-950 border border-slate-830 rounded-lg py-2 px-3 text-xs text-slate-100 font-mono"
-                  />
-                  <span className="text-[10.5px] text-zinc-550 block mt-1 font-light italic">
-                    *Рекомендуется использовать ограниченного read-only пользователя MariaDB Asterisk.
-                  </span>
-                </div>
-
-                <div className="space-y-1 pt-1">
-                  <label className="text-slate-455 text-[11px] font-semibold uppercase tracking-wider">Путь к записям разговоров</label>
-                  <input
-                    type="text"
-                    value={settings.recordingsPath}
-                    onChange={(e) => setSettings({ ...settings, recordingsPath: e.target.value })}
-                    placeholder="/var/spool/asterisk/monitor"
-                    className="w-full bg-slate-950 border border-slate-830 rounded-lg py-2 px-3 text-xs text-slate-100 font-mono"
-                    required
-                  />
-                  <span className="text-[10px] text-slate-500 mt-1 block">
-                    Папка на локальном диске, куда складываются аудио `.wav` или `.mp3` файлы звонков.
-                  </span>
-                </div>
-
-                <div className="border-t border-slate-800 pt-4 mt-2">
-                  <h4 className="text-xs font-bold text-slate-350 uppercase tracking-widest flex items-center gap-1.5 mb-3">
-                    <Phone className="h-4 w-4 text-emerald-500" />
-                    Настройки клик-ту-колл (Asterisk AMI)
-                  </h4>
-                  
+            {draftSettings ? (
+              <form onSubmit={handleSaveSettings} className="flex-1 flex flex-col overflow-hidden">
+                <div className="flex-1 overflow-y-auto p-6 space-y-4 pr-3 scrollbar-thin">
                   <div className="grid grid-cols-3 gap-3">
                     <div className="col-span-2 space-y-1">
-                      <label className="text-slate-450 text-[11px] font-semibold uppercase tracking-wider font-sans">Хост Asterisk AMI / IP</label>
+                      <label className="text-slate-450 text-[11px] font-semibold uppercase tracking-wider">Хост MariaDB / IP</label>
                       <input
                         type="text"
-                        value={settings.amiHost || ''}
-                        onChange={(e) => setSettings({ ...settings, amiHost: e.target.value })}
+                        value={draftSettings.dbHost}
+                        onChange={(e) => setDraftSettings({ ...draftSettings, dbHost: e.target.value })}
                         className="w-full bg-slate-950 border border-slate-830 rounded-lg py-2 px-3 text-xs text-slate-100 font-mono"
-                        placeholder="например: localhost"
+                        required
                       />
                     </div>
                     <div className="space-y-1">
-                      <label className="text-slate-450 text-[11px] font-semibold uppercase tracking-wider font-sans">Порт AMI</label>
+                      <label className="text-slate-450 text-[11px] font-semibold uppercase tracking-wider">Порт</label>
                       <input
                         type="number"
-                        value={settings.amiPort ?? 5038}
-                        onChange={(e) => setSettings({ ...settings, amiPort: parseInt(e.target.value, 10) || 5038 })}
+                        value={draftSettings.dbPort}
+                        onChange={(e) => setDraftSettings({ ...draftSettings, dbPort: parseInt(e.target.value, 10) })}
                         className="w-full bg-slate-950 border border-slate-830 rounded-lg py-2 px-3 text-xs text-slate-100 font-mono"
+                        required
                       />
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-3 mt-3">
+                  <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1">
-                      <label className="text-slate-450 text-[11px] font-semibold uppercase tracking-wider font-mono">User (AMI Username)</label>
+                      <label className="text-slate-450 text-[11px] font-semibold uppercase tracking-wider">Имя базы данных</label>
                       <input
                         type="text"
-                        value={settings.amiUser || ''}
-                        onChange={(e) => setSettings({ ...settings, amiUser: e.target.value })}
+                        value={draftSettings.dbName}
+                        onChange={(e) => setDraftSettings({ ...draftSettings, dbName: e.target.value })}
                         className="w-full bg-slate-950 border border-slate-830 rounded-lg py-2 px-3 text-xs text-slate-100 font-mono"
-                        placeholder="clicktocall"
+                        required
                       />
                     </div>
                     <div className="space-y-1">
-                      <label className="text-slate-450 text-[11px] font-semibold uppercase tracking-wider font-sans">Пароль AMI (Secret)</label>
+                      <label className="text-slate-450 text-[11px] font-semibold uppercase tracking-wider font-mono">User (Read-Only)</label>
                       <input
-                        type="password"
-                        value={settings.amiPass || ''}
-                        onChange={(e) => setSettings({ ...settings, amiPass: e.target.value })}
+                        type="text"
+                        value={draftSettings.dbUser}
+                        onChange={(e) => setDraftSettings({ ...draftSettings, dbUser: e.target.value })}
                         className="w-full bg-slate-950 border border-slate-830 rounded-lg py-2 px-3 text-xs text-slate-100 font-mono"
-                        placeholder="••••••••"
+                        required
                       />
                     </div>
                   </div>
 
-                  <div className="space-y-1 mt-3">
-                    <label className="text-slate-455 text-[11px] font-semibold uppercase tracking-wider font-sans">Исходящий Контекст (AMI Context)</label>
+                  <div className="space-y-1">
+                    <label className="text-slate-450 text-[11px] font-semibold uppercase tracking-wider">Пароль базы данных</label>
+                    <input
+                      type="password"
+                      value={draftSettings.dbPass}
+                      onChange={(e) => setDraftSettings({ ...draftSettings, dbPass: e.target.value })}
+                      placeholder="••••••••"
+                      className="w-full bg-slate-950 border border-slate-830 rounded-lg py-2 px-3 text-xs text-slate-100 font-mono"
+                    />
+                    <span className="text-[10.5px] text-zinc-500 block mt-1 font-light italic">
+                      *Рекомендуется использовать ограниченного read-only пользователя MariaDB Asterisk.
+                    </span>
+                  </div>
+
+                  <div className="space-y-1 pt-1">
+                    <label className="text-slate-455 text-[11px] font-semibold uppercase tracking-wider">Путь к записям разговоров</label>
                     <input
                       type="text"
-                      value={settings.amiContext || 'from-internal'}
-                      onChange={(e) => setSettings({ ...settings, amiContext: e.target.value })}
+                      value={draftSettings.recordingsPath}
+                      onChange={(e) => setDraftSettings({ ...draftSettings, recordingsPath: e.target.value })}
+                      placeholder="/var/spool/asterisk/monitor"
                       className="w-full bg-slate-950 border border-slate-830 rounded-lg py-2 px-3 text-xs text-slate-100 font-mono"
-                      placeholder="from-internal"
+                      required
                     />
-                    <span className="text-[10px] text-zinc-500 mt-1 block font-light">
-                      Служебный контекст (по умолчанию: from-internal) для отправки Originate Local/ext@context.
+                    <span className="text-[10px] text-slate-500 mt-1 block">
+                      Папка на локальном диске, куда складываются аудио `.wav` или `.mp3` файлы звонков.
                     </span>
                   </div>
-                </div>
 
-                <div className="border-t border-slate-800 pt-4 mt-2">
-                  <h4 className="text-xs font-bold text-slate-350 uppercase tracking-widest flex items-center gap-1.5 mb-3">
-                    <Sliders className="h-4 w-4 text-emerald-400" />
-                    Нормализация телефонных номеров
-                  </h4>
-                  <div className="space-y-3">
-                    <label className="flex items-center gap-2.5 text-xs text-slate-300 font-light cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={settings.normEnabled ?? true}
-                        onChange={(e) => setSettings({ ...settings, normEnabled: e.target.checked })}
-                        className="rounded border-slate-800 bg-slate-950 text-emerald-555 focus:ring-emerald-500 h-4 w-4 cursor-pointer"
-                      />
-                      <span>Включить автоматическую нормализацию номеров</span>
-                    </label>
-
-                    {(settings.normEnabled !== false) && (
-                      <div className="pl-6 space-y-2 border-l border-slate-800 mt-2">
-                        <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={settings.normStripSymbols ?? true}
-                            disabled={settings.normDigitsOnly ?? false}
-                            onChange={(e) => setSettings({ ...settings, normStripSymbols: e.target.checked })}
-                            className="rounded border-slate-800 bg-slate-950 text-emerald-555 focus:ring-emerald-500 h-3.5 w-3.5 cursor-pointer disabled:opacity-50"
-                          />
-                          <span>Удалять спецсимволы (оставлять только цифры и "+")</span>
-                        </label>
-
-                        <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={settings.normReplace8With7 ?? true}
-                            onChange={(e) => setSettings({ ...settings, normReplace8With7: e.target.checked })}
-                            className="rounded border-slate-800 bg-slate-950 text-emerald-555 focus:ring-emerald-500 h-3.5 w-3.5 cursor-pointer"
-                          />
-                          <span>Заменять ведущую "8" на "7" (для РФ/СНГ номеров)</span>
-                        </label>
-
-                        <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={settings.normDigitsOnly ?? false}
-                            onChange={(e) => {
-                              const active = e.target.checked;
-                              setSettings({
-                                ...settings,
-                                normDigitsOnly: active,
-                                normStripSymbols: active ? false : (settings.normStripSymbols ?? true)
-                              });
-                            }}
-                            className="rounded border-slate-800 bg-slate-950 text-emerald-555 focus:ring-emerald-500 h-3.5 w-3.5 cursor-pointer"
-                          />
-                          <span>Оставлять только цифры (полностью удалять "+")</span>
-                        </label>
-                      </div>
-                    )}
-                    <span className="text-[10px] text-zinc-550 block font-light">
-                      Правила применяются на лету при добавлении контактов в справочник, звонках Click-то-Call и импорте из файлов.
-                    </span>
-                  </div>
-                </div>
-
-                <div className="border-t border-slate-800 pt-4 mt-2">
-                  <h4 className="text-xs font-bold text-slate-350 uppercase tracking-widest flex items-center gap-1.5 mb-3">
-                    <Clock className="h-4 w-4 text-cyan-400" />
-                    Нормативы обработки и KPI контроля
-                  </h4>
-                  <div className="space-y-1">
-                    <label className="text-slate-455 text-[11px] font-semibold uppercase tracking-wider font-sans">Лимит времени отзвона по KPI (минут)</label>
-                    <input
-                      type="number"
-                      min={1}
-                      max={1440}
-                      value={settings.callbackKpiMinutes ?? 60}
-                      onChange={(e) => setSettings({ ...settings, callbackKpiMinutes: parseInt(e.target.value, 10) || 60 })}
-                      className="w-full bg-slate-950 border border-slate-830 rounded-lg py-2 px-3 text-xs text-slate-100 font-mono"
-                      placeholder="60"
-                    />
-                    <span className="text-[10px] text-zinc-550 mt-1 block font-light">
-                      Если сотрудник перезвонит клиенту (или клиент дозвонится повторно) в течение этого времени, звонок автоматически пометится как выполненный («Обработан») с пометкой автозакрытия.
-                    </span>
-                  </div>
-                </div>
-
-                {isDemoModeActive && (
                   <div className="border-t border-slate-800 pt-4 mt-2">
                     <h4 className="text-xs font-bold text-slate-350 uppercase tracking-widest flex items-center gap-1.5 mb-3">
-                      <Sliders className="h-4 w-4 text-amber-500" />
-                      Демонстрационный режим
+                      <Phone className="h-4 w-4 text-emerald-500" />
+                      Настройки клик-ту-колл (Asterisk AMI)
                     </h4>
                     
-                    <div className="bg-slate-950 border border-slate-850 rounded-lg p-3 space-y-2.5">
-                      <p className="text-[10.5px] text-slate-400 font-light leading-relaxed">
-                        Вы работаете с демонстрационными звонками. После настройки подключения к вашей MariaDB Asterisk ниже, приложение переключится на ваши реальные логи АТС автоматически.
-                      </p>
-                      
-                      <div className="flex items-center justify-between">
-                        <span className="text-[11px] text-slate-400 font-medium">Управление:</span>
-                        <div className="flex gap-2">
-                          <button
-                            type="button"
-                            onClick={clearDemoData}
-                            disabled={isDemoClearing}
-                            className="px-2.5 py-1 text-[11px] font-semibold bg-red-950 hover:bg-red-900 border border-red-850 text-red-300 rounded cursor-pointer disabled:opacity-50 transition-all active:scale-95 flex items-center gap-1"
-                            title="Удалить все демонстрационные звонки из памяти"
-                          >
-                            {isDemoClearing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
-                            Удалить демо данные
-                          </button>
-                          
-                          <button
-                            type="button"
-                            onClick={generateDemoData}
-                            disabled={isDemoGenerating}
-                            className="px-2.5 py-1 text-[11px] font-semibold bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 rounded cursor-pointer disabled:opacity-50 transition-all active:scale-95 flex items-center gap-1"
-                            title="Сгенерировать чистый набор демо-звонков заново"
-                          >
-                            {isDemoGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
-                            Сгенерировать заново
-                          </button>
-                        </div>
+                    <div className="grid grid-cols-3 gap-3">
+                      <div className="col-span-2 space-y-1">
+                        <label className="text-slate-450 text-[11px] font-semibold uppercase tracking-wider font-sans">Хост Asterisk AMI / IP</label>
+                        <input
+                          type="text"
+                          value={draftSettings.amiHost || ''}
+                          onChange={(e) => setDraftSettings({ ...draftSettings, amiHost: e.target.value })}
+                          className="w-full bg-slate-950 border border-slate-830 rounded-lg py-2 px-3 text-xs text-slate-100 font-mono"
+                          placeholder="например: localhost"
+                        />
                       </div>
+                      <div className="space-y-1">
+                        <label className="text-slate-450 text-[11px] font-semibold uppercase tracking-wider font-sans">Порт AMI</label>
+                        <input
+                          type="number"
+                          value={draftSettings.amiPort ?? 5038}
+                          onChange={(e) => setDraftSettings({ ...draftSettings, amiPort: parseInt(e.target.value, 10) || 5038 })}
+                          className="w-full bg-slate-950 border border-slate-830 rounded-lg py-2 px-3 text-xs text-slate-100 font-mono"
+                        />
+                      </div>
+                    </div>
 
-                      {demoStatusResult && (
-                        <div className={`p-2 rounded text-[10.5px] border ${
-                          demoStatusResult.success 
-                            ? 'bg-emerald-950/40 border-emerald-900 text-emerald-400' 
-                            : 'bg-red-950/40 border-red-900 text-red-400'
-                        }`}>
-                          {demoStatusResult.message}
-                        </div>
-                      )}
+                    <div className="grid grid-cols-2 gap-3 mt-3">
+                      <div className="space-y-1">
+                        <label className="text-slate-450 text-[11px] font-semibold uppercase tracking-wider font-mono">User (AMI Username)</label>
+                        <input
+                          type="text"
+                          value={draftSettings.amiUser || ''}
+                          onChange={(e) => setDraftSettings({ ...draftSettings, amiUser: e.target.value })}
+                          className="w-full bg-slate-950 border border-slate-830 rounded-lg py-2 px-3 text-xs text-slate-100 font-mono"
+                          placeholder="clicktocall"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-slate-450 text-[11px] font-semibold uppercase tracking-wider font-sans">Пароль AMI (Secret)</label>
+                        <input
+                          type="password"
+                          value={draftSettings.amiPass || ''}
+                          onChange={(e) => setDraftSettings({ ...draftSettings, amiPass: e.target.value })}
+                          className="w-full bg-slate-950 border border-slate-830 rounded-lg py-2 px-3 text-xs text-slate-100 font-mono"
+                          placeholder="••••••••"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-1 mt-3">
+                      <label className="text-slate-455 text-[11px] font-semibold uppercase tracking-wider font-sans">Исходящий Контекст (AMI Context)</label>
+                      <input
+                        type="text"
+                        value={draftSettings.amiContext || 'from-internal'}
+                        onChange={(e) => setDraftSettings({ ...draftSettings, amiContext: e.target.value })}
+                        className="w-full bg-slate-950 border border-slate-830 rounded-lg py-2 px-3 text-xs text-slate-100 font-mono"
+                        placeholder="from-internal"
+                      />
+                      <span className="text-[10px] text-zinc-500 mt-1 block font-light">
+                        Служебный контекст (по умолчанию: from-internal) для отправки Originate Local/ext@context.
+                      </span>
                     </div>
                   </div>
-                )}
 
-                {dbTestResult && (
-                  <div className={`p-3.5 border rounded-lg text-xs flex items-start gap-2 ${
-                    dbTestResult.success
-                      ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-300'
-                      : 'bg-red-500/10 border-red-500/20 text-red-300'
-                  }`}>
-                    <AlertCircle className={`h-4.5 w-4.5 shrink-0 mt-0.5 ${dbTestResult.success ? 'text-emerald-400' : 'text-red-400'}`} />
-                    <span>{dbTestResult.message}</span>
+                  <div className="border-t border-slate-800 pt-4 mt-2">
+                    <h4 className="text-xs font-bold text-slate-350 uppercase tracking-widest flex items-center gap-1.5 mb-3">
+                      <Sliders className="h-4 w-4 text-emerald-400" />
+                      Нормализация телефонных номеров
+                    </h4>
+                    <div className="space-y-3">
+                      <label className="flex items-center gap-2.5 text-xs text-slate-300 font-light cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={draftSettings.normEnabled ?? true}
+                          onChange={(e) => setDraftSettings({ ...draftSettings, normEnabled: e.target.checked })}
+                          className="rounded border-slate-800 bg-slate-950 text-emerald-555 focus:ring-emerald-500 h-4 w-4 cursor-pointer"
+                        />
+                        <span>Включить автоматическую нормализацию номеров</span>
+                      </label>
+
+                      {(draftSettings.normEnabled !== false) && (
+                        <div className="pl-6 space-y-2 border-l border-slate-800 mt-2">
+                          <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={draftSettings.normStripSymbols ?? true}
+                              disabled={draftSettings.normDigitsOnly ?? false}
+                              onChange={(e) => setDraftSettings({ ...draftSettings, normStripSymbols: e.target.checked })}
+                              className="rounded border-slate-800 bg-slate-950 text-emerald-555 focus:ring-emerald-500 h-3.5 w-3.5 cursor-pointer disabled:opacity-50"
+                            />
+                            <span>Удалять спецсимволы (оставлять только цифры и "+")</span>
+                          </label>
+
+                          <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={draftSettings.normReplace8With7 ?? true}
+                              onChange={(e) => setDraftSettings({ ...draftSettings, normReplace8With7: e.target.checked })}
+                              className="rounded border-slate-800 bg-slate-950 text-emerald-555 focus:ring-emerald-500 h-3.5 w-3.5 cursor-pointer"
+                            />
+                            <span>Заменять ведущую "8" на "7" (для РФ/СНГ номеров)</span>
+                          </label>
+
+                          <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={draftSettings.normDigitsOnly ?? false}
+                              onChange={(e) => {
+                                const active = e.target.checked;
+                                setDraftSettings({
+                                  ...draftSettings,
+                                  normDigitsOnly: active,
+                                  normStripSymbols: active ? false : (draftSettings.normStripSymbols ?? true)
+                                });
+                              }}
+                              className="rounded border-slate-800 bg-slate-950 text-emerald-555 focus:ring-emerald-500 h-3.5 w-3.5 cursor-pointer"
+                            />
+                            <span>Оставлять только цифры (полностью удалять "+")</span>
+                          </label>
+                        </div>
+                      )}
+                      <span className="text-[10px] text-zinc-500 block font-light">
+                        Правила применяются на лету при добавлении контактов в справочник, звонках Click-то-Call и импорте из файлов.
+                      </span>
+                    </div>
                   </div>
-                )}
 
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-4 border-t border-slate-800">
+                  <div className="border-t border-slate-800 pt-4 mt-2">
+                    <h4 className="text-xs font-bold text-slate-350 uppercase tracking-widest flex items-center gap-1.5 mb-3">
+                      <Clock className="h-4 w-4 text-cyan-400" />
+                      Нормативы обработки и KPI контроля
+                    </h4>
+                    <div className="space-y-1">
+                      <label className="text-slate-455 text-[11px] font-semibold uppercase tracking-wider font-sans">Лимит времени отзвона по KPI (минут)</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={1440}
+                        value={draftSettings.callbackKpiMinutes ?? 60}
+                        onChange={(e) => setDraftSettings({ ...draftSettings, callbackKpiMinutes: parseInt(e.target.value, 10) || 60 })}
+                        className="w-full bg-slate-950 border border-slate-830 rounded-lg py-2 px-3 text-xs text-slate-100 font-mono"
+                        placeholder="60"
+                      />
+                      <span className="text-[10px] text-zinc-550 mt-1 block font-light">
+                        Если сотрудник перезвонит клиенту (или клиент дозвонится повторно) в течение этого времени, звонок автоматически пометится как выполненный («Обработан») с пометкой автозакрытия.
+                      </span>
+                    </div>
+                  </div>
+
+                  {isDemoModeActive && (
+                    <div className="border-t border-slate-800 pt-4 mt-2">
+                      <h4 className="text-xs font-bold text-slate-350 uppercase tracking-widest flex items-center gap-1.5 mb-3">
+                        <Sliders className="h-4 w-4 text-amber-500" />
+                        Демонстрационный режим
+                      </h4>
+                      
+                      <div className="bg-slate-950 border border-slate-850 rounded-lg p-3 space-y-2.5">
+                        <p className="text-[10.5px] text-slate-400 font-light leading-relaxed">
+                          Вы работаете с демонстрационными звонками. После настройки подключения к вашей MariaDB Asterisk ниже, приложение переключится на ваши реальные логи АТС автоматически.
+                        </p>
+                        
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                          <span className="text-[11px] text-slate-400 font-medium">Управление:</span>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={clearDemoData}
+                              disabled={isDemoClearing}
+                              className="px-2.5 py-1 text-[11px] font-semibold bg-red-950 hover:bg-red-900 border border-red-850 text-red-300 rounded cursor-pointer disabled:opacity-50 transition-all active:scale-95 flex items-center gap-1"
+                              title="Удалить все демонстрационные звонки из памяти"
+                            >
+                              {isDemoClearing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+                              Удалить демо данные
+                            </button>
+                            
+                            <button
+                              type="button"
+                              onClick={generateDemoData}
+                              disabled={isDemoGenerating}
+                              className="px-2.5 py-1 text-[11px] font-semibold bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 rounded cursor-pointer disabled:opacity-50 transition-all active:scale-95 flex items-center gap-1"
+                              title="Сгенерировать чистый набор демо-звонков заново"
+                            >
+                              {isDemoGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                              Сгенерировать заново
+                            </button>
+                          </div>
+                        </div>
+
+                        {demoStatusResult && (
+                          <div className={`p-2 rounded text-[10.5px] border ${
+                            demoStatusResult.success 
+                              ? 'bg-emerald-950/40 border-emerald-900 text-emerald-400' 
+                              : 'bg-red-950/40 border-red-900 text-red-400'
+                          }`}>
+                            {demoStatusResult.message}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {dbTestResult && (
+                    <div className={`p-3.5 border rounded-lg text-xs flex items-start gap-2 ${
+                      dbTestResult.success
+                        ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-300'
+                        : 'bg-red-500/10 border-red-500/20 text-red-300'
+                    }`}>
+                      <AlertCircle className={`h-4.5 w-4.5 shrink-0 mt-0.5 ${dbTestResult.success ? 'text-emerald-400' : 'text-red-400'}`} />
+                      <span>{dbTestResult.message}</span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 p-6 pt-4 border-t border-slate-800 bg-slate-900 shrink-0">
                   <button
                     type="button"
                     onClick={testDbConnection}
@@ -2888,21 +2893,21 @@ export default function App() {
                     Проверить связь
                   </button>
 
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 justify-end">
                     <button
                       type="button"
                       onClick={() => {
                         setIsSettingsOpen(false);
                         setDbTestResult(null);
                       }}
-                      className="text-xs text-slate-400 hover:text-white bg-slate-850 px-4 py-2 rounded-lg"
+                      className="text-xs text-slate-400 hover:text-white bg-slate-850 hover:bg-slate-800 px-4 py-2 rounded-lg cursor-pointer transition-colors"
                     >
                       Отмена
                     </button>
                     <button
                       type="submit"
                       disabled={isSavingSettings}
-                      className="bg-emerald-650 hover:bg-emerald-550 text-xs font-semibold text-white px-4 py-2 rounded-lg cursor-pointer"
+                      className="bg-emerald-650 hover:bg-emerald-550 text-xs font-semibold text-white px-4 py-2 rounded-lg cursor-pointer transition-colors"
                     >
                       Сохранить и активировать
                     </button>
@@ -2910,7 +2915,7 @@ export default function App() {
                 </div>
               </form>
             ) : (
-              <div className="p-10 flex justify-center">
+              <div className="p-10 flex justify-center border-t border-slate-800">
                 <Loader2 className="h-8 w-8 animate-spin text-slate-600" />
               </div>
             )}

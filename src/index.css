@@ -1,1 +1,12 @@
 @import "tailwindcss";
+
+@theme {
+  --color-red-650: #dc2626;
+  --color-red-655: #b91c1c;
+  --color-rose-650: #db2777;
+  --color-emerald-650: #059669;
+  --color-emerald-555: #10b981;
+  --color-amber-650: #d97706;
+  --color-purple-650: #7c3aed;
+  --color-slate-650: #475569;
+}
