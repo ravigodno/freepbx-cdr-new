@@ -995,6 +995,73 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
         return;
       }
     }
+    // Normalize single IVR calls where FreePBX stores dst as "s".
+    // IVR answered by PBX is not a real operator answer.
+    calls = calls.map(c => {
+      if ((c.dcontext || "").startsWith("ivr-") && (c.dst === "s" || !c.dst)) {
+        const ivrName = `IVR ${String(c.dcontext).replace("ivr-", "")}`;
+        return {
+          ...c,
+          dst: ivrName,
+          dstchannel: "",
+          disposition: "NO ANSWER",
+          billsec: 0,
+          did: c.did || "",
+        };
+      }
+      return c;
+    });
+
+    // Collapse queue/ring-group CDR legs into one logical call by linkedid
+    const linkedGroups = new Map<string, CallEntry[]>();
+    calls.forEach(c => {
+      const key = c.linkedid || c.uniqueid;
+      if (!linkedGroups.has(key)) linkedGroups.set(key, []);
+      linkedGroups.get(key)!.push(c);
+    });
+
+    calls = Array.from(linkedGroups.values()).map(group => {
+      if (group.length === 1) return group[0];
+
+      const sorted = [...group].sort((a, b) => new Date(a.calldate).getTime() - new Date(b.calldate).getTime());
+      const answered = sorted.find(c => c.disposition === "ANSWERED" && Number(c.billsec || 0) > 0);
+      const first = sorted[0];
+      const main = answered || first;
+
+      const external = sorted.find(c => (c.src || "").replace(/\D/g, "").length >= 7) || first;
+      const queueLeg = sorted.find(c => c.dcontext === "ext-queues" || c.lastapp === "Queue");
+      const groupLeg = sorted.find(c => c.dcontext === "ext-group");
+      const routeLeg = queueLeg || groupLeg || first;
+      const answeredExts = Array.from(new Set(sorted.filter(c => c.dcontext === "ext-local" && (c.disposition || "").toUpperCase() === "ANSWERED" && Number(c.billsec || 0) > 0).map(c => c.dst).filter(v => /^[0-9]{2,5}$/.test(String(v || "")))));
+      const missedExts = Array.from(new Set(sorted.filter(c => c.dcontext === "ext-local" && ((c.disposition || "").toUpperCase() !== "ANSWERED" || Number(c.billsec || 0) === 0)).map(c => c.dst).filter(v => /^[0-9]{2,5}$/.test(String(v || "")))));
+      if (groupLeg) {
+        const allGroupExts = Array.from(new Set(String(groupLeg.lastdata || "").match(/SIP\/([0-9]{2,5})/g)?.map(x => x.replace("SIP/", "")) || []));
+        const answeredChannel = String(answered?.dstchannel || "");
+        const answeredMatch = answeredChannel.match(/SIP\/([0-9]{2,5})-/);
+        if (answered && answeredMatch && answeredMatch[1]) {
+          answeredExts.splice(0, answeredExts.length, answeredMatch[1]);
+        }
+        if (!answered && allGroupExts.length) {
+          missedExts.splice(0, missedExts.length, ...allGroupExts);
+        }
+      }
+      const dialedExts = answered ? answeredExts : missedExts;
+
+      return {
+        ...routeLeg,
+        uniqueid: first.linkedid || first.uniqueid,
+        linkedid: first.linkedid || first.uniqueid,
+        calldate: first.calldate,
+        src: external.src || first.src,
+        dst: queueLeg ? `Очередь ${queueLeg.dst}` : groupLeg ? `Группа ${groupLeg.dst}` : (routeLeg.dst || first.dst),
+        dstchannel: "",
+        disposition: answered ? "ANSWERED" : "NO ANSWER",
+        billsec: answered ? answered.billsec : 0,
+        duration: Math.max(...sorted.map(c => Number(c.duration || 0))),
+        did: dialedExts.length ? `${(queueLeg?.did || groupLeg?.did || sorted.find(c => c.did)?.did || "")} → ${answered ? "ответил" : "пропустили"}: ${dialedExts.join(", ")}` : (sorted.find(c => c.did)?.did || first.did),
+      };
+    });
+
 
     // --- ALGORITHM FOR DETECTING MISSED CALLS AND POST-CALLBACK STATUSES ---
     // 1. Map local commented/processed states to each call
