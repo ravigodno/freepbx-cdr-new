@@ -1132,7 +1132,7 @@ export default function App() {
         <div className="max-w-[1800px] mx-auto px-4 py-3 flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
           <div className="flex flex-col sm:flex-row sm:items-center gap-6 w-full xl:w-auto">
             <div className="flex items-center gap-3">
-              <div className="bg-gradient-to-br from-red-650 to-rose-700 p-2 rounded-xl text-white shadow-md shadow-red-500/10">
+              <div className="bg-gradient-to-br from-red-600 to-rose-700 p-2 rounded-xl text-white shadow-md shadow-red-500/10">
                 <PhoneMissed className="h-5 w-5" />
               </div>
               <div>
@@ -1205,7 +1205,7 @@ export default function App() {
                     setOnlyMyCalls(e.target.checked);
                     setPage(1);
                   }}
-                  className="rounded border-slate-300 text-red-650 focus:ring-red-500 h-3.5 w-3.5 cursor-pointer"
+                  className="rounded border-slate-300 text-red-600 focus:ring-red-500 h-3.5 w-3.5 cursor-pointer"
                 />
                 <span className="text-[11px] font-bold text-slate-700">Мои звонки</span>
               </label>
@@ -1217,7 +1217,7 @@ export default function App() {
             <div className="flex items-center gap-2">
               <div className="text-right hidden md:block">
                 <div className="text-xs font-semibold text-slate-800">{session.username}</div>
-                <div className="text-[10px] text-red-650 font-medium uppercase tracking-wider">{session.role}</div>
+                <div className="text-[10px] text-red-600 font-medium uppercase tracking-wider">{session.role}</div>
               </div>
               
               {session.role === 'admin' && (
@@ -1235,7 +1235,7 @@ export default function App() {
 
               <button
                 onClick={handleLogout}
-                className="p-2 text-slate-500 hover:text-red-650 hover:bg-slate-100 rounded-lg border border-transparent hover:border-slate-200 transition-all cursor-pointer"
+                className="p-2 text-slate-500 hover:text-red-600 hover:bg-slate-100 rounded-lg border border-transparent hover:border-slate-200 transition-all cursor-pointer"
                 title="Выйти"
               >
                 <LogOut className="h-5 w-5" />
@@ -1292,7 +1292,7 @@ export default function App() {
 
               {/* Пропущенные */}
               <div className="bg-white border border-red-100 rounded-xl p-4 flex flex-col justify-between shadow-sm hover:shadow-md transition-shadow">
-                <span className="text-xs text-red-650 font-semibold tracking-wide">Пропущенные</span>
+                <span className="text-xs text-red-600 font-semibold tracking-wide">Пропущенные</span>
                 <div className="mt-2 flex items-baseline justify-between">
                   {isLoadingStats ? (
                     <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
@@ -1445,7 +1445,7 @@ export default function App() {
               </div>
               <button
                 onClick={() => reloadData()}
-                className="hover:text-red-650 hover:bg-slate-200 bg-slate-100 border border-slate-200 px-2.5 py-1 rounded-md cursor-pointer transition-all font-medium text-xs"
+                className="hover:text-red-600 hover:bg-slate-200 bg-slate-100 border border-slate-200 px-2.5 py-1 rounded-md cursor-pointer transition-all font-medium text-xs"
                 title="Обновить сейчас"
               >
                 Обновить
@@ -1458,7 +1458,7 @@ export default function App() {
                     setStatusFilter('ALL');
                     applyPeriodPreset(7);
                   }}
-                  className="hover:bg-red-50 bg-red-50/50 border border-red-200 text-red-650 px-2.5 py-1 rounded-md cursor-pointer transition-all font-semibold text-xs"
+                  className="hover:bg-red-50 bg-red-50/50 border border-red-200 text-red-600 px-2.5 py-1 rounded-md cursor-pointer transition-all font-semibold text-xs"
                   title="Сбросить все фильтры"
                 >
                   Сбросить фильтры
@@ -1541,7 +1541,7 @@ export default function App() {
                 <AlertCircle className="h-10 w-10 text-rose-500" />
                 <div>
                   <h3 className="text-sm font-semibold text-rose-800 leading-normal">Ошибка подключения к базе Asterisk/FreePBX</h3>
-                  <p className="text-xs text-rose-650 max-w-lg font-light mt-1">
+                  <p className="text-xs text-rose-600 max-w-lg font-light mt-1">
                     {callsError}
                   </p>
                 </div>
@@ -1742,7 +1742,7 @@ export default function App() {
                                   <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium select-none ${
                                     callerType === 'internal'
                                       ? 'bg-slate-100 text-slate-650 border border-slate-200'
-                                      : 'bg-red-50 text-red-650 border border-slate-150'
+                                      : 'bg-red-50 text-red-600 border border-slate-150'
                                   }`}>
                                     {callerType === 'internal' ? 'Внутр.' : 'Клиент'}
                                   </span>
@@ -1802,7 +1802,7 @@ export default function App() {
                                   <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium select-none ${
                                     calleeType === 'internal'
                                       ? 'bg-slate-100 text-slate-650 border border-slate-200'
-                                      : 'bg-red-50 text-red-650 border border-slate-150'
+                                      : 'bg-red-50 text-red-600 border border-slate-150'
                                   }`}>
                                     {calleeType === 'internal' ? 'Внутр.' : 'Клиент'}
                                   </span>
@@ -1863,7 +1863,7 @@ export default function App() {
                               </span>
                             )}
                             {callDisp === 'NO ANSWER' && (
-                              <span className="inline-flex items-center gap-1 bg-red-50 text-red-650 border border-red-200 px-2 py-0.5 rounded text-[10.5px] font-semibold">
+                              <span className="inline-flex items-center gap-1 bg-red-50 text-red-600 border border-red-200 px-2 py-0.5 rounded text-[10.5px] font-semibold">
                                 <XCircle className="h-3 w-3" />
                                 БЕЗ ОТВЕТА
                               </span>
@@ -1970,7 +1970,7 @@ export default function App() {
                                 className={`px-2.5 py-1.5 rounded-lg border transition-all text-[11px] font-semibold cursor-pointer ${
                                   call.processed
                                     ? 'bg-white border-slate-200 text-slate-500 hover:text-slate-950 hover:bg-slate-50'
-                                    : 'bg-gradient-to-r from-red-650 to-rose-700 text-white border-transparent hover:from-red-600 hover:to-rose-650 shadow-sm'
+                                    : 'bg-gradient-to-r from-red-600 to-rose-700 text-white border-transparent hover:from-red-600 hover:to-rose-600 shadow-sm'
                                 }`}
                               >
                                 {call.processed ? 'Изменить' : 'Обработать'}
@@ -2067,7 +2067,7 @@ export default function App() {
               onClick={() => setIsAdminPanelExpanded(!isAdminPanelExpanded)}
             >
               <div className="flex items-center gap-2">
-                <Sliders className="h-4.5 w-4.5 text-red-650" />
+                <Sliders className="h-4.5 w-4.5 text-red-600" />
                 <h3 className="text-sm font-bold text-slate-800 font-sans">Панель администратора справочника</h3>
                 <span className="text-[11px] text-slate-400 font-normal">
                   ({isAdminPanelExpanded ? 'нажмите, чтобы свернуть' : 'нажмите, чтобы развернуть'})
@@ -2094,7 +2094,7 @@ export default function App() {
                 <div className="flex flex-wrap gap-2.5">
                   <button
                     onClick={() => setIsImportOpen(true)}
-                    className="flex items-center gap-1.5 px-3.5 py-2 bg-gradient-to-r from-red-650 to-rose-700 hover:from-red-600 hover:to-rose-650 text-white rounded-lg text-xs font-semibold cursor-pointer shadow-xs transition-all active:scale-95 select-none"
+                    className="flex items-center gap-1.5 px-3.5 py-2 bg-gradient-to-r from-red-600 to-rose-700 hover:from-red-600 hover:to-rose-600 text-white rounded-lg text-xs font-semibold cursor-pointer shadow-xs transition-all active:scale-95 select-none"
                   >
                     <Upload className="h-3.5 w-3.5" />
                     Импорт контактов (массовый)
@@ -2102,9 +2102,9 @@ export default function App() {
 
                   <button
                     onClick={handleDownloadTemplate}
-                    className="flex items-center gap-1.5 px-3.5 py-2 bg-white hover:bg-slate-100 text-red-650 rounded-lg text-xs font-semibold cursor-pointer border border-red-200 shadow-xs transition-all active:scale-95 select-none"
+                    className="flex items-center gap-1.5 px-3.5 py-2 bg-white hover:bg-slate-100 text-red-600 rounded-lg text-xs font-semibold cursor-pointer border border-red-200 shadow-xs transition-all active:scale-95 select-none"
                   >
-                    <Download className="h-3.5 w-3.5 text-red-550" />
+                    <Download className="h-3.5 w-3.5 text-red-500" />
                     Шаблон импорта (CSV Excel)
                   </button>
 
@@ -2270,7 +2270,7 @@ export default function App() {
                         <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-medium border ${
                           entry.type === 'internal'
                             ? 'bg-slate-150 text-slate-650 border-slate-250'
-                            : 'bg-red-50 text-red-650 border-red-150'
+                            : 'bg-red-50 text-red-600 border-red-150'
                         }`}>
                           {entry.type === 'internal' ? 'Внутренний номер' : 'Клиент'}
                         </span>
@@ -2306,6 +2306,13 @@ export default function App() {
       </section>
     )}
       </main>
+
+      <footer className="border-t border-slate-200 bg-white py-3 text-center text-[11px] text-slate-500">
+        © 2026 Freepbx CDR-NEW. Все права защищены. Грунин К.В. ИНН 9102057404.
+        <a href="https://grunin.org" target="_blank" rel="noopener noreferrer" className="mx-1 text-slate-700 hover:text-red-600 underline">grunin.org</a>
+        Внедрение, разработка и поддержка VOIP-проектов.
+        <a href="tel:+79787437943" className="ml-1 text-slate-700 hover:text-red-600 underline">+7 (978) 743-79-43</a>
+      </footer>
 
       {/* FOOTER RECORD PLAYER CONTROL SLIDE OVERLAY */}
       {playingRecording && (
@@ -2368,7 +2375,7 @@ export default function App() {
                 <button
                   onClick={() => changeSpeed(1)}
                   className={`px-2 py-1 rounded text-[10px] font-semibold transition-all cursor-pointer ${
-                    playbackSpeed === 1 ? 'bg-red-50 border border-red-200/50 text-red-655' : 'text-slate-500 hover:text-slate-800'
+                    playbackSpeed === 1 ? 'bg-red-50 border border-red-200/50 text-red-600' : 'text-slate-500 hover:text-slate-800'
                   }`}
                 >
                   1.0x
@@ -2376,7 +2383,7 @@ export default function App() {
                 <button
                   onClick={() => changeSpeed(1.25)}
                   className={`px-2 py-1 rounded text-[10px] font-semibold transition-all cursor-pointer ${
-                    playbackSpeed === 1.25 ? 'bg-red-50 border border-red-200/50 text-red-655' : 'text-slate-500 hover:text-slate-800'
+                    playbackSpeed === 1.25 ? 'bg-red-50 border border-red-200/50 text-red-600' : 'text-slate-500 hover:text-slate-800'
                   }`}
                 >
                   1.25x
@@ -2384,7 +2391,7 @@ export default function App() {
                 <button
                   onClick={() => changeSpeed(1.5)}
                   className={`px-2 py-1 rounded text-[10px] font-semibold transition-all cursor-pointer ${
-                    playbackSpeed === 1.5 ? 'bg-red-50 border border-red-200/50 text-red-655' : 'text-slate-500 hover:text-slate-800'
+                    playbackSpeed === 1.5 ? 'bg-red-50 border border-red-200/50 text-red-600' : 'text-slate-500 hover:text-slate-800'
                   }`}
                 >
                   1.5x
@@ -2392,7 +2399,7 @@ export default function App() {
                 <button
                   onClick={() => changeSpeed(2)}
                   className={`px-2 py-1 rounded text-[10px] font-semibold transition-all cursor-pointer ${
-                    playbackSpeed === 2 ? 'bg-red-50 border border-red-200/50 text-red-655' : 'text-slate-500 hover:text-slate-800'
+                    playbackSpeed === 2 ? 'bg-red-50 border border-red-200/50 text-red-600' : 'text-slate-500 hover:text-slate-800'
                   }`}
                 >
                   2x
@@ -2444,7 +2451,7 @@ export default function App() {
             <div className="flex items-start justify-between border-b border-slate-200 pb-3 mb-4">
               <div>
                 <h3 className="text-base font-bold text-slate-800 flex items-center gap-2">
-                  <MessageSquare className="h-5 w-5 text-red-655" />
+                  <MessageSquare className="h-5 w-5 text-red-600" />
                   Обработка пропущенного вызова
                 </h3>
                 <p className="text-xs text-slate-500 font-light mt-0.5">
@@ -2927,7 +2934,7 @@ export default function App() {
             <div className="flex items-start justify-between border-b border-slate-100 pb-3 mb-4 shrink-0">
               <div>
                 <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                  <Upload className="h-5 w-5 text-red-650" />
+                  <Upload className="h-5 w-5 text-red-600" />
                   Пакетный импорт телефонного справочника
                 </h3>
                 <p className="text-xs text-slate-500 font-light mt-0.5">
@@ -3029,7 +3036,7 @@ export default function App() {
                             <span className={`text-[9px] font-semibold px-2 py-0.2 rounded-full border ${
                               item.type === 'internal'
                                 ? 'bg-slate-100 text-slate-600 border-slate-200'
-                                : 'bg-red-50 text-red-650 border-red-150'
+                                : 'bg-red-50 text-red-600 border-red-150'
                             }`}>
                               {item.type === 'internal' ? 'Внутр.' : 'Клиент'}
                             </span>
@@ -3048,7 +3055,7 @@ export default function App() {
                           name="importMode"
                           checked={!importOverwriteMode}
                           onChange={() => setImportOverwriteMode(false)}
-                          className="text-red-650 focus:ring-red-500 h-3.5 w-3.5 cursor-pointer"
+                          className="text-red-600 focus:ring-red-500 h-3.5 w-3.5 cursor-pointer"
                         />
                         <span>Прибавить новые к существующим (Дописать)</span>
                       </label>
@@ -3062,9 +3069,9 @@ export default function App() {
                               setImportOverwriteMode(true);
                             }
                           }}
-                          className="text-red-500 focus:ring-red-550 h-3.5 w-3.5 cursor-pointer"
+                          className="text-red-500 focus:ring-red-500 h-3.5 w-3.5 cursor-pointer"
                         />
-                        <span className="font-bold text-red-650 hover:text-red-700">Очистить справочник и записать заново!</span>
+                        <span className="font-bold text-red-600 hover:text-red-700">Очистить справочник и записать заново!</span>
                       </label>
                     </div>
                   </div>
@@ -3106,7 +3113,7 @@ export default function App() {
             <div className="flex items-start justify-between border-b border-slate-100 pb-3 mb-4">
               <div>
                 <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                  <BookOpen className="h-5 w-5 text-red-650" />
+                  <BookOpen className="h-5 w-5 text-red-600" />
                   {editingDirEntry ? 'Редактировать контакт' : 'Новый контакт'}
                 </h3>
                 <p className="text-xs text-slate-500 font-light mt-0.5">
@@ -3172,7 +3179,7 @@ export default function App() {
                     onClick={() => setDirType('client')}
                     className={`py-2 px-3 rounded-lg border text-xs font-semibold cursor-pointer transition-all ${
                       dirType === 'client'
-                        ? 'bg-red-50 border-red-200 text-red-650'
+                        ? 'bg-red-50 border-red-200 text-red-600'
                         : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
                     }`}
                   >
