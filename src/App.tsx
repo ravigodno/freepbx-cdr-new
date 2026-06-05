@@ -2327,7 +2327,7 @@ export default function App() {
                   {playingRecording}
                 </div>
                 <div className="text-[10px] text-slate-500 font-mono mt-0.5">
-                  Плеер Asterisk Monitor Spooler
+                  <a href={`/api/recordings/${encodeURIComponent(playingRecording)}`} download={playingRecording} className="text-[10px] text-red-600 hover:text-red-700 underline underline-offset-2">Скачать запись</a>
                 </div>
               </div>
             </div>
@@ -2470,7 +2470,7 @@ export default function App() {
               <div className="bg-slate-50 rounded-xl p-4 border border-slate-200 mb-4 text-xs space-y-2">
                 <div className="grid grid-cols-2">
                   <span className="text-slate-500">Клиент / Номер:</span>
-                  <span className="font-semibold text-slate-800 text-right">{selectedCall.src}</span>
+                  <div className="flex items-center justify-end gap-2"><span className="font-semibold text-slate-800 text-right">{selectedCall.src}</span><button type="button" onClick={() => triggerClickToCall(selectedCall.src)} className="px-2 py-1 bg-red-600 hover:bg-red-700 text-white rounded text-[10px] font-semibold cursor-pointer">Позвонить</button></div>
                 </div>
                 <div className="grid grid-cols-2">
                   <span className="text-slate-500">Маршрут / Внутренний:</span>
