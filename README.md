@@ -11,11 +11,20 @@
 * SLA-контроль времени реакции операторов.
 * Статистика KPI отдела продаж.
 * Прослушивание записей разговоров.
+* Скачать запись разговора одним кликом.
 * Click-To-Call через Asterisk AMI.
 * Телефонный справочник клиентов и сотрудников.
 * Назначение ответственных за обработку пропущенных вызовов.
 * Комментарии к звонкам.
 * Разделение ролей Администратор / Оператор.
+* Группировка CDR-записей по linkedid.
+* Корректная обработка очередей FreePBX.
+* Корректная обработка Ring Groups.
+* Корректная обработка IVR.
+* Отображение внутренних номеров, которые пропустили вызов.
+* Отображение внутреннего номера, ответившего на вызов.
+* Встроенный аудиоплеер записей разговоров.
+* Автоматическое определение обработанных и потерянных вызовов по KPI.
 
 ---
 
@@ -79,6 +88,12 @@ ADMIN_PASSWORD="admin"
 
 OPERATOR_USERNAME="operator"
 OPERATOR_PASSWORD="operator"
+
+ASTERISK_AMI_HOST="127.0.0.1"
+ASTERISK_AMI_PORT="5038"
+ASTERISK_AMI_USER="999"
+ASTERISK_AMI_PASSWORD="YOUR_AMI_PASSWORD"
+ASTERISK_AMI_CONTEXT="from-internal"
 
 PORT="3000"
 ```
@@ -170,13 +185,6 @@ vite 4.5.14
 tailwindcss 3.4.19
 ```
 
-Проверка:
-
-```bash
-npm list vite
-npm list | grep tailwind
-```
-
 ---
 
 # Сборка проекта
@@ -193,19 +201,9 @@ dist/assets/*.js
 dist/assets/*.css
 ```
 
-Проверка CSS:
-
-```bash
-ls -lh dist/assets/*.css
-```
-
-Размер CSS обычно составляет около 30 КБ.
-
 ---
 
 # Запуск через PM2
-
-Запуск:
 
 ```bash
 NODE_ENV=production pm2 start npm --name "asterisk-cdr-panel" -- start
@@ -223,9 +221,7 @@ pm2 save
 pm2 startup
 ```
 
-Выполните команду, которую предложит PM2.
-
-После этого:
+После выполнения команды:
 
 ```bash
 pm2 save
@@ -250,7 +246,7 @@ pm2 logs asterisk-cdr-panel
 Перезапуск:
 
 ```bash
-pm2 restart asterisk-cdr-panel
+pm2 restart asterisk-cdr-panel --update-env
 ```
 
 Остановка:
@@ -283,62 +279,102 @@ pm2 restart asterisk-cdr-panel --update-env
 
 ---
 
+# Логика обработки вызовов
+
+## Очереди
+
+Вместо нескольких строк CDR отображается один логический вызов:
+
+```text
+Куда звонил: Очередь 9990
+DID: 841282 → пропустили: 100, 200
+```
+
+или
+
+```text
+Куда звонил: Очередь 9990
+DID: 841282 → ответил: 200
+```
+
+---
+
+## Группы вызова
+
+```text
+Куда звонил: Группа 9999
+DID: 841282 → ответил: 200
+```
+
+---
+
+## IVR
+
+Если абонент сбросил вызов внутри IVR и не дошёл до оператора:
+
+```text
+IVR 1
+Статус: Пропущен
+```
+
+FreePBX обычно сохраняет такие звонки как:
+
+```text
+dst=s
+dcontext=ivr-1
+```
+
+Панель автоматически преобразует их в читаемый вид.
+
+---
+
+# KPI и статистика
+
+## Обработанные
+
+Обработанные = есть отзвон или вручную отмечен обработанным, даже если SLA превышен.
+
+## Потерянные
+
+Потерянные = пропущенные + SLA уже истёк + нет отзвона + не обработан вручную.
+
+---
+
 # Записи разговоров
 
-Путь к записям:
+Путь:
 
 ```env
 RECORDINGS_PATH="/var/spool/asterisk/monitor"
 ```
 
-Приложение автоматически ищет записи во вложенных каталогах вида:
+Поддерживаются вложенные каталоги:
 
 ```text
 /var/spool/asterisk/monitor/2026/06/05/
 ```
 
-Проверка существования файла:
+Для очередей и групп вызова запись разговоров должна быть включена в настройках FreePBX.
 
-```bash
-find /var/spool/asterisk/monitor -name "*.wav"
-```
-
-Проверка формата записи:
-
-```bash
-file ИМЯ_ФАЙЛА.wav
-```
-
-Ожидаемый результат:
+Если запись не включена:
 
 ```text
-RIFF (little-endian) data, WAVE audio, Microsoft PCM, 16 bit, mono 8000 Hz
+recordingfile = NULL
 ```
 
-API воспроизведения:
-
-```text
-/api/recordings/<filename>
-```
+Кнопка воспроизведения отображаться не будет.
 
 Проверка:
 
 ```bash
-curl -I "http://127.0.0.1:3000/api/recordings/FILE.wav"
-```
-
-Ожидаемый результат:
-
-```text
-HTTP/1.1 200 OK
-Content-Type: audio/wav
+find /var/spool/asterisk/monitor -name "*.wav"
 ```
 
 ---
 
 # Решение проблем
 
-## Вместо реальных звонков отображаются демо-данные
+## Отображаются демо-данные
 
 Проверьте:
 
@@ -346,40 +382,30 @@ Content-Type: audio/wav
 DEMO_MODE="false"
 ```
 
-Также убедитесь, что в разделе настроек панели сохранены реальные параметры подключения к MariaDB.
-
-При необходимости очистите LocalStorage браузера.
+Очистите LocalStorage браузера.
 
 ---
 
-## Не воспроизводятся записи разговоров
+## Не воспроизводятся записи
 
-Проверьте наличие файла:
+Проверьте:
 
 ```bash
-find /var/spool/asterisk/monitor -name "ИМЯ_ФАЙЛА.wav"
+find /var/spool/asterisk/monitor -name "*.wav"
 ```
 
 Проверьте API:
 
 ```bash
-curl -I http://127.0.0.1:3000/api/recordings/ИМЯ_ФАЙЛА.wav
+curl -I http://127.0.0.1:3000/api/recordings/FILE.wav
 ```
 
 ---
 
 ## Ошибка подключения к MariaDB
 
-Проверьте подключение:
-
 ```bash
 mysql -u cdrviewer -p asteriskcdrdb
-```
-
-Проверьте права:
-
-```sql
-SHOW GRANTS FOR 'cdrviewer'@'localhost';
 ```
 
 ---
@@ -392,8 +418,6 @@ SHOW GRANTS FOR 'cdrviewer'@'localhost';
 asterisk -rx "manager show users"
 ```
 
-Убедитесь, что пользователь существует и пароль совпадает с указанным в настройках панели.
-
 ---
 
 # GitHub
@@ -404,8 +428,8 @@ asterisk -rx "manager show users"
 git config --global credential.helper store
 git config --global push.default simple
 
-git config --global user.name "Konstantin Grunin"
-git config --global user.email "ravigodno@gmail.com"
+git config --global user.name "YOUR_NAME"
+git config --global user.email "YOUR_EMAIL"
 ```
 
 ---
@@ -428,3 +452,9 @@ data/
 # Репозиторий проекта
 
 https://github.com/ravigodno/freepbx-cdr-new
+
+---
+
+© 2026 Freepbx CDR-NEW
+Грунин К.В. ИНН 9102057404
+https://grunin.org
