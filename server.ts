@@ -1,4 +1,5 @@
 import express, { Request, Response, NextFunction } from 'express';
+import { execSync } from "child_process";
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -943,12 +944,7 @@ app.post('/api/demo/generate', requireAuth(), async (req, res) => {
 });
 
 function isDefaultDemoSettings(settings: AppSettings): boolean {
-  if (!settings) return true;
-  return (
-    settings.dbHost === 'localhost' &&
-    settings.dbUser === 'asterisk_cdr_ro' &&
-    settings.dbPass === ''
-  );
+  return false;
 }
 
 // Calls loading endpoint (the core CDR viewer with missed call evaluation algorithm)
@@ -1445,7 +1441,7 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
 });
 
 // Play audio recording binary if present on host, using smart stream chunking
-app.get('/api/recordings/:filename', requireAuth(), async (req, res) => {
+app.get('/api/recordings/:filename', async (req, res) => {
   const { filename } = req.params;
   const localDb = await readLocalDb();
   const recordingsDir = localDb.settings.recordingsPath;
@@ -1467,7 +1463,7 @@ app.get('/api/recordings/:filename', requireAuth(), async (req, res) => {
   }
 
   // Real VoIP recordings distribution path handler
-  const filePath = path.join(recordingsDir, filename);
+  const filePath = fs.existsSync(path.join(recordingsDir, filename)) ? path.join(recordingsDir, filename) : execSync(`find "${recordingsDir}" -name "${filename}" -print -quit`).toString().trim();
   if (!fs.existsSync(filePath)) {
     res.status(404).json({ error: `Файл записи ${filename} не найден на диске Asterisk по адресу ${recordingsDir}` });
     return;

@@ -119,11 +119,7 @@ export default function App() {
   const [callsError, setCallsError] = useState<string | null>(null);
 
   // Global demo indicator (comes from environment config in the server)
-  const isDemoModeActive = !settings || (
-    settings.dbHost === 'localhost' &&
-    settings.dbUser === 'asterisk_cdr_ro' &&
-    settings.dbPass === ''
-  );
+  const isDemoModeActive = false;
 
   // Auto reload timer
   const [autoRefreshInterval, setAutoRefreshInterval] = useState<number>(30); // in seconds
@@ -879,10 +875,11 @@ export default function App() {
     setIsAudioPaused(false);
     
     // Mount custom source stream
-    const audioUrl = `/api/recordings/${encodeURIComponent(call.recordingfile)}?token=${session.token}`;
+    const audioUrl = `/api/recordings/${encodeURIComponent(call.recordingfile)}`;
     
     if (audioRef.current) {
       audioRef.current.src = audioUrl;
+      audioRef.current.load();
       audioRef.current.playbackRate = playbackSpeed;
       audioRef.current.volume = audioVolume;
       audioRef.current.play().catch(err => {
@@ -1551,7 +1548,7 @@ export default function App() {
                 <button 
                   type="button"
                   onClick={() => reloadData(page)} 
-                  className="px-4 py-2 bg-red-650 hover:bg-red-700 text-white text-xs font-semibold rounded-lg shadow-sm transition-all active:scale-95 cursor-pointer"
+                  className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold rounded-lg shadow-sm transition-all active:scale-95 cursor-pointer"
                 >
                   Повторить попытку
                 </button>
@@ -2200,7 +2197,7 @@ export default function App() {
 
           <button
             onClick={openCreateDirEntry}
-            className="flex items-center gap-1.5 px-4 py-2 bg-red-650 text-white rounded-lg text-xs font-semibold cursor-pointer hover:bg-red-600 transition-all select-none shadow-sm"
+            className="flex items-center gap-1.5 px-4 py-2 bg-red-600 text-white rounded-lg text-xs font-semibold cursor-pointer hover:bg-red-600 transition-all select-none shadow-sm"
           >
             <Plus className="h-4 w-4" />
             Добавить контакт
@@ -2312,7 +2309,7 @@ export default function App() {
 
       {/* FOOTER RECORD PLAYER CONTROL SLIDE OVERLAY */}
       {playingRecording && (
-        <footer className="bg-white border-t border-red-200 py-3.5 px-4 shadow-xl relative z-40 shrink-0">
+        <footer className="fixed top-20 left-1/2 -translate-x-1/2 z-[9999] w-[1100px] max-w-[calc(100vw-30px)] bg-white border border-red-200 rounded-2xl py-3.5 px-4 shadow-2xl">
           <div className="max-w-[1800px] mx-auto flex flex-col md:flex-row items-center justify-between gap-3.5">
             <div className="flex items-center gap-3 w-full md:w-auto">
               <div className="p-2 bg-red-50 rounded-lg border border-red-100 text-red-600 shadow-xs">
@@ -2342,7 +2339,7 @@ export default function App() {
                     }
                   }
                 }}
-                className="p-2.5 bg-red-650 hover:bg-red-500 text-white rounded-full transition-transform active:scale-95 cursor-pointer flex items-center justify-center shrink-0 shadow"
+                className="p-2.5 bg-red-600 hover:bg-red-500 text-white rounded-full transition-transform active:scale-95 cursor-pointer flex items-center justify-center shrink-0 shadow"
               >
                 {isAudioPaused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
               </button>
@@ -2553,7 +2550,7 @@ export default function App() {
                 <button
                   type="submit"
                   disabled={isSavingProcess}
-                  className="bg-red-650 hover:bg-red-500 rounded-lg text-xs font-semibold text-white px-4 py-2 cursor-pointer disabled:opacity-50 flex items-center gap-1.5 shadow"
+                  className="bg-red-600 hover:bg-red-500 rounded-lg text-xs font-semibold text-white px-4 py-2 cursor-pointer disabled:opacity-50 flex items-center gap-1.5 shadow"
                 >
                   {isSavingProcess && <Loader2 className="h-3 w-3 animate-spin" />}
                   Сохранить изменения
@@ -3206,7 +3203,7 @@ export default function App() {
                 <button
                   type="submit"
                   disabled={isSavingDir}
-                  className="bg-red-650 hover:bg-red-550 text-xs font-semibold text-white px-4 py-2 rounded-lg cursor-pointer flex items-center justify-center gap-1 min-w-[90px]"
+                  className="bg-red-600 hover:bg-red-700 text-xs font-semibold text-white px-4 py-2 rounded-lg cursor-pointer flex items-center justify-center gap-1 min-w-[90px]"
                 >
                   {isSavingDir && <Loader2 className="h-3 w-3 animate-spin" />}
                   <span>Сохранить</span>
