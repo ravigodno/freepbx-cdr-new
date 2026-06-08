@@ -1,5 +1,4 @@
 import express, { Request, Response, NextFunction } from 'express';
-import { execSync } from "child_process";
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -7,6 +6,7 @@ import mysql from 'mysql2/promise';
 import bcrypt from 'bcryptjs';
 import dotenv from 'dotenv';
 import net from 'net';
+import crypto from 'crypto';
 import { createServer as createViteServer } from 'vite';
 import { CallEntry, MissedCallStatus, AppSettings, DashboardStats, UserRole, WebUser } from './src/types.js';
 
@@ -26,8 +26,42 @@ if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-// Global server secret for basic signing of auth tokens
+// Global server secret for HMAC signing of auth tokens.
+// Tokens are intentionally compact and self-contained for this local app,
+// but they must be tamper-resistant because the role is stored client-side.
 const JWT_SECRET = process.env.JWT_SECRET || 'asterisk-cdr-secret-key-132';
+
+function base64UrlEncode(input: Buffer | string): string {
+  return Buffer.from(input).toString('base64url');
+}
+
+function signTokenPayload(encodedPayload: string): string {
+  return crypto.createHmac('sha256', JWT_SECRET).update(encodedPayload).digest('base64url');
+}
+
+function createAuthToken(payload: { username: string; role: UserRole; expiresAt: number }): string {
+  const encodedPayload = base64UrlEncode(JSON.stringify(payload));
+  const signature = signTokenPayload(encodedPayload);
+  return `${encodedPayload}.${signature}`;
+}
+
+function verifyAuthToken(token: string): { username: string; role: UserRole; expiresAt: number } | null {
+  const [encodedPayload, signature] = token.split('.');
+  if (!encodedPayload || !signature) return null;
+
+  const expectedSignature = signTokenPayload(encodedPayload);
+  const signatureBuffer = Buffer.from(signature, 'base64url');
+  const expectedBuffer = Buffer.from(expectedSignature, 'base64url');
+  if (signatureBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(signatureBuffer, expectedBuffer)) {
+    return null;
+  }
+
+  const payload = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8'));
+  if (payload.username && payload.role && payload.expiresAt > Date.now()) {
+    return payload;
+  }
+  return null;
+}
 
 // Phone Number Normalization helper function
 function normalizePhoneNumber(num: string, settings?: AppSettings): string {
@@ -496,9 +530,8 @@ function getLoggedInUser(req: Request): { username: string; role: UserRole } | n
   }
   const token = authHeader.substring(7);
   try {
-    // Basic decode & verify for local network (or simple JSON format)
-    const payload = JSON.parse(Buffer.from(token, 'base64').toString('utf8'));
-    if (payload.username && payload.role && payload.expiresAt > Date.now()) {
+    const payload = verifyAuthToken(token);
+    if (payload) {
       return { username: payload.username, role: payload.role };
     }
   } catch (e) {}
@@ -564,13 +597,12 @@ app.post('/api/auth/login', async (req, res) => {
     return;
   }
 
-  // Create a base64 encoded token valid for 24 hours
-  const tokenPayload = {
+  // Create a signed token valid for 24 hours
+  const token = createAuthToken({
     username: user.username,
     role: user.role,
     expiresAt: Date.now() + 24 * 60 * 60 * 1000
-  };
-  const token = Buffer.from(JSON.stringify(tokenPayload)).toString('base64');
+  });
 
   res.json({
     token,
@@ -947,6 +979,24 @@ function isDefaultDemoSettings(settings: AppSettings): boolean {
   return false;
 }
 
+
+function normalizeTimeFilter(value: unknown, fallback: string): string {
+  const time = typeof value === 'string' ? value : '';
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(time) ? time : fallback;
+}
+
+function buildDateTimeFilter(date: string, time: string, endOfMinute = false): string {
+  return `${date} ${time}:${endOfMinute ? '59' : '00'}`;
+}
+
+function getDateTimeFilterMs(date: string, time: string, endOfMinute = false): number {
+  return new Date(`${date}T${time}:${endOfMinute ? '59' : '00'}`).getTime();
+}
+
+function getCallDateMs(calldate: string): number {
+  return new Date(String(calldate || '').replace(' ', 'T')).getTime();
+}
+
 // Calls loading endpoint (the core CDR viewer with missed call evaluation algorithm)
 app.get('/api/calls', requireAuth(), async (req, res) => {
   try {
@@ -959,8 +1009,7 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
     const limit = parseInt(req.query.limit as string || '20', 10);
     const startDate = req.query.startDate as string; // YYYY-MM-DD
     const endDate = req.query.endDate as string;     // YYYY-MM-DD
-    const startTime = req.query.startTime as string;
-    const endTime = req.query.endTime as string;
+
     const numberFilter = req.query.number as string; // Caller/callee details
     const statusFilter = req.query.status as string; // 'ALL', 'ANSWERED', 'MISSED', 'ONLY_UNPROCESSED', 'ONLY_CALLBACKED'
     const searchFilter = req.query.search as string; // general search
@@ -980,11 +1029,11 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
 
       if (startDate) {
         sql += ' AND calldate >= ?';
-        sqlParams.push(`${startDate} 00:00:00`);
+        sqlParams.push(buildDateTimeFilter(startDate, startTime));
       }
       if (endDate) {
         sql += ' AND calldate <= ?';
-        sqlParams.push(`${endDate} 23:59:59`);
+        sqlParams.push(buildDateTimeFilter(endDate, endTime, true));
       }
 
       sql += ' ORDER BY calldate DESC LIMIT 1000'; // Guard database read limits
@@ -1225,12 +1274,12 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
 
     // Filter by period
     if (startDate) {
-      const sVal = new Date(`${startDate}T00:00:00`).getTime();
-      filteredCalls = filteredCalls.filter(c => new Date(c.calldate).getTime() >= sVal);
+      const sVal = getDateTimeFilterMs(startDate, startTime);
+      filteredCalls = filteredCalls.filter(c => getCallDateMs(c.calldate) >= sVal);
     }
     if (endDate) {
-      const eVal = new Date(`${endDate}T23:59:59`).getTime();
-      filteredCalls = filteredCalls.filter(c => new Date(c.calldate).getTime() <= eVal);
+      const eVal = getDateTimeFilterMs(endDate, endTime, true);
+      filteredCalls = filteredCalls.filter(c => getCallDateMs(c.calldate) <= eVal);
     }
 
     // General string search
@@ -1322,8 +1371,7 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
     // Retrieve active filter parameters
     const startDate = req.query.startDate as string;
     const endDate = req.query.endDate as string;
-    const startTime = req.query.startTime as string;
-    const endTime = req.query.endTime as string;
+
     const numberFilter = req.query.number as string;
     const searchFilter = req.query.search as string;
     const operatorExt = (req.query.operatorExt as string || '').trim();
@@ -1338,13 +1386,13 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
 
       if (startDate) {
         sql += ' AND calldate >= ?';
-        sqlParams.push(`${startDate} 00:00:00`);
+        sqlParams.push(buildDateTimeFilter(startDate, startTime));
       } else {
         sql += ' AND calldate >= DATE_SUB(NOW(), INTERVAL 7 DAY)';
       }
       if (endDate) {
         sql += ' AND calldate <= ?';
-        sqlParams.push(`${endDate} 23:59:59`);
+        sqlParams.push(buildDateTimeFilter(endDate, endTime, true));
       }
 
       sql += ' ORDER BY calldate DESC LIMIT 1000';
@@ -1484,12 +1532,12 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
     let filteredCalls = [...calls];
 
     if (startDate) {
-      const sVal = new Date(`${startDate}T00:00:00`).getTime();
-      filteredCalls = filteredCalls.filter(c => new Date(c.calldate).getTime() >= sVal);
+      const sVal = getDateTimeFilterMs(startDate, startTime);
+      filteredCalls = filteredCalls.filter(c => getCallDateMs(c.calldate) >= sVal);
     }
     if (endDate) {
-      const eVal = new Date(`${endDate}T23:59:59`).getTime();
-      filteredCalls = filteredCalls.filter(c => new Date(c.calldate).getTime() <= eVal);
+      const eVal = getDateTimeFilterMs(endDate, endTime, true);
+      filteredCalls = filteredCalls.filter(c => getCallDateMs(c.calldate) <= eVal);
     }
 
     if (searchFilter && searchFilter.trim().length > 0) {
@@ -1623,10 +1671,34 @@ app.get('/api/recordings/:filename', async (req, res) => {
     return;
   }
 
-  // Real VoIP recordings distribution path handler
-  const filePath = fs.existsSync(path.join(recordingsDir, filename)) ? path.join(recordingsDir, filename) : execSync(`find "${recordingsDir}" -name "${filename}" -print -quit`).toString().trim();
-  if (!fs.existsSync(filePath)) {
-    res.status(404).json({ error: `Файл записи ${filename} не найден на диске Asterisk по адресу ${recordingsDir}` });
+  // Real VoIP recordings distribution path handler.
+  // Never invoke a shell with a user-controlled filename; resolve the path in-process.
+  const safeFilename = path.basename(filename);
+  const recordingsRoot = path.resolve(recordingsDir);
+  const directPath = path.resolve(recordingsRoot, safeFilename);
+
+  const findRecordingFile = (dir: string, targetName: string): string | null => {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const entryPath = path.join(dir, entry.name);
+      if (entry.isFile() && entry.name === targetName) return entryPath;
+      if (entry.isDirectory()) {
+        const resolvedEntryPath = path.resolve(entryPath);
+        if (!resolvedEntryPath.startsWith(recordingsRoot + path.sep)) continue;
+        const found = findRecordingFile(entryPath, targetName);
+        if (found) return found;
+      }
+    }
+    return null;
+  };
+
+  let filePath = directPath.startsWith(recordingsRoot + path.sep) && fs.existsSync(directPath) ? directPath : '';
+  if (!filePath && fs.existsSync(recordingsRoot)) {
+    filePath = findRecordingFile(recordingsRoot, safeFilename) || '';
+  }
+
+  if (!filePath || !fs.existsSync(filePath)) {
+    res.status(404).json({ error: `Файл записи ${safeFilename} не найден на диске Asterisk по адресу ${recordingsDir}` });
     return;
   }
 
