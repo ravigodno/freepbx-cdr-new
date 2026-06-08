@@ -1007,7 +1007,7 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
   try {
     const localDb = await readLocalDb();
     const settings = localDb.settings;
-    const isDemo = process.env.DEMO_MODE === 'true' || isDefaultDemoSettings(settings) || req.query.demo === 'true';
+    const isDemo = process.env.DEMO_MODE === 'true' || (process.env.K_SERVICE ? isDefaultDemoSettings(settings) : false);
 
     // Pagination and filter parameters
     const page = parseInt(req.query.page as string || '1', 10);
@@ -1049,8 +1049,13 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
       try {
         calls = await queryFreePBXCDR(settings, false, sql, sqlParams);
       } catch (e: any) {
-        console.warn('Real MariaDB query failed, falling back to simulated data:', e.message);
-        calls = JSON.parse(JSON.stringify(mockCDRData));
+        if (process.env.K_SERVICE) {
+          console.log('Real MariaDB query failed (sandbox mode), returning fallback data:', e.message);
+          calls = JSON.parse(JSON.stringify(mockCDRData));
+        } else {
+          console.error('Real MariaDB query failed:', e.message);
+          calls = [];
+        }
         (req as any).dbError = e.message;
       }
     }
@@ -1423,7 +1428,7 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
   try {
     const localDb = await readLocalDb();
     const settings = localDb.settings;
-    const isDemo = process.env.DEMO_MODE === 'true' || isDefaultDemoSettings(settings) || req.query.demo === 'true';
+    const isDemo = process.env.DEMO_MODE === 'true' || (process.env.K_SERVICE ? isDefaultDemoSettings(settings) : false);
 
     // Retrieve active filter parameters
     const startDate = req.query.startDate as string;
@@ -1459,8 +1464,13 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
       try {
         calls = await queryFreePBXCDR(localDb.settings, false, sql, sqlParams);
       } catch (e: any) {
-        console.warn('Real MariaDB query for stats failed, falling back to simulated data:', e.message);
-        calls = JSON.parse(JSON.stringify(mockCDRData));
+        if (process.env.K_SERVICE) {
+          console.log('Real MariaDB query for stats failed (sandbox mode), returning fallback data:', e.message);
+          calls = JSON.parse(JSON.stringify(mockCDRData));
+        } else {
+          console.error('Real MariaDB query for stats failed:', e.message);
+          calls = [];
+        }
         (req as any).dbError = e.message;
       }
     }
@@ -1714,7 +1724,7 @@ app.get('/api/recordings/:filename', async (req, res) => {
   const { filename } = req.params;
   const localDb = await readLocalDb();
   const recordingsDir = localDb.settings.recordingsPath;
-  const isDemo = process.env.DEMO_MODE === 'true';
+  const isDemo = process.env.DEMO_MODE === 'true' || (process.env.K_SERVICE ? isDefaultDemoSettings(localDb.settings) : false);
 
   if (isDemo || !filename || filename.includes('..')) {
     // Return sample visual synthesized test audio context for Demo mode live playback 
