@@ -103,6 +103,65 @@ function normalizePhoneNumber(num: string, settings?: AppSettings): string {
   return cleaned;
 }
 
+const isInternalExt = (num: string): boolean => {
+  if (!num) return false;
+  const cleaned = num.trim();
+  const digits = cleaned.replace(/\D/g, '');
+  return digits.length > 0 && digits.length <= 5 && /^\d+$/.test(cleaned);
+};
+
+const isIncoming = (c: any): boolean => {
+  const srcVal = (c.src || '').trim();
+  const dstVal = (c.dst || '').trim();
+  const dctx = (c.dcontext || '').toLowerCase();
+  const ch = (c.channel || '').toLowerCase();
+
+  // Internal caller cannot be an incoming trunk call (from the outside)
+  if (isInternalExt(srcVal)) {
+    return false;
+  }
+
+  // Trunk context indicators
+  if (
+    dctx.includes('from-trunk') ||
+    dctx.includes('from-pstn') ||
+    dctx.includes('sip-external') ||
+    dctx.includes('from-digital') ||
+    dctx.includes('from-outside') ||
+    (c.did && c.did.length > 0)
+  ) {
+    return true;
+  }
+
+  // Incoming routed to a queue, ring group, IVR, or internal number with an external source
+  const isIncomingRoute = 
+    dctx === 'ext-queues' ||
+    dctx === 'ext-group' ||
+    dctx === 'ext-local' ||
+    dctx.startsWith('ivr-') ||
+    dstVal === '600' ||
+    isInternalExt(dstVal);
+
+  const isTrunkChannel = ch.includes('-in-') || ch.includes('trunk');
+
+  return isIncomingRoute || isTrunkChannel;
+};
+
+const isOutgoing = (c: any): boolean => {
+  const srcVal = (c.src || '').trim();
+  const dstVal = (c.dst || '').trim();
+  const dctx = (c.dcontext || '').toLowerCase();
+
+  return dctx === 'from-internal' && isInternalExt(srcVal) && !isInternalExt(dstVal) && dstVal.length >= 7;
+};
+
+const isInternal = (c: any): boolean => {
+  const srcVal = (c.src || '').trim();
+  const dstVal = (c.dst || '').trim();
+
+  return isInternalExt(srcVal) && isInternalExt(dstVal);
+};
+
 // Ensure standard database schema is initialized
 function bootstrapDatabase() {
   if (!fs.existsSync(DB_FILE)) {
@@ -1242,7 +1301,7 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
       const isMissedType = disposition === 'NO ANSWER' || disposition === 'BUSY' || disposition === 'FAILED';
       
       // Determine if incoming missed
-      const isIncomingMissed = isMissedType && (call.dcontext === 'from-trunk' || call.dst === '600' || call.did?.length > 0 || (call.channel && !call.dstchannel));
+      const isIncomingMissed = isMissedType && isIncoming(call);
 
       if (isIncomingMissed && call.src && call.src.trim().length > 3) {
         const clientNum = call.src.trim();
@@ -1359,43 +1418,18 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
         filteredCalls = filteredCalls.filter(c => {
           const disposition = c.disposition?.toUpperCase();
           const isUnanswered = disposition === 'NO ANSWER' || disposition === 'BUSY' || disposition === 'FAILED';
-          const isIncoming = c.dcontext === 'from-trunk' || c.dst === '600' || c.did?.length > 0;
-          const isMissed = isUnanswered && (isIncoming || !c.dstchannel);
+          const isIncomingCall = isIncoming(c);
+          const isMissed = isUnanswered && (isIncomingCall || !c.dstchannel);
           return isMissed && !c.processed && !c.wasCallbacked;
         });
       } else if (statusFilter === 'ONLY_CALLBACKED') {
         filteredCalls = filteredCalls.filter(c => c.wasCallbacked === true);
       } else if (statusFilter === 'INBOUND') {
-        filteredCalls = filteredCalls.filter(c => {
-          const dctx = c.dcontext || '';
-          const ch = c.channel || '';
-          const srcVal = (c.src || '').trim();
-          const dstVal = (c.dst || '').trim();
-          const isExternalSrc = srcVal.replace(/\D/g, "").length >= 7;
-          const isInternalDst = /^[0-9]{2,5}$/.test(dstVal);
-          return dctx.includes("from-trunk") ||
-                 dctx === "ext-queues" ||
-                 dctx === "ext-group" ||
-                 dctx.startsWith("ivr-") ||
-                 c.dst === "600" ||
-                 (c.did && c.did.length > 0) ||
-                 (isExternalSrc && isInternalDst) ||
-                 /^SIP\/[^\/]+-in-/.test(ch) ||
-                 /^PJSIP\/[^\/]+-in-/.test(ch);
-        });
+        filteredCalls = filteredCalls.filter(c => isIncoming(c));
       } else if (statusFilter === 'OUTBOUND') {
-        filteredCalls = filteredCalls.filter(c => {
-          const dctx = c.dcontext || '';
-          const dstVal = (c.dst || '').trim();
-          return dctx === 'from-internal' && /^[0-9]{7,}$/.test(dstVal);
-        });
+        filteredCalls = filteredCalls.filter(c => isOutgoing(c));
       } else if (statusFilter === 'INTERNAL') {
-        filteredCalls = filteredCalls.filter(c => {
-          const dctx = c.dcontext || '';
-          const srcVal = (c.src || '').trim();
-          const dstVal = (c.dst || '').trim();
-          return (dctx === 'ext-local' || dctx === 'from-internal') && /^[0-9]{2,5}$/.test(srcVal) && /^[0-9]{2,5}$/.test(dstVal);
-        });
+        filteredCalls = filteredCalls.filter(c => isInternal(c));
       } else if (statusFilter === 'PROCESSED') {
         filteredCalls = filteredCalls.filter(c => {
           const disposition = c.disposition?.toUpperCase();
@@ -1572,7 +1606,7 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
     chronological.forEach((call) => {
       const disposition = call.disposition?.toUpperCase();
       const isMissedType = disposition === 'NO ANSWER' || disposition === 'BUSY' || disposition === 'FAILED';
-      const isIncomingMissed = isMissedType && (call.dcontext === 'from-trunk' || call.dst === '600' || call.did?.length > 0 || (call.channel && !call.dstchannel));
+      const isIncomingMissed = isMissedType && isIncoming(call);
 
       if (isIncomingMissed && call.src) {
         const clientNum = call.src.trim();
@@ -1661,39 +1695,21 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
     let lostCalls = 0;
 
     filteredCalls.forEach(c => {
-      const dctx = c.dcontext || '';
-      const ch = c.channel || '';
-      const srcVal = (c.src || '').trim();
-      const dstVal = (c.dst || '').trim();
+      const isIncomingCall = isIncoming(c);
+      const isOutgoingCall = isOutgoing(c);
+      const isInternalCall = isInternal(c);
 
-      const isExternalSrc = srcVal.replace(/\D/g, "").length >= 7;
-      const isInternalDst = /^[0-9]{2,5}$/.test(dstVal);
-
-      const isIncoming = dctx.includes("from-trunk") ||
-                         dctx === "ext-queues" ||
-                         dctx === "ext-group" ||
-                         dctx.startsWith("ivr-") ||
-                         c.dst === "600" ||
-                         (c.did && c.did.length > 0) ||
-                         (isExternalSrc && isInternalDst) ||
-                         /^SIP\/[^\/]+-in-/.test(ch) ||
-                         /^PJSIP\/[^\/]+-in-/.test(ch);
-
-      const isOutgoing = dctx === 'from-internal' && /^[0-9]{7,}$/.test(dstVal);
-
-      const isInternal = dctx === 'ext-local' && /^[0-9]{2,5}$/.test(srcVal) && /^[0-9]{2,5}$/.test(dstVal);
-
-      if (isIncoming) {
+      if (isIncomingCall) {
         inboundCalls++;
-      } else if (isOutgoing) {
+      } else if (isOutgoingCall) {
         outboundCalls++;
-      } else if (isInternal) {
+      } else if (isInternalCall) {
         internalCalls++;
       }
 
       const disposition = c.disposition?.toUpperCase();
       const isMissedType = disposition === 'NO ANSWER' || disposition === 'BUSY' || disposition === 'FAILED';
-      const isIncomingMissed = isMissedType;
+      const isIncomingMissed = isIncomingCall && isMissedType;
 
       if (isIncomingMissed) {
         missedCalls++;

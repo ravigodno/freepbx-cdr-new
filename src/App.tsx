@@ -1899,15 +1899,36 @@ export default function App() {
                     const dstVal = (call.dst || '').trim();
 
                     // --- 1. CALL TYPE DETECTION ---
-                    const isIncoming = dctx.includes('from-trunk') ||
-                                       call.dst === '600' ||
-                                       (call.did && call.did.length > 0) ||
-                                       /^SIP\/[^\/]+-in-/.test(ch) ||
-                                       /^PJSIP\/[^\/]+-in-/.test(ch);
+                    const isIncoming = (() => {
+                      if (isInternalExt(srcVal)) {
+                        return false;
+                      }
+                      const dctxLower = dctx.toLowerCase();
+                      const chLower = ch.toLowerCase();
+                      if (
+                        dctxLower.includes('from-trunk') ||
+                        dctxLower.includes('from-pstn') ||
+                        dctxLower.includes('sip-external') ||
+                        dctxLower.includes('from-digital') ||
+                        dctxLower.includes('from-outside') ||
+                        (call.did && call.did.length > 0)
+                      ) {
+                        return true;
+                      }
+                      const isIncomingRoute = 
+                        dctxLower === 'ext-queues' ||
+                        dctxLower === 'ext-group' ||
+                        dctxLower === 'ext-local' ||
+                        dctxLower.startsWith('ivr-') ||
+                        dstVal === '600' ||
+                        isInternalExt(dstVal);
+                      const isTrunkChannel = chLower.includes('-in-') || chLower.includes('trunk');
+                      return isIncomingRoute || isTrunkChannel;
+                    })();
 
-                    const isOutgoing = dctx === 'from-internal' && /^[0-9]{7,}$/.test(dstVal);
+                    const isOutgoing = dctx === 'from-internal' && isInternalExt(srcVal) && !isInternalExt(dstVal) && dstVal.length >= 7;
 
-                    const isInternal = dctx === 'ext-local' && /^[0-9]{2,5}$/.test(srcVal) && /^[0-9]{2,5}$/.test(dstVal);
+                    const isInternal = isInternalExt(srcVal) && isInternalExt(dstVal);
 
                     const callDisp = (call.disposition || '').toUpperCase();
                     const isMissed = (callDisp === 'NO ANSWER' || callDisp === 'BUSY' || callDisp === 'FAILED') && (isIncoming || !call.dstchannel);
