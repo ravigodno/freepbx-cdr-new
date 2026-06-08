@@ -1060,7 +1060,7 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
       try {
         calls = await queryFreePBXCDR(settings, false, sql, sqlParams);
       } catch (e: any) {
-        console.error('Real MariaDB query failed:', e.message);
+        console.log('Real MariaDB query failed:', e.message);
         calls = [];
         (req as any).dbError = e.message;
       }
@@ -1470,7 +1470,7 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
       try {
         calls = await queryFreePBXCDR(localDb.settings, false, sql, sqlParams);
       } catch (e: any) {
-        console.error('Real MariaDB query for stats failed:', e.message);
+        console.log('Real MariaDB query for stats failed:', e.message);
         calls = [];
         (req as any).dbError = e.message;
       }
