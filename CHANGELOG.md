@@ -12,6 +12,8 @@
 
 - Bumped application version from `1.0.0` to `2.0.0`.
 - Date filtering now uses local date values instead of UTC-derived ISO date strings in the UI.
+- Restored normal multi-line source formatting after resolving the GitHub merge conflict.
+
 
 ### Security
 

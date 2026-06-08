@@ -1010,6 +1010,9 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
     const startDate = req.query.startDate as string; // YYYY-MM-DD
     const endDate = req.query.endDate as string;     // YYYY-MM-DD
 
+    const startTime = normalizeTimeFilter(req.query.startTime, '00:00'); // HH:mm, 24-hour
+    const endTime = normalizeTimeFilter(req.query.endTime, '23:59');     // HH:mm, 24-hour
+
     const numberFilter = req.query.number as string; // Caller/callee details
     const statusFilter = req.query.status as string; // 'ALL', 'ANSWERED', 'MISSED', 'ONLY_UNPROCESSED', 'ONLY_CALLBACKED'
     const searchFilter = req.query.search as string; // general search
@@ -1372,6 +1375,8 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
     const startDate = req.query.startDate as string;
     const endDate = req.query.endDate as string;
 
+    const startTime = normalizeTimeFilter(req.query.startTime, '00:00');
+    const endTime = normalizeTimeFilter(req.query.endTime, '23:59');
     const numberFilter = req.query.number as string;
     const searchFilter = req.query.search as string;
     const operatorExt = (req.query.operatorExt as string || '').trim();
