@@ -68,6 +68,7 @@ export interface AppSettings {
   dbName: string;
   dbUser: string;
   dbPass: string;
+  demoMode?: boolean;
   
   // AMI / Click-to-Call Settings
   amiHost?: string;

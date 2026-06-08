@@ -267,7 +267,7 @@ export default function App() {
   const [dbWarning, setDbWarning] = useState<string | null>(null);
 
   // Global demo indicator (comes from environment config in the server)
-  const isDemoModeActive = false;
+  const [isDemoModeActive, setIsDemoModeActive] = useState<boolean>(false);
 
   // Auto reload timer
   const [autoRefreshInterval, setAutoRefreshInterval] = useState<number>(30); // in seconds
@@ -765,6 +765,9 @@ export default function App() {
         if (data.dbError) {
           setDbWarning(data.dbError);
         }
+        if (data.demoModeActive !== undefined) {
+          setIsDemoModeActive(data.demoModeActive);
+        }
       }
     } catch (e) {
       console.error('Error fetching dashboard statistics:', e);
@@ -815,6 +818,9 @@ export default function App() {
           setDbWarning(data.dbError);
         } else {
           setDbWarning(null);
+        }
+        if (data.demoModeActive !== undefined) {
+          setIsDemoModeActive(data.demoModeActive);
         }
       } else {
         const errorData = await resp.json();
@@ -3133,20 +3139,30 @@ export default function App() {
                     </div>
                   </div>
 
-                  {isDemoModeActive && (
-                    <div className="border-t border-slate-800 pt-4 mt-2">
-                      <h4 className="text-xs font-bold text-slate-350 uppercase tracking-widest flex items-center gap-1.5 mb-3">
-                        <Sliders className="h-4 w-4 text-amber-500" />
-                        Демонстрационный режим
-                      </h4>
+                  <div className="border-t border-slate-800 pt-4 mt-2">
+                    <h4 className="text-xs font-bold text-slate-350 uppercase tracking-widest flex items-center gap-1.5 mb-3">
+                      <Sliders className="h-4 w-4 text-amber-500" />
+                      Демонстрационный режим
+                    </h4>
+                    
+                    <div className="bg-slate-950 border border-slate-850 rounded-lg p-3 space-y-3">
+                      <label className="flex items-center gap-2.5 text-xs text-slate-300 font-light cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={draftSettings.demoMode ?? false}
+                          onChange={(e) => setDraftSettings({ ...draftSettings, demoMode: e.target.checked })}
+                          className="rounded border-slate-800 bg-slate-950 text-amber-500 focus:ring-amber-500 h-4 w-4 cursor-pointer"
+                        />
+                        <span className="font-semibold text-amber-400">Включить демонстрационный режим (песочница)</span>
+                      </label>
+
+                      <p className="text-[10.5px] text-slate-400 font-light leading-relaxed">
+                        При включении демонстрационного режима приложение будет использовать виртуальную базу данных CDR звонков вместо реального подключения к MariaDB Asterisk.
+                      </p>
                       
-                      <div className="bg-slate-950 border border-slate-850 rounded-lg p-3 space-y-2.5">
-                        <p className="text-[10.5px] text-slate-400 font-light leading-relaxed">
-                          Вы работаете с демонстрационными звонками. После настройки подключения к вашей MariaDB Asterisk ниже, приложение переключится на ваши реальные логи АТС автоматически.
-                        </p>
-                        
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                          <span className="text-[11px] text-slate-400 font-medium">Управление:</span>
+                      {draftSettings.demoMode && (
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-t border-slate-850 pt-2.5">
+                          <span className="text-[11px] text-slate-400 font-medium font-sans">Управление данными:</span>
                           <div className="flex gap-2">
                             <button
                               type="button"
@@ -3171,19 +3187,19 @@ export default function App() {
                             </button>
                           </div>
                         </div>
+                      )}
 
-                        {demoStatusResult && (
-                          <div className={`p-2 rounded text-[10.5px] border ${
-                            demoStatusResult.success 
-                              ? 'bg-emerald-950/40 border-emerald-900 text-emerald-400' 
-                              : 'bg-red-950/40 border-red-900 text-red-400'
-                          }`}>
-                            {demoStatusResult.message}
-                          </div>
-                        )}
-                      </div>
+                      {demoStatusResult && (
+                        <div className={`p-2 rounded text-[10.5px] border ${
+                          demoStatusResult.success 
+                            ? 'bg-emerald-950/40 border-emerald-900 text-emerald-400' 
+                            : 'bg-red-950/40 border-red-900 text-red-400'
+                        }`}>
+                          {demoStatusResult.message}
+                        </div>
+                      )}
                     </div>
-                  )}
+                  </div>
 
                   {dbTestResult && (
                     <div className={`p-3.5 border rounded-lg text-xs flex items-start gap-2 ${

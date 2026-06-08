@@ -246,11 +246,6 @@ const mockUniqueIds: string[] = [];
 const mockCDRData: CallEntry[] = [];
 
 function generateMockCDR() {
-  return; // Simulated database code deactivated completely
-  const envDemo = String(process.env.DEMO_MODE || '').replace(/['"]/g, '').trim().toLowerCase();
-  if (envDemo === 'false') {
-    return;
-  }
   if (mockCDRData.length > 0) return;
   
   const now = new Date();
@@ -992,7 +987,11 @@ function isDefaultDemoSettings(settings: AppSettings): boolean {
 }
 
 function isDemoMode(settings: AppSettings): boolean {
-  return false; // Force demo mode to be completely inactive under all parameters
+  if (!settings) return false;
+  if (settings.demoMode !== undefined) {
+    return settings.demoMode === true;
+  }
+  return isDefaultDemoSettings(settings);
 }
 
 
@@ -1422,7 +1421,8 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
       page,
       limit,
       totalPages: Math.ceil(totalCount / limit),
-      dbError: (req as any).dbError || undefined
+      dbError: (req as any).dbError || undefined,
+      demoModeActive: isDemo
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Error executing CDR fetch logs.' });
@@ -1713,7 +1713,8 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
       missedCalls,
       processedCalls,
       lostCalls,
-      dbError: (req as any).dbError || undefined
+      dbError: (req as any).dbError || undefined,
+      demoModeActive: isDemo
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
