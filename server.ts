@@ -984,8 +984,10 @@ function isDefaultDemoSettings(settings: AppSettings): boolean {
   const host = settings.dbHost || 'localhost';
   const pass = settings.dbPass || '';
   const user = settings.dbUser || '';
-  // Automatically activate demo mode if settings match local default database details or have no password
-  return !host || host === 'localhost' || host === '127.0.0.1' || !pass || user === 'asterisk_cdr_ro';
+  // Only trigger demo fallback if the database has NO password AND the user is either empty or our default placeholder user
+  const isPlaceholderUser = !user || user === 'asterisk_cdr_ro';
+  const isPlaceholderPass = !pass;
+  return isPlaceholderUser && isPlaceholderPass;
 }
 
 function isDemoMode(settings: AppSettings): boolean {
