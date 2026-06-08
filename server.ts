@@ -1009,8 +1009,10 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
     const limit = parseInt(req.query.limit as string || '20', 10);
     const startDate = req.query.startDate as string; // YYYY-MM-DD
     const endDate = req.query.endDate as string;     // YYYY-MM-DD
+
     const startTime = normalizeTimeFilter(req.query.startTime, '00:00'); // HH:mm, 24-hour
     const endTime = normalizeTimeFilter(req.query.endTime, '23:59');     // HH:mm, 24-hour
+
     const numberFilter = req.query.number as string; // Caller/callee details
     const statusFilter = req.query.status as string; // 'ALL', 'ANSWERED', 'MISSED', 'ONLY_UNPROCESSED', 'ONLY_CALLBACKED'
     const searchFilter = req.query.search as string; // general search
@@ -1117,6 +1119,43 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
 
     // --- ALGORITHM FOR DETECTING MISSED CALLS AND POST-CALLBACK STATUSES ---
     // 1. Map local commented/processed states to each call
+    // Collapse CDR legs for stats by linkedid, same as calls list
+    const statsLinkedGroups = new Map<string, CallEntry[]>();
+    calls.forEach(c => {
+      const key = c.linkedid || c.uniqueid;
+      if (!statsLinkedGroups.has(key)) statsLinkedGroups.set(key, []);
+      statsLinkedGroups.get(key)!.push(c);
+    });
+
+    calls = Array.from(statsLinkedGroups.values()).map(group => {
+      if (group.length === 1) return group[0];
+      const sorted = [...group].sort((a, b) => new Date(a.calldate).getTime() - new Date(b.calldate).getTime());
+      const answered = sorted.find(c => (c.disposition || "").toUpperCase() === "ANSWERED" && Number(c.billsec || 0) > 0);
+      const queueLeg = sorted.find(c => c.dcontext === "ext-queues" || c.lastapp === "Queue");
+      const groupLeg = sorted.find(c => c.dcontext === "ext-group");
+      const routeLeg = queueLeg || groupLeg || sorted[0];
+      const external = sorted.find(c => (c.src || "").replace(/\D/g, "").length >= 7) || routeLeg;
+      const extLegs = sorted.filter(c => c.dcontext === "ext-local" && /^[0-9]{2,5}$/.test(String(c.dst || "")));
+      const missedExts = Array.from(new Set(extLegs.filter(c => (c.disposition || "").toUpperCase() !== "ANSWERED" || Number(c.billsec || 0) === 0).map(c => String(c.dst))));
+      const answeredExts = Array.from(new Set(extLegs.filter(c => (c.disposition || "").toUpperCase() === "ANSWERED" && Number(c.billsec || 0) > 0).map(c => String(c.dst))));
+      const dialedExts = answered ? answeredExts : missedExts;
+      const did = routeLeg.did || sorted.find(c => c.did)?.did || "";
+      return {
+        ...routeLeg,
+        uniqueid: routeLeg.linkedid || routeLeg.uniqueid,
+        linkedid: routeLeg.linkedid || routeLeg.uniqueid,
+        calldate: sorted[0].calldate,
+        src: external.src || routeLeg.src,
+        dst: queueLeg ? `Очередь ${queueLeg.dst}` : groupLeg ? `Группа ${groupLeg.dst}` : (routeLeg.dst || sorted[0].dst),
+        dstchannel: "",
+        did: dialedExts.length ? `${did} → ${answered ? "ответил" : "пропустили"}: ${dialedExts.join(", ")}` : did,
+        disposition: answered ? "ANSWERED" : "NO ANSWER",
+        billsec: answered ? answered.billsec : 0,
+        duration: Math.max(...sorted.map(c => Number(c.duration || 0))),
+        recordingfile: answered?.recordingfile || sorted.find(c => c.recordingfile)?.recordingfile || "",
+      };
+    });
+
     const directory = localDb.directory || [];
 
     const callMap = new Map<string, CallEntry>();
@@ -1335,6 +1374,7 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
     // Retrieve active filter parameters
     const startDate = req.query.startDate as string;
     const endDate = req.query.endDate as string;
+
     const startTime = normalizeTimeFilter(req.query.startTime, '00:00');
     const endTime = normalizeTimeFilter(req.query.endTime, '23:59');
     const numberFilter = req.query.number as string;
@@ -1370,6 +1410,43 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
         return;
       }
     }
+
+    // Collapse CDR legs for stats by linkedid, same as calls list
+    const statsLinkedGroups = new Map<string, CallEntry[]>();
+    calls.forEach(c => {
+      const key = c.linkedid || c.uniqueid;
+      if (!statsLinkedGroups.has(key)) statsLinkedGroups.set(key, []);
+      statsLinkedGroups.get(key)!.push(c);
+    });
+
+    calls = Array.from(statsLinkedGroups.values()).map(group => {
+      if (group.length === 1) return group[0];
+      const sorted = [...group].sort((a, b) => new Date(a.calldate).getTime() - new Date(b.calldate).getTime());
+      const answered = sorted.find(c => (c.disposition || "").toUpperCase() === "ANSWERED" && Number(c.billsec || 0) > 0);
+      const queueLeg = sorted.find(c => c.dcontext === "ext-queues" || c.lastapp === "Queue");
+      const groupLeg = sorted.find(c => c.dcontext === "ext-group");
+      const routeLeg = queueLeg || groupLeg || sorted[0];
+      const external = sorted.find(c => (c.src || "").replace(/\D/g, "").length >= 7) || routeLeg;
+      const extLegs = sorted.filter(c => c.dcontext === "ext-local" && /^[0-9]{2,5}$/.test(String(c.dst || "")));
+      const missedExts = Array.from(new Set(extLegs.filter(c => (c.disposition || "").toUpperCase() !== "ANSWERED" || Number(c.billsec || 0) === 0).map(c => String(c.dst))));
+      const answeredExts = Array.from(new Set(extLegs.filter(c => (c.disposition || "").toUpperCase() === "ANSWERED" && Number(c.billsec || 0) > 0).map(c => String(c.dst))));
+      const dialedExts = answered ? answeredExts : missedExts;
+      const did = routeLeg.did || sorted.find(c => c.did)?.did || "";
+      return {
+        ...routeLeg,
+        uniqueid: routeLeg.linkedid || routeLeg.uniqueid,
+        linkedid: routeLeg.linkedid || routeLeg.uniqueid,
+        calldate: sorted[0].calldate,
+        src: external.src || routeLeg.src,
+        dst: queueLeg ? `Очередь ${queueLeg.dst}` : groupLeg ? `Группа ${groupLeg.dst}` : (routeLeg.dst || sorted[0].dst),
+        dstchannel: "",
+        did: dialedExts.length ? `${did} → ${answered ? "ответил" : "пропустили"}: ${dialedExts.join(", ")}` : did,
+        disposition: answered ? "ANSWERED" : "NO ANSWER",
+        billsec: answered ? answered.billsec : 0,
+        duration: Math.max(...sorted.map(c => Number(c.duration || 0))),
+        recordingfile: answered?.recordingfile || sorted.find(c => c.recordingfile)?.recordingfile || "",
+      };
+    });
 
     const directory = localDb.directory || [];
     const callMap = new Map<string, CallEntry>();
@@ -1515,9 +1592,16 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
       const srcVal = (c.src || '').trim();
       const dstVal = (c.dst || '').trim();
 
-      const isIncoming = dctx.includes('from-trunk') ||
-                         c.dst === '600' ||
+      const isExternalSrc = srcVal.replace(/\D/g, "").length >= 7;
+      const isInternalDst = /^[0-9]{2,5}$/.test(dstVal);
+
+      const isIncoming = dctx.includes("from-trunk") ||
+                         dctx === "ext-queues" ||
+                         dctx === "ext-group" ||
+                         dctx.startsWith("ivr-") ||
+                         c.dst === "600" ||
                          (c.did && c.did.length > 0) ||
+                         (isExternalSrc && isInternalDst) ||
                          /^SIP\/[^\/]+-in-/.test(ch) ||
                          /^PJSIP\/[^\/]+-in-/.test(ch);
 
@@ -1535,7 +1619,7 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
 
       const disposition = c.disposition?.toUpperCase();
       const isMissedType = disposition === 'NO ANSWER' || disposition === 'BUSY' || disposition === 'FAILED';
-      const isIncomingMissed = isIncoming && isMissedType;
+      const isIncomingMissed = isMissedType;
 
       if (isIncomingMissed) {
         missedCalls++;
