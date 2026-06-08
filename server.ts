@@ -246,6 +246,7 @@ const mockUniqueIds: string[] = [];
 const mockCDRData: CallEntry[] = [];
 
 function generateMockCDR() {
+  return; // Simulated database code deactivated completely
   const envDemo = String(process.env.DEMO_MODE || '').replace(/['"]/g, '').trim().toLowerCase();
   if (envDemo === 'false') {
     return;
@@ -991,14 +992,7 @@ function isDefaultDemoSettings(settings: AppSettings): boolean {
 }
 
 function isDemoMode(settings: AppSettings): boolean {
-  const envDemo = String(process.env.DEMO_MODE || '').replace(/['"]/g, '').trim().toLowerCase();
-  if (envDemo === 'false') {
-    return false;
-  }
-  if (envDemo === 'true') {
-    return true;
-  }
-  return isDefaultDemoSettings(settings);
+  return false; // Force demo mode to be completely inactive under all parameters
 }
 
 
@@ -1066,14 +1060,8 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
       try {
         calls = await queryFreePBXCDR(settings, false, sql, sqlParams);
       } catch (e: any) {
-        const envDemo = String(process.env.DEMO_MODE || '').replace(/['"]/g, '').trim().toLowerCase();
-        if (process.env.K_SERVICE && envDemo !== 'false') {
-          console.log('Real MariaDB query failed (sandbox mode), returning fallback data:', e.message);
-          calls = JSON.parse(JSON.stringify(mockCDRData));
-        } else {
-          console.error('Real MariaDB query failed:', e.message);
-          calls = [];
-        }
+        console.error('Real MariaDB query failed:', e.message);
+        calls = [];
         (req as any).dbError = e.message;
       }
     }
@@ -1482,14 +1470,8 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
       try {
         calls = await queryFreePBXCDR(localDb.settings, false, sql, sqlParams);
       } catch (e: any) {
-        const envDemo = String(process.env.DEMO_MODE || '').replace(/['"]/g, '').trim().toLowerCase();
-        if (process.env.K_SERVICE && envDemo !== 'false') {
-          console.log('Real MariaDB query for stats failed (sandbox mode), returning fallback data:', e.message);
-          calls = JSON.parse(JSON.stringify(mockCDRData));
-        } else {
-          console.error('Real MariaDB query for stats failed:', e.message);
-          calls = [];
-        }
+        console.error('Real MariaDB query for stats failed:', e.message);
+        calls = [];
         (req as any).dbError = e.message;
       }
     }
@@ -1856,8 +1838,7 @@ async function startServer() {
   app.listen(parseInt(PORT, 10), '0.0.0.0', () => {
     console.log(`VOIP CDR Missed Calls Service is operational on port ${PORT}`);
     console.log(`Environment context: ${NODE_ENV}`);
-    const envDemo = String(process.env.DEMO_MODE || '').replace(/['"]/g, '').trim().toLowerCase();
-    console.log(`Simulated Asterisk Sandbox status: ${envDemo === 'true' ? 'ACTIVE' : 'INACTIVE'}`);
+    console.log(`Simulated Asterisk Sandbox status: DISABLED`);
   });
 }
 
