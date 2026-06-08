@@ -13,8 +13,19 @@ import { CallEntry, MissedCallStatus, AppSettings, DashboardStats, UserRole, Web
 // Load environment variables
 dotenv.config();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+let myFilename = '';
+let myDirname = '';
+
+try {
+  myFilename = eval('__filename');
+  myDirname = eval('__dirname');
+} catch (e) {
+  myFilename = fileURLToPath(import.meta.url);
+  myDirname = path.dirname(myFilename);
+}
+
+const __filename = myFilename;
+const __dirname = myDirname;
 
 const PORT = process.env.PORT || '3000';
 const NODE_ENV = process.env.NODE_ENV || 'development';
@@ -1059,9 +1070,8 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
       try {
         calls = await queryFreePBXCDR(settings, false, sql, sqlParams);
       } catch (e: any) {
-        console.log('Real MariaDB query failed:', e.message);
-        calls = [];
-        (req as any).dbError = e.message;
+        calls = JSON.parse(JSON.stringify(mockCDRData));
+        (req as any).dbError = `База данных CDR недоступна. Отображаются демонстрационные данные.`;
       }
     }
     // Normalize single IVR calls where FreePBX stores dst as "s".
@@ -1470,9 +1480,8 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
       try {
         calls = await queryFreePBXCDR(localDb.settings, false, sql, sqlParams);
       } catch (e: any) {
-        console.log('Real MariaDB query for stats failed:', e.message);
-        calls = [];
-        (req as any).dbError = e.message;
+        calls = JSON.parse(JSON.stringify(mockCDRData));
+        (req as any).dbError = `База данных CDR недоступна. Отображаются демонстрационные данные.`;
       }
     }
 
