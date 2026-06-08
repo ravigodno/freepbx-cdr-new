@@ -246,6 +246,9 @@ const mockUniqueIds: string[] = [];
 const mockCDRData: CallEntry[] = [];
 
 function generateMockCDR() {
+  if (process.env.DEMO_MODE === 'false') {
+    return;
+  }
   if (mockCDRData.length > 0) return;
   
   const now = new Date();
@@ -984,6 +987,13 @@ function isDefaultDemoSettings(settings: AppSettings): boolean {
   return !host || host === 'localhost' || host === '127.0.0.1' || !pass || user === 'asterisk_cdr_ro';
 }
 
+function isDemoMode(settings: AppSettings): boolean {
+  if (process.env.DEMO_MODE === 'false') {
+    return false;
+  }
+  return process.env.DEMO_MODE === 'true' || (process.env.K_SERVICE ? isDefaultDemoSettings(settings) : false);
+}
+
 
 function normalizeTimeFilter(value: unknown, fallback: string): string {
   const time = typeof value === 'string' ? value : '';
@@ -1007,7 +1017,7 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
   try {
     const localDb = await readLocalDb();
     const settings = localDb.settings;
-    const isDemo = process.env.DEMO_MODE === 'true' || (process.env.K_SERVICE ? isDefaultDemoSettings(settings) : false);
+    const isDemo = isDemoMode(settings);
 
     // Pagination and filter parameters
     const page = parseInt(req.query.page as string || '1', 10);
@@ -1049,7 +1059,7 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
       try {
         calls = await queryFreePBXCDR(settings, false, sql, sqlParams);
       } catch (e: any) {
-        if (process.env.K_SERVICE) {
+        if (process.env.K_SERVICE && process.env.DEMO_MODE !== 'false') {
           console.log('Real MariaDB query failed (sandbox mode), returning fallback data:', e.message);
           calls = JSON.parse(JSON.stringify(mockCDRData));
         } else {
@@ -1428,7 +1438,7 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
   try {
     const localDb = await readLocalDb();
     const settings = localDb.settings;
-    const isDemo = process.env.DEMO_MODE === 'true' || (process.env.K_SERVICE ? isDefaultDemoSettings(settings) : false);
+    const isDemo = isDemoMode(settings);
 
     // Retrieve active filter parameters
     const startDate = req.query.startDate as string;
@@ -1464,7 +1474,7 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
       try {
         calls = await queryFreePBXCDR(localDb.settings, false, sql, sqlParams);
       } catch (e: any) {
-        if (process.env.K_SERVICE) {
+        if (process.env.K_SERVICE && process.env.DEMO_MODE !== 'false') {
           console.log('Real MariaDB query for stats failed (sandbox mode), returning fallback data:', e.message);
           calls = JSON.parse(JSON.stringify(mockCDRData));
         } else {
@@ -1724,7 +1734,7 @@ app.get('/api/recordings/:filename', async (req, res) => {
   const { filename } = req.params;
   const localDb = await readLocalDb();
   const recordingsDir = localDb.settings.recordingsPath;
-  const isDemo = process.env.DEMO_MODE === 'true' || (process.env.K_SERVICE ? isDefaultDemoSettings(localDb.settings) : false);
+  const isDemo = isDemoMode(localDb.settings);
 
   if (isDemo || !filename || filename.includes('..')) {
     // Return sample visual synthesized test audio context for Demo mode live playback 
