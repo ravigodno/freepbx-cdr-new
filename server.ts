@@ -976,7 +976,12 @@ app.post('/api/demo/generate', requireAuth(), async (req, res) => {
 });
 
 function isDefaultDemoSettings(settings: AppSettings): boolean {
-  return false;
+  if (!settings) return true;
+  const host = settings.dbHost || 'localhost';
+  const pass = settings.dbPass || '';
+  const user = settings.dbUser || '';
+  // Automatically activate demo mode if settings match local default database details or have no password
+  return !host || host === 'localhost' || host === '127.0.0.1' || !pass || user === 'asterisk_cdr_ro';
 }
 
 
@@ -1044,9 +1049,9 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
       try {
         calls = await queryFreePBXCDR(settings, false, sql, sqlParams);
       } catch (e: any) {
-        console.error('Real MariaDB query failed:', e.message);
-        res.status(500).json({ error: `Ошибка подключения к базе MariaDB (${settings.dbHost}:${settings.dbPort}): ${e.message}` });
-        return;
+        console.warn('Real MariaDB query failed, falling back to simulated data:', e.message);
+        calls = JSON.parse(JSON.stringify(mockCDRData));
+        (req as any).dbError = e.message;
       }
     }
     // Normalize single IVR calls where FreePBX stores dst as "s".
@@ -1328,9 +1333,7 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
       } else if (statusFilter === 'MISSED') {
         filteredCalls = filteredCalls.filter(c => {
           const disposition = c.disposition?.toUpperCase();
-          const isUnanswered = disposition === 'NO ANSWER' || disposition === 'BUSY' || disposition === 'FAILED';
-          const isIncoming = c.dcontext === 'from-trunk' || c.dst === '600' || c.did?.length > 0;
-          return isUnanswered && (isIncoming || !c.dstchannel);
+          return disposition === 'NO ANSWER' || disposition === 'BUSY' || disposition === 'FAILED';
         });
       } else if (statusFilter === 'ONLY_UNPROCESSED') {
         filteredCalls = filteredCalls.filter(c => {
@@ -1342,6 +1345,56 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
         });
       } else if (statusFilter === 'ONLY_CALLBACKED') {
         filteredCalls = filteredCalls.filter(c => c.wasCallbacked === true);
+      } else if (statusFilter === 'INBOUND') {
+        filteredCalls = filteredCalls.filter(c => {
+          const dctx = c.dcontext || '';
+          const ch = c.channel || '';
+          const srcVal = (c.src || '').trim();
+          const dstVal = (c.dst || '').trim();
+          const isExternalSrc = srcVal.replace(/\D/g, "").length >= 7;
+          const isInternalDst = /^[0-9]{2,5}$/.test(dstVal);
+          return dctx.includes("from-trunk") ||
+                 dctx === "ext-queues" ||
+                 dctx === "ext-group" ||
+                 dctx.startsWith("ivr-") ||
+                 c.dst === "600" ||
+                 (c.did && c.did.length > 0) ||
+                 (isExternalSrc && isInternalDst) ||
+                 /^SIP\/[^\/]+-in-/.test(ch) ||
+                 /^PJSIP\/[^\/]+-in-/.test(ch);
+        });
+      } else if (statusFilter === 'OUTBOUND') {
+        filteredCalls = filteredCalls.filter(c => {
+          const dctx = c.dcontext || '';
+          const dstVal = (c.dst || '').trim();
+          return dctx === 'from-internal' && /^[0-9]{7,}$/.test(dstVal);
+        });
+      } else if (statusFilter === 'INTERNAL') {
+        filteredCalls = filteredCalls.filter(c => {
+          const dctx = c.dcontext || '';
+          const srcVal = (c.src || '').trim();
+          const dstVal = (c.dst || '').trim();
+          return (dctx === 'ext-local' || dctx === 'from-internal') && /^[0-9]{2,5}$/.test(srcVal) && /^[0-9]{2,5}$/.test(dstVal);
+        });
+      } else if (statusFilter === 'PROCESSED') {
+        filteredCalls = filteredCalls.filter(c => {
+          const disposition = c.disposition?.toUpperCase();
+          const isMissedType = disposition === 'NO ANSWER' || disposition === 'BUSY' || disposition === 'FAILED';
+          const isHandled = c.processed || c.wasCallbacked || c.wasKpiResolved;
+          return isMissedType && isHandled;
+        });
+      } else if (statusFilter === 'LOST') {
+        filteredCalls = filteredCalls.filter(c => {
+          const disposition = c.disposition?.toUpperCase();
+          const isMissedType = disposition === 'NO ANSWER' || disposition === 'BUSY' || disposition === 'FAILED';
+          const kpiMinutes = settings && settings.callbackKpiMinutes !== undefined
+            ? Number(settings.callbackKpiMinutes)
+            : 60;
+          const callTime = new Date(c.calldate).getTime();
+          const slaExpired = Number.isFinite(callTime) && (Date.now() - callTime) > kpiMinutes * 60 * 1000;
+          const isHandled = c.processed || c.wasCallbacked || c.wasKpiResolved;
+          return isMissedType && !isHandled && slaExpired;
+        });
       }
     }
 
@@ -1357,7 +1410,8 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
       total: totalCount,
       page,
       limit,
-      totalPages: Math.ceil(totalCount / limit)
+      totalPages: Math.ceil(totalCount / limit),
+      dbError: (req as any).dbError || undefined
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Error executing CDR fetch logs.' });
@@ -1405,9 +1459,9 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
       try {
         calls = await queryFreePBXCDR(localDb.settings, false, sql, sqlParams);
       } catch (e: any) {
-        console.error('Real MariaDB query for stats failed:', e.message);
-        res.status(500).json({ error: `Ошибка подключения к базе MariaDB (${localDb.settings.dbHost}:${localDb.settings.dbPort}): ${e.message}` });
-        return;
+        console.warn('Real MariaDB query for stats failed, falling back to simulated data:', e.message);
+        calls = JSON.parse(JSON.stringify(mockCDRData));
+        (req as any).dbError = e.message;
       }
     }
 
@@ -1647,7 +1701,8 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
       internalCalls,
       missedCalls,
       processedCalls,
-      lostCalls
+      lostCalls,
+      dbError: (req as any).dbError || undefined
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message });

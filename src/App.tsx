@@ -264,6 +264,7 @@ export default function App() {
   const [isDemoGenerating, setIsDemoGenerating] = useState(false);
   const [demoStatusResult, setDemoStatusResult] = useState<{ success: boolean; message: string } | null>(null);
   const [callsError, setCallsError] = useState<string | null>(null);
+  const [dbWarning, setDbWarning] = useState<string | null>(null);
 
   // Global demo indicator (comes from environment config in the server)
   const isDemoModeActive = false;
@@ -298,6 +299,20 @@ export default function App() {
   const [importSuccessCount, setImportSuccessCount] = useState<number | null>(null);
   const [isNormalizingDb, setIsNormalizingDb] = useState(false);
   const [normalizedCount, setNormalizedCount] = useState<number | null>(null);
+
+  // Helper to handle unauthorized status (expired/missing token)
+  const handleAuthError = (resp?: Response) => {
+    if (session) {
+      setSession(null);
+      localStorage.removeItem('asterisk_cdr_session');
+      if (audioRef.current) {
+        audioRef.current.pause();
+      }
+      setPlayingRecording(null);
+      setPlayingCallId(null);
+      alert('Ваша сессия истекла или недействительна. Пожалуйста, авторизуйтесь заново.');
+    }
+  };
 
   // Simple CSV / Text Parser
   const handleParseImport = (text: string) => {
@@ -444,6 +459,10 @@ export default function App() {
           'Authorization': `Bearer ${session?.token}`
         }
       });
+      if (resp.status === 401) {
+        handleAuthError(resp);
+        return;
+      }
       const data = await resp.json();
       if (resp.ok) {
         setNormalizedCount(data.updatedCount);
@@ -475,6 +494,10 @@ export default function App() {
           overwrite: importOverwriteMode
         })
       });
+      if (resp.status === 401) {
+        handleAuthError(resp);
+        return;
+      }
       const data = await resp.json();
       if (resp.ok) {
         setImportSuccessCount(data.count);
@@ -546,6 +569,11 @@ export default function App() {
         })
       });
       
+      if (resp.status === 401) {
+        handleAuthError(resp);
+        return;
+      }
+      
       const data = await resp.json();
       if (resp.ok && data.success) {
         if (data.log && Array.isArray(data.log)) {
@@ -577,6 +605,10 @@ export default function App() {
           'Authorization': `Bearer ${session.token}`
         }
       });
+      if (resp.status === 401) {
+        handleAuthError(resp);
+        return;
+      }
       if (resp.ok) {
         const data = await resp.json();
         setDirectory(data);
@@ -617,6 +649,11 @@ export default function App() {
         })
       });
 
+      if (resp.status === 401) {
+        handleAuthError(resp);
+        return;
+      }
+
       const data = await resp.json();
       if (resp.ok) {
         // Refresh contacts locally
@@ -650,6 +687,10 @@ export default function App() {
           'Authorization': `Bearer ${session?.token}`
         }
       });
+      if (resp.status === 401) {
+        handleAuthError(resp);
+        return;
+      }
       if (resp.ok) {
         await loadDirectory();
         loadCalls(page);
@@ -714,9 +755,16 @@ export default function App() {
           'Authorization': `Bearer ${session.token}`
         }
       });
+      if (resp.status === 401) {
+        handleAuthError(resp);
+        return;
+      }
       if (resp.ok) {
         const data = await resp.json();
         setStats(data);
+        if (data.dbError) {
+          setDbWarning(data.dbError);
+        }
       }
     } catch (e) {
       console.error('Error fetching dashboard statistics:', e);
@@ -751,6 +799,11 @@ export default function App() {
         }
       });
 
+      if (resp.status === 401) {
+        handleAuthError(resp);
+        return;
+      }
+
       if (resp.ok) {
         const data = await resp.json();
         setCalls(data.calls);
@@ -758,6 +811,11 @@ export default function App() {
         setTotalPages(data.totalPages || 1);
         setPage(data.page || 1);
         setCallsError(null);
+        if (data.dbError) {
+          setDbWarning(data.dbError);
+        } else {
+          setDbWarning(null);
+        }
       } else {
         const errorData = await resp.json();
         console.error('Error parsing CDR call logs:', errorData.error);
@@ -850,6 +908,11 @@ export default function App() {
         })
       });
 
+      if (resp.status === 401) {
+        handleAuthError(resp);
+        return;
+      }
+
       if (resp.ok) {
         // Optimistically update list or fully reload
         setSelectedCall(null);
@@ -873,6 +936,10 @@ export default function App() {
           'Authorization': `Bearer ${session.token}`
         }
       });
+      if (resp.status === 401) {
+        handleAuthError(resp);
+        return;
+      }
       if (resp.ok) {
         const data = await resp.json();
         setSettings(data);
@@ -898,6 +965,11 @@ export default function App() {
         },
         body: JSON.stringify(draftSettings)
       });
+
+      if (resp.status === 401) {
+        handleAuthError(resp);
+        return;
+      }
 
       if (resp.ok) {
         setIsSettingsOpen(false);
@@ -926,6 +998,10 @@ export default function App() {
           'Authorization': `Bearer ${session.token}`
         }
       });
+      if (resp.status === 401) {
+        handleAuthError(resp);
+        return;
+      }
       if (resp.ok) {
         setDemoStatusResult({ success: true, message: 'Демонстрационные звонки успешно удалены из памяти!' });
         loadCalls(1);
@@ -950,6 +1026,10 @@ export default function App() {
           'Authorization': `Bearer ${session.token}`
         }
       });
+      if (resp.status === 401) {
+        handleAuthError(resp);
+        return;
+      }
       if (resp.ok) {
         setDemoStatusResult({ success: true, message: 'Демонстрационные звонки успешно сгенерированы заново!' });
         loadCalls(1);
@@ -979,6 +1059,11 @@ export default function App() {
         },
         body: JSON.stringify(draftSettings)
       });
+      
+      if (resp.status === 401) {
+        handleAuthError(resp);
+        return;
+      }
       
       if (resp.ok) {
         setDbTestResult({
@@ -1220,8 +1305,8 @@ export default function App() {
           </div>
 
           {loginError && (
-            <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-800 text-sm rounded-lg flex items-start gap-2.5">
-              <AlertCircle className="h-5 w-5 text-red-600 shrink-0 mt-0.5" />
+            <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-00 text-sm rounded-lg flex items-start gap-2.5">
+              <AlertCircle className="h-5 w-5 text-red-650 shrink-0 mt-0.5" />
               <span>{loginError}</span>
             </div>
           )}
@@ -1367,12 +1452,12 @@ export default function App() {
             </div>
 
             {/* Config & Profile actions */}
-            <div className="h-8 w-[1px] bg-slate-200 hidden sm:block" />
+            <div className="h-8 w-[1px] bg-slate-205 hidden sm:block" />
 
             <div className="flex items-center gap-2">
               <div className="text-right hidden md:block">
                 <div className="text-xs font-semibold text-slate-800">{session.username}</div>
-                <div className="text-[10px] text-red-600 font-medium uppercase tracking-wider">{session.role}</div>
+                <div className="text-[10px] text-red-655 font-medium uppercase tracking-wider">{session.role}</div>
               </div>
               
               {session.role === 'admin' && (
@@ -1381,7 +1466,7 @@ export default function App() {
                     loadAdminSettings();
                     setIsSettingsOpen(true);
                   }}
-                  className="p-2 text-slate-500 hover:text-slate-950 hover:bg-slate-100 rounded-lg border border-transparent hover:border-slate-200 transition-all cursor-pointer"
+                  className="p-2 text-slate-500 hover:text-slate-950 hover:bg-slate-100 rounded-lg border border-transparent hover:border-slate-201 transition-all cursor-pointer"
                   title="Настройки подключения FreePBX"
                 >
                   <Settings className="h-5 w-5" />
@@ -1390,7 +1475,7 @@ export default function App() {
 
               <button
                 onClick={handleLogout}
-                className="p-2 text-slate-500 hover:text-red-600 hover:bg-slate-100 rounded-lg border border-transparent hover:border-slate-200 transition-all cursor-pointer"
+                className="p-2 text-slate-500 hover:text-red-655 hover:bg-slate-105 rounded-lg border border-transparent hover:border-slate-250 transition-all cursor-pointer"
                 title="Выйти"
               >
                 <LogOut className="h-5 w-5" />
@@ -1402,14 +1487,46 @@ export default function App() {
 
       {/* Main UI body section */}
       <main className="flex-1 overflow-y-auto max-w-[1800px] w-full mx-auto p-4 space-y-4">
+        {dbWarning && (
+          <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 text-amber-900 p-4 rounded-xl flex items-start sm:items-center justify-between shadow-xs gap-3 animate-fade-in relative z-10">
+            <div className="flex items-center gap-3">
+              <div className="bg-amber-100 p-1.5 rounded-lg text-amber-700 shrink-0">
+                <AlertCircle className="h-4.5 w-4.5" />
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-amber-900 leading-tight">База данных FreePBX недоступна</p>
+                <p className="text-[11px] text-amber-700 font-light mt-0.5">
+                  Причина: {dbWarning}. Система автоматически переключена на демонстрационные VoIP данные.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => setDbWarning(null)}
+              className="text-amber-500 hover:text-amber-700 font-bold px-2 py-0.5 rounded text-xs shrink-0 cursor-pointer transition-colors"
+            >
+              Скрыть
+            </button>
+          </div>
+        )}
+
         {activeView === 'calls' ? (
           <>
             {/* KPI Dashboard cards section */}
             <section id="kpi-dashboard" className="grid grid-cols-2 lg:grid-cols-6 gap-3">
               {/* Входящие */}
-              <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-col justify-between shadow-sm hover:shadow-md transition-shadow">
-                <span className="text-xs text-slate-500 font-medium tracking-wide">Входящие</span>
-                <div className="mt-2 flex items-baseline justify-between">
+              <button
+                onClick={() => {
+                  setStatusFilter(statusFilter === 'INBOUND' ? 'ALL' : 'INBOUND');
+                  setPage(1);
+                }}
+                className={`text-left p-4 flex flex-col justify-between rounded-xl shadow-sm hover:shadow-md transition-all cursor-pointer border hover:scale-[1.01] active:scale-[0.99] ${
+                  statusFilter === 'INBOUND'
+                    ? 'bg-cyan-50/70 border-cyan-405 ring-2 ring-cyan-500/30'
+                    : 'bg-white border-slate-200'
+                }`}
+              >
+                <span className="text-xs text-slate-500 font-semibold tracking-wide">Входящие</span>
+                <div className="mt-2 flex items-baseline justify-between w-full">
                   {isLoadingStats ? (
                     <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
                   ) : (
@@ -1417,12 +1534,22 @@ export default function App() {
                   )}
                   <PhoneIncoming className="h-5 w-5 text-cyan-500 self-center" />
                 </div>
-              </div>
+              </button>
 
               {/* Исходящие */}
-              <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-col justify-between shadow-sm hover:shadow-md transition-shadow">
-                <span className="text-xs text-slate-500 font-medium tracking-wide">Исходящие</span>
-                <div className="mt-2 flex items-baseline justify-between">
+              <button
+                onClick={() => {
+                  setStatusFilter(statusFilter === 'OUTBOUND' ? 'ALL' : 'OUTBOUND');
+                  setPage(1);
+                }}
+                className={`text-left p-4 flex flex-col justify-between rounded-xl shadow-sm hover:shadow-md transition-all cursor-pointer border hover:scale-[1.01] active:scale-[0.99] ${
+                  statusFilter === 'OUTBOUND'
+                    ? 'bg-indigo-50/70 border-indigo-400 ring-2 ring-indigo-500/30'
+                    : 'bg-white border-slate-200'
+                }`}
+              >
+                <span className="text-xs text-slate-500 font-semibold tracking-wide">Исходящие</span>
+                <div className="mt-2 flex items-baseline justify-between w-full">
                   {isLoadingStats ? (
                     <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
                   ) : (
@@ -1430,12 +1557,22 @@ export default function App() {
                   )}
                   <PhoneOutgoing className="h-5 w-5 text-indigo-500 self-center" />
                 </div>
-              </div>
+              </button>
 
               {/* Внутренние */}
-              <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-col justify-between shadow-sm hover:shadow-md transition-shadow">
-                <span className="text-xs text-slate-500 font-medium tracking-wide">Внутренние</span>
-                <div className="mt-2 flex items-baseline justify-between">
+              <button
+                onClick={() => {
+                  setStatusFilter(statusFilter === 'INTERNAL' ? 'ALL' : 'INTERNAL');
+                  setPage(1);
+                }}
+                className={`text-left p-4 flex flex-col justify-between rounded-xl shadow-sm hover:shadow-md transition-all cursor-pointer border hover:scale-[1.01] active:scale-[0.99] ${
+                  statusFilter === 'INTERNAL'
+                    ? 'bg-purple-50/70 border-purple-400 ring-2 ring-purple-500/30'
+                    : 'bg-white border-slate-200'
+                }`}
+              >
+                <span className="text-xs text-slate-500 font-semibold tracking-wide">Внутренние</span>
+                <div className="mt-2 flex items-baseline justify-between w-full">
                   {isLoadingStats ? (
                     <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
                   ) : (
@@ -1443,12 +1580,22 @@ export default function App() {
                   )}
                   <Phone className="h-5 w-5 text-purple-500 self-center" />
                 </div>
-              </div>
+              </button>
 
               {/* Пропущенные */}
-              <div className="bg-white border border-red-100 rounded-xl p-4 flex flex-col justify-between shadow-sm hover:shadow-md transition-shadow">
-                <span className="text-xs text-red-600 font-semibold tracking-wide">Пропущенные</span>
-                <div className="mt-2 flex items-baseline justify-between">
+              <button
+                onClick={() => {
+                  setStatusFilter(statusFilter === 'MISSED' ? 'ALL' : 'MISSED');
+                  setPage(1);
+                }}
+                className={`text-left p-4 flex flex-col justify-between rounded-xl shadow-sm hover:shadow-md transition-all cursor-pointer border hover:scale-[1.01] active:scale-[0.99] ${
+                  statusFilter === 'MISSED'
+                    ? 'bg-red-50/70 border-red-400 ring-2 ring-red-500/30'
+                    : 'bg-white border-red-100'
+                }`}
+              >
+                <span className="text-xs text-red-600 font-bold tracking-wide">Пропущенные</span>
+                <div className="mt-2 flex items-baseline justify-between w-full">
                   {isLoadingStats ? (
                     <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
                   ) : (
@@ -1456,27 +1603,49 @@ export default function App() {
                   )}
                   <PhoneMissed className="h-5 w-5 text-red-500/80 self-center" />
                 </div>
-              </div>
+              </button>
 
               {/* Обработанные */}
-              <div className="bg-white border border-emerald-100 rounded-xl p-4 flex flex-col justify-between shadow-sm hover:shadow-md transition-shadow" title="Обработанные = есть отзвон или вручную отмечен обработанным, даже если SLA превышен.">
-                <span className="text-xs text-emerald-600 font-semibold tracking-wide flex items-center gap-1">
+              <button
+                onClick={() => {
+                  setStatusFilter(statusFilter === 'PROCESSED' ? 'ALL' : 'PROCESSED');
+                  setPage(1);
+                }}
+                title="Обработанные = есть отзвон или вручную отмечен обработанным, даже если SLA превышен."
+                className={`text-left p-4 flex flex-col justify-between rounded-xl shadow-sm hover:shadow-md transition-all cursor-pointer border hover:scale-[1.01] active:scale-[0.99] ${
+                  statusFilter === 'PROCESSED'
+                    ? 'bg-emerald-50/70 border-emerald-400 ring-2 ring-emerald-500/30'
+                    : 'bg-white border-emerald-100'
+                }`}
+              >
+                <span className="text-xs text-emerald-600 font-bold tracking-wide flex items-center gap-1">
                   Обработанные
                 </span>
-                <div className="mt-2 flex items-baseline justify-between">
+                <div className="mt-2 flex items-baseline justify-between w-full">
                   {isLoadingStats ? (
                     <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
                   ) : (
-                    <span className="text-2xl font-bold text-emerald-600 font-mono">{stats?.processedCalls ?? 0}</span>
+                    <span className="text-2xl font-bold text-emerald-605 font-mono">{stats?.processedCalls ?? 0}</span>
                   )}
                   <CheckCircle className="h-5 w-5 text-emerald-500/80 self-center" />
                 </div>
-              </div>
+              </button>
 
               {/* Потерянные */}
-              <div className="bg-white border border-amber-150 rounded-xl p-4 flex flex-col justify-between shadow-sm hover:shadow-md transition-shadow" title="Потерянные = пропущенные + SLA уже истёк + нет отзвона + не обработан вручную.">
-                <span className="text-xs text-amber-650 font-semibold tracking-wide">Потерянные</span>
-                <div className="mt-2 flex items-baseline justify-between">
+              <button
+                onClick={() => {
+                  setStatusFilter(statusFilter === 'LOST' ? 'ALL' : 'LOST');
+                  setPage(1);
+                }}
+                title="Потерянные = пропущенные + SLA уже истёк + нет отзвона + не обработан вручную."
+                className={`text-left p-4 flex flex-col justify-between rounded-xl shadow-sm hover:shadow-md transition-all cursor-pointer border hover:scale-[1.01] active:scale-[0.99] ${
+                  statusFilter === 'LOST'
+                    ? 'bg-amber-50/70 border-amber-400 ring-2 ring-amber-500/30'
+                    : 'bg-white border-amber-150'
+                }`}
+              >
+                <span className="text-xs text-amber-655 font-bold tracking-wide">Потерянные</span>
+                <div className="mt-2 flex items-baseline justify-between w-full">
                   {isLoadingStats ? (
                     <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
                   ) : (
@@ -1484,12 +1653,12 @@ export default function App() {
                   )}
                   <XCircle className="h-5 w-5 text-amber-500/80 self-center" />
                 </div>
-              </div>
+              </button>
             </section>
 
         {/* Filters configuration section */}
-        <section id="filters-bar" className="bg-white border border-slate-200 rounded-xl p-4 space-y-3.5 shadow-sm">
-          <div className="flex flex-col lg:flex-row lg:items-center justify-between border-b border-slate-100 pb-3 gap-3">
+        <section id="filters-bar" className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
               <div className="flex items-center gap-2 text-slate-705 text-sm font-bold select-none">
                 <Filter className="h-4 w-4 text-red-500" />
@@ -1569,9 +1738,9 @@ export default function App() {
                 >
                   Этот месяц
                 </button>
-
+ 
                 <div className="h-3 w-[1px] bg-slate-200 mx-1 hidden sm:block" />
-
+ 
                 <div className="flex flex-wrap items-center gap-1.5" lang="ru-RU">
                   <RussianDatePicker
                     value={startDate}
@@ -1617,6 +1786,18 @@ export default function App() {
                 </div>
               </div>
             </div>
+
+            {/* Search querying */}
+            <div className="flex-1 max-w-sm min-w-[200px] relative">
+              <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Поиск по любой строке..."
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg py-1.5 pl-9 pr-3 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-red-500 focus:border-red-500 transition-all font-light"
+              />
+            </div>
             
             {/* Auto-refresh timer info & Reset Filters button combined */}
             <div className="flex items-center gap-2.5 text-xs text-slate-500 shrink-0 select-none">
@@ -1626,7 +1807,7 @@ export default function App() {
               </div>
               <button
                 onClick={() => reloadData()}
-                className="hover:text-red-600 hover:bg-slate-200 bg-slate-100 border border-slate-200 px-2.5 py-1 rounded-md cursor-pointer transition-all font-medium text-xs"
+                className="hover:text-red-600 hover:bg-slate-200 bg-slate-100 border border-slate-200 px-2.5 py-1.5 rounded-md cursor-pointer transition-all font-medium text-xs"
                 title="Обновить сейчас"
               >
                 Обновить
@@ -1639,63 +1820,12 @@ export default function App() {
                     setStatusFilter('ALL');
                     applyPeriodPreset(7);
                   }}
-                  className="hover:bg-red-50 bg-red-50/50 border border-red-200 text-red-600 px-2.5 py-1 rounded-md cursor-pointer transition-all font-semibold text-xs"
+                  className="hover:bg-red-50 bg-red-50/50 border border-red-200 text-red-600 px-2.5 py-1.5 rounded-md cursor-pointer transition-all font-semibold text-xs"
                   title="Сбросить все фильтры"
                 >
                   Сбросить фильтры
                 </button>
               )}
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-            {/* Search querying */}
-            <div className="md:col-span-2 space-y-1">
-              <label className="text-slate-550 text-xs font-semibold">Поиск по любой строке</label>
-              <div className="relative">
-                <Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Имя, номер телефона, ID звонка, комментарий..."
-                  className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 pl-9 pr-3 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-red-500 focus:border-red-500 transition-all font-light"
-                />
-              </div>
-            </div>
-
-            {/* Phone search */}
-            <div className="space-y-1">
-              <label className="text-slate-550 text-xs font-semibold">Номер телефона</label>
-              <div className="relative">
-                <Phone className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
-                <input
-                  type="text"
-                  value={numberFilter}
-                  onChange={(e) => setNumberFilter(e.target.value)}
-                  placeholder="Только цифры номера..."
-                  className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 pl-9 pr-3 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-red-500 focus:border-red-500 transition-all font-mono"
-                />
-              </div>
-            </div>
-
-            {/* Status quick select */}
-            <div className="space-y-1">
-              <label className="text-slate-550 text-xs font-semibold">Групповой статус</label>
-              <select
-                value={statusFilter}
-                onChange={(e) => {
-                  setStatusFilter(e.target.value);
-                  setPage(1);
-                }}
-                className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-red-500 focus:border-red-500 transition-all cursor-pointer"
-              >
-                <option value="ONLY_UNPROCESSED">🔴 Необработанные пропущенные</option>
-                <option value="MISSED">❌ Все пропущенные вызовы</option>
-                <option value="ONLY_CALLBACKED">📱 Успешные перезвоны (Все)</option>
-                <option value="ANSWERED">🟢 Только отвеченные вызовы</option>
-                <option value="ALL">📋 Полный лог вызовов (Все)</option>
-              </select>
             </div>
           </div>
         </section>
