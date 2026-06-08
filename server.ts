@@ -993,7 +993,10 @@ function isDemoMode(settings: AppSettings): boolean {
   if (envDemo === 'false') {
     return false;
   }
-  return envDemo === 'true' || (process.env.K_SERVICE ? isDefaultDemoSettings(settings) : false);
+  if (envDemo === 'true') {
+    return true;
+  }
+  return isDefaultDemoSettings(settings);
 }
 
 
