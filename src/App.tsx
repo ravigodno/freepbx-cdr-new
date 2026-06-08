@@ -42,6 +42,155 @@ import {
 } from 'lucide-react';
 import { CallEntry, DashboardStats, AppSettings, UserRole, DirectoryEntry } from './types';
 
+
+const RU_MONTHS = [
+  'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
+  'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'
+];
+const RU_WEEKDAYS_MONDAY_FIRST = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+
+const toLocalDateInputValue = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const parseDateInputValue = (value: string) => {
+  const [year, month, day] = value.split('-').map(Number);
+  if (!year || !month || !day) return new Date();
+  return new Date(year, month - 1, day);
+};
+
+const getDefaultStartDate = () => {
+  const date = new Date();
+  date.setDate(date.getDate() - 7);
+  return toLocalDateInputValue(date);
+};
+
+const formatRussianDate = (value: string) => {
+  if (!value) return 'Выберите дату';
+  return parseDateInputValue(value).toLocaleDateString('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric'
+  });
+};
+
+interface RussianDatePickerProps {
+  value: string;
+  onChange: (value: string) => void;
+  ariaLabel: string;
+}
+
+function RussianDatePicker({ value, onChange, ariaLabel }: RussianDatePickerProps) {
+  const [isOpen, setIsOpen] = useState(false);
+  const selectedDate = parseDateInputValue(value);
+  const [visibleMonth, setVisibleMonth] = useState(() => new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1));
+
+  useEffect(() => {
+    if (!isOpen) {
+      setVisibleMonth(new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1));
+    }
+  }, [value, isOpen]);
+
+  const firstDay = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth(), 1);
+  const mondayOffset = (firstDay.getDay() + 6) % 7;
+  const gridStart = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth(), 1 - mondayOffset);
+  const days = Array.from({ length: 42 }, (_, index) => {
+    const d = new Date(gridStart);
+    d.setDate(gridStart.getDate() + index);
+    return d;
+  });
+  const todayValue = toLocalDateInputValue(new Date());
+
+  const changeMonth = (offset: number) => {
+    setVisibleMonth(prev => new Date(prev.getFullYear(), prev.getMonth() + offset, 1));
+  };
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        lang="ru-RU"
+        aria-label={ariaLabel}
+        onClick={() => setIsOpen(prev => !prev)}
+        className="min-w-[112px] bg-white border border-slate-200 rounded px-2 py-1 text-[11px] text-slate-700 font-mono focus:outline-none focus:border-red-500 hover:border-slate-300 transition-all text-left"
+      >
+        {formatRussianDate(value)}
+      </button>
+      {isOpen && (
+        <div className="absolute z-50 mt-2 w-64 rounded-xl border border-slate-200 bg-white p-3 shadow-xl">
+          <div className="flex items-center justify-between mb-2">
+            <button
+              type="button"
+              onClick={() => changeMonth(-1)}
+              className="p-1 rounded-md hover:bg-slate-100 text-slate-500"
+              aria-label="Предыдущий месяц"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+            <div className="text-sm font-bold text-slate-800 select-none">
+              {RU_MONTHS[visibleMonth.getMonth()]} {visibleMonth.getFullYear()}
+            </div>
+            <button
+              type="button"
+              onClick={() => changeMonth(1)}
+              className="p-1 rounded-md hover:bg-slate-100 text-slate-500"
+              aria-label="Следующий месяц"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          </div>
+          <div className="grid grid-cols-7 gap-1 text-center text-[10px] font-semibold text-slate-400 mb-1 select-none">
+            {RU_WEEKDAYS_MONDAY_FIRST.map(day => <div key={day}>{day}</div>)}
+          </div>
+          <div className="grid grid-cols-7 gap-1">
+            {days.map(day => {
+              const dayValue = toLocalDateInputValue(day);
+              const isSelected = dayValue === value;
+              const isToday = dayValue === todayValue;
+              const isOutsideMonth = day.getMonth() !== visibleMonth.getMonth();
+              return (
+                <button
+                  key={dayValue}
+                  type="button"
+                  onClick={() => {
+                    onChange(dayValue);
+                    setIsOpen(false);
+                  }}
+                  className={`h-8 rounded-lg text-xs font-medium transition-all ${
+                    isSelected
+                      ? 'bg-red-600 text-white shadow-sm'
+                      : isToday
+                        ? 'bg-red-50 text-red-700 border border-red-100'
+                        : isOutsideMonth
+                          ? 'text-slate-300 hover:bg-slate-50'
+                          : 'text-slate-700 hover:bg-slate-100'
+                  }`}
+                >
+                  {day.getDate()}
+                </button>
+              );
+            })}
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              onChange(todayValue);
+              setVisibleMonth(new Date());
+              setIsOpen(false);
+            }}
+            className="mt-3 w-full rounded-lg bg-slate-50 border border-slate-200 px-2 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+          >
+            Сегодня
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Front-end state structures
 interface UserSession {
   token: string;
@@ -75,12 +224,10 @@ export default function App() {
   const [isLoadingCalls, setIsLoadingCalls] = useState(false);
 
   // Filter bindings
-  const [startDate, setStartDate] = useState(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 7);
-    return d.toISOString().split('T')[0];
-  });
-  const [endDate, setEndDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [startDate, setStartDate] = useState(getDefaultStartDate);
+  const [endDate, setEndDate] = useState(() => toLocalDateInputValue(new Date()));
+  const [startTime, setStartTime] = useState('00:00');
+  const [endTime, setEndTime] = useState('23:59');
   const [statusFilter, setStatusFilter] = useState('ALL'); // Default focus on full log
   const [searchQuery, setSearchQuery] = useState('');
   const [numberFilter, setNumberFilter] = useState('');
@@ -554,6 +701,8 @@ export default function App() {
         demo: isDemoModeActive ? 'true' : 'false',
         startDate,
         endDate,
+        startTime,
+        endTime,
         status: statusFilter,
         search: searchQuery,
         number: numberFilter,
@@ -586,6 +735,8 @@ export default function App() {
         limit: limit.toString(),
         startDate,
         endDate,
+        startTime,
+        endTime,
         status: statusFilter,
         search: searchQuery,
         number: numberFilter,
@@ -948,7 +1099,7 @@ export default function App() {
       reloadData(1);
       loadDirectory();
     }
-  }, [session, startDate, endDate, statusFilter, isDemoModeActive, onlyMyCalls, myExt]);
+  }, [session, startDate, endDate, startTime, endTime, statusFilter, isDemoModeActive, onlyMyCalls, myExt]);
 
   // Handle delay on searching to prevent overwhelming SQL DB
   useEffect(() => {
@@ -976,7 +1127,7 @@ export default function App() {
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [session, page, autoRefreshInterval, startDate, endDate, statusFilter, isDemoModeActive]);
+  }, [session, page, autoRefreshInterval, startDate, endDate, startTime, endTime, statusFilter, isDemoModeActive]);
 
   // Open Comment Sidebar
   const openProcessModal = (call: CallEntry) => {
@@ -1033,8 +1184,10 @@ export default function App() {
     const start = new Date();
     start.setDate(start.getDate() - daysAgo);
     
-    setStartDate(start.toISOString().split('T')[0]);
-    setEndDate(new Date().toISOString().split('T')[0]);
+    setStartDate(toLocalDateInputValue(start));
+    setEndDate(toLocalDateInputValue(new Date()));
+    setStartTime('00:00');
+    setEndTime('23:59');
     setPage(1);
   };
 
@@ -1043,7 +1196,9 @@ export default function App() {
     const year = start.getFullYear();
     const month = String(start.getMonth() + 1).padStart(2, '0');
     setStartDate(`${year}-${month}-01`);
-    setEndDate(new Date().toISOString().split('T')[0]);
+    setEndDate(toLocalDateInputValue(new Date()));
+    setStartTime('00:00');
+    setEndTime('23:59');
     setPage(1);
   };
 
@@ -1347,12 +1502,14 @@ export default function App() {
                 <span className="text-[11px] text-slate-550 font-semibold px-1 select-none">Период:</span>
                 <button
                   onClick={() => {
-                    setStartDate(new Date().toISOString().split('T')[0]);
-                    setEndDate(new Date().toISOString().split('T')[0]);
+                    setStartDate(toLocalDateInputValue(new Date()));
+                    setEndDate(toLocalDateInputValue(new Date()));
+                    setStartTime('00:00');
+                    setEndTime('23:59');
                     setPage(1);
                   }}
                   className={`text-[11px] px-2 py-0.5 rounded font-medium transition-all cursor-pointer ${
-                    startDate === new Date().toISOString().split('T')[0] && endDate === new Date().toISOString().split('T')[0]
+                    startDate === toLocalDateInputValue(new Date()) && endDate === toLocalDateInputValue(new Date()) && startTime === '00:00' && endTime === '23:59'
                       ? 'bg-red-50 text-red-750 font-bold'
                       : 'bg-white text-slate-600 hover:text-slate-900 border border-transparent hover:border-slate-200'
                   }`}
@@ -1363,17 +1520,19 @@ export default function App() {
                   onClick={() => {
                     const yesterday = new Date();
                     yesterday.setDate(yesterday.getDate() - 1);
-                    const yStr = yesterday.toISOString().split('T')[0];
+                    const yStr = toLocalDateInputValue(yesterday);
                     setStartDate(yStr);
                     setEndDate(yStr);
+                    setStartTime('00:00');
+                    setEndTime('23:59');
                     setPage(1);
                   }}
                   className={`text-[11px] px-2 py-0.5 rounded font-medium transition-all cursor-pointer ${
                     (() => {
                       const yesterday = new Date();
                       yesterday.setDate(yesterday.getDate() - 1);
-                      const yStr = yesterday.toISOString().split('T')[0];
-                      return startDate === yStr && endDate === yStr;
+                      const yStr = toLocalDateInputValue(yesterday);
+                      return startDate === yStr && endDate === yStr && startTime === '00:00' && endTime === '23:59';
                     })()
                       ? 'bg-red-50 text-red-750 font-bold'
                       : 'bg-white text-slate-600 hover:text-slate-900 border border-transparent hover:border-slate-200'
@@ -1387,8 +1546,8 @@ export default function App() {
                     (() => {
                       const sev = new Date();
                       sev.setDate(sev.getDate() - 7);
-                      const sStr = sev.toISOString().split('T')[0];
-                      return startDate === sStr && endDate === new Date().toISOString().split('T')[0];
+                      const sStr = toLocalDateInputValue(sev);
+                      return startDate === sStr && endDate === toLocalDateInputValue(new Date()) && startTime === '00:00' && endTime === '23:59';
                     })()
                       ? 'bg-red-50 text-red-750 font-bold'
                       : 'bg-white text-slate-600 hover:text-slate-900 border border-transparent hover:border-slate-200'
@@ -1402,7 +1561,7 @@ export default function App() {
                     (() => {
                       const d = new Date();
                       const mStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
-                      return startDate === mStr && endDate === new Date().toISOString().split('T')[0];
+                      return startDate === mStr && endDate === toLocalDateInputValue(new Date()) && startTime === '00:00' && endTime === '23:59';
                     })()
                       ? 'bg-red-50 text-red-750 font-bold'
                       : 'bg-white text-slate-600 hover:text-slate-900 border border-transparent hover:border-slate-200'
@@ -1413,25 +1572,47 @@ export default function App() {
 
                 <div className="h-3 w-[1px] bg-slate-200 mx-1 hidden sm:block" />
 
-                <div className="flex items-center gap-1">
-                  <input
-                    type="date"
+                <div className="flex flex-wrap items-center gap-1.5" lang="ru-RU">
+                  <RussianDatePicker
                     value={startDate}
-                    onChange={(e) => {
-                      setStartDate(e.target.value);
+                    onChange={(value) => {
+                      setStartDate(value);
                       setPage(1);
                     }}
-                    className="bg-white border border-slate-200 rounded px-1.5 py-0.5 text-[11px] text-slate-700 font-mono focus:outline-none focus:border-red-500"
+                    ariaLabel="Дата начала периода"
+                  />
+                  <input
+                    type="time"
+                    value={startTime}
+                    onChange={(e) => {
+                      setStartTime(e.target.value);
+                      setPage(1);
+                    }}
+                    step="60"
+                    lang="ru-RU"
+                    aria-label="Время начала периода"
+                    className="bg-white border border-slate-200 rounded px-1.5 py-1 text-[11px] text-slate-700 font-mono focus:outline-none focus:border-red-500"
                   />
                   <span className="text-slate-400 text-xs">—</span>
-                  <input
-                    type="date"
+                  <RussianDatePicker
                     value={endDate}
-                    onChange={(e) => {
-                      setEndDate(e.target.value);
+                    onChange={(value) => {
+                      setEndDate(value);
                       setPage(1);
                     }}
-                    className="bg-white border border-slate-200 rounded px-1.5 py-0.5 text-[11px] text-slate-700 font-mono focus:outline-none focus:border-red-500"
+                    ariaLabel="Дата окончания периода"
+                  />
+                  <input
+                    type="time"
+                    value={endTime}
+                    onChange={(e) => {
+                      setEndTime(e.target.value);
+                      setPage(1);
+                    }}
+                    step="60"
+                    lang="ru-RU"
+                    aria-label="Время окончания периода"
+                    className="bg-white border border-slate-200 rounded px-1.5 py-1 text-[11px] text-slate-700 font-mono focus:outline-none focus:border-red-500"
                   />
                 </div>
               </div>
@@ -1450,7 +1631,7 @@ export default function App() {
               >
                 Обновить
               </button>
-              {(searchQuery || numberFilter || statusFilter !== 'ALL') && (
+              {(searchQuery || numberFilter || statusFilter !== 'ALL' || startDate !== getDefaultStartDate() || endDate !== toLocalDateInputValue(new Date()) || startTime !== '00:00' || endTime !== '23:59') && (
                 <button
                   onClick={() => {
                     setSearchQuery('');
