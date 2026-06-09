@@ -191,6 +191,75 @@ function RussianDatePicker({ value, onChange, ariaLabel }: RussianDatePickerProp
   );
 }
 
+
+interface TimeInput24Props {
+  value: string;
+  onChange: (value: string) => void;
+  ariaLabel: string;
+}
+
+const normalizeTimeInputValue = (value: string, fallback: string): string => {
+  const digits = String(value || '').replace(/\D/g, '').slice(0, 4);
+  if (!digits) return fallback;
+
+  let hours = 0;
+  let minutes = 0;
+
+  if (digits.length <= 2) {
+    hours = Number(digits);
+    minutes = 0;
+  } else {
+    hours = Number(digits.slice(0, 2));
+    minutes = Number(digits.slice(2, 4).padEnd(2, '0'));
+  }
+
+  if (!Number.isFinite(hours)) hours = 0;
+  if (!Number.isFinite(minutes)) minutes = 0;
+
+  hours = Math.min(Math.max(hours, 0), 23);
+  minutes = Math.min(Math.max(minutes, 0), 59);
+
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+};
+
+function TimeInput24({ value, onChange, ariaLabel }: TimeInput24Props) {
+  const [draft, setDraft] = useState(value);
+
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  const commit = () => {
+    const normalized = normalizeTimeInputValue(draft, value || '00:00');
+    setDraft(normalized);
+    onChange(normalized);
+  };
+
+  return (
+    <input
+      type="text"
+      inputMode="numeric"
+      pattern="[0-9]{2}:[0-9]{2}"
+      placeholder="00:00"
+      value={draft}
+      onChange={(e) => {
+        const raw = e.target.value.replace(/[^\d:]/g, '').slice(0, 5);
+        setDraft(raw);
+      }}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.currentTarget.blur();
+        }
+      }}
+      lang="ru-RU"
+      aria-label={ariaLabel}
+      title="Формат времени: 00:00–23:59"
+      className="w-[58px] bg-white border border-slate-200 rounded px-1.5 py-1 text-[11px] text-slate-700 font-mono focus:outline-none focus:border-red-500"
+    />
+  );
+}
+
 // Front-end state structures
 interface UserSession {
   token: string;
@@ -1756,17 +1825,13 @@ export default function App() {
                     }}
                     ariaLabel="Дата начала периода"
                   />
-                  <input
-                    type="time"
+                  <TimeInput24
                     value={startTime}
-                    onChange={(e) => {
-                      setStartTime(e.target.value);
+                    onChange={(value) => {
+                      setStartTime(value);
                       setPage(1);
                     }}
-                    step="60"
-                    lang="ru-RU"
-                    aria-label="Время начала периода"
-                    className="bg-white border border-slate-200 rounded px-1.5 py-1 text-[11px] text-slate-700 font-mono focus:outline-none focus:border-red-500"
+                    ariaLabel="Время начала периода"
                   />
                   <span className="text-slate-400 text-xs">—</span>
                   <RussianDatePicker
@@ -1777,17 +1842,13 @@ export default function App() {
                     }}
                     ariaLabel="Дата окончания периода"
                   />
-                  <input
-                    type="time"
+                  <TimeInput24
                     value={endTime}
-                    onChange={(e) => {
-                      setEndTime(e.target.value);
+                    onChange={(value) => {
+                      setEndTime(value);
                       setPage(1);
                     }}
-                    step="60"
-                    lang="ru-RU"
-                    aria-label="Время окончания периода"
-                    className="bg-white border border-slate-200 rounded px-1.5 py-1 text-[11px] text-slate-700 font-mono focus:outline-none focus:border-red-500"
+                    ariaLabel="Время окончания периода"
                   />
                 </div>
               </div>
