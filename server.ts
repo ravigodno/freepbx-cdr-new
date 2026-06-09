@@ -258,7 +258,7 @@ const normalizeInboundCallerForDisplay = (c: any): any => {
 const getDialedExtsFromLastData = (value: any): string[] => {
   const result: string[] = [];
   const text = String(value || '');
-  const re = /(?:SIP|PJSIP|Local)\/([0-9]{2,5})(?=[-@,&\s)]|$)/gi;
+  const re = /(?:SIP|PJSIP|Local)\/([0-9]{2,5})(?:[-@,]|$)/gi;
   let m: RegExpExecArray | null;
 
   while ((m = re.exec(text)) !== null) {
@@ -1071,15 +1071,19 @@ app.delete('/api/directory/:id', requireAuth(), async (req, res) => {
 // --- ASTERISK AMI CLICK TO CALL SERVICES ---
 
 function runAMICallSimulate(log: string[], fromExtension: string, toPhoneNumber: string, context: string, resolve: Function) {
+  const clickToCallContext = process.env.CLICK2CALL_CONTEXT || 'cdr-panel-click2call';
+  const channelPrefix = process.env.CLICK2CALL_CHANNEL_PREFIX || 'SIP';
+  const origChannel = `${channelPrefix}/${fromExtension}`;
+
   log.push(`[AMI-SIMULATOR] Начат имитационный вызов из внутреннего номера [${fromExtension}] на номер [${toPhoneNumber}]...`);
   log.push(`[AMI-SIMULATOR] Имитируем: подключение к Asterisk AMI...`);
   log.push(`[AMI-SIMULATOR] Asterisk приветствие: "Asterisk Call Manager/5.0.3"`);
   log.push(`[AMI-SIMULATOR] Команда: Login (Username: clicktocall, Secret: ••••••) отправлена`);
   log.push(`[AMI-SIMULATOR] Получен ответ: Response: Success (Message: Authentication accepted)`);
-  log.push(`[AMI-SIMULATOR] Формируем Origin Channel: "Local/${fromExtension}@${context}"`);
-  log.push(`[AMI-SIMULATOR] Команда: Originate (Channel: Local/${fromExtension}@${context}, Exten: ${toPhoneNumber}, Context: ${context}, ExtenPriority: 1, CallerID: <${fromExtension}>) отправлена`);
+  log.push(`[AMI-SIMULATOR] Формируем Origin Channel: "${origChannel}"`);
+  log.push(`[AMI-SIMULATOR] Команда: Originate (Channel: ${origChannel}, Exten: ${toPhoneNumber}, Context: ${clickToCallContext}, CallerID: "${fromExtension}" <${fromExtension}>) отправлена`);
   log.push(`[AMI-SIMULATOR] Получен ответ: Response: Success (Message: Originate successfully queued)`);
-  log.push(`[AMI-SIMULATOR] Вызов успешно инициирован! Сначала зазвонит ваш телефон (${fromExtension}), а после поднятия трубки начнется вызов на ${toPhoneNumber}.`);
+  log.push(`[AMI-SIMULATOR] Вызов успешно инициирован: сначала звонит ${fromExtension}, после ответа набор идет через контекст ${clickToCallContext}.`);
   resolve({ success: true, log, simulated: true });
 }
 
@@ -1091,6 +1095,10 @@ function triggerAMICall(settings: AppSettings, fromExtension: string, toPhoneNum
     const user = settings.amiUser || 'clicktocall';
     const pass = settings.amiPass || '';
     const context = settings.amiContext || 'from-internal';
+    const clickToCallContext = process.env.CLICK2CALL_CONTEXT || 'cdr-panel-click2call';
+    const channelPrefix = process.env.CLICK2CALL_CHANNEL_PREFIX || 'SIP';
+    const safeFromExtension = fromExtension.replace(/[^0-9]/g, '');
+    const safeToPhoneNumber = toPhoneNumber.replace(/[^0-9+#*]/g, '');
     
     log.push(`[AMI] Инициализация подключения к ${host}:${port}...`);
     
@@ -1132,16 +1140,19 @@ function triggerAMICall(settings: AppSettings, fromExtension: string, toPhoneNum
             log.push(`[AMI] Авторизация успешно подтверждена.`);
             buffer = '';
             
-            const origChannel = `Local/${fromExtension}@${context}`;
-            log.push(`[AMI] Отправляем Originate: [${origChannel}] -> [${toPhoneNumber}] по контексту [${context}]...`);
+            const origChannel = `${channelPrefix}/${safeFromExtension}`;
+            log.push(`[AMI] Отправляем Originate: [${origChannel}] -> [${safeToPhoneNumber}] по контексту [${clickToCallContext}]...`);
             
             socket.write(
               `Action: Originate\r\n` +
               `Channel: ${origChannel}\r\n` +
-              `Exten: ${toPhoneNumber}\r\n` +
-              `Context: ${context}\r\n` +
+              `Exten: ${safeToPhoneNumber}\r\n` +
+              `Context: ${clickToCallContext}\r\n` +
               `Priority: 1\r\n` +
-              `CallerID: <${fromExtension}> ClickToCall\r\n` +
+              `CallerID: "${safeFromExtension}" <${safeFromExtension}>\r\n` +
+              `Variable: __CDR_PANEL_CLICK2CALL=1\r\n` +
+              `Variable: __CDR_PANEL_SRC=${safeFromExtension}\r\n` +
+              `Variable: __CDR_PANEL_DST=${safeToPhoneNumber}\r\n` +
               `Async: true\r\n\r\n`
             );
             stage = 'originate_sent';
@@ -1377,8 +1388,6 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
 
       const allDialedExts = uniqueExts([
         ...sorted.flatMap(c => getDialedExtsFromLastData(c.lastdata)),
-        ...sorted.map(c => getChannelInternalExt(c.dstchannel)),
-        ...sorted.map(c => getChannelInternalExt(c.channel)),
         ...answeredExts,
         ...missedExts
       ]);
@@ -1441,8 +1450,6 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
 
       const allDialedExts = uniqueExts([
         ...sorted.flatMap(c => getDialedExtsFromLastData(c.lastdata)),
-        ...sorted.map(c => getChannelInternalExt(c.dstchannel)),
-        ...sorted.map(c => getChannelInternalExt(c.channel)),
         ...answeredExts,
         ...missedExts
       ]);
@@ -1770,8 +1777,6 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
 
       const allDialedExts = uniqueExts([
         ...sorted.flatMap(c => getDialedExtsFromLastData(c.lastdata)),
-        ...sorted.map(c => getChannelInternalExt(c.dstchannel)),
-        ...sorted.map(c => getChannelInternalExt(c.channel)),
         ...answeredExts,
         ...missedExts
       ]);
