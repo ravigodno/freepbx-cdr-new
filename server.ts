@@ -103,63 +103,257 @@ function normalizePhoneNumber(num: string, settings?: AppSettings): string {
   return cleaned;
 }
 
-const isInternalExt = (num: string): boolean => {
-  if (!num) return false;
-  const cleaned = num.trim();
-  const digits = cleaned.replace(/\D/g, '');
-  return digits.length > 0 && digits.length <= 5 && /^\d+$/.test(cleaned);
+const onlyDigits = (value: any): string => {
+  return String(value || '').replace(/\D/g, '');
 };
 
-const isIncoming = (c: any): boolean => {
-  const srcVal = (c.src || '').trim();
-  const dstVal = (c.dst || '').trim();
-  const dctx = (c.dcontext || '').toLowerCase();
-  const ch = (c.channel || '').toLowerCase();
+const getNumberTokens = (...values: any[]): string[] => {
+  return values
+    .flatMap(value => String(value || '').match(/\d+/g) || [])
+    .filter(Boolean);
+};
 
-  // Internal caller cannot be an incoming trunk call (from the outside)
-  if (isInternalExt(srcVal)) {
-    return false;
+const isInternalExt = (num: any): boolean => {
+  const digits = onlyDigits(num);
+  return digits.length >= 2 && digits.length <= 5;
+};
+
+const isExternalNumber = (num: any): boolean => {
+  return onlyDigits(num).length >= 7;
+};
+
+const getChannelInternalExt = (value: any): string => {
+  const s = String(value || '');
+
+  // SIP/200-00000001, PJSIP/200-00000001
+  let m = s.match(/(?:SIP|PJSIP)\/([0-9]{2,5})-/i);
+  if (m && isInternalExt(m[1])) return m[1];
+
+  // Local/200@from-internal-00000000;1
+  m = s.match(/Local\/([0-9]{2,5})@/i);
+  if (m && isInternalExt(m[1])) return m[1];
+
+  return '';
+};
+
+const getCallerInternalExt = (c: any): string => {
+  if (isInternalExt(c.src)) return onlyDigits(c.src);
+  if (isInternalExt(c.cnum)) return onlyDigits(c.cnum);
+
+  const fromChannel = getChannelInternalExt(c.channel);
+  if (fromChannel) return fromChannel;
+
+  const fromClid = String(c.clid || '').match(/<([0-9]{2,5})>/);
+  if (fromClid && isInternalExt(fromClid[1])) return fromClid[1];
+
+  return '';
+};
+
+const getCalleeInternalExt = (c: any): string => {
+  if (isInternalExt(c.dst)) return onlyDigits(c.dst);
+
+  const fromDstChannel = getChannelInternalExt(c.dstchannel);
+  if (fromDstChannel) return fromDstChannel;
+
+  return '';
+};
+
+const callHasExactNumber = (c: any, number: string): boolean => {
+  const n = onlyDigits(number);
+  if (!n) return true;
+
+  const tokens = getNumberTokens(
+    c.src,
+    c.dst,
+    c.did,
+    c.channel,
+    c.dstchannel,
+    c.lastdata,
+    c.clid,
+    c.cnum,
+    c.outbound_cnum
+  );
+
+  return tokens.some(token => token === n);
+};
+
+const getExternalCallerNumber = (group: any[]): string => {
+  const candidates: string[] = [];
+
+  for (const c of group) {
+    const fields = [c.clid, c.src, c.cnum, c.dst, c.did, c.lastdata];
+    for (const field of fields) {
+      const matches = String(field || '').match(/\+?\d{10,15}/g) || [];
+      for (const raw of matches) {
+        let digits = raw.replace(/\D/g, '');
+        if (digits.length === 11 && digits.startsWith('8')) {
+          digits = '7' + digits.substring(1);
+        }
+        if (digits.length >= 10 && !isInternalExt(digits)) {
+          candidates.push(digits);
+        }
+      }
+    }
   }
 
-  // Trunk context indicators
-  if (
+  // Для входящих через группу/очередь реальный клиент почти всегда есть в CLID.
+  // Если FreePBX в src положил транк/CallerID, берём первый полноценный внешний номер.
+  return candidates[0] || '';
+};
+
+const hasInboundTrunkSignal = (c: any): boolean => {
+  const dctx = String(c.dcontext || '').toLowerCase();
+  const channel = String(c.channel || '').toLowerCase();
+  const dstchannel = String(c.dstchannel || '').toLowerCase();
+  const did = onlyDigits(c.did);
+
+  // did иногда содержит служебный текст "→ ответил: 200".
+  // DID считаем внешним признаком только если в нём есть минимум 6 цифр.
+  return (
+    did.length >= 6 ||
     dctx.includes('from-trunk') ||
     dctx.includes('from-pstn') ||
     dctx.includes('sip-external') ||
     dctx.includes('from-digital') ||
     dctx.includes('from-outside') ||
-    (c.did && c.did.length > 0)
-  ) {
-    return true;
-  }
+    channel.includes('-in-') ||
+    channel.includes('trunk-in') ||
+    dstchannel.includes('trunk-in')
+  );
+};
 
-  // Incoming routed to a queue, ring group, IVR, or internal number with an external source
-  const isIncomingRoute = 
+const isIncomingRouteContext = (c: any): boolean => {
+  const dctx = String(c.dcontext || '').toLowerCase();
+  return (
     dctx === 'ext-queues' ||
     dctx === 'ext-group' ||
     dctx === 'ext-local' ||
-    dctx.startsWith('ivr-') ||
-    dstVal === '600' ||
-    isInternalExt(dstVal);
-
-  const isTrunkChannel = ch.includes('-in-') || ch.includes('trunk');
-
-  return isIncomingRoute || isTrunkChannel;
+    dctx.startsWith('ivr-')
+  );
 };
 
+const normalizeInboundCallerForDisplay = (c: any): any => {
+  const externalCallerNumber = getExternalCallerNumber([c]);
+  const currentSrc = onlyDigits(c.src);
+
+  if (
+    externalCallerNumber &&
+    externalCallerNumber !== currentSrc &&
+    !getCallerInternalExt(c) &&
+    isExternalNumber(c.src) &&
+    (hasInboundTrunkSignal(c) || isIncomingRouteContext(c))
+  ) {
+    return {
+      ...c,
+      src: externalCallerNumber,
+      cnum: externalCallerNumber,
+    };
+  }
+
+  return c;
+};
+
+
+
+const getDialedExtsFromLastData = (value: any): string[] => {
+  const result: string[] = [];
+  const text = String(value || '');
+  const re = /(?:SIP|PJSIP|Local)\/([0-9]{2,5})(?=[-@,&\s)]|$)/gi;
+  let m: RegExpExecArray | null;
+
+  while ((m = re.exec(text)) !== null) {
+    if (isInternalExt(m[1]) && !result.includes(m[1])) {
+      result.push(m[1]);
+    }
+  }
+
+  return result;
+};
+
+const uniqueExts = (values: any[]): string[] => {
+  const result: string[] = [];
+  values.forEach(value => {
+    const ext = onlyDigits(value);
+    if (isInternalExt(ext) && !result.includes(ext)) {
+      result.push(ext);
+    }
+  });
+  return result;
+};
+
+const buildDidWithAnsweredAndMissed = (baseDid: any, answeredExts: string[], missedExts: string[]): string => {
+  const did = String(baseDid || '').trim();
+  const parts: string[] = [];
+
+  if (answeredExts.length) {
+    parts.push(`ответил: ${answeredExts.join(', ')}`);
+  }
+
+  if (missedExts.length) {
+    parts.push(`не ответили: ${missedExts.join(', ')}`);
+  }
+
+  if (!parts.length) {
+    return did;
+  }
+
+  return `${did} → ${parts.join(', ')}`.trim();
+};
+
+const normalizeClickToCallForDisplay = (c: any): any => {
+  const dctx = String(c.dcontext || '').toLowerCase();
+  const lastapp = String(c.lastapp || '').toLowerCase();
+  const lastdata = String(c.lastdata || '').toLowerCase();
+  const channel = String(c.channel || '');
+
+  const localExt = getChannelInternalExt(channel);
+  const cnumExt = isInternalExt(c.cnum) ? onlyDigits(c.cnum) : '';
+  const clidExtMatch = String(c.clid || '').match(/<([0-9]{2,5})>/);
+  const clidExt = clidExtMatch && isInternalExt(clidExtMatch[1]) ? clidExtMatch[1] : '';
+  const ext = cnumExt || localExt || clidExt;
+
+  const looksLikeClickToCall =
+    dctx === 'from-internal' &&
+    isExternalNumber(c.dst) &&
+    Boolean(ext) &&
+    (
+      channel.toLowerCase().includes('local/') ||
+      lastapp === 'agi' ||
+      lastdata.includes('check_trunks_ami') ||
+      lastdata.includes('originate') ||
+      lastdata.includes('callback')
+    );
+
+  if (!looksLikeClickToCall) {
+    return c;
+  }
+
+  return {
+    ...c,
+    src: ext,
+    cnum: ext,
+    clid: `"${ext}" <${ext}>`
+  };
+};
+
+// Входящие = внешний номер пришёл в АТС через транк/DID/маршрут входящего вызова.
+const isIncoming = (c: any): boolean => {
+  if (!isExternalNumber(c.src)) return false;
+  if (getCallerInternalExt(c)) return false;
+
+  return hasInboundTrunkSignal(c) || isIncomingRouteContext(c);
+};
+
+// Исходящие = внутренний оператор звонит на внешний номер.
+// На этой АТС в CDR src может быть не внутренний номер, а outbound_cnum/транк,
+// поэтому внутреннего оператора берём из src, cnum или channel.
 const isOutgoing = (c: any): boolean => {
-  const srcVal = (c.src || '').trim();
-  const dstVal = (c.dst || '').trim();
-  const dctx = (c.dcontext || '').toLowerCase();
-
-  return dctx === 'from-internal' && isInternalExt(srcVal) && !isInternalExt(dstVal) && dstVal.length >= 7;
+  return Boolean(getCallerInternalExt(c)) && isExternalNumber(c.dst) && !isIncoming(c);
 };
 
+// Внутренние = внутренний оператор -> внутренний номер.
 const isInternal = (c: any): boolean => {
-  const srcVal = (c.src || '').trim();
-  const dstVal = (c.dst || '').trim();
-
-  return isInternalExt(srcVal) && isInternalExt(dstVal);
+  return Boolean(getCallerInternalExt(c)) && Boolean(getCalleeInternalExt(c)) && !isIncoming(c) && !isOutgoing(c);
 };
 
 // Ensure standard database schema is initialized
@@ -1150,6 +1344,9 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
       return c;
     });
 
+    // Normalize click-to-call CDR legs where FreePBX stores outbound caller as trunk/outbound_cnum.
+    calls = calls.map(c => normalizeClickToCallForDisplay(c));
+
     // Collapse queue/ring-group CDR legs into one logical call by linkedid
     const linkedGroups = new Map<string, CallEntry[]>();
     calls.forEach(c => {
@@ -1159,50 +1356,64 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
     });
 
     calls = Array.from(linkedGroups.values()).map(group => {
-      if (group.length === 1) return group[0];
+      if (group.length === 1) return normalizeClickToCallForDisplay(normalizeInboundCallerForDisplay(group[0]));
 
-      const sorted = [...group].sort((a, b) => new Date(a.calldate).getTime() - new Date(b.calldate).getTime());
+      const sorted = [...group].map(c => normalizeClickToCallForDisplay(c)).sort((a, b) => new Date(a.calldate).getTime() - new Date(b.calldate).getTime());
       const answered = sorted.find(c => c.disposition === "ANSWERED" && Number(c.billsec || 0) > 0);
       const first = sorted[0];
       const main = answered || first;
 
+      const externalCallerNumber = getExternalCallerNumber(sorted);
       const external = sorted.find(c => (c.src || "").replace(/\D/g, "").length >= 7) || first;
       const queueLeg = sorted.find(c => c.dcontext === "ext-queues" || c.lastapp === "Queue");
       const groupLeg = sorted.find(c => c.dcontext === "ext-group");
       const routeLeg = queueLeg || groupLeg || first;
-      const answeredExts = Array.from(new Set(sorted.filter(c => c.dcontext === "ext-local" && (c.disposition || "").toUpperCase() === "ANSWERED" && Number(c.billsec || 0) > 0).map(c => c.dst).filter(v => /^[0-9]{2,5}$/.test(String(v || "")))));
-      const missedExts = Array.from(new Set(sorted.filter(c => c.dcontext === "ext-local" && ((c.disposition || "").toUpperCase() !== "ANSWERED" || Number(c.billsec || 0) === 0)).map(c => c.dst).filter(v => /^[0-9]{2,5}$/.test(String(v || "")))));
-      if (groupLeg) {
-        const allGroupExts = Array.from(new Set(String(groupLeg.lastdata || "").match(/SIP\/([0-9]{2,5})/g)?.map(x => x.replace("SIP/", "")) || []));
-        const answeredChannel = String(answered?.dstchannel || "");
-        const answeredMatch = answeredChannel.match(/SIP\/([0-9]{2,5})-/);
-        if (answered && answeredMatch && answeredMatch[1]) {
-          answeredExts.splice(0, answeredExts.length, answeredMatch[1]);
-        }
-        if (!answered && allGroupExts.length) {
-          missedExts.splice(0, missedExts.length, ...allGroupExts);
-        }
+      let answeredExts = uniqueExts(sorted
+        .filter(c => c.dcontext === "ext-local" && (c.disposition || "").toUpperCase() === "ANSWERED" && Number(c.billsec || 0) > 0)
+        .map(c => c.dst));
+      let missedExts = uniqueExts(sorted
+        .filter(c => c.dcontext === "ext-local" && ((c.disposition || "").toUpperCase() !== "ANSWERED" || Number(c.billsec || 0) === 0))
+        .map(c => c.dst));
+
+      const allDialedExts = uniqueExts([
+        ...sorted.flatMap(c => getDialedExtsFromLastData(c.lastdata)),
+        ...sorted.map(c => getChannelInternalExt(c.dstchannel)),
+        ...sorted.map(c => getChannelInternalExt(c.channel)),
+        ...answeredExts,
+        ...missedExts
+      ]);
+
+      const answeredChannel = String(answered?.dstchannel || "");
+      const answeredMatch = answeredChannel.match(/(?:SIP|PJSIP)\/([0-9]{2,5})-/i);
+      if (answered && answeredMatch && answeredMatch[1]) {
+        answeredExts = uniqueExts([answeredMatch[1]]);
       }
-      const dialedExts = answered ? answeredExts : missedExts;
+
+      if ((groupLeg || queueLeg) && allDialedExts.length) {
+        missedExts = allDialedExts.filter(ext => !answeredExts.includes(ext));
+      }
 
       return {
         ...routeLeg,
         uniqueid: first.linkedid || first.uniqueid,
         linkedid: first.linkedid || first.uniqueid,
         calldate: first.calldate,
-        src: external.src || first.src,
+        src: (queueLeg || groupLeg || hasInboundTrunkSignal(routeLeg) || isIncomingRouteContext(routeLeg)) ? (externalCallerNumber || external.src || first.src) : (external.src || first.src),
         dst: queueLeg ? `Очередь ${queueLeg.dst}` : groupLeg ? `Группа ${groupLeg.dst}` : (routeLeg.dst || first.dst),
         dstchannel: "",
         disposition: answered ? "ANSWERED" : "NO ANSWER",
         billsec: answered ? answered.billsec : 0,
         duration: Math.max(...sorted.map(c => Number(c.duration || 0))),
-        did: dialedExts.length ? `${(queueLeg?.did || groupLeg?.did || sorted.find(c => c.did)?.did || "")} → ${answered ? "ответил" : "пропустили"}: ${dialedExts.join(", ")}` : (sorted.find(c => c.did)?.did || first.did),
+        did: buildDidWithAnsweredAndMissed((queueLeg?.did || groupLeg?.did || sorted.find(c => c.did)?.did || ""), answeredExts, missedExts) || (sorted.find(c => c.did)?.did || first.did),
       };
     });
 
 
     // --- ALGORITHM FOR DETECTING MISSED CALLS AND POST-CALLBACK STATUSES ---
     // 1. Map local commented/processed states to each call
+    // Normalize click-to-call CDR legs in stats as well.
+    calls = calls.map(c => normalizeClickToCallForDisplay(c));
+
     // Collapse CDR legs for stats by linkedid, same as calls list
     const statsLinkedGroups = new Map<string, CallEntry[]>();
     calls.forEach(c => {
@@ -1212,27 +1423,50 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
     });
 
     calls = Array.from(statsLinkedGroups.values()).map(group => {
-      if (group.length === 1) return group[0];
-      const sorted = [...group].sort((a, b) => new Date(a.calldate).getTime() - new Date(b.calldate).getTime());
+      if (group.length === 1) return normalizeClickToCallForDisplay(normalizeInboundCallerForDisplay(group[0]));
+      const sorted = [...group].map(c => normalizeClickToCallForDisplay(c)).sort((a, b) => new Date(a.calldate).getTime() - new Date(b.calldate).getTime());
       const answered = sorted.find(c => (c.disposition || "").toUpperCase() === "ANSWERED" && Number(c.billsec || 0) > 0);
       const queueLeg = sorted.find(c => c.dcontext === "ext-queues" || c.lastapp === "Queue");
       const groupLeg = sorted.find(c => c.dcontext === "ext-group");
       const routeLeg = queueLeg || groupLeg || sorted[0];
+      const externalCallerNumber = getExternalCallerNumber(sorted);
       const external = sorted.find(c => (c.src || "").replace(/\D/g, "").length >= 7) || routeLeg;
       const extLegs = sorted.filter(c => c.dcontext === "ext-local" && /^[0-9]{2,5}$/.test(String(c.dst || "")));
-      const missedExts = Array.from(new Set(extLegs.filter(c => (c.disposition || "").toUpperCase() !== "ANSWERED" || Number(c.billsec || 0) === 0).map(c => String(c.dst))));
-      const answeredExts = Array.from(new Set(extLegs.filter(c => (c.disposition || "").toUpperCase() === "ANSWERED" && Number(c.billsec || 0) > 0).map(c => String(c.dst))));
-      const dialedExts = answered ? answeredExts : missedExts;
+      let missedExts = uniqueExts(extLegs
+        .filter(c => (c.disposition || "").toUpperCase() !== "ANSWERED" || Number(c.billsec || 0) === 0)
+        .map(c => String(c.dst)));
+      let answeredExts = uniqueExts(extLegs
+        .filter(c => (c.disposition || "").toUpperCase() === "ANSWERED" && Number(c.billsec || 0) > 0)
+        .map(c => String(c.dst)));
+
+      const allDialedExts = uniqueExts([
+        ...sorted.flatMap(c => getDialedExtsFromLastData(c.lastdata)),
+        ...sorted.map(c => getChannelInternalExt(c.dstchannel)),
+        ...sorted.map(c => getChannelInternalExt(c.channel)),
+        ...answeredExts,
+        ...missedExts
+      ]);
+
+      const answeredChannel = String(answered?.dstchannel || "");
+      const answeredMatch = answeredChannel.match(/(?:SIP|PJSIP)\/([0-9]{2,5})-/i);
+      if (answered && answeredMatch && answeredMatch[1]) {
+        answeredExts = uniqueExts([answeredMatch[1]]);
+      }
+
+      if ((groupLeg || queueLeg) && allDialedExts.length) {
+        missedExts = allDialedExts.filter(ext => !answeredExts.includes(ext));
+      }
+
       const did = routeLeg.did || sorted.find(c => c.did)?.did || "";
       return {
         ...routeLeg,
         uniqueid: routeLeg.linkedid || routeLeg.uniqueid,
         linkedid: routeLeg.linkedid || routeLeg.uniqueid,
         calldate: sorted[0].calldate,
-        src: external.src || routeLeg.src,
+        src: (queueLeg || groupLeg || hasInboundTrunkSignal(routeLeg) || isIncomingRouteContext(routeLeg)) ? (externalCallerNumber || external.src || routeLeg.src) : (external.src || routeLeg.src),
         dst: queueLeg ? `Очередь ${queueLeg.dst}` : groupLeg ? `Группа ${groupLeg.dst}` : (routeLeg.dst || sorted[0].dst),
         dstchannel: "",
-        did: dialedExts.length ? `${did} → ${answered ? "ответил" : "пропустили"}: ${dialedExts.join(", ")}` : did,
+        did: buildDidWithAnsweredAndMissed(did, answeredExts, missedExts) || did,
         disposition: answered ? "ANSWERED" : "NO ANSWER",
         billsec: answered ? answered.billsec : 0,
         duration: Math.max(...sorted.map(c => Number(c.duration || 0))),
@@ -1383,26 +1617,15 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
       );
     }
 
-    // Number specific search
+    // Number specific search. Use exact digit-token match so extension 100 does not match external 79788101210.
     if (numberFilter && numberFilter.trim().length > 0) {
       const n = numberFilter.replace(/\D/g, '');
-      filteredCalls = filteredCalls.filter(c => 
-        (c.src && c.src.replace(/\D/g, '').includes(n)) || 
-        (c.dst && c.dst.replace(/\D/g, '').includes(n))
-      );
+      filteredCalls = filteredCalls.filter(c => callHasExactNumber(c, n));
     }
 
-    // Filter by "My Calls"
+    // Filter by "My Calls". Use the same exact-number logic as the number search.
     if (onlyMyCalls && operatorExt) {
-      const ext = operatorExt;
-      filteredCalls = filteredCalls.filter(c => {
-        const matchesSrc = c.src === ext || (c.src && c.src.endsWith(ext));
-        const matchesDst = c.dst === ext || (c.dst && c.dst.endsWith(ext));
-        const matchesClid = c.clid && c.clid.includes(ext);
-        const matchesChannel = c.channel && (c.channel.includes(`/ ${ext}-`) || c.channel.includes(`/${ext}-`) || c.channel.includes(`-${ext}`));
-        const matchesDstChannel = c.dstchannel && (c.dstchannel.includes(`/ ${ext}-`) || c.dstchannel.includes(`/${ext}-`) || c.dstchannel.includes(`-${ext}`));
-        return matchesSrc || matchesDst || matchesClid || matchesChannel || matchesDstChannel;
-      });
+      filteredCalls = filteredCalls.filter(c => callHasExactNumber(c, operatorExt));
     }
 
     // Status filtering logic
@@ -1412,15 +1635,14 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
       } else if (statusFilter === 'MISSED') {
         filteredCalls = filteredCalls.filter(c => {
           const disposition = c.disposition?.toUpperCase();
-          return disposition === 'NO ANSWER' || disposition === 'BUSY' || disposition === 'FAILED';
+          const isMissedType = disposition === 'NO ANSWER' || disposition === 'BUSY' || disposition === 'FAILED';
+          return isIncoming(c) && isMissedType;
         });
       } else if (statusFilter === 'ONLY_UNPROCESSED') {
         filteredCalls = filteredCalls.filter(c => {
           const disposition = c.disposition?.toUpperCase();
-          const isUnanswered = disposition === 'NO ANSWER' || disposition === 'BUSY' || disposition === 'FAILED';
-          const isIncomingCall = isIncoming(c);
-          const isMissed = isUnanswered && (isIncomingCall || !c.dstchannel);
-          return isMissed && !c.processed && !c.wasCallbacked;
+          const isMissedType = disposition === 'NO ANSWER' || disposition === 'BUSY' || disposition === 'FAILED';
+          return isIncoming(c) && isMissedType && !c.processed && !c.wasCallbacked;
         });
       } else if (statusFilter === 'ONLY_CALLBACKED') {
         filteredCalls = filteredCalls.filter(c => c.wasCallbacked === true);
@@ -1434,8 +1656,8 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
         filteredCalls = filteredCalls.filter(c => {
           const disposition = c.disposition?.toUpperCase();
           const isMissedType = disposition === 'NO ANSWER' || disposition === 'BUSY' || disposition === 'FAILED';
-          const isHandled = c.processed || c.wasCallbacked || c.wasKpiResolved;
-          return isMissedType && isHandled;
+          const isHandledInSla = c.wasKpiResolved === true;
+          return isIncoming(c) && isMissedType && isHandledInSla;
         });
       } else if (statusFilter === 'LOST') {
         filteredCalls = filteredCalls.filter(c => {
@@ -1446,8 +1668,9 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
             : 60;
           const callTime = new Date(c.calldate).getTime();
           const slaExpired = Number.isFinite(callTime) && (Date.now() - callTime) > kpiMinutes * 60 * 1000;
-          const isHandled = c.processed || c.wasCallbacked || c.wasKpiResolved;
-          return isMissedType && !isHandled && slaExpired;
+          const isHandledInSla = c.wasKpiResolved === true;
+          const isLateCallback = c.wasCallbacked && !c.wasKpiResolved;
+          return isIncoming(c) && isMissedType && !isHandledInSla && (isLateCallback || slaExpired);
         });
       }
     }
@@ -1488,6 +1711,7 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
     const endTime = normalizeTimeFilter(req.query.endTime, '23:59');
     const numberFilter = req.query.number as string;
     const searchFilter = req.query.search as string;
+    const statusFilter = req.query.status as string;
     const operatorExt = (req.query.operatorExt as string || '').trim();
     const onlyMyCalls = req.query.onlyMyCalls === 'true';
     
@@ -1528,27 +1752,50 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
     });
 
     calls = Array.from(statsLinkedGroups.values()).map(group => {
-      if (group.length === 1) return group[0];
-      const sorted = [...group].sort((a, b) => new Date(a.calldate).getTime() - new Date(b.calldate).getTime());
+      if (group.length === 1) return normalizeClickToCallForDisplay(normalizeInboundCallerForDisplay(group[0]));
+      const sorted = [...group].map(c => normalizeClickToCallForDisplay(c)).sort((a, b) => new Date(a.calldate).getTime() - new Date(b.calldate).getTime());
       const answered = sorted.find(c => (c.disposition || "").toUpperCase() === "ANSWERED" && Number(c.billsec || 0) > 0);
       const queueLeg = sorted.find(c => c.dcontext === "ext-queues" || c.lastapp === "Queue");
       const groupLeg = sorted.find(c => c.dcontext === "ext-group");
       const routeLeg = queueLeg || groupLeg || sorted[0];
+      const externalCallerNumber = getExternalCallerNumber(sorted);
       const external = sorted.find(c => (c.src || "").replace(/\D/g, "").length >= 7) || routeLeg;
       const extLegs = sorted.filter(c => c.dcontext === "ext-local" && /^[0-9]{2,5}$/.test(String(c.dst || "")));
-      const missedExts = Array.from(new Set(extLegs.filter(c => (c.disposition || "").toUpperCase() !== "ANSWERED" || Number(c.billsec || 0) === 0).map(c => String(c.dst))));
-      const answeredExts = Array.from(new Set(extLegs.filter(c => (c.disposition || "").toUpperCase() === "ANSWERED" && Number(c.billsec || 0) > 0).map(c => String(c.dst))));
-      const dialedExts = answered ? answeredExts : missedExts;
+      let missedExts = uniqueExts(extLegs
+        .filter(c => (c.disposition || "").toUpperCase() !== "ANSWERED" || Number(c.billsec || 0) === 0)
+        .map(c => String(c.dst)));
+      let answeredExts = uniqueExts(extLegs
+        .filter(c => (c.disposition || "").toUpperCase() === "ANSWERED" && Number(c.billsec || 0) > 0)
+        .map(c => String(c.dst)));
+
+      const allDialedExts = uniqueExts([
+        ...sorted.flatMap(c => getDialedExtsFromLastData(c.lastdata)),
+        ...sorted.map(c => getChannelInternalExt(c.dstchannel)),
+        ...sorted.map(c => getChannelInternalExt(c.channel)),
+        ...answeredExts,
+        ...missedExts
+      ]);
+
+      const answeredChannel = String(answered?.dstchannel || "");
+      const answeredMatch = answeredChannel.match(/(?:SIP|PJSIP)\/([0-9]{2,5})-/i);
+      if (answered && answeredMatch && answeredMatch[1]) {
+        answeredExts = uniqueExts([answeredMatch[1]]);
+      }
+
+      if ((groupLeg || queueLeg) && allDialedExts.length) {
+        missedExts = allDialedExts.filter(ext => !answeredExts.includes(ext));
+      }
+
       const did = routeLeg.did || sorted.find(c => c.did)?.did || "";
       return {
         ...routeLeg,
         uniqueid: routeLeg.linkedid || routeLeg.uniqueid,
         linkedid: routeLeg.linkedid || routeLeg.uniqueid,
         calldate: sorted[0].calldate,
-        src: external.src || routeLeg.src,
+        src: (queueLeg || groupLeg || hasInboundTrunkSignal(routeLeg) || isIncomingRouteContext(routeLeg)) ? (externalCallerNumber || external.src || routeLeg.src) : (external.src || routeLeg.src),
         dst: queueLeg ? `Очередь ${queueLeg.dst}` : groupLeg ? `Группа ${groupLeg.dst}` : (routeLeg.dst || sorted[0].dst),
         dstchannel: "",
-        did: dialedExts.length ? `${did} → ${answered ? "ответил" : "пропустили"}: ${dialedExts.join(", ")}` : did,
+        did: buildDidWithAnsweredAndMissed(did, answeredExts, missedExts) || did,
         disposition: answered ? "ANSWERED" : "NO ANSWER",
         billsec: answered ? answered.billsec : 0,
         duration: Math.max(...sorted.map(c => Number(c.duration || 0))),
@@ -1600,41 +1847,54 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
       callMap.set(c.uniqueid, c);
     });
 
-    const chronological = [...calls].sort((a, b) => new Date(a.calldate).getTime() - new Date(b.calldate).getTime());
-    
-    // Evaluate resolutions
-    chronological.forEach((call) => {
+    // Calculate callback/KPI statuses for /api/stats exactly like /api/calls.
+    // Without this block processedCalls stays 0 even when table rows show "SLA OK".
+    const chronologicalStatsCalls = [...calls].sort((a, b) => new Date(a.calldate).getTime() - new Date(b.calldate).getTime());
+
+    chronologicalStatsCalls.forEach((call) => {
       const disposition = call.disposition?.toUpperCase();
       const isMissedType = disposition === 'NO ANSWER' || disposition === 'BUSY' || disposition === 'FAILED';
       const isIncomingMissed = isMissedType && isIncoming(call);
 
-      if (isIncomingMissed && call.src) {
+      if (isIncomingMissed && call.src && call.src.trim().length > 3) {
         const clientNum = call.src.trim();
         const callTime = new Date(call.calldate).getTime();
-        
-         const resolved = chronological.find(c => {
+
+        const resolution = chronologicalStatsCalls.find(c => {
           const cTime = new Date(c.calldate).getTime();
           if (cTime <= callTime) return false;
-          return (c.disposition === 'ANSWERED' && c.billsec > 0) && (c.dst === clientNum || c.src === clientNum);
+
+          const isAnswered = c.disposition === 'ANSWERED' && Number(c.billsec || 0) > 0;
+          if (!isAnswered) return false;
+
+          const isOutboundResolved = c.dst === clientNum;
+          const isInboundResolved = c.src === clientNum;
+
+          return isOutboundResolved || isInboundResolved;
         });
 
-        if (resolved) {
-          const original = callMap.get(call.uniqueid);
-          if (original) {
-            original.wasCallbacked = true;
-            
-            const resTime = new Date(resolved.calldate).getTime();
+        if (resolution) {
+          const originalCall = callMap.get(call.uniqueid);
+          if (originalCall) {
+            originalCall.wasCallbacked = true;
+            originalCall.callbackCallId = resolution.uniqueid;
+            originalCall.callbackTime = resolution.calldate;
+
+            const resTime = new Date(resolution.calldate).getTime();
             const diffMs = resTime - callTime;
             const diffMin = Math.floor(diffMs / 60000);
-            const kpiMinutes = localDb.settings && localDb.settings.callbackKpiMinutes !== undefined ? Number(localDb.settings.callbackKpiMinutes) : 60;
-            
+            const kpiMinutes = settings && settings.callbackKpiMinutes !== undefined ? Number(settings.callbackKpiMinutes) : 60;
+
             if (diffMin <= kpiMinutes) {
-              original.wasKpiResolved = true;
-              if (!original.processed) {
-                original.processed = true;
+              originalCall.wasKpiResolved = true;
+              if (!originalCall.processed) {
+                originalCall.processed = true;
+                originalCall.processedBy = 'Система KPI';
+                originalCall.processedAt = resolution.calldate;
+                originalCall.comment = `Авто-отзвон осуществлен за ${diffMin} мин (Лимит KPI: ${kpiMinutes} мин).`;
               }
             } else {
-              original.wasKpiResolved = false;
+              originalCall.wasKpiResolved = false;
             }
           }
         }
@@ -1668,22 +1928,11 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
 
     if (numberFilter && numberFilter.trim().length > 0) {
       const n = numberFilter.replace(/\D/g, '');
-      filteredCalls = filteredCalls.filter(c => 
-        (c.src && c.src.replace(/\D/g, '').includes(n)) || 
-        (c.dst && c.dst.replace(/\D/g, '').includes(n))
-      );
+      filteredCalls = filteredCalls.filter(c => callHasExactNumber(c, n));
     }
 
     if (onlyMyCalls && operatorExt) {
-      const ext = operatorExt;
-      filteredCalls = filteredCalls.filter(c => {
-        const matchesSrc = c.src === ext || (c.src && c.src.endsWith(ext));
-        const matchesDst = c.dst === ext || (c.dst && c.dst.endsWith(ext));
-        const matchesClid = c.clid && c.clid.includes(ext);
-        const matchesChannel = c.channel && (c.channel.includes(`/ ${ext}-`) || c.channel.includes(`/${ext}-`) || c.channel.includes(`-${ext}`));
-        const matchesDstChannel = c.dstchannel && (c.dstchannel.includes(`/ ${ext}-`) || c.dstchannel.includes(`/${ext}-`) || c.dstchannel.includes(`-${ext}`));
-        return matchesSrc || matchesDst || matchesClid || matchesChannel || matchesDstChannel;
-      });
+      filteredCalls = filteredCalls.filter(c => callHasExactNumber(c, operatorExt));
     }
 
     // Now calculate actual stats based on filtered list of calls
@@ -1721,15 +1970,26 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
         const callTime = new Date(c.calldate).getTime();
         const slaExpired = Number.isFinite(callTime) && (Date.now() - callTime) > kpiMinutes * 60 * 1000;
 
-        const isHandled = c.processed || c.wasCallbacked || c.wasKpiResolved;
+        const isHandledInSla = c.wasKpiResolved === true && c.processedBy === 'Система KPI';
+        const isLateCallback = c.wasCallbacked === true && c.wasKpiResolved !== true;
 
-        if (isHandled) {
+        if (isHandledInSla) {
           processedCalls++;
-        } else if (slaExpired) {
+        } else if (isLateCallback || slaExpired) {
           lostCalls++;
         }
       }
     });
+
+    // Если активна карточка "Обработанные", принудительно синхронизируем её число
+    // с тем же видимым набором, который отдаёт /api/calls?status=PROCESSED.
+    if (statusFilter === 'PROCESSED') {
+      processedCalls = filteredCalls.filter(c => {
+        const disposition = c.disposition?.toUpperCase();
+        const isMissedType = disposition === 'NO ANSWER' || disposition === 'BUSY' || disposition === 'FAILED';
+        return isIncoming(c) && isMissedType && c.wasKpiResolved === true && c.processedBy === 'Система KPI';
+      }).length;
+    }
 
     res.json({
       inboundCalls,
