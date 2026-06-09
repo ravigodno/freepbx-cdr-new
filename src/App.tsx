@@ -1218,7 +1218,7 @@ export default function App() {
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [session, page, autoRefreshInterval, startDate, endDate, startTime, endTime, statusFilter, isDemoModeActive]);
+  }, [session, page, autoRefreshInterval, startDate, endDate, startTime, endTime, statusFilter, isDemoModeActive, searchQuery, numberFilter, onlyMyCalls, myExt]);
 
   // Open Comment Sidebar
   const openProcessModal = (call: CallEntry) => {
