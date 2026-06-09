@@ -191,80 +191,27 @@ function RussianDatePicker({ value, onChange, ariaLabel }: RussianDatePickerProp
   );
 }
 
-
-interface TimeInput24Props {
-  value: string;
-  onChange: (value: string) => void;
-  ariaLabel: string;
-}
-
-const normalizeTimeInputValue = (value: string, fallback: string): string => {
-  const digits = String(value || '').replace(/\D/g, '').slice(0, 4);
-  if (!digits) return fallback;
-
-  let hours = 0;
-  let minutes = 0;
-
-  if (digits.length <= 2) {
-    hours = Number(digits);
-    minutes = 0;
-  } else {
-    hours = Number(digits.slice(0, 2));
-    minutes = Number(digits.slice(2, 4).padEnd(2, '0'));
-  }
-
-  if (!Number.isFinite(hours)) hours = 0;
-  if (!Number.isFinite(minutes)) minutes = 0;
-
-  hours = Math.min(Math.max(hours, 0), 23);
-  minutes = Math.min(Math.max(minutes, 0), 59);
-
-  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
-};
-
-function TimeInput24({ value, onChange, ariaLabel }: TimeInput24Props) {
-  const [draft, setDraft] = useState(value);
-
-  useEffect(() => {
-    setDraft(value);
-  }, [value]);
-
-  const commit = () => {
-    const normalized = normalizeTimeInputValue(draft, value || '00:00');
-    setDraft(normalized);
-    onChange(normalized);
-  };
-
-  return (
-    <input
-      type="text"
-      inputMode="numeric"
-      pattern="[0-9]{2}:[0-9]{2}"
-      placeholder="00:00"
-      value={draft}
-      onChange={(e) => {
-        const raw = e.target.value.replace(/[^\d:]/g, '').slice(0, 5);
-        setDraft(raw);
-      }}
-      onBlur={commit}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') {
-          e.currentTarget.blur();
-        }
-      }}
-      lang="ru-RU"
-      aria-label={ariaLabel}
-      title="Формат времени: 00:00–23:59"
-      className="w-[58px] bg-white border border-slate-200 rounded px-1.5 py-1 text-[11px] text-slate-700 font-mono focus:outline-none focus:border-red-500"
-    />
-  );
-}
-
 // Front-end state structures
 interface UserSession {
   token: string;
   username: string;
   role: UserRole;
+}
+
+
+interface LiveCallBanner {
+  active: boolean;
+  direction?: 'incoming' | 'outgoing' | 'internal';
+  operatorExt?: string;
+  number?: string;
+  displayName?: string;
+  contactType?: 'internal' | 'client';
+  contactComment?: string;
+  did?: string;
+  linkedid?: string;
+  durationSec?: number;
+  durationText?: string;
+  startedAt?: string;
 }
 
 export default function App() {
@@ -593,6 +540,7 @@ export default function App() {
   const [myExt, setMyExt] = useState(() => {
     return localStorage.getItem('operator_asterisk_ext') || '101';
   });
+  const [liveCallBanner, setLiveCallBanner] = useState<LiveCallBanner | null>(null);
   const [isCallingModalOpen, setIsCallingModalOpen] = useState(false);
   const [callingLog, setCallingLog] = useState<string[]>([]);
   const [callingTarget, setCallingTarget] = useState('');
@@ -662,6 +610,28 @@ export default function App() {
       setCallingLog(prev => [...prev, `[Система] Ошибка сети: не удалось подключиться к серверу.`]);
     } finally {
       setIsC2CLoading(false);
+    }
+  };
+
+  const loadLiveCallBanner = async () => {
+    if (!session || !myExt.trim()) {
+      setLiveCallBanner(null);
+      return;
+    }
+    try {
+      const qParams = new URLSearchParams({ operatorExt: myExt.trim() });
+      const resp = await fetch(`/api/live/call-banner?${qParams.toString()}`, {
+        headers: { 'Authorization': `Bearer ${session.token}` }
+      });
+      if (resp.status === 401) {
+        handleAuthError(resp);
+        return;
+      }
+      if (!resp.ok) return;
+      const data = await resp.json();
+      setLiveCallBanner(data && data.active ? data : null);
+    } catch (e) {
+      // Live popup is auxiliary; ignore network errors here.
     }
   };
 
@@ -1253,6 +1223,17 @@ export default function App() {
     }
   };
 
+  // Poll active AMI channels for live call popup
+  useEffect(() => {
+    if (!session || !myExt.trim()) {
+      setLiveCallBanner(null);
+      return;
+    }
+    loadLiveCallBanner();
+    const interval = setInterval(loadLiveCallBanner, 2000);
+    return () => clearInterval(interval);
+  }, [session, myExt]);
+
   // Trigger main loads on mount or settings pivot
   useEffect(() => {
     if (session) {
@@ -1368,7 +1349,7 @@ export default function App() {
         {/* Animated ambient background vectors */}
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(241,245,249,0.95),rgba(226,232,240,1))] z-0" />
         
-        <div className="relative w-full max-w-md bg-white/95 backdrop-blur-md rounded-2xl border border-slate-200 p-8 shadow-xl z-10">
+        <div className="relative w-full max-w-md bg-white  rounded-2xl border border-slate-200 p-8 shadow-xl z-10">
           <div className="flex flex-col items-center mb-6">
             <div className="bg-red-50 text-red-600 p-3 rounded-full mb-3 border border-red-100 shadow-sm">
               <PhoneMissed className="h-8 w-8" />
@@ -1560,6 +1541,75 @@ export default function App() {
         </div>
       </header>
 
+      {liveCallBanner?.active && (() => {
+        const isIncomingLive = liveCallBanner.direction === 'incoming';
+        const isOutgoingLive = liveCallBanner.direction === 'outgoing';
+        const isInternalLive = liveCallBanner.direction === 'internal';
+        const title = isIncomingLive ? 'Входящий звонок' : isOutgoingLive ? 'Исходящий звонок' : 'Внутренний звонок';
+        const iconClass = isIncomingLive ? 'text-red-600 bg-red-50' : isOutgoingLive ? 'text-indigo-600 bg-indigo-50' : 'text-purple-600 bg-purple-50';
+        const contactTypeLabel = liveCallBanner.contactType === 'internal' ? 'Внутренний' : 'Клиент';
+        const contactTypeClass = liveCallBanner.contactType === 'internal' ? 'bg-slate-100 text-slate-600 border-slate-200' : 'bg-red-50 text-red-600 border-red-100';
+        const display = liveCallBanner.displayName || liveCallBanner.number || 'Неизвестный номер';
+        const cleanName = display.replace(/\s*\(([^)]*)\)\s*$/, '');
+        const positionMatch = display.match(/\(([^)]*)\)\s*$/);
+        const position = positionMatch?.[1] || liveCallBanner.contactComment || '';
+        const durationText = liveCallBanner.durationText || `${Math.floor((liveCallBanner.durationSec || 0) / 60)}:${String((liveCallBanner.durationSec || 0) % 60).padStart(2, '0')}`;
+
+        return (
+          <div className="fixed top-[74px] left-1/2 -translate-x-1/2 z-50 w-[calc(100%-32px)] max-w-[1720px] pointer-events-none">
+            <div className="pointer-events-auto relative overflow-hidden rounded-2xl border border-red-200 bg-white shadow-2xl shadow-slate-900/12  animate-fade-in">
+              <div className="absolute inset-y-0 left-0 w-2 bg-gradient-to-b from-red-500 to-rose-600" />
+              <div className="flex items-stretch min-h-[104px]">
+                <div className="flex items-center gap-4 px-6 py-4 min-w-[420px] max-w-[520px] border-r border-slate-200">
+                  <div className={`h-14 w-14 rounded-full flex items-center justify-center shadow-sm shrink-0 ${iconClass}`}>
+                    {isIncomingLive ? <PhoneIncoming className="h-7 w-7" /> : isOutgoingLive ? <PhoneOutgoing className="h-7 w-7" /> : <PhoneCall className="h-7 w-7" />}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 text-[12px] uppercase tracking-[0.12em] font-black text-slate-900">
+                      {title}
+                      {isIncomingLive && <span className="h-2.5 w-2.5 rounded-full bg-red-500 animate-pulse" />}
+                    </div>
+                    <div className="mt-1 text-xl font-black text-slate-950 truncate" title={display}>{cleanName}</div>
+                    <div className="mt-1 flex items-center gap-2 text-sm font-bold text-slate-800">
+                      <Phone className="h-4 w-4 text-cyan-500" />
+                      <span>{liveCallBanner.number || '—'}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 xl:grid-cols-6 flex-1 divide-x divide-slate-200">
+                  <div className="px-6 py-4 flex flex-col justify-center">
+                    <span className="text-[11px] uppercase tracking-wider font-bold text-slate-500">Тип</span>
+                    <span className={`mt-2 w-fit rounded-md border px-2 py-1 text-xs font-bold ${contactTypeClass}`}>{contactTypeLabel}</span>
+                  </div>
+                  <div className="px-6 py-4 flex flex-col justify-center min-w-0">
+                    <span className="text-[11px] uppercase tracking-wider font-bold text-slate-500">Справочник</span>
+                    <span className="mt-2 text-sm font-black text-slate-900 truncate" title={display}>{cleanName}</span>
+                  </div>
+                  <div className="px-6 py-4 flex flex-col justify-center min-w-0">
+                    <span className="text-[11px] uppercase tracking-wider font-bold text-slate-500">Должность / комментарий</span>
+                    <span className="mt-2 text-sm font-bold text-slate-900 truncate" title={position}>{position || '—'}</span>
+                  </div>
+                  <div className="px-6 py-4 flex flex-col justify-center">
+                    <span className="text-[11px] uppercase tracking-wider font-bold text-slate-500">DID</span>
+                    <span className="mt-2 text-base font-black text-slate-950">{liveCallBanner.did || '—'}</span>
+                  </div>
+                  <div className="px-6 py-4 flex flex-col justify-center">
+                    <span className="text-[11px] uppercase tracking-wider font-bold text-slate-500">На мой SIP</span>
+                    <span className="mt-2 text-base font-black text-slate-950">{liveCallBanner.operatorExt || myExt || '—'}</span>
+                  </div>
+                  <div className="px-6 py-4 flex flex-col justify-center items-start xl:items-end">
+                    <span className="text-sm font-black text-slate-900">{liveCallBanner.startedAt || ''}</span>
+                    <span className="mt-2 text-[11px] uppercase tracking-wider font-bold text-slate-500">Длительность</span>
+                    <span className="mt-1 text-base font-black text-slate-950 font-mono">{durationText}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Main UI body section */}
       <main className="flex-1 overflow-y-auto max-w-[1800px] w-full mx-auto p-4 space-y-4">
         {dbWarning && (
@@ -1665,7 +1715,7 @@ export default function App() {
                 }}
                 className={`text-left p-4 flex flex-col justify-between rounded-xl shadow-sm hover:shadow-md transition-all cursor-pointer border hover:scale-[1.01] active:scale-[0.99] ${
                   statusFilter === 'MISSED'
-                    ? 'bg-red-50/70 border-red-400 ring-2 ring-red-500/30'
+                    ? 'bg-red-50 border-red-400 ring-2 ring-red-500/30'
                     : 'bg-white border-red-100'
                 }`}
               >
@@ -1825,13 +1875,17 @@ export default function App() {
                     }}
                     ariaLabel="Дата начала периода"
                   />
-                  <TimeInput24
+                  <input
+                    type="text"
                     value={startTime}
-                    onChange={(value) => {
-                      setStartTime(value);
+                    onChange={(e) => {
+                      setStartTime(e.target.value);
                       setPage(1);
                     }}
-                    ariaLabel="Время начала периода"
+                    step="60"
+                    lang="ru-RU"
+                    aria-label="Время начала периода"
+                    className="bg-white border border-slate-200 rounded px-1.5 py-1 text-[11px] text-slate-700 font-mono focus:outline-none focus:border-red-500"
                   />
                   <span className="text-slate-400 text-xs">—</span>
                   <RussianDatePicker
@@ -1842,13 +1896,17 @@ export default function App() {
                     }}
                     ariaLabel="Дата окончания периода"
                   />
-                  <TimeInput24
+                  <input
+                    type="text"
                     value={endTime}
-                    onChange={(value) => {
-                      setEndTime(value);
+                    onChange={(e) => {
+                      setEndTime(e.target.value);
                       setPage(1);
                     }}
-                    ariaLabel="Время окончания периода"
+                    step="60"
+                    lang="ru-RU"
+                    aria-label="Время окончания периода"
+                    className="bg-white border border-slate-200 rounded px-1.5 py-1 text-[11px] text-slate-700 font-mono focus:outline-none focus:border-red-500"
                   />
                 </div>
               </div>
@@ -1887,7 +1945,7 @@ export default function App() {
                     setStatusFilter('ALL');
                     applyPeriodPreset(7);
                   }}
-                  className="hover:bg-red-50 bg-red-50/50 border border-red-200 text-red-600 px-2.5 py-1.5 rounded-md cursor-pointer transition-all font-semibold text-xs"
+                  className="hover:bg-red-50 bg-red-50 border border-red-200 text-red-600 px-2.5 py-1.5 rounded-md cursor-pointer transition-all font-semibold text-xs"
                   title="Сбросить все фильтры"
                 >
                   Сбросить фильтры
@@ -2774,7 +2832,7 @@ export default function App() {
                 <button
                   onClick={() => changeSpeed(1)}
                   className={`px-2 py-1 rounded text-[10px] font-semibold transition-all cursor-pointer ${
-                    playbackSpeed === 1 ? 'bg-red-50 border border-red-200/50 text-red-600' : 'text-slate-500 hover:text-slate-800'
+                    playbackSpeed === 1 ? 'bg-red-50 border border-red-200 text-red-600' : 'text-slate-500 hover:text-slate-800'
                   }`}
                 >
                   1.0x
@@ -2782,7 +2840,7 @@ export default function App() {
                 <button
                   onClick={() => changeSpeed(1.25)}
                   className={`px-2 py-1 rounded text-[10px] font-semibold transition-all cursor-pointer ${
-                    playbackSpeed === 1.25 ? 'bg-red-50 border border-red-200/50 text-red-600' : 'text-slate-500 hover:text-slate-800'
+                    playbackSpeed === 1.25 ? 'bg-red-50 border border-red-200 text-red-600' : 'text-slate-500 hover:text-slate-800'
                   }`}
                 >
                   1.25x
@@ -2790,7 +2848,7 @@ export default function App() {
                 <button
                   onClick={() => changeSpeed(1.5)}
                   className={`px-2 py-1 rounded text-[10px] font-semibold transition-all cursor-pointer ${
-                    playbackSpeed === 1.5 ? 'bg-red-50 border border-red-200/50 text-red-600' : 'text-slate-500 hover:text-slate-800'
+                    playbackSpeed === 1.5 ? 'bg-red-50 border border-red-200 text-red-600' : 'text-slate-500 hover:text-slate-800'
                   }`}
                 >
                   1.5x
@@ -2798,7 +2856,7 @@ export default function App() {
                 <button
                   onClick={() => changeSpeed(2)}
                   className={`px-2 py-1 rounded text-[10px] font-semibold transition-all cursor-pointer ${
-                    playbackSpeed === 2 ? 'bg-red-50 border border-red-200/50 text-red-600' : 'text-slate-500 hover:text-slate-800'
+                    playbackSpeed === 2 ? 'bg-red-50 border border-red-200 text-red-600' : 'text-slate-500 hover:text-slate-800'
                   }`}
                 >
                   2x
@@ -2845,7 +2903,7 @@ export default function App() {
 
       {/* CALL PROCESSING / COMMENTING DIALOG MODAL PANEL */}
       {selectedCall && (
-        <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+        <div className="fixed inset-0 bg-slate-950/40  flex items-center justify-center p-4 z-50">
           <div className="w-full max-w-xl bg-white border border-slate-200 rounded-2xl p-6 shadow-2xl relative max-h-[90vh] overflow-y-auto font-sans">
             <div className="flex items-start justify-between border-b border-slate-200 pb-3 mb-4">
               <div>
@@ -2969,7 +3027,7 @@ export default function App() {
 
       {/* ADMIN CONNECTORS / CONFIGURATOR MODAL */}
       {isSettingsOpen && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+        <div className="fixed inset-0 bg-slate-950/80  flex items-center justify-center p-4 z-50">
           <div className="w-full max-w-lg bg-slate-900 border border-slate-850 rounded-2xl shadow-2xl relative max-h-[90vh] flex flex-col overflow-hidden z-50">
             <div className="flex items-start justify-between border-b border-slate-800 p-6 pb-3 shrink-0">
               <div>
@@ -3338,7 +3396,7 @@ export default function App() {
 
       {/* MASS DIRECTORY IMPORT DIALOG (ADMINS ONLY) */}
       {isImportOpen && (
-        <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+        <div className="fixed inset-0 bg-slate-950/70  flex items-center justify-center p-4 z-50">
           <div className="w-full max-w-2xl bg-white border border-slate-200 rounded-2xl p-6 shadow-2xl relative max-h-[90vh] flex flex-col z-[60]">
             <div className="flex items-start justify-between border-b border-slate-100 pb-3 mb-4 shrink-0">
               <div>
@@ -3517,7 +3575,7 @@ export default function App() {
 
       {/* DIRECTORY ADD / EDIT DIALOG */}
       {isDirFormOpen && (
-        <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+        <div className="fixed inset-0 bg-slate-950/70  flex items-center justify-center p-4 z-50">
           <div className="w-full max-w-md bg-white border border-slate-200 rounded-2xl p-6 shadow-2xl relative max-h-[90vh] overflow-y-auto">
             <div className="flex items-start justify-between border-b border-slate-100 pb-3 mb-4">
               <div>
@@ -3632,7 +3690,7 @@ export default function App() {
 
       {/* CLICK-TO-CALL AMI STATUS LOGS DIALOG */}
       {isCallingModalOpen && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+        <div className="fixed inset-0 bg-slate-950/80 -xs flex items-center justify-center p-4 z-50">
           <div className="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl relative">
             <div className="flex items-start justify-between border-b border-slate-800 pb-3 mb-4">
               <div className="flex items-center gap-2.5">

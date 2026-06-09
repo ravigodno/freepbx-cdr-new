@@ -258,7 +258,7 @@ const normalizeInboundCallerForDisplay = (c: any): any => {
 const getDialedExtsFromLastData = (value: any): string[] => {
   const result: string[] = [];
   const text = String(value || '');
-  const re = /(?:SIP|PJSIP|Local)\/([0-9]{2,5})(?:[-@,]|$)/gi;
+  const re = new RegExp("(?:SIP|PJSIP|Local)/([0-9]{2,5})(?:[-@,&]|$)", "gi");
   let m: RegExpExecArray | null;
 
   while ((m = re.exec(text)) !== null) {
@@ -1189,6 +1189,291 @@ function triggerAMICall(settings: AppSettings, fromExtension: string, toPhoneNum
   });
 }
 
+
+interface LiveCallBanner {
+  active: boolean;
+  direction?: 'incoming' | 'outgoing' | 'internal';
+  operatorExt?: string;
+  number?: string;
+  displayName?: string;
+  contactType?: string;
+  contactComment?: string;
+  did?: string;
+  linkedid?: string;
+  durationSec?: number;
+  durationText?: string;
+  startedAt?: string;
+}
+
+type AmiBlock = Record<string, string>;
+
+function parseAmiBlocks(raw: string): AmiBlock[] {
+  return raw
+    .split(/\r?\n\r?\n/)
+    .map(block => {
+      const item: AmiBlock = {};
+      block.split(/\r?\n/).forEach(line => {
+        const idx = line.indexOf(':');
+        if (idx > 0) {
+          const key = line.substring(0, idx).trim();
+          const value = line.substring(idx + 1).trim();
+          item[key] = value;
+        }
+      });
+      return item;
+    })
+    .filter(item => Object.keys(item).length > 0);
+}
+
+function runAmiCoreShowChannels(settings: AppSettings): Promise<AmiBlock[]> {
+  return new Promise((resolve, reject) => {
+    const host = settings.amiHost || 'localhost';
+    const port = Number(settings.amiPort || 5038);
+    const user = settings.amiUser || 'clicktocall';
+    const pass = settings.amiPass || '';
+
+    if (!host || !user || !pass) {
+      resolve([]);
+      return;
+    }
+
+    const socket = new net.Socket();
+    socket.setTimeout(3500);
+    let buffer = '';
+    let stage: 'greeting' | 'login' | 'channels' = 'greeting';
+
+    socket.connect(port, host, () => {});
+
+    socket.on('data', (data) => {
+      buffer += data.toString();
+
+      if (stage === 'greeting' && buffer.includes('\n')) {
+        buffer = '';
+        socket.write(`Action: Login\r\nUsername: ${user}\r\nSecret: ${pass}\r\nEvents: off\r\n\r\n`);
+        stage = 'login';
+        return;
+      }
+
+      if (stage === 'login' && (buffer.includes('\r\n\r\n') || buffer.includes('\n\n'))) {
+        const lower = buffer.toLowerCase();
+        if (!lower.includes('success') && !lower.includes('authentication accepted')) {
+          socket.destroy();
+          resolve([]);
+          return;
+        }
+        buffer = '';
+        socket.write('Action: CoreShowChannels\r\n\r\n');
+        stage = 'channels';
+        return;
+      }
+
+      if (stage === 'channels' && buffer.includes('CoreShowChannelsComplete')) {
+        const blocks = parseAmiBlocks(buffer).filter(item => item.Event === 'CoreShowChannel');
+        socket.write('Action: Logoff\r\n\r\n');
+        socket.end();
+        resolve(blocks);
+      }
+    });
+
+    socket.on('error', (err) => {
+      resolve([]);
+    });
+
+    socket.on('timeout', () => {
+      socket.destroy();
+      resolve([]);
+    });
+  });
+}
+
+function getLiveCallNumberCandidates(...values: any[]): string[] {
+  const result: string[] = [];
+  values.forEach(value => {
+    const matches = String(value || '').match(/\+?\d{2,15}/g) || [];
+    matches.forEach(raw => {
+      let digits = raw.replace(/\D/g, '');
+      if (digits.length === 11 && digits.startsWith('8')) digits = '7' + digits.substring(1);
+      if (digits && !result.includes(digits)) result.push(digits);
+    });
+  });
+  return result;
+}
+
+function resolveLiveContact(number: string, directory: any[], settings: AppSettings): { name: string; type: string; comment: string } {
+  const normalized = normalizePhoneNumber(number, settings).replace(/\D/g, '');
+  if (!normalized) return { name: '', type: '', comment: '' };
+
+  const found = (directory || []).find((entry: any) => {
+    const entryDigits = normalizePhoneNumber(entry.number || '', settings).replace(/\D/g, '');
+    return entryDigits && (entryDigits === normalized || entryDigits.endsWith(normalized) || normalized.endsWith(entryDigits));
+  });
+
+  return {
+    name: found?.name || '',
+    type: found?.type || '',
+    comment: found?.comment || ''
+  };
+}
+
+function getLiveChannelEndpointExt(value: any): string {
+  const text = String(value || '');
+  let m = text.match(/(?:SIP|PJSIP)\/([0-9]{2,5})-/i);
+  if (m && isInternalExt(m[1])) return m[1];
+
+  m = text.match(/Local\/([0-9]{2,5})@/i);
+  if (m && isInternalExt(m[1])) return m[1];
+
+  return '';
+}
+
+function getLiveAppDataNumberCandidates(value: any): string[] {
+  const text = String(value || '')
+    // Убираем технические суффиксы каналов, чтобы 00000004 не определялся как номер.
+    .replace(/(?:SIP|PJSIP)\/([0-9]{2,5})-[0-9a-f]+/gi, '$1')
+    .replace(/Local\/([0-9]{2,5})@[^,\s)]*/gi, '$1');
+
+  return getLiveCallNumberCandidates(text);
+}
+
+function liveDurationToSeconds(value: any): number {
+  const text = String(value || '').trim();
+  const m = text.match(/^(\d+):(\d{2}):(\d{2})$/);
+  if (!m) return 0;
+  return Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]);
+}
+
+function liveFormatSeconds(value: number): string {
+  const total = Math.max(0, Math.floor(Number(value) || 0));
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
+function buildLiveCallBannerFromAmiChannels(channels: AmiBlock[], operatorExt: string, directory: any[], settings: AppSettings): LiveCallBanner {
+  const ext = onlyDigits(operatorExt);
+  if (!ext) return { active: false };
+
+  const grouped = new Map<string, AmiBlock[]>();
+  channels.forEach(ch => {
+    const key = ch.Linkedid || ch.Uniqueid || ch.Channel || Math.random().toString();
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key)!.push(ch);
+  });
+
+  const groupHasOperator = (group: AmiBlock[]) => group.some(ch => {
+    const channel = String(ch.Channel || '');
+    const appData = String(ch.ApplicationData || '');
+    const caller = onlyDigits(ch.CallerIDNum);
+    const connected = onlyDigits(ch.ConnectedLineNum);
+    const exten = onlyDigits(ch.Exten);
+    const endpoint = getLiveChannelEndpointExt(channel);
+
+    return (
+      endpoint === ext ||
+      appData.includes(`SIP/${ext}`) ||
+      appData.includes(`PJSIP/${ext}`) ||
+      appData.includes(`Local/${ext}@`) ||
+      caller === ext ||
+      connected === ext ||
+      exten === ext
+    );
+  });
+
+  for (const group of grouped.values()) {
+    if (!groupHasOperator(group)) continue;
+
+    const joinedContext = group.map(ch => String(ch.Context || '').toLowerCase()).join(' ');
+    const joinedChannels = group.map(ch => String(ch.Channel || '').toLowerCase()).join(' ');
+
+    const hasInboundSignal =
+      joinedChannels.includes('-in-') ||
+      joinedContext.includes('from-trunk') ||
+      joinedContext.includes('from-pstn') ||
+      joinedContext.includes('ext-group') ||
+      joinedContext.includes('ext-queues') ||
+      joinedContext.includes('ivr-');
+
+    // ВАЖНО: не берём произвольные цифры из Channel, иначе суффиксы каналов
+    // вроде SIP/100-00000004 могут отображаться как номер 00000004.
+    const fieldCandidates = getLiveCallNumberCandidates(
+      ...group.flatMap(ch => [ch.CallerIDNum, ch.ConnectedLineNum, ch.Exten])
+    );
+    const appDataCandidates = group.flatMap(ch => getLiveAppDataNumberCandidates(ch.ApplicationData));
+    const channelEndpointExts = group
+      .map(ch => getLiveChannelEndpointExt(ch.Channel))
+      .filter(Boolean);
+
+    const allCandidates = Array.from(new Set([...fieldCandidates, ...appDataCandidates, ...channelEndpointExts]));
+    const externalCandidates = allCandidates.filter(num => isExternalNumber(num) && !isInternalExt(num));
+    const internalCandidates = Array.from(new Set(allCandidates.filter(num => isInternalExt(num))));
+
+    const inboundCaller = group
+      .map(ch => onlyDigits(ch.CallerIDNum))
+      .find(num => isExternalNumber(num) && !isInternalExt(num));
+
+    let direction: 'incoming' | 'outgoing' | 'internal' = hasInboundSignal ? 'incoming' : 'outgoing';
+    let number = '';
+
+    if (hasInboundSignal) {
+      number = inboundCaller || externalCandidates[0] || '';
+    } else {
+      number = externalCandidates.find(num => num !== inboundCaller) || '';
+      if (!number) {
+        direction = 'internal';
+        number =
+          internalCandidates.find(num => num !== ext) ||
+          group.map(ch => onlyDigits(ch.ConnectedLineNum)).find(num => isInternalExt(num) && num !== ext) ||
+          group.map(ch => onlyDigits(ch.Exten)).find(num => isInternalExt(num) && num !== ext) ||
+          '';
+      }
+    }
+
+    if (!number) continue;
+
+    const did = hasInboundSignal
+      ? (group.map(ch => onlyDigits(ch.Exten)).find(num => isExternalNumber(num) && num !== number) || '')
+      : '';
+
+    const contact = resolveLiveContact(number, directory, settings);
+    const first = group[0];
+    const durationSec = Math.max(...group.map(ch => liveDurationToSeconds(ch.Duration)), 0);
+
+    return {
+      active: true,
+      direction,
+      operatorExt: ext,
+      number,
+      displayName: contact.name,
+      contactType: contact.type,
+      contactComment: contact.comment,
+      did,
+      linkedid: first?.Linkedid || first?.Uniqueid || '',
+      durationSec,
+      durationText: liveFormatSeconds(durationSec),
+      startedAt: new Date().toLocaleTimeString('ru-RU', { hour12: false })
+    };
+  }
+
+  return { active: false };
+}
+
+app.get('/api/live/call-banner', requireAuth(), async (req, res) => {
+  try {
+    const operatorExt = String(req.query.operatorExt || '').trim();
+    if (!operatorExt) {
+      res.json({ active: false });
+      return;
+    }
+
+    const localDb = await readLocalDb();
+    const channels = await runAmiCoreShowChannels(localDb.settings);
+    const banner = buildLiveCallBannerFromAmiChannels(channels, operatorExt, localDb.directory || [], localDb.settings);
+    res.json(banner);
+  } catch (error: any) {
+    res.json({ active: false, error: error.message });
+  }
+});
+
 // POST endpoint to trigger Ami Originate Call
 app.post('/api/click-to-call', requireAuth(), async (req, res) => {
   try {
@@ -1975,7 +2260,7 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
         const callTime = new Date(c.calldate).getTime();
         const slaExpired = Number.isFinite(callTime) && (Date.now() - callTime) > kpiMinutes * 60 * 1000;
 
-        const isHandledInSla = c.wasKpiResolved === true && c.processedBy === 'Система KPI';
+        const isHandledInSla = c.wasKpiResolved === true;
         const isLateCallback = c.wasCallbacked === true && c.wasKpiResolved !== true;
 
         if (isHandledInSla) {
@@ -1992,7 +2277,7 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
       processedCalls = filteredCalls.filter(c => {
         const disposition = c.disposition?.toUpperCase();
         const isMissedType = disposition === 'NO ANSWER' || disposition === 'BUSY' || disposition === 'FAILED';
-        return isIncoming(c) && isMissedType && c.wasKpiResolved === true && c.processedBy === 'Система KPI';
+        return isIncoming(c) && isMissedType && c.wasKpiResolved === true;
       }).length;
     }
 
