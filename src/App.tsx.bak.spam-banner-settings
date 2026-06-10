@@ -217,10 +217,6 @@ interface LiveCallBanner {
   displayName?: string;
   contactType?: 'internal' | 'client';
   contactComment?: string;
-  isSpam?: boolean;
-  isBlacklisted?: boolean;
-  company?: string;
-  position?: string;
   did?: string;
   linkedid?: string;
   durationSec?: number;
@@ -1838,7 +1834,6 @@ export default function App() {
         const contactTypeLabel = liveCallBanner.contactType === 'internal' ? 'Внутренний' : 'Клиент';
         const contactTypeClass = liveCallBanner.contactType === 'internal' ? 'bg-slate-100 text-slate-600 border-slate-200' : 'bg-red-50 text-red-600 border-red-100';
         const display = liveCallBanner.displayName || liveCallBanner.number || 'Неизвестный номер';
-        const isSpamOrBlacklisted = liveCallBanner.isSpam === true || liveCallBanner.isBlacklisted === true;
         const cleanName = display.replace(/\s*\(([^)]*)\)\s*$/, '');
         const positionMatch = display.match(/\(([^)]*)\)\s*$/);
         const position = positionMatch?.[1] || liveCallBanner.contactComment || '';
@@ -1858,16 +1853,7 @@ export default function App() {
                       {title}
                       {isIncomingLive && <span className="h-2.5 w-2.5 rounded-full bg-red-500 animate-pulse" />}
                     </div>
-                    <div className="mt-1 flex items-center gap-2 min-w-0" title={display}>
-                      <span className="text-xl font-black text-slate-950 truncate">
-                        {cleanName || display}
-                      </span>
-                      {isSpamOrBlacklisted && (
-                        <span className="shrink-0 inline-flex items-center rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-[11px] font-black text-red-700">
-                          СПАМ / ЧС
-                        </span>
-                      )}
-                    </div>
+                    <div className="mt-1 text-xl font-black text-slate-950 truncate" title={display}>{cleanName}</div>
                     <div className="mt-1 flex items-center gap-2 text-sm font-bold text-slate-800">
                       <Phone className="h-4 w-4 text-cyan-500" />
                       <span>{liveCallBanner.number || '—'}</span>
@@ -3428,21 +3414,12 @@ export default function App() {
                   {settingsTab === 'directory' && (
                     <div className="space-y-5">
                       <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                        <h4 className="text-sm font-black text-slate-900 mb-3 flex items-center gap-2"><BookOpen className="h-4 w-4 text-red-600" />Настройки</h4>
+                        <h4 className="text-sm font-black text-slate-900 mb-3 flex items-center gap-2"><BookOpen className="h-4 w-4 text-red-600" />Нормализация номеров</h4>
                         <div className="space-y-3 text-xs text-slate-700">
                           <label className="flex items-center gap-2"><input type="checkbox" checked={draftSettings.normEnabled ?? true} onChange={(e) => setDraftSettings({ ...draftSettings, normEnabled: e.target.checked })} className="rounded border-slate-300 text-red-600" />Включить нормализацию</label>
                           <label className="flex items-center gap-2"><input type="checkbox" checked={draftSettings.normStripSymbols ?? true} disabled={draftSettings.normDigitsOnly ?? false} onChange={(e) => setDraftSettings({ ...draftSettings, normStripSymbols: e.target.checked })} className="rounded border-slate-300 text-red-600" />Удалять спецсимволы</label>
                           <label className="flex items-center gap-2"><input type="checkbox" checked={draftSettings.normReplace8With7 ?? true} onChange={(e) => setDraftSettings({ ...draftSettings, normReplace8With7: e.target.checked })} className="rounded border-slate-300 text-red-600" />Заменять 8 на 7</label>
                           <label className="flex items-center gap-2"><input type="checkbox" checked={draftSettings.normDigitsOnly ?? false} onChange={(e) => setDraftSettings({ ...draftSettings, normDigitsOnly: e.target.checked, normStripSymbols: e.target.checked ? false : (draftSettings.normStripSymbols ?? true) })} className="rounded border-slate-300 text-red-600" />Только цифры</label>
-                          <label className="flex items-center gap-2">
-                            <input
-                              type="checkbox"
-                              checked={draftSettings.directorySyncAsteriskBlacklist ?? false}
-                              onChange={(e) => setDraftSettings({ ...draftSettings, directorySyncAsteriskBlacklist: e.target.checked })}
-                              className="rounded border-slate-300 text-red-600"
-                            />
-                            Синхронизировать ЧС с Asterisk AstDB blacklist
-                          </label>
                         </div>
                       </div>
 
@@ -3477,6 +3454,10 @@ export default function App() {
                             <input type="text" readOnly value={draftSettings.directorySyncToken || ''} className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-700 font-mono" />
                           </label>
                         </div>
+                        <label className="mt-3 flex items-center gap-2 text-xs text-slate-700 font-bold">
+                          <input type="checkbox" checked={draftSettings.directorySyncAsteriskBlacklist ?? false} onChange={(e) => setDraftSettings({ ...draftSettings, directorySyncAsteriskBlacklist: e.target.checked })} className="rounded border-slate-300 text-red-600" />
+                          Синхронизировать локальный черный список с Asterisk AstDB blacklist
+                        </label>
                         <div className="mt-3 flex flex-wrap gap-2">
                           <button type="button" onClick={handleTestUrlImport} disabled={isTestingUrlImport} className="px-4 py-2 rounded-lg bg-white border border-slate-200 text-slate-800 text-xs font-bold hover:bg-slate-50 disabled:opacity-50">{isTestingUrlImport ? 'Проверка...' : 'Проверить ссылку'}</button>
                           <button type="button" onClick={handleSyncDirectoryUrl} disabled={isSyncingDirectoryUrl} className="px-4 py-2 rounded-lg bg-red-600 text-white text-xs font-bold hover:bg-red-700 disabled:opacity-50">{isSyncingDirectoryUrl ? 'Синхронизация...' : 'Синхронизировать сейчас'}</button>

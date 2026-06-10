@@ -1838,7 +1838,6 @@ export default function App() {
         const contactTypeLabel = liveCallBanner.contactType === 'internal' ? 'Внутренний' : 'Клиент';
         const contactTypeClass = liveCallBanner.contactType === 'internal' ? 'bg-slate-100 text-slate-600 border-slate-200' : 'bg-red-50 text-red-600 border-red-100';
         const display = liveCallBanner.displayName || liveCallBanner.number || 'Неизвестный номер';
-        const isSpamOrBlacklisted = liveCallBanner.isSpam === true || liveCallBanner.isBlacklisted === true;
         const cleanName = display.replace(/\s*\(([^)]*)\)\s*$/, '');
         const positionMatch = display.match(/\(([^)]*)\)\s*$/);
         const position = positionMatch?.[1] || liveCallBanner.contactComment || '';
@@ -1858,16 +1857,7 @@ export default function App() {
                       {title}
                       {isIncomingLive && <span className="h-2.5 w-2.5 rounded-full bg-red-500 animate-pulse" />}
                     </div>
-                    <div className="mt-1 flex items-center gap-2 min-w-0" title={display}>
-                      <span className="text-xl font-black text-slate-950 truncate">
-                        {cleanName || display}
-                      </span>
-                      {isSpamOrBlacklisted && (
-                        <span className="shrink-0 inline-flex items-center rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-[11px] font-black text-red-700">
-                          СПАМ / ЧС
-                        </span>
-                      )}
-                    </div>
+                    <div className="mt-1 text-xl font-black text-slate-950 truncate" title={display}>{cleanName}</div>
                     <div className="mt-1 flex items-center gap-2 text-sm font-bold text-slate-800">
                       <Phone className="h-4 w-4 text-cyan-500" />
                       <span>{liveCallBanner.number || '—'}</span>
@@ -3434,15 +3424,6 @@ export default function App() {
                           <label className="flex items-center gap-2"><input type="checkbox" checked={draftSettings.normStripSymbols ?? true} disabled={draftSettings.normDigitsOnly ?? false} onChange={(e) => setDraftSettings({ ...draftSettings, normStripSymbols: e.target.checked })} className="rounded border-slate-300 text-red-600" />Удалять спецсимволы</label>
                           <label className="flex items-center gap-2"><input type="checkbox" checked={draftSettings.normReplace8With7 ?? true} onChange={(e) => setDraftSettings({ ...draftSettings, normReplace8With7: e.target.checked })} className="rounded border-slate-300 text-red-600" />Заменять 8 на 7</label>
                           <label className="flex items-center gap-2"><input type="checkbox" checked={draftSettings.normDigitsOnly ?? false} onChange={(e) => setDraftSettings({ ...draftSettings, normDigitsOnly: e.target.checked, normStripSymbols: e.target.checked ? false : (draftSettings.normStripSymbols ?? true) })} className="rounded border-slate-300 text-red-600" />Только цифры</label>
-                          <label className="flex items-center gap-2">
-                            <input
-                              type="checkbox"
-                              checked={draftSettings.directorySyncAsteriskBlacklist ?? false}
-                              onChange={(e) => setDraftSettings({ ...draftSettings, directorySyncAsteriskBlacklist: e.target.checked })}
-                              className="rounded border-slate-300 text-red-600"
-                            />
-                            Синхронизировать ЧС с Asterisk AstDB blacklist
-                          </label>
                         </div>
                       </div>
 

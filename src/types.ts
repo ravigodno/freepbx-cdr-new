@@ -1,9 +1,13 @@
-export type UserRole = 'admin' | 'operator';
+export type UserRole = 'admin' | 'manager' | 'operator';
 
 export interface User {
   id: string;
   username: string;
   role: UserRole;
+  extension?: string;
+  disabled?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface WebUser extends User {
@@ -85,6 +89,17 @@ export interface AppSettings {
   normReplace8With7?: boolean;
   normStripSymbols?: boolean;
   normDigitsOnly?: boolean;
+
+  // Directory import / synchronization settings
+  directoryImportUrl?: string;
+  directoryImportFormat?: 'csv' | 'json';
+  directoryImportMode?: 'append' | 'upsert' | 'overwrite';
+  directoryImportSchedule?: 'manual' | 'hourly' | 'daily' | 'weekly';
+  directorySyncToken?: string;
+  directorySyncAsteriskBlacklist?: boolean;
+  directoryLastSyncAt?: string;
+  directoryLastSyncStatus?: string;
+  directoryLastSyncMessage?: string;
 }
 
 export interface DashboardStats {
@@ -99,9 +114,18 @@ export interface DashboardStats {
 export interface DirectoryEntry {
   id: string;
   name: string;
-  number: string;
+  number: string;              // primary phone/ext, kept for backward compatibility
+  phones?: string[];           // all phones/exts attached to one contact
   type: 'internal' | 'client';
+  company?: string;
+  position?: string;
+  email?: string;
+  website?: string;
+  tags?: string[];
+  isSpam?: boolean;
+  isBlacklisted?: boolean;
   comment?: string;
   createdAt?: string;
+  updatedAt?: string;
 }
 
