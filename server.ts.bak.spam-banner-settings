@@ -1746,10 +1746,6 @@ interface LiveCallBanner {
   displayName?: string;
   contactType?: string;
   contactComment?: string;
-  isSpam?: boolean;
-  isBlacklisted?: boolean;
-  company?: string;
-  position?: string;
   did?: string;
   linkedid?: string;
   durationSec?: number;
@@ -1851,60 +1847,24 @@ function getLiveCallNumberCandidates(...values: any[]): string[] {
   return result;
 }
 
-function resolveLiveContact(number: string, directory: any[], settings: AppSettings): { name: string; type: string; comment: string; isSpam: boolean; isBlacklisted: boolean; company: string; position: string } {
+function resolveLiveContact(number: string, directory: any[], settings: AppSettings): { name: string; type: string; comment: string } {
   const normalized = normalizePhoneNumber(number, settings).replace(/\D/g, '');
-  if (!normalized) {
-    return { name: '', type: '', comment: '', isSpam: false, isBlacklisted: false, company: '', position: '' };
-  }
+  if (!normalized) return { name: '', type: '', comment: '' };
 
-  const getPhones = (entry: any): string[] => {
-    const values = [
-      ...(Array.isArray(entry?.phones) ? entry.phones : []),
-      entry?.number,
-      entry?.phone,
-      entry?.phone1,
-      entry?.phone2,
-      entry?.phone3
-    ];
+  const found = findDirectoryContactByNumber(directory, normalized);
 
-    return Array.from(new Set(
-      values
-        .flatMap(v => {
-          if (!v) return [];
-          if (typeof v === 'object') {
-            return [
-              v.number,
-              v.phone,
-              v.value,
-              v.raw
-            ].filter(Boolean);
-          }
-          return String(v).split(/[;,|\n]+/);
-        })
-        .map(v => normalizePhoneNumber(String(v || ''), settings).replace(/\D/g, ''))
-        .filter(Boolean)
-    ));
-  };
-
-  const found = (directory || []).find((entry: any) => {
-    return getPhones(entry).some(entryDigits => {
-      return entryDigits &&
-        (
-          entryDigits === normalized ||
-          entryDigits.endsWith(normalized) ||
-          normalized.endsWith(entryDigits)
-        );
-    });
-  });
+  const extra = [
+    found?.company,
+    found?.position,
+    Array.isArray(found?.tags) ? found.tags.join(', ') : '',
+    found?.isSpam ? 'СПАМ' : '',
+    found?.isBlacklisted ? 'ЧС' : ''
+  ].filter(Boolean).join(' · ');
 
   return {
     name: found?.name || '',
     type: found?.type || '',
-    comment: found?.comment || '',
-    isSpam: found?.isSpam === true,
-    isBlacklisted: found?.isBlacklisted === true,
-    company: found?.company || '',
-    position: found?.position || ''
+    comment: found?.comment || extra || ''
   };
 }
 
@@ -2039,10 +1999,6 @@ function buildLiveCallBannerFromAmiChannels(channels: AmiBlock[], operatorExt: s
       displayName: contact.name,
       contactType: contact.type,
       contactComment: contact.comment,
-      isSpam: contact.isSpam,
-      isBlacklisted: contact.isBlacklisted,
-      company: contact.company,
-      position: contact.position,
       did,
       linkedid: first?.Linkedid || first?.Uniqueid || '',
       durationSec,

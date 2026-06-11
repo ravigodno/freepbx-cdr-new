@@ -1746,10 +1746,6 @@ interface LiveCallBanner {
   displayName?: string;
   contactType?: string;
   contactComment?: string;
-  isSpam?: boolean;
-  isBlacklisted?: boolean;
-  company?: string;
-  position?: string;
   did?: string;
   linkedid?: string;
   durationSec?: number;
@@ -1869,19 +1865,8 @@ function resolveLiveContact(number: string, directory: any[], settings: AppSetti
 
     return Array.from(new Set(
       values
-        .flatMap(v => {
-          if (!v) return [];
-          if (typeof v === 'object') {
-            return [
-              v.number,
-              v.phone,
-              v.value,
-              v.raw
-            ].filter(Boolean);
-          }
-          return String(v).split(/[;,|\n]+/);
-        })
-        .map(v => normalizePhoneNumber(String(v || ''), settings).replace(/\D/g, ''))
+        .flatMap(v => String(v || '').split(/[;,|\n]+/))
+        .map(v => normalizePhoneNumber(v, settings).replace(/\D/g, ''))
         .filter(Boolean)
     ));
   };
