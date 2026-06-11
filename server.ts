@@ -1253,7 +1253,7 @@ app.post('/api/users', requireAuth('admin'), async (req, res) => {
       res.status(400).json({ error: 'Логин и пароль обязательны' });
       return;
     }
-    if (!['admin', 'manager', 'operator'].includes(role)) {
+    if (!['admin', 'manager', 'operator', 'directory_only', 'custom'].includes(role)) {
       res.status(400).json({ error: 'Некорректная роль пользователя' });
       return;
     }
@@ -1299,7 +1299,7 @@ app.put('/api/users/:id', requireAuth('admin'), async (req, res) => {
       res.status(400).json({ error: 'Логин обязателен' });
       return;
     }
-    if (!['admin', 'manager', 'operator'].includes(role)) {
+    if (!['admin', 'manager', 'operator', 'directory_only', 'custom'].includes(role)) {
       res.status(400).json({ error: 'Некорректная роль пользователя' });
       return;
     }
@@ -1350,9 +1350,24 @@ app.delete('/api/users/:id', requireAuth('admin'), async (req, res) => {
 });
 
 // Settings endpoint
-app.get('/api/settings', requireAuth('admin'), async (req, res) => {
+app.get('/api/settings', requireAuth(), async (req, res) => {
   const localDb = await readLocalDb();
-  res.json(localDb.settings);
+  const user = (req as any).user;
+  if (user && user.role === 'admin') {
+    res.json(localDb.settings);
+  } else {
+    // Non-admins only get public/permissions settings
+    const safeSettings = {
+      customCanViewCalls: localDb.settings.customCanViewCalls,
+      customCanViewDirectory: localDb.settings.customCanViewDirectory,
+      customCanViewReports: localDb.settings.customCanViewReports,
+      customCanListenRecordings: localDb.settings.customCanListenRecordings,
+      customCanMakeCalls: localDb.settings.customCanMakeCalls,
+      customCanEditDirectory: localDb.settings.customCanEditDirectory,
+      demoMode: localDb.settings.demoMode,
+    };
+    res.json(safeSettings);
+  }
 });
 
 app.post('/api/settings', requireAuth('admin'), async (req, res) => {

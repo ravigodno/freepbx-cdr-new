@@ -1,4 +1,4 @@
-export type UserRole = 'admin' | 'manager' | 'operator';
+export type UserRole = 'admin' | 'manager' | 'operator' | 'directory_only' | 'custom';
 
 export interface User {
   id: string;
@@ -100,6 +100,14 @@ export interface AppSettings {
   directoryLastSyncAt?: string;
   directoryLastSyncStatus?: string;
   directoryLastSyncMessage?: string;
+
+  // Permissions Matrix for Customizable ('custom') Role
+  customCanViewCalls?: boolean;
+  customCanViewDirectory?: boolean;
+  customCanViewReports?: boolean;
+  customCanListenRecordings?: boolean;
+  customCanMakeCalls?: boolean;
+  customCanEditDirectory?: boolean;
 }
 
 export interface DashboardStats {
