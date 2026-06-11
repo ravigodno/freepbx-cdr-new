@@ -41,6 +41,8 @@ import {
   Network
 } from 'lucide-react';
 import { CallEntry, DashboardStats, AppSettings, UserRole, DirectoryEntry } from './types';
+import packageJson from '../package.json';
+
 
 
 const RU_MONTHS = [
@@ -283,12 +285,25 @@ export default function App() {
   const [commentInput, setCommentInput] = useState('');
   const [isProcessedInput, setIsProcessedInput] = useState(true);
 
+  // Chronology dialog state
+  const [chronologyCallId, setChronologyCallId] = useState<string | null>(null);
+  const [chronologyData, setChronologyData] = useState<{
+    uniqueid: string;
+    linkedid: string;
+    legsCount: number;
+    timeline: any[];
+  } | null>(null);
+  const [isChronologyLoading, setIsChronologyLoading] = useState(false);
+  const [chronologyError, setChronologyError] = useState<string | null>(null);
+
   // Settings Modal state
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [draftSettings, setDraftSettings] = useState<AppSettings | null>(null);
   const [isTestingDb, setIsTestingDb] = useState(false);
   const [dbTestResult, setDbTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [isTestingAmi, setIsTestingAmi] = useState(false);
+  const [amiTestResult, setAmiTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [settingsTab, setSettingsTab] = useState<'pbx' | 'directory' | 'access' | 'permissions'>('pbx');
   const [accessUsers, setAccessUsers] = useState<AccessUser[]>([]);
@@ -1132,6 +1147,33 @@ export default function App() {
     setPlayingCallId(null);
   };
 
+  // Fetch Call Routing Chronology
+  const fetchChronology = async (uniqueid: string) => {
+    setChronologyCallId(uniqueid);
+    setIsChronologyLoading(true);
+    setChronologyError(null);
+    setChronologyData(null);
+    try {
+      const token = session?.token || localStorage.getItem('asterisk_cdr_session') || '';
+      const resp = await fetch(`/api/calls/${uniqueid}/chronology`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      const data = await resp.json();
+      if (data.success) {
+        setChronologyData(data);
+      } else {
+        setChronologyError(data.message || 'Не удалось загрузить хронологию вызова.');
+      }
+    } catch (err: any) {
+      console.error('Error in fetchChronology:', err);
+      setChronologyError(err.message || 'Ошибка сети при получении хронологии.');
+    } finally {
+      setIsChronologyLoading(false);
+    }
+  };
+
   // Process / Comment Missed Call
   const handleProcessMissedCall = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1175,6 +1217,8 @@ export default function App() {
   // Admin Settings Loader
   const loadAdminSettings = async () => {
     if (!session || session.role !== 'admin') return;
+    setDbTestResult(null);
+    setAmiTestResult(null);
     try {
       const resp = await fetch('/api/settings', {
         headers: {
@@ -1374,15 +1418,14 @@ export default function App() {
     }
   };
 
-  // Connection Test routine
+  // Connection Test routine for MariaDB
   const testDbConnection = async () => {
     if (!draftSettings || !session) return;
     setIsTestingDb(true);
     setDbTestResult(null);
     
     try {
-      // Simulate connection checking API call on Express
-      const resp = await fetch('/api/settings', {
+      const resp = await fetch('/api/settings/test-db', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1396,15 +1439,16 @@ export default function App() {
         return;
       }
       
+      const data = await resp.json();
       if (resp.ok) {
         setDbTestResult({
           success: true,
-          message: 'Подключение установлено успешно! MariaDB asteriskcdrdb доступна на чтение.'
+          message: data.message || 'Подключение установлено успешно! MariaDB asteriskcdrdb доступна на чтение.'
         });
       } else {
         setDbTestResult({
           success: false,
-          message: 'Не удалось проверить подключение к базе данных. Проверьте хост и доступы.'
+          message: data.error || 'Не удалось проверить подключение к базе данных. Проверьте хост и доступы.'
         });
       }
     } catch (err: any) {
@@ -1414,6 +1458,49 @@ export default function App() {
       });
     } finally {
       setIsTestingDb(false);
+    }
+  };
+
+  // Connection Test routine for Asterisk AMI
+  const testAmiConnection = async () => {
+    if (!draftSettings || !session) return;
+    setIsTestingAmi(true);
+    setAmiTestResult(null);
+    
+    try {
+      const resp = await fetch('/api/settings/test-ami', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.token}`
+        },
+        body: JSON.stringify(draftSettings)
+      });
+      
+      if (resp.status === 401) {
+        handleAuthError(resp);
+        return;
+      }
+      
+      const data = await resp.json();
+      if (resp.ok) {
+        setAmiTestResult({
+          success: true,
+          message: data.message || 'Подключение к Asterisk AMI успешно установлено!'
+        });
+      } else {
+        setAmiTestResult({
+          success: false,
+          message: data.error || 'Не удалось подключиться к Asterisk AMI.'
+        });
+      }
+    } catch (err: any) {
+      setAmiTestResult({
+        success: false,
+        message: `Ошибка сокета: ${err.message || 'сервер недоступен'}`
+      });
+    } finally {
+      setIsTestingAmi(false);
     }
   };
 
@@ -1640,7 +1727,12 @@ export default function App() {
             <div className="bg-red-50 text-red-600 p-3 rounded-full mb-3 border border-red-100 shadow-sm">
               <PhoneMissed className="h-8 w-8" />
             </div>
-            <h1 className="text-xl font-bold text-slate-900 text-center tracking-tight font-sans">FreePBX CDR Missed Calls</h1>
+            <h1 className="text-xl font-bold text-slate-900 text-center tracking-tight flex items-center justify-center gap-2 font-sans">
+              FreePBX CDR Missed Calls
+              <span className="text-[10px] bg-slate-100 text-slate-600 font-normal px-1.5 py-0.5 rounded-md border border-slate-200">
+                v{packageJson.version}
+              </span>
+            </h1>
             <p className="text-slate-500 text-xs mt-1 text-center font-light">
               Система мониторинга и отработки неотвеченных вызовов VoIP
             </p>
@@ -1721,7 +1813,7 @@ export default function App() {
                 <h1 className="text-base font-bold text-slate-900 tracking-tight flex items-center gap-2 font-sans">
                   Freepbx CDR-NEW
                   <span className="text-[10px] bg-slate-100 text-slate-600 font-normal px-2 py-0.5 rounded-md border border-slate-200">
-                    CDR v2.0.1
+                    v{packageJson.version}
                   </span>
                 </h1>
                 <p className="text-slate-500 text-xs font-light">
@@ -2457,8 +2549,20 @@ export default function App() {
                             )}
                             {call.calldate}
                           </div>
-                          <div className="text-[11px] text-slate-400 font-mono mt-0.5 select-all" title="Asterisk UniqueID">
-                            ID: {call.uniqueid}
+                          <div className="text-[11px] text-slate-400 font-mono mt-0.5 flex items-center gap-1" title="Asterisk UniqueID">
+                            <span>ID:</span>
+                            {session?.role === 'admin' ? (
+                              <button
+                                onClick={() => fetchChronology(call.uniqueid)}
+                                className="text-red-700 hover:text-red-900 font-bold hover:underline bg-red-50 hover:bg-red-100 transition-colors px-1 rounded cursor-pointer border border-red-200/60 flex items-center gap-0.5"
+                                title="Посмотреть хронологию прохождения звонка"
+                              >
+                                {call.uniqueid}
+                                <span className="text-[9.5px] font-semibold text-red-500 hover:text-red-800 opacity-90">(хронология)</span>
+                              </button>
+                            ) : (
+                              <span className="select-all">{call.uniqueid}</span>
+                            )}
                           </div>
                         </td>
 
@@ -2502,9 +2606,9 @@ export default function App() {
                                     {callerType === 'internal' ? 'Внутр.' : 'Клиент'}
                                   </span>
                                 </div>
-                                <div className="text-[11px] text-slate-550 font-mono select-all flex items-center gap-1.5 mt-0.5">
-                                  <span className="font-semibold">{displayedSrc}</span>
-                                  <div className="flex items-center gap-1.5 mt-1">
+                                <div className="text-[11px] text-slate-550 font-mono flex flex-col sm:flex-row sm:items-center gap-1.5 mt-0.5">
+                                  <span className="font-semibold select-all">{displayedSrc}</span>
+                                  <div className="flex items-center gap-1.5">
                                     <button
                                       onClick={() => triggerClickToCall(displayedSrc, callerName)}
                                       className="px-2 py-0.5 rounded bg-emerald-600 hover:bg-emerald-700 text-white border border-emerald-700 cursor-pointer flex items-center gap-1 transition-all shadow-xs hover:scale-105 active:scale-95 text-[10px] font-semibold"
@@ -3242,6 +3346,279 @@ export default function App() {
         </footer>
       )}
 
+      {/* CALL ROUTING CHRONOLOGY TIMELINE DIALOG MODAL PANEL */}
+      {chronologyCallId && (
+        <div className="fixed inset-0 bg-slate-950/40 flex items-center justify-center p-4 z-50 animate-fade-in">
+          <div className="w-full max-w-2xl bg-white border border-slate-200 rounded-2xl shadow-2xl relative max-h-[90vh] flex flex-col font-sans overflow-hidden">
+            {/* Modal Header */}
+            <div className="flex items-start justify-between border-b border-slate-200 p-5 bg-slate-50/60">
+              <div>
+                <h3 className="text-base font-bold text-slate-800 flex items-center gap-2">
+                  <Network className="h-5 w-5 text-red-600" />
+                  Хронология прохождения звонка
+                </h3>
+                <p className="text-xs text-slate-500 font-medium mt-0.5 font-mono">
+                  ID: {chronologyCallId}
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setChronologyCallId(null);
+                  setChronologyData(null);
+                }}
+                className="text-slate-400 hover:text-slate-800 p-1.5 hover:bg-slate-105 rounded-lg cursor-pointer transition-colors text-base"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Modal Content */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-4">
+              {isChronologyLoading && (
+                <div className="flex flex-col items-center justify-center py-12 space-y-3">
+                  <Loader2 className="h-10 w-10 text-red-600 animate-spin" />
+                  <p className="text-sm text-slate-600 font-medium font-sans">Запрос истории звонка по плечам маршрутизации...</p>
+                </div>
+              )}
+
+              {chronologyError && (
+                <div className="p-4 bg-red-50 border border-red-200 rounded-xl text-red-800 text-xs flex items-start gap-2.5">
+                  <AlertCircle className="h-5 w-5 text-red-650 shrink-0 mt-0.5" />
+                  <div>
+                    <h5 className="font-bold">Ошибка получения данных:</h5>
+                    <p className="mt-1">{chronologyError}</p>
+                    <button
+                      onClick={() => fetchChronology(chronologyCallId)}
+                      className="mt-3 text-[11px] bg-red-100 hover:bg-red-200 active:scale-95 transition-all text-red-800 font-bold px-3 py-1.5 rounded-lg border border-red-200 cursor-pointer"
+                    >
+                      Попробовать снова
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {chronologyData && (
+                <div className="space-y-5">
+                  {/* Summary Card */}
+                  <div className="bg-slate-50 rounded-xl p-4 border border-slate-200/80 text-xs shadow-xs grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <div className="flex justify-between border-b border-slate-100 pb-1">
+                        <span className="text-slate-500">Первоначальное время:</span>
+                        <span className="font-semibold text-slate-800 font-mono">{chronologyData.timeline[0]?.calldate || '—'}</span>
+                      </div>
+                      <div className="flex justify-between border-b border-slate-100 pb-1">
+                        <span className="text-slate-500">Кто звонил:</span>
+                        <span className="font-bold text-slate-900 font-mono text-xs">{chronologyData.timeline[0]?.src || '—'}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">DID компании:</span>
+                        <span className="font-semibold text-slate-800 font-mono">{chronologyData.timeline.find(t => t.did)?.did || '—'}</span>
+                      </div>
+                    </div>
+                    <div className="space-y-1.5">
+                      <div className="flex justify-between border-b border-slate-100 pb-1">
+                        <span className="text-slate-500">Всего переходов/событий:</span>
+                        <span className="font-bold text-slate-800 font-mono bg-slate-205 px-1.5 py-0.5 rounded text-[10.5px]">
+                          {chronologyData.legsCount}
+                        </span>
+                      </div>
+                      <div className="flex justify-between border-b border-slate-100 pb-1">
+                        <span className="text-slate-500">Итоговый статус звонка:</span>
+                        {(() => {
+                          const anyAnswered = chronologyData.timeline.some(t => t.disposition === 'ANSWERED' && Number(t.billsec || 0) > 0);
+                          return (
+                            <span className={`px-1.5 py-0.5 rounded text-[10.5px] font-black uppercase tracking-wider font-sans ${
+                              anyAnswered 
+                                ? 'bg-emerald-100 border border-emerald-200 text-emerald-800' 
+                                : 'bg-red-100 border border-red-200 text-red-800'
+                            }`}>
+                              {anyAnswered ? 'ОТВЕЧЕН (ANSWERED)' : 'НЕ ОТВЕЧЕН (NO ANSWER)'}
+                            </span>
+                          );
+                        })()}
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Linked ID:</span>
+                        <span className="font-medium text-slate-550 font-mono">{chronologyData.linkedid}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Horizontal visual divider */}
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400">Хронологическая лента</span>
+                    <hr className="flex-1 border-slate-200" />
+                  </div>
+
+                  {/* Timeline steps */}
+                  <div className="flow-root pl-2">
+                    <ul className="-mb-8">
+                      {chronologyData.timeline.map((leg, legIdx) => {
+                        const isLast = legIdx === chronologyData.timeline.length - 1;
+                        const isAnswered = leg.disposition === 'ANSWERED';
+                        
+                        // Select border and background color based on step type
+                        let badgeBg = 'bg-slate-200 text-slate-700 border-slate-300';
+                        let stepIcon = <Clock className="h-4 w-4" />;
+                        
+                        if (leg.actionType === 'connected') {
+                          badgeBg = 'bg-emerald-600 text-white border-emerald-700';
+                          stepIcon = <CheckCircle className="h-4 w-4" />;
+                        } else if (leg.actionType === 'ringing') {
+                          badgeBg = isAnswered ? 'bg-emerald-50 text-emerald-700 border-emerald-300' : 'bg-slate-100 text-slate-600 border-slate-300';
+                          stepIcon = <Phone className="h-4 w-4" />;
+                        } else if (leg.actionType === 'ivr') {
+                          badgeBg = 'bg-cyan-50 text-cyan-700 border-cyan-200';
+                          stepIcon = <Database className="h-4 w-4" />;
+                        } else if (leg.actionType === 'voicemail') {
+                          badgeBg = 'bg-amber-50 text-amber-700 border-amber-200';
+                          stepIcon = <BookOpen className="h-4 w-4" />;
+                        } else {
+                          badgeBg = 'bg-slate-50 text-slate-705 border-slate-200';
+                          stepIcon = <Network className="h-4 w-4" />;
+                        }
+
+                        return (
+                          <li key={legIdx}>
+                            <div className="relative pb-8">
+                              {/* Connector line */}
+                              {!isLast && (
+                                <span className="absolute top-4 left-4 -ml-px h-full w-0.5 bg-slate-200" aria-hidden="true" />
+                              )}
+                              
+                              <div className="relative flex space-x-3 items-start">
+                                {/* Checkpoint Indicator */}
+                                <div>
+                                  <span className={`h-8 w-8 rounded-full border flex items-center justify-center ring-4 ring-white shadow-xs shrink-0 ${badgeBg}`}>
+                                    {stepIcon}
+                                  </span>
+                                </div>
+                                
+                                {/* Step Details */}
+                                <div className="min-w-0 flex-1 pt-1.5">
+                                  <div className="flex flex-col sm:flex-row sm:items-baseline justify-between gap-1.5">
+                                    <div className="text-xs font-bold text-slate-900 font-sans">
+                                      {leg.title}
+                                    </div>
+                                    <div className="text-[10px] text-slate-550 font-mono shrink-0 whitespace-nowrap bg-slate-100 px-1.5 py-0.5 rounded">
+                                      {leg.calldate}
+                                    </div>
+                                  </div>
+                                  
+                                  <p className="mt-1 text-xs text-slate-600 font-sans leading-relaxed">
+                                    {leg.description}
+                                  </p>
+
+                                  {/* Detailed System Legs Info */}
+                                  <div className="mt-2 text-[10px] text-slate-500 font-mono bg-slate-50 p-2 rounded border border-slate-150 space-y-1">
+                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                                      <div>
+                                        <span className="text-slate-400">Канал (src):</span>{' '}
+                                        <span className="text-slate-700 font-medium truncate block max-w-full" title={leg.channel}>
+                                          {leg.channel ? String(leg.channel).split('-')[0] : 'н/д'}
+                                        </span>
+                                      </div>
+                                      <div>
+                                        <span className="text-slate-400">Канал (dst):</span>{' '}
+                                        <span className="text-slate-700 font-medium truncate block max-w-full" title={leg.dstchannel}>
+                                          {leg.dstchannel ? String(leg.dstchannel).split('-')[0] : 'н/д'}
+                                        </span>
+                                      </div>
+                                      <div>
+                                        <span className="text-slate-400">Приложение:</span>{' '}
+                                        <span className="text-slate-800 font-semibold">{leg.lastapp || '—'}</span>
+                                      </div>
+                                      <div>
+                                        <span className="text-slate-400">Результат:</span>{' '}
+                                        <span className={`font-extrabold ${isAnswered ? 'text-emerald-700' : 'text-rose-600'}`}>
+                                          {leg.disposition}
+                                        </span>
+                                      </div>
+                                    </div>
+                                    <div className="flex flex-wrap gap-x-4 pt-1 border-t border-slate-100">
+                                      <span>
+                                        <span className="text-slate-400">Вызов:</span>{' '}
+                                        <span className="text-slate-800 font-semibold">{leg.duration} сек</span>
+                                      </span>
+                                      {Number(leg.billsec) > 0 && (
+                                        <span>
+                                          <span className="text-slate-400">Разговор:</span>{' '}
+                                          <span className="text-emerald-700 font-black">{leg.billsec} сек</span>
+                                        </span>
+                                      )}
+                                      {leg.dcontext && (
+                                        <span>
+                                          <span className="text-slate-400">Контекст:</span>{' '}
+                                          <span className="text-slate-600">{leg.dcontext}</span>
+                                        </span>
+                                      )}
+                                      {leg.lastdata && (
+                                        <span>
+                                          <span className="text-slate-400">Аргументы:</span>{' '}
+                                          <span className="text-slate-600 truncate max-w-xs inline-block align-bottom" title={leg.lastdata}>{leg.lastdata}</span>
+                                        </span>
+                                      )}
+                                    </div>
+
+                                    {/* Action button inside timeline to play specific leg's call audio recording! */}
+                                    {leg.recordingfile && (
+                                      <div className="pt-2 flex items-center gap-2">
+                                        <button
+                                          type="button"
+                                          onClick={() => playRecording(leg)}
+                                          className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider flex items-center gap-1 cursor-pointer transition-all border ${
+                                            playingRecording === leg.recordingfile
+                                              ? 'bg-red-50 border-red-200 text-red-700'
+                                              : 'bg-white hover:bg-slate-100 border-slate-200 text-slate-700'
+                                          }`}
+                                        >
+                                          {playingRecording === leg.recordingfile && !isAudioPaused ? (
+                                            <>
+                                              <Pause className="h-3 w-3 text-red-600 animate-pulse" />
+                                              <span>Играет</span>
+                                            </>
+                                          ) : (
+                                            <>
+                                              <Play className="h-3 w-3 text-slate-600" />
+                                              <span>Прослушать запись</span>
+                                            </>
+                                          )}
+                                        </button>
+                                        <span className="text-[9.5px] text-slate-500 font-sans truncate" title={leg.recordingfile}>
+                                          Файл: {leg.recordingfile.split('/').pop()}
+                                        </span>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="border-t border-slate-200 p-4 bg-slate-50 flex justify-end gap-2.5">
+              <button
+                type="button"
+                onClick={() => {
+                  setChronologyCallId(null);
+                  setChronologyData(null);
+                }}
+                className="px-4 py-2 bg-white hover:bg-slate-100 text-slate-700 rounded-lg text-xs font-bold border border-slate-200 cursor-pointer shadow-sm active:scale-95 transition-transform"
+              >
+                Закрыть окно
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* CALL PROCESSING / COMMENTING DIALOG MODAL PANEL */}
       {selectedCall && (
         <div className="fixed inset-0 bg-slate-950/40  flex items-center justify-center p-4 z-50">
@@ -3304,61 +3681,25 @@ export default function App() {
                 <textarea
                   value={commentInput}
                   onChange={(e) => setCommentInput(e.target.value)}
-                  placeholder="Добавьте подробности разговора, перезвона или причину пропуска звонка..."
-                  className="w-full h-24 bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-red-500 font-sans"
+                  placeholder="Опишите результат отзвона клиенту или почему звонок не требует отработки..."
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 h-24 focus:ring-1 focus:ring-red-500 font-sans focus:outline-none focus:bg-white resize-none"
                 />
               </div>
 
-              {/* Quick Preset Comment Templates */}
-              <div className="space-y-1.5">
-                <span className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold font-sans">Шаблоны быстрых комментариев:</span>
-                <div className="flex flex-wrap gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => applyPresetComment('Клиент перезвонил сам, вопрос решен')}
-                    className="text-[10px] bg-slate-50 text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-slate-200 px-2 py-1 rounded cursor-pointer transition-all font-sans"
-                  >
-                    Перезвонил клиент
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => applyPresetComment('Успешно перезвонили, проконсультировали')}
-                    className="text-[10px] bg-slate-50 text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-slate-200 px-2 py-1 rounded cursor-pointer transition-all font-sans"
-                  >
-                    Успешный перезвон
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => applyPresetComment('Не дозвонились операторы, сброс/автоответчик')}
-                    className="text-[10px] bg-slate-50 text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-slate-200 px-2 py-1 rounded cursor-pointer transition-all font-sans"
-                  >
-                    Не дозвонились
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => applyPresetComment('Ошиблись номером / Спам / Молчали')}
-                    className="text-[10px] bg-slate-50 text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-slate-200 px-2 py-1 rounded cursor-pointer transition-all font-sans"
-                  >
-                    Ошибка/Спам
-                  </button>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-end gap-3.5 pt-3 border-t border-slate-200">
+              <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
                   onClick={() => setSelectedCall(null)}
-                  className="text-xs text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 border border-slate-200 px-4 py-2 rounded-lg cursor-pointer font-sans"
+                  className="px-4 py-2 bg-white hover:bg-slate-100 text-slate-700 rounded-lg text-xs font-bold border border-slate-200"
                 >
                   Отмена
                 </button>
                 <button
                   type="submit"
                   disabled={isSavingProcess}
-                  className="bg-red-600 hover:bg-red-500 rounded-lg text-xs font-semibold text-white px-4 py-2 cursor-pointer disabled:opacity-50 flex items-center gap-1.5 shadow"
+                  className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-bold disabled:opacity-50"
                 >
-                  {isSavingProcess && <Loader2 className="h-3 w-3 animate-spin" />}
-                  Сохранить изменения
+                  {isSavingProcess ? 'Сохранение...' : 'Сохранить результат'}
                 </button>
               </div>
             </form>
@@ -3366,27 +3707,38 @@ export default function App() {
         </div>
       )}
 
-      {/* ADMIN SETTINGS MODAL */}
+      {/* SYSTEM SETTINGS MODAL DIALOG (ADMINS ONLY) */}
       {isSettingsOpen && (
-        <div className="fixed inset-0 bg-slate-950/50 flex items-center justify-center p-4 z-50">
-          <div className="w-full max-w-5xl bg-white border border-slate-200 rounded-2xl shadow-2xl relative max-h-[92vh] flex flex-col overflow-hidden z-50">
-            <div className="flex items-start justify-between border-b border-slate-200 p-6 pb-4 shrink-0 bg-white">
-              <div>
-                <h3 className="text-lg font-black text-slate-950 flex items-center gap-2"><Settings className="h-5 w-5 text-red-600" />Настройки системы</h3>
-                <p className="text-xs text-slate-500 mt-1">Подключение к АТС, справочник, пользователи и роли доступа.</p>
+        <div className="fixed inset-0 bg-slate-950/40 flex items-center justify-center p-4 z-50">
+          <div className="w-full max-w-[1100px] bg-white border border-slate-200 rounded-2xl shadow-2xl relative max-h-[90vh] flex flex-col overflow-hidden font-sans">
+            <div className="flex items-center justify-between border-b border-slate-200 p-6 pb-4 shrink-0 bg-slate-50">
+              <div className="flex items-center gap-2">
+                <Settings className="h-6 w-6 text-red-600 animate-spin-slow" />
+                <h3 className="text-base font-black text-slate-905">Настройки системы</h3>
               </div>
               <button onClick={() => { setIsSettingsOpen(false); setDbTestResult(null); resetUserForm(); }} className="text-slate-400 hover:text-slate-900 p-1 rounded-md cursor-pointer">✕</button>
             </div>
 
-            <div className="px-6 pt-4 border-b border-slate-200 bg-slate-50">
-              <div className="flex flex-wrap gap-2">
-                {[
-                  ['pbx', 'Настройки подключения к АТС'],
-                  ['directory', 'Настройки справочника'],
-                  ['access', 'Настройки доступа'],
-                  ['permissions', 'Права ролей']
-                ].map(([key, label]) => (
-                  <button key={key} type="button" onClick={() => setSettingsTab(key as any)} className={`px-4 py-2 rounded-t-xl text-xs font-bold border transition-all ${settingsTab === key ? 'bg-white border-slate-200 border-b-white text-red-700 shadow-sm' : 'bg-slate-100 border-transparent text-slate-600 hover:bg-white hover:text-slate-900'}`}>{label}</button>
+            <div className="p-6 pb-2 border-b border-slate-200 bg-slate-50/50 shrink-0">
+              <div className="flex flex-wrap gap-1.5 p-1 bg-slate-100 rounded-xl">
+                {Object.entries({
+                  pbx: 'Настройки АТС',
+                  directory: 'Телефонный справочник',
+                  access: 'Доступ и пользователи',
+                  permissions: 'Права доступа'
+                }).map(([tab, label]) => (
+                  <button
+                    key={tab}
+                    type="button"
+                    onClick={() => setSettingsTab(tab as any)}
+                    className={`flex-1 py-1.5 text-center text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                      settingsTab === tab
+                        ? 'bg-red-600 text-white shadow-md'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    {label}
+                  </button>
                 ))}
               </div>
             </div>
@@ -3397,7 +3749,21 @@ export default function App() {
                   {settingsTab === 'pbx' && (
                     <div className="space-y-5">
                       <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                        <h4 className="text-sm font-black text-slate-900 mb-3 flex items-center gap-2"><Database className="h-4 w-4 text-red-600" />MariaDB / FreePBX CDR</h4>
+                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mb-3 border-b border-slate-200 pb-2">
+                          <h4 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                            <Database className="h-4 w-4 text-red-600" />
+                            MariaDB / FreePBX CDR
+                          </h4>
+                          <button
+                            type="button"
+                            onClick={testDbConnection}
+                            disabled={isTestingDb}
+                            className="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 rounded-lg text-xs font-bold border border-slate-200 active:scale-95 transition-transform cursor-pointer flex items-center justify-center gap-1.5 shadow-sm"
+                          >
+                            {isTestingDb && <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-500" />}
+                            Проверить MariaDB
+                          </button>
+                        </div>
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                           <label className="md:col-span-2 text-xs font-bold text-slate-600">Хост MariaDB<input type="text" value={draftSettings.dbHost} onChange={(e) => setDraftSettings({ ...draftSettings, dbHost: e.target.value })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" required /></label>
                           <label className="text-xs font-bold text-slate-600">Порт<input type="number" value={draftSettings.dbPort} onChange={(e) => setDraftSettings({ ...draftSettings, dbPort: parseInt(e.target.value, 10) || 3306 })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" required /></label>
@@ -3405,9 +3771,29 @@ export default function App() {
                           <label className="text-xs font-bold text-slate-600">Пользователь<input type="text" value={draftSettings.dbUser} onChange={(e) => setDraftSettings({ ...draftSettings, dbUser: e.target.value })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" required /></label>
                           <label className="text-xs font-bold text-slate-600">Пароль<input type="password" value={draftSettings.dbPass} onChange={(e) => setDraftSettings({ ...draftSettings, dbPass: e.target.value })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" /></label>
                         </div>
+                        {dbTestResult && (
+                          <div className={`mt-3 p-3.5 border rounded-lg text-xs flex items-start gap-2 ${dbTestResult.success ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-red-50 border-red-200 text-red-700'}`}>
+                            <AlertCircle className={`h-4.5 w-4.5 shrink-0 mt-0.5 ${dbTestResult.success ? 'text-emerald-600' : 'text-red-600'}`} />
+                            <span>{dbTestResult.message}</span>
+                          </div>
+                        )}
                       </div>
                       <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                        <h4 className="text-sm font-black text-slate-900 mb-3 flex items-center gap-2"><Phone className="h-4 w-4 text-red-600" />AMI / Click2Call</h4>
+                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mb-3 border-b border-slate-200 pb-2">
+                          <h4 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                            <Phone className="h-4 w-4 text-red-600" />
+                            AMI / Click2Call
+                          </h4>
+                          <button
+                            type="button"
+                            onClick={testAmiConnection}
+                            disabled={isTestingAmi}
+                            className="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 rounded-lg text-xs font-bold border border-slate-200 active:scale-95 transition-transform cursor-pointer flex items-center justify-center gap-1.5 shadow-sm"
+                          >
+                            {isTestingAmi && <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-500" />}
+                            Проверить AMI
+                          </button>
+                        </div>
                         <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                           <label className="md:col-span-2 text-xs font-bold text-slate-600">Хост AMI<input type="text" value={draftSettings.amiHost || ''} onChange={(e) => setDraftSettings({ ...draftSettings, amiHost: e.target.value })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" /></label>
                           <label className="text-xs font-bold text-slate-600">Порт<input type="number" value={draftSettings.amiPort ?? 5038} onChange={(e) => setDraftSettings({ ...draftSettings, amiPort: parseInt(e.target.value, 10) || 5038 })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" /></label>
@@ -3415,6 +3801,12 @@ export default function App() {
                           <label className="md:col-span-2 text-xs font-bold text-slate-600">AMI User<input type="text" value={draftSettings.amiUser || ''} onChange={(e) => setDraftSettings({ ...draftSettings, amiUser: e.target.value })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" /></label>
                           <label className="md:col-span-2 text-xs font-bold text-slate-600">AMI Secret<input type="password" value={draftSettings.amiPass || ''} onChange={(e) => setDraftSettings({ ...draftSettings, amiPass: e.target.value })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" /></label>
                         </div>
+                        {amiTestResult && (
+                          <div className={`mt-3 p-3.5 border rounded-lg text-xs flex items-start gap-2 ${amiTestResult.success ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-red-50 border-red-200 text-red-700'}`}>
+                            <AlertCircle className={`h-4.5 w-4.5 shrink-0 mt-0.5 ${amiTestResult.success ? 'text-emerald-600' : 'text-red-600'}`} />
+                            <span>{amiTestResult.message}</span>
+                          </div>
+                        )}
                       </div>
                       <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                         <h4 className="text-sm font-black text-slate-900 mb-3 flex items-center gap-2"><Clock className="h-4 w-4 text-red-600" />Записи и KPI</h4>

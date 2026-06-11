@@ -1368,6 +1368,74 @@ app.post('/api/settings', requireAuth('admin'), async (req, res) => {
   res.json({ success: true, settings: localDb.settings });
 });
 
+// Test database connection with unsaved/draft settings
+app.post('/api/settings/test-db', requireAuth('admin'), async (req, res) => {
+  try {
+    const settings = req.body;
+    const localDb = await readLocalDb();
+    
+    // Check if demoMode or requested demo
+    if (settings.demoMode || (!settings.dbHost && !settings.dbUser)) {
+      res.json({ success: true, message: 'Тестовое подключение установлено успешно (Демонстрационный режим).' });
+      return;
+    }
+
+    let connection;
+    try {
+      connection = await mysql.createConnection({
+        host: settings.dbHost,
+        port: Number(settings.dbPort || 3306),
+        user: settings.dbUser,
+        password: settings.dbPass,
+        database: settings.dbName,
+        connectTimeout: 5000
+      });
+      await connection.execute('SELECT 1');
+      res.json({ success: true, message: 'Подключение установлено успешно! MariaDB asteriskcdrdb доступна на чтение.' });
+    } finally {
+      if (connection) await connection.end();
+    }
+  } catch (error: any) {
+    res.status(400).json({ error: error.message || 'Ошибка подключения к базе данных.' });
+  }
+});
+
+// Test AMI connection with unsaved/draft settings
+app.post('/api/settings/test-ami', requireAuth('admin'), async (req, res) => {
+  try {
+    const settings = req.body;
+    
+    if (settings.demoMode || (!settings.amiHost && !settings.amiUser)) {
+      res.json({ success: true, message: 'Имитация подключения к AMI успешно выполнена (Демонстрационный режим).' });
+      return;
+    }
+
+    const host = settings.amiHost || 'localhost';
+    const port = settings.amiPort || 5038;
+    const user = settings.amiUser || '';
+    const pass = settings.amiPass || '';
+
+    if (!host || !user || !pass) {
+      res.status(400).json({ error: 'Заполните Хост, Пользователя и Пароль AMI' });
+      return;
+    }
+
+    if (host === 'localhost' && !pass) {
+      res.json({ success: true, message: 'Имитация локального подключения (без пароля) выполнена успешно.' });
+      return;
+    }
+
+    const result = await runAMICommand(settings, 'Ping');
+    if (result.success) {
+      res.json({ success: true, message: 'Подключение к Asterisk AMI успешно установлено!' });
+    } else {
+      res.status(400).json({ error: result.message || 'Не удалось подключиться к Asterisk AMI.' });
+    }
+  } catch (error: any) {
+    res.status(400).json({ error: error.message || 'Ошибка подключения к Asterisk AMI.' });
+  }
+});
+
 // --- TELEPHONE DIRECTORY ENDPOINTS ---
 
 // Get all directory entries
@@ -2129,6 +2197,133 @@ app.post('/api/calls/:uniqueid/process', requireAuth(), async (req, res) => {
 
   await writeLocalDb(localDb);
   res.json({ success: true, status: statusItem });
+});
+
+// Chronology / Timeline of a call by uniqueid
+app.get('/api/calls/:uniqueid/chronology', requireAuth(), async (req, res) => {
+  const { uniqueid } = req.params;
+  try {
+    const localDb = await readLocalDb();
+    const settings = localDb.settings;
+    const isDemo = isDemoMode(settings);
+
+    let legs: CallEntry[] = [];
+
+    if (isDemo) {
+      const found = mockCDRData.find(c => c.uniqueid === uniqueid || c.linkedid === uniqueid);
+      const targetLinkedId = found ? (found.linkedid || found.uniqueid) : uniqueid;
+      legs = mockCDRData.filter(c => c.uniqueid === targetLinkedId || c.linkedid === targetLinkedId);
+    } else {
+      // 1. Find linkedid
+      let targetLinkedId = uniqueid;
+      try {
+        const findLinkedIdSql = "SELECT COALESCE(nullif(linkedid, ''), uniqueid) as target_id FROM cdr WHERE uniqueid = ? LIMIT 1";
+        const result = await queryFreePBXCDR(settings, false, findLinkedIdSql, [uniqueid]);
+        if (result && result.length > 0 && (result[0] as any).target_id) {
+          targetLinkedId = (result[0] as any).target_id;
+        }
+      } catch (err) {
+        console.error('Error finding linked ID:', err);
+      }
+
+      // 2. Query all legs matching linked ID
+      const legsSql = 'SELECT uniqueid, calldate, clid, src, dst, dcontext, channel, dstchannel, lastapp, lastdata, duration, billsec, disposition, recordingfile, did, cnum, cnam, outbound_cnum, linkedid FROM cdr WHERE uniqueid = ? OR linkedid = ? ORDER BY calldate ASC';
+      legs = await queryFreePBXCDR(settings, false, legsSql, [targetLinkedId, targetLinkedId]);
+    }
+
+    // Sort legs by calldate ASC to ensure proper chronological order
+    legs.sort((a, b) => new Date(a.calldate).getTime() - new Date(b.calldate).getTime());
+
+    // Format the timeline steps into beautiful human-readable explanations
+    const timeline = legs.map((leg, idx) => {
+      // Analyze this leg to explain what happened in human terms
+      let actionType: 'routing' | 'ringing' | 'connected' | 'abandoned' | 'ivr' | 'voicemail' | 'system' = 'routing';
+      let title = '';
+      let description = '';
+      
+      const lastapp = leg.lastapp?.toUpperCase();
+      const lastdata = leg.lastdata || '';
+      const dcontext = leg.dcontext || '';
+      const disposition = leg.disposition?.toUpperCase();
+      
+      if (dcontext.startsWith('ivr-') || lastapp === 'BACKGROUND') {
+        actionType = 'ivr';
+        title = `IVR-меню: ${dcontext.replace('ivr-', '')}`;
+        description = `Вызов зашёл в интерактивное голосовое меню. Воспроизведение файла/выбор пути.`;
+      } else if (lastapp === 'VOICEMAIL') {
+        actionType = 'voicemail';
+        title = `Автоответчик / Голосовая почта`;
+        description = `Вызов перенаправлен в почтовый ящик (VoiceMail) для номера ${lastdata}.`;
+      } else if (dcontext === 'ext-queues' || lastapp === 'QUEUE') {
+        actionType = 'routing';
+        title = `Попадание в очередь: ${leg.dst}`;
+        description = `Маршрутизация вызова в очередь распределения. Длительность ожидания: ${leg.duration} сек.`;
+      } else if (dcontext === 'ext-group') {
+        actionType = 'routing';
+        title = `Группа обзвона: ${leg.dst}`;
+        description = `Вызовы направлены на группу операторов. Общее время обзвона: ${leg.duration} сек.`;
+      } else if (dcontext === 'ext-local' || lastapp === 'DIAL') {
+        if (disposition === 'ANSWERED') {
+          actionType = 'connected';
+          title = `Разговор с внутренним номером ${leg.dst}`;
+          description = `Вызов отвечен. Длительность разговора: ${leg.billsec} сек (всего ${leg.duration} сек). Внутренний канал: ${leg.dstchannel || 'н/д'}.`;
+        } else {
+          actionType = 'ringing';
+          title = `Вызов на внутренний номер ${leg.dst}`;
+          const reason = disposition === 'BUSY' ? 'Занято' : disposition === 'NO ANSWER' ? 'Нет ответа' : 'Вызов пропущен';
+          description = `Вызов отправлен оператору, но не отвечен. Причина: ${reason}. Продолжительность вызова: ${leg.duration} сек.`;
+        }
+      } else if (leg.dst && leg.dst.startsWith('q-') && disposition === 'ANSWERED') {
+        actionType = 'connected';
+        title = `Разговор в очереди: ${leg.dst}`;
+        description = `Оператор ответил из группы очереди. Разговор длился ${leg.billsec} сек.`;
+      } else {
+        // General or fallback description
+        if (disposition === 'ANSWERED') {
+          actionType = 'connected';
+          title = `Соединение с ${leg.dst || 'н/д'}`;
+          description = `Успешный разговор длительностью ${leg.billsec} сек (всего: ${leg.duration} - сек). Приложение: ${leg.lastapp || 'н/д'}.`;
+        } else {
+          actionType = 'routing';
+          title = `Маршрут / Действие: ${leg.dst || 'н/д'}`;
+          const reason = disposition === 'BUSY' ? 'Занято' : disposition === 'NO ANSWER' ? 'Нет ответа' : 'Вызов пропущен/не отвечен';
+          description = `Действие через контекст "${dcontext}". Результат: ${reason}. Выполнено: ${leg.lastapp || 'н/д'}.`;
+        }
+      }
+
+      return {
+        id: leg.uniqueid,
+        calldate: leg.calldate,
+        src: leg.src,
+        dst: leg.dst,
+        dcontext: leg.dcontext,
+        channel: leg.channel,
+        dstchannel: leg.dstchannel,
+        lastapp: leg.lastapp,
+        lastdata: leg.lastdata,
+        duration: leg.duration,
+        billsec: leg.billsec,
+        disposition: leg.disposition,
+        recordingfile: leg.recordingfile,
+        did: leg.did,
+        actionType,
+        title,
+        description
+      };
+    });
+
+    res.json({
+      success: true,
+      uniqueid,
+      linkedid: legs[0]?.linkedid || uniqueid,
+      legsCount: legs.length,
+      timeline
+    });
+
+  } catch (error: any) {
+    console.error('Error fetching chronology:', error);
+    res.status(500).json({ success: false, message: error.message || 'Ошибка загрузки хронологии' });
+  }
 });
 
 // Demo data management endpoints
