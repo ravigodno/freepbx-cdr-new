@@ -215,35 +215,7 @@ interface UserSession {
 }
 
 const Logo3D = ({ className = "h-5 w-5" }: { className?: string }) => (
-  <svg className={className} viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" referrerPolicy="no-referrer">
-    {/* Bottom Plate */}
-    <g transform="translate(0, 16)">
-      <path d="M32 8 L54 19 L32 30 L10 19 Z" fill="#2563EB" opacity="0.6" />
-      <path d="M10 19 L32 30 V34 L10 23 Z" fill="#1D4ED8" opacity="0.6" />
-      <path d="M32 30 L54 19 V23 L32 34 Z" fill="#1E40AF" opacity="0.6" />
-    </g>
-
-    {/* Middle Plate */}
-    <g transform="translate(0, 8)">
-      <path d="M32 8 L54 19 L32 30 L10 19 Z" fill="#3B82F6" opacity="0.85" />
-      <path d="M10 19 L32 30 V34 L10 23 Z" fill="#2563EB" opacity="0.85" />
-      <path d="M32 30 L54 19 V23 L32 34 Z" fill="#1D4ED8" opacity="0.85" />
-    </g>
-
-    {/* Top Plate */}
-    <g transform="translate(0, 0)">
-      <path d="M32 8 L54 19 L32 30 L10 19 Z" fill="url(#topPlateGrad)" />
-      <path d="M10 19 L32 30 V34 L10 23 Z" fill="#2563EB" />
-      <path d="M32 30 L54 19 V23 L32 34 Z" fill="#1D4ED8" />
-    </g>
-
-    <defs>
-      <linearGradient id="topPlateGrad" x1="10" y1="19" x2="54" y2="19" gradientUnits="userSpaceOnUse">
-        <stop offset="0%" stopColor="#60A5FA" />
-        <stop offset="100%" stopColor="#3B82F6" />
-      </linearGradient>
-    </defs>
-  </svg>
+  <img src="/freepbx-cdr-logo.svg" className={className} alt="PBXPULS" />
 );
 
 interface AccessUser {
@@ -2481,14 +2453,14 @@ export default function App() {
       <aside className={`${isSidebarExpanded ? 'w-64' : 'w-16 md:w-20'} bg-white dark:bg-[#1e293b] border-r border-slate-200 dark:border-[#334155] flex flex-col items-center justify-between py-5 shrink-0 sticky top-0 h-screen select-none z-30 transition-all duration-300 shadow-xs`}>
         <div className={`flex flex-col ${isSidebarExpanded ? 'items-start px-4' : 'items-center'} gap-6 w-full`}>
           {/* Logo Element resembling high-end layers icon */}
-          <div className={`flex items-center ${isSidebarExpanded ? 'gap-3 w-full' : 'justify-center w-full'}`}>
-            <div className="bg-white dark:bg-[#1e293b] p-1.5 rounded-2xl shadow-md border border-slate-200/40 dark:border-slate-800 active:scale-95 transition-transform cursor-pointer shrink-0">
-              <Logo3D className="h-6 w-6 md:h-7 md:w-7" />
+          <div className={`flex items-center ${isSidebarExpanded ? 'gap-2 w-full' : 'justify-center w-full'}`}>
+            <div className="h-[45px] w-[45px] flex items-center justify-center active:scale-95 transition-transform cursor-pointer shrink-0">
+              <Logo3D className="h-[45px] w-[45px]" />
             </div>
             {isSidebarExpanded && (
               <div className="min-w-0 animate-fade-in">
-                <span className="font-extrabold text-[#e04040] dark:text-[#f87171] text-xs tracking-wider uppercase block leading-none">FreePBX</span>
-                <span className="text-[9px] text-slate-400 dark:text-slate-500 font-bold tracking-widest block mt-0.5 uppercase">CDR PORTAL</span>
+                <span className="font-bold text-[#0f2557] dark:text-slate-100 text-[24px] tracking-tight uppercase block leading-none">PBXPULS</span>
+                
               </div>
             )}
           </div>
@@ -2501,7 +2473,7 @@ export default function App() {
                 onClick={() => setActiveView('calls')}
                 className={`flex items-center ${isSidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl transition-all relative group cursor-pointer ${
                   activeView === 'calls'
-                    ? 'bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400 border border-red-100 dark:border-red-900/30 shadow-inner'
+                    ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-900/30 shadow-inner'
                     : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent'
                 }`}
                 title={isSidebarExpanded ? "" : "Реестр звонков"}
@@ -2529,7 +2501,7 @@ export default function App() {
                 }}
                 className={`flex items-center ${isSidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl transition-all relative group cursor-pointer ${
                   activeView === 'directory'
-                    ? 'bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400 border border-red-100 dark:border-red-900/30 shadow-inner'
+                    ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-900/30 shadow-inner'
                     : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent'
                 }`}
                 title={isSidebarExpanded ? "" : "Телефонный справочник"}
@@ -2554,7 +2526,7 @@ export default function App() {
                 onClick={() => setActiveView('reports')}
                 className={`flex items-center ${isSidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl transition-all relative group cursor-pointer ${
                   activeView === 'reports'
-                    ? 'bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400 border border-red-100 dark:border-red-900/30 shadow-inner'
+                    ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-900/30 shadow-inner'
                     : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent'
                 }`}
                 title={isSidebarExpanded ? "" : "Отчеты и аналитика"}
@@ -2869,7 +2841,7 @@ export default function App() {
       })()}
 
       {/* Main UI body section */}
-      <main className="flex-1 overflow-y-auto max-w-[1800px] w-full mx-auto p-4 space-y-4">
+      <main className="flex-1 overflow-y-auto w-full pl-[8px] pr-2 py-4 space-y-4">
         {dbWarning && (
           <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 text-amber-900 p-4 rounded-xl flex items-start sm:items-center justify-between shadow-xs gap-3 animate-fade-in relative z-10">
             <div className="flex items-center gap-3">
@@ -3488,9 +3460,9 @@ export default function App() {
                         {/* Column 1: TIME AND ID */}
                         <td className="py-4 px-4 font-normal text-slate-705 dark:text-slate-350">
                           <div className="flex items-center gap-3">
-                            {/* Blue phone circle container */}
-                            <div className="w-10 h-10 rounded-full bg-blue-50/80 dark:bg-blue-900/20 text-blue-500 dark:text-blue-400 flex items-center justify-center shrink-0 border border-blue-100/40 dark:border-blue-800/10 shadow-3xs">
-                              <Phone className="h-4.5 w-4.5" />
+                            {/* Call type icon circle */}
+                            <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 border shadow-3xs `}>
+                              {isIncoming ? <PhoneIncoming className="h-4.5 w-4.5" /> : isOutgoing ? <PhoneOutgoing className="h-4.5 w-4.5" /> : <PhoneCall className="h-4.5 w-4.5" />}
                             </div>
                             <div className="flex flex-col">
                               <span className="font-bold text-slate-800 dark:text-slate-200 text-[13px] tracking-tight">
@@ -3581,7 +3553,7 @@ export default function App() {
                                 </span>
                               </div>
                               <div className="text-xs font-bold text-slate-800 dark:text-slate-200 flex flex-wrap items-center gap-1.5">
-                                <span>Группа &nbsp;{isIncoming ? (call.dst && isInternalExt(call.dst) ? call.dst : '9999') : (isInternalExt(displayedDst) ? displayedDst : '9999')}</span>
+                                <span>{displayedDst}</span>
                                 <div className="flex items-center gap-1">
                                   <button
                                     onClick={() => triggerClickToCall(displayedDst, calleeName)}
@@ -3979,7 +3951,7 @@ export default function App() {
 
         {/* Directory toolbar */}
         <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-col sm:flex-row gap-3 items-center justify-between shadow-sm">
-          <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto items-stretch sm:items-center">
+          <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto items-stretch sm:items-center">
             {/* Search */}
             <div className="relative min-w-[260px]">
               <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
@@ -4196,7 +4168,7 @@ export default function App() {
       {playingRecording && (
         <footer className="fixed top-20 left-1/2 -translate-x-1/2 z-[9999] w-[1100px] max-w-[calc(100vw-30px)] bg-white border border-red-200 rounded-2xl py-3.5 px-4 shadow-2xl">
           <div className="max-w-[1800px] mx-auto flex flex-col md:flex-row items-center justify-between gap-3.5">
-            <div className="flex items-center gap-3 w-full md:w-auto">
+            <div className="flex items-center gap-2 w-full md:w-auto">
               <div className="p-2 bg-red-50 rounded-lg border border-red-100 text-red-600 shadow-xs">
                 <Volume2 className="h-5 w-5" />
               </div>
@@ -4248,7 +4220,7 @@ export default function App() {
             </div>
 
             {/* Speed adjustments */}
-            <div className="flex items-center gap-3 w-full md:w-auto justify-between md:justify-end">
+            <div className="flex items-center gap-2 w-full md:w-auto justify-between md:justify-end">
               <div className="flex items-center gap-1 bg-slate-50 p-1 rounded-lg border border-slate-200">
                 <button
                   onClick={() => changeSpeed(1)}
