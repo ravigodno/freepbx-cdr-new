@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.1.1 - 2026-06-11
+
+### Changed
+
+- Default start date (`startDate`) is now initialized to the 1st of the current month instead of 7 days ago (`getDefaultStartDate`).
+- Filter reset button ("Сбросить фильтры") now applies the current month preset (`applyThisMonthPreset`) instead of the 7-day preset, completely resetting the dashboard and lists to the beginning of the month.
+- Optimized and improved the responsive interface rendering and Russian localization rules.
+
 ## 2.0.0 - 2026-06-08
 
 ### Added
