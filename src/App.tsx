@@ -66,8 +66,9 @@ const parseDateInputValue = (value: string) => {
 
 const getDefaultStartDate = () => {
   const date = new Date();
-  date.setDate(date.getDate() - 7);
-  return toLocalDateInputValue(date);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  return `${year}-${month}-01`;
 };
 
 const formatRussianDate = (value: string) => {
@@ -117,9 +118,10 @@ function RussianDatePicker({ value, onChange, ariaLabel }: RussianDatePickerProp
         lang="ru-RU"
         aria-label={ariaLabel}
         onClick={() => setIsOpen(prev => !prev)}
-        className="min-w-[112px] bg-white border border-slate-200 rounded px-2 py-1 text-[11px] text-slate-700 font-mono focus:outline-none focus:border-red-500 hover:border-slate-300 transition-all text-left"
+        className="min-w-[112px] bg-white border border-slate-200 rounded px-2.5 py-1 text-[11px] text-slate-700 font-mono focus:outline-none focus:border-red-500 hover:border-slate-300 transition-all text-left flex items-center gap-1.5 cursor-pointer"
       >
-        {formatRussianDate(value)}
+        <Calendar className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+        <span>{formatRussianDate(value)}</span>
       </button>
       {isOpen && (
         <div className="absolute z-50 mt-2 w-64 rounded-xl border border-slate-200 bg-white p-3 shadow-xl">
@@ -2265,18 +2267,21 @@ export default function App() {
                     }}
                     ariaLabel="Дата начала периода"
                   />
-                  <input
-                    type="text"
-                    value={startTime}
-                    onChange={(e) => {
-                      setStartTime(e.target.value);
-                      setPage(1);
-                    }}
-                    step="60"
-                    lang="ru-RU"
-                    aria-label="Время начала периода"
-                    className="bg-white border border-slate-200 rounded px-1.5 py-1 text-[11px] text-slate-700 font-mono focus:outline-none focus:border-red-500"
-                  />
+                  <div className="relative flex items-center shadow-xs">
+                    <Clock className="absolute left-1.5 h-3.5 w-3.5 text-slate-400 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={startTime}
+                      onChange={(e) => {
+                        setStartTime(e.target.value);
+                        setPage(1);
+                      }}
+                      step="60"
+                      lang="ru-RU"
+                      aria-label="Время начала периода"
+                      className="bg-white border border-slate-200 rounded pl-6 pr-1.5 py-1 text-[11px] text-slate-700 font-mono focus:outline-none focus:border-red-500 w-[64px]"
+                    />
+                  </div>
                   <span className="text-slate-400 text-xs">—</span>
                   <RussianDatePicker
                     value={endDate}
@@ -2286,18 +2291,21 @@ export default function App() {
                     }}
                     ariaLabel="Дата окончания периода"
                   />
-                  <input
-                    type="text"
-                    value={endTime}
-                    onChange={(e) => {
-                      setEndTime(e.target.value);
-                      setPage(1);
-                    }}
-                    step="60"
-                    lang="ru-RU"
-                    aria-label="Время окончания периода"
-                    className="bg-white border border-slate-200 rounded px-1.5 py-1 text-[11px] text-slate-700 font-mono focus:outline-none focus:border-red-500"
-                  />
+                  <div className="relative flex items-center shadow-xs">
+                    <Clock className="absolute left-1.5 h-3.5 w-3.5 text-slate-400 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={endTime}
+                      onChange={(e) => {
+                        setEndTime(e.target.value);
+                        setPage(1);
+                      }}
+                      step="60"
+                      lang="ru-RU"
+                      aria-label="Время окончания периода"
+                      className="bg-white border border-slate-200 rounded pl-6 pr-1.5 py-1 text-[11px] text-slate-700 font-mono focus:outline-none focus:border-red-500 w-[64px]"
+                    />
+                  </div>
                 </div>
               </div>
             </div>
@@ -2333,7 +2341,7 @@ export default function App() {
                     setSearchQuery('');
                     setNumberFilter('');
                     setStatusFilter('ALL');
-                    applyPeriodPreset(7);
+                    applyThisMonthPreset();
                   }}
                   className="hover:bg-red-50 bg-red-50 border border-red-200 text-red-600 px-2.5 py-1.5 rounded-md cursor-pointer transition-all font-semibold text-xs"
                   title="Сбросить все фильтры"
@@ -2549,16 +2557,15 @@ export default function App() {
                             )}
                             {call.calldate}
                           </div>
-                          <div className="text-[11px] text-slate-400 font-mono mt-0.5 flex items-center gap-1" title="Asterisk UniqueID">
-                            <span>ID:</span>
+                          <div className="text-[11px] text-slate-400 font-mono mt-0.5" title="Asterisk UniqueID">
+                            ID:{' '}
                             {session?.role === 'admin' ? (
                               <button
                                 onClick={() => fetchChronology(call.uniqueid)}
-                                className="text-red-700 hover:text-red-900 font-bold hover:underline bg-red-50 hover:bg-red-100 transition-colors px-1 rounded cursor-pointer border border-red-200/60 flex items-center gap-0.5"
+                                className="text-slate-400 hover:text-red-700 hover:underline cursor-pointer font-medium"
                                 title="Посмотреть хронологию прохождения звонка"
                               >
                                 {call.uniqueid}
-                                <span className="text-[9.5px] font-semibold text-red-500 hover:text-red-800 opacity-90">(хронология)</span>
                               </button>
                             ) : (
                               <span className="select-all">{call.uniqueid}</span>
