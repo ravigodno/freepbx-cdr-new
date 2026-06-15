@@ -53,9 +53,6 @@ import {
 } from 'lucide-react';
 import { CallEntry, DashboardStats, AppSettings, UserRole, DirectoryEntry } from './types';
 import packageJson from '../package.json';
-import SngrepTab from './components/monitoring/SngrepTab';
-import TcpdumpTab from './components/monitoring/TcpdumpTab';
-import ActiveCallsTab from './components/monitoring/ActiveCallsTab';
 
 
 
@@ -416,13 +413,6 @@ export default function App() {
   const [liveSessionsError, setLiveSessionsError] = useState('');
   const [liveSearch, setLiveSearch] = useState('');
   const [isLoadingLiveSessions, setIsLoadingLiveSessions] = useState(false);
-  const [isLiveMonitoringPaused, setIsLiveMonitoringPaused] = useState(false);
-  const [snapshotStatus, setSnapshotStatus] = useState('');
-  const [tcpdumpStatus, setTcpdumpStatus] = useState<any>(null);
-  const [tcpdumpFiles, setTcpdumpFiles] = useState<any[]>([]);
-  const [tcpdumpMessage, setTcpdumpMessage] = useState('');
-  const [tcpdumpOutput, setTcpdumpOutput] = useState('');
-  const [monitorMode, setMonitorMode] = useState<'calls' | 'tcpdump' | 'sngrep'>('calls');
 
   const [isSidebarExpanded, setIsSidebarExpanded] = useState<boolean>(() => {
     return localStorage.getItem('asterisk_cdr_sidebar_expanded') === 'true';
@@ -2312,16 +2302,16 @@ export default function App() {
             </span>
           </div>
 
-          <div className={(monitorMode === "calls" ? "block " : "hidden ") + "overflow-x-auto"}>
+          <div className="overflow-x-auto">
             <table className="w-full text-left font-sans text-xs">
               <thead className="bg-slate-50 dark:bg-[#172132] border-b border-slate-200 dark:border-slate-800 text-[10.5px] font-bold text-slate-500 dark:text-slate-400 uppercase select-none">
                 <tr>
-                  <th className="py-2 px-3">НАПРАВЛЕНИЕ / ДЕПАРТАМЕНТ</th>
+                  <th className="py-3 px-4">НАПРАВЛЕНИЕ / ДЕПАРТАМЕНТ</th>
                   <th className="py-3 px-4 text-center">ВСЕГО ЗВОНКОВ</th>
                   <th className="py-3 px-4 text-center">ПРИНЯТЫЕ</th>
                   <th className="py-3 px-4 text-center">ПРОПУЩЕННЫЕ</th>
                   <th className="py-3 px-4 text-center">СРЕДНЯЯ ДЛИТЕЛЬНОСТЬ</th>
-                  <th className="py-2 px-3">% ПРОПУЩЕННЫХ (SLA)</th>
+                  <th className="py-3 px-4">% ПРОПУЩЕННЫХ (SLA)</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-slate-700 dark:text-slate-300 select-none">
@@ -2509,117 +2499,11 @@ export default function App() {
 
   useEffect(() => {
     if (activeView !== 'monitoring') return;
-    if (isLiveMonitoringPaused) return;
 
     loadLiveSessions();
     const timer = setInterval(loadLiveSessions, 2000);
 
     return () => clearInterval(timer);
-  }, [activeView, isLiveMonitoringPaused]);
-
-  const saveLiveSnapshot = async () => {
-    try {
-      const payload = {
-        createdAt: new Date().toISOString(),
-        summary: liveSessionsData?.summary || {},
-        calls: liveSessionsData?.calls || [],
-        sessions: liveSessionsData?.sessions || [],
-        raw: liveSessionsData?.raw || {}
-      };
-
-      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const filename = `pbxpuls-live-snapshot-${stamp}.json`;
-
-      const blob = new Blob([JSON.stringify(payload, null, 2)], {
-        type: 'application/json;charset=utf-8'
-      });
-
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-
-      setSnapshotStatus('Снимок скачан на компьютер: ' + filename);
-    } catch (e: any) {
-      setSnapshotStatus('Ошибка: ' + (e.message || String(e)));
-    }
-  };
-
-
-  const loadTcpdumpStatus = async () => {
-    try {
-      const res = await fetch('/api/diagnostics/tcpdump/status');
-      const data = await res.json();
-      setTcpdumpStatus(data);
-    } catch {}
-  };
-
-  const loadTcpdumpFiles = async () => {
-    try {
-      const res = await fetch('/api/diagnostics/tcpdump/files');
-      const data = await res.json();
-      if (data.success) setTcpdumpFiles(data.files || []);
-    } catch {}
-  };
-
-  const startTcpdump = async (mode: string) => {
-    setTcpdumpMessage('Запускаю tcpdump...');
-    try {
-      const res = await fetch('/api/diagnostics/tcpdump/start?mode=' + encodeURIComponent(mode) + '&iface=any', { method: 'POST' });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error || 'Ошибка запуска tcpdump');
-      setTcpdumpMessage('tcpdump запущен: ' + mode);
-      await loadTcpdumpStatus();
-      await loadTcpdumpFiles();
-      await loadTcpdumpOutput();
-    } catch (e: any) {
-      setTcpdumpMessage('Ошибка: ' + (e.message || String(e)));
-    }
-  };
-
-  const stopTcpdump = async () => {
-    setTcpdumpMessage('Останавливаю tcpdump...');
-    try {
-      const res = await fetch('/api/diagnostics/tcpdump/stop', { method: 'POST' });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error || 'Ошибка остановки tcpdump');
-      setTcpdumpMessage('tcpdump остановлен');
-      await loadTcpdumpStatus();
-      await loadTcpdumpFiles();
-    } catch (e: any) {
-      setTcpdumpMessage('Ошибка: ' + (e.message || String(e)));
-    }
-  };
-
-  const formatBytes = (bytes: any) => {
-    const n = Number(bytes || 0);
-    if (n < 1024) return n + ' B';
-    if (n < 1024 * 1024) return Math.round(n / 1024) + ' KB';
-    return (n / 1024 / 1024).toFixed(2) + ' MB';
-  };
-
-
-  const loadTcpdumpOutput = async () => {
-    try {
-      const res = await fetch('/api/diagnostics/tcpdump/output');
-      const data = await res.json();
-      if (data.success) setTcpdumpOutput(data.output || '');
-    } catch {}
-  };
-
-  useEffect(() => {
-    if (activeView !== 'monitoring') return;
-    const t = setInterval(() => {
-      loadTcpdumpStatus();
-      loadTcpdumpOutput();
-    }, 2000);
-    return () => clearInterval(t);
   }, [activeView]);
 
   const renderMonitoringView = () => {
@@ -2790,56 +2674,6 @@ export default function App() {
       return m ? m[1].replace(/-.*/, '') : '';
     };
 
-    const getCallTimelineSteps = (call: any) => {
-      const now = liveSessionsData?.summary?.updatedAt
-        ? new Date(liveSessionsData.summary.updatedAt).toLocaleTimeString('ru-RU')
-        : new Date().toLocaleTimeString('ru-RU');
-
-      const channels = call.channels || [];
-      const firstDial = channels.find((ch: any) => String(ch.application || '').toLowerCase() === 'dial');
-      const trunk = getTrunkFromAppData(firstDial?.appData || '');
-
-      const events: any[] = [];
-
-      events.push({ time: now, title: 'Создана активная сессия', detail: call.label || '—' });
-
-      if (call.from) {
-        events.push({ time: now, title: 'Источник вызова', detail: call.from });
-      }
-
-      if (trunk) {
-        events.push({ time: now, title: 'Выбран транк / направление', detail: trunk });
-      }
-
-      channels.forEach((ch: any) => {
-        if (ch.context) {
-          events.push({ time: now, title: 'Контекст Asterisk', detail: ch.context });
-        }
-
-        if (ch.application) {
-          events.push({ time: now, title: 'Приложение', detail: ch.application + (ch.appData ? ' → ' + ch.appData : '') });
-        }
-
-        if (String(ch.state || '').toLowerCase().includes('ring')) {
-          events.push({ time: now, title: 'Идёт вызов / Ringing', detail: ch.channel || ch.callerId || '—' });
-        }
-
-        if (String(ch.state || '').toLowerCase() === 'up') {
-          events.push({ time: now, title: 'Разговор установлен / Up', detail: ch.channel || ch.callerId || '—' });
-        }
-
-        if (String(ch.state || '').toLowerCase().includes('down')) {
-          events.push({ time: now, title: 'Канал ещё не поднят / Down', detail: ch.channel || ch.callerId || '—' });
-        }
-      });
-
-      if (call.to) {
-        events.push({ time: now, title: 'Назначение вызова', detail: call.to });
-      }
-
-      return events;
-    };
-
     const getCallPathSteps = (call: any) => {
       const firstDial = (call.channels || []).find((ch: any) => String(ch.application || '').toLowerCase() === 'dial');
       const trunk = getTrunkFromAppData(firstDial?.appData || '');
@@ -2897,34 +2731,6 @@ export default function App() {
           <div className="p-4 border-b border-slate-200 dark:border-[#334155] flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
             <div>
               <h2 className="text-sm font-black text-slate-900 dark:text-white">Мониторинг активных звонков</h2>
-            <div className="mt-3 flex gap-2">
-              <button
-                onClick={() => setMonitorMode('calls')}
-                className={`px-3 py-2 rounded-lg text-xs font-bold border ${monitorMode === 'calls'
-                  ? 'bg-blue-50 text-blue-700 border-blue-200'
-                  : 'bg-white text-slate-600 border-slate-200'}`}
-              >
-                Активные звонки
-              </button>
-
-              <button
-                onClick={() => setMonitorMode('tcpdump')}
-                className={`px-3 py-2 rounded-lg text-xs font-bold border ${monitorMode === 'tcpdump'
-                  ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
-                  : 'bg-white text-slate-600 border-slate-200'}`}
-              >
-                TCPDUMP / SIP-RTP
-              </button>
-
-              <button
-                onClick={() => setMonitorMode('sngrep')}
-                className={`px-3 py-2 rounded-lg text-xs font-bold border ${monitorMode === 'sngrep'
-                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                  : 'bg-white text-slate-600 border-slate-200'}`}
-              >
-                SNGREP
-              </button>
-            </div>
               <p className="text-xs text-slate-500 mt-1">Источник: AMI → core show channels concise / verbose / queue show</p>
             </div>
 
@@ -2940,31 +2746,8 @@ export default function App() {
               </div>
 
               <button
-                onClick={saveLiveSnapshot}
-                className="px-3 py-2 bg-emerald-50 text-emerald-700 border border-emerald-100 rounded-lg text-xs font-bold flex items-center gap-2 cursor-pointer"
-              >
-                Снимок в файл
-              </button>
-
-              <button
-                onClick={() => setIsLiveMonitoringPaused(!isLiveMonitoringPaused)}
-                className={`px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-2 cursor-pointer border ${
-                  isLiveMonitoringPaused
-                    ? 'bg-amber-50 text-amber-700 border-amber-200'
-                    : 'bg-slate-50 text-slate-700 border-slate-200'
-                }`}
-              >
-                {isLiveMonitoringPaused ? 'Продолжить' : 'Зафиксировать'}
-              </button>
-
-              <button
                 onClick={loadLiveSessions}
-                disabled={isLiveMonitoringPaused}
-                className={`px-3 py-2 border rounded-lg text-xs font-bold flex items-center gap-2 cursor-pointer ${
-                  isLiveMonitoringPaused
-                    ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
-                    : 'bg-blue-50 text-blue-700 border-blue-100'
-                }`}
+                className="px-3 py-2 bg-blue-50 text-blue-700 border border-blue-100 rounded-lg text-xs font-bold flex items-center gap-2 cursor-pointer"
               >
                 <RefreshCw className={`h-3.5 w-3.5 ${isLoadingLiveSessions ? 'animate-spin' : ''}`} />
                 Обновить
@@ -2972,67 +2755,205 @@ export default function App() {
             </div>
           </div>
 
-
-          {monitorMode === 'tcpdump' && (
-            <TcpdumpTab />
-          )}
-
-          {monitorMode === 'sngrep' && (
-            <SngrepTab
-              tcpdumpOutput={tcpdumpOutput}
-              loadTcpdumpOutput={loadTcpdumpOutput}
-            />
-          )}
-
-          {snapshotStatus && (
-            <div className="p-3 text-xs font-bold text-emerald-700 bg-emerald-50 border-b border-emerald-100">
-              {snapshotStatus}
-            </div>
-          )}
-
-          {isLiveMonitoringPaused && (
-            <div className="p-3 text-xs font-bold text-amber-700 bg-amber-50 border-b border-amber-100">
-              Снимок зафиксирован. Автообновление остановлено для анализа.
-            </div>
-          )}
-
           {liveSessionsError && (
             <div className="p-4 text-sm font-bold text-red-600 bg-red-50 border-b border-red-100">
               {liveSessionsError}
             </div>
           )}
 
-          {monitorMode === 'calls' && (
-            <ActiveCallsTab
-              liveSessionsData={liveSessionsData}
-              liveSearch={liveSearch}
-              setLiveSearch={setLiveSearch}
-            />
-          )}
+          <div className="p-4 border-b border-slate-200 dark:border-[#334155]">
+            <h3 className="text-xs font-black text-slate-600 dark:text-slate-300 uppercase tracking-wider mb-3">
+              Объединённые звонки
+            </h3>
 
-          <details className={(monitorMode === "calls" ? "block " : "hidden ") + "border-t border-slate-200 dark:border-[#334155]"}>
+            {filteredCalls.length === 0 ? (
+              <div className="py-6 text-center text-sm text-slate-400">
+                Активных звонков сейчас нет
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                {filteredCalls.map((call: any, index: number) => (
+                  <div key={index} className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-900/30 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-xl font-black text-slate-900 dark:text-white">
+                          {call.label}
+                        </div>
+                        <div className="mt-1 flex flex-wrap gap-2 text-[11px]">
+                          <span className="px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-100 font-bold">
+                            {getCallKindLabel(call)}
+                          </span>
+                          <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200 font-mono">
+                            Bridge key: {call.bridgeKey || '—'}
+                          </span>
+                        </div>
+                      </div>
+
+                      <span className={`px-2 py-1 rounded-lg border text-xs font-bold ${
+                        String(call.state).toLowerCase() === 'up'
+                          ? 'bg-emerald-50 text-emerald-700 border-emerald-100'
+                          : String(call.state).toLowerCase().includes('ring')
+                            ? 'bg-cyan-50 text-cyan-700 border-cyan-100'
+                            : 'bg-slate-100 text-slate-600 border-slate-200'
+                      }`}>
+                        {call.state}
+                      </span>
+                    </div>
+
+                    <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
+                      <div>
+                        <div className="text-slate-400 font-bold">Откуда</div>
+                        <div className="font-mono font-black text-slate-800 dark:text-slate-200">{call.from || '—'}</div>
+                      </div>
+                      <div>
+                        <div className="text-slate-400 font-bold">Куда</div>
+                        <div className="font-mono font-black text-slate-800 dark:text-slate-200">{call.to || '—'}</div>
+                      </div>
+                      <div>
+                        <div className="text-slate-400 font-bold">Длительность</div>
+                        <div className="font-mono font-bold">{formatDuration(call.duration)}</div>
+                      </div>
+                      <div>
+                        <div className="text-slate-400 font-bold">Каналов</div>
+                        <div className="font-mono font-bold">{call.channels.length}</div>
+                      </div>
+
+                      <div>
+                        <div className="text-slate-400 font-bold">Тип</div>
+                        <div className="font-bold text-slate-800 dark:text-slate-200">{getCallKindLabel(call)}</div>
+                      </div>
+
+                      <div>
+                        <div className="text-slate-400 font-bold">Статус</div>
+                        <div className="font-bold text-slate-800 dark:text-slate-200">{call.state || '—'}</div>
+                      </div>
+                    </div>
+
+                    <details className="mt-3" open>
+                      <summary className="cursor-pointer text-xs font-bold text-indigo-600">Путь прохождения звонка</summary>
+                      <div className="mt-2 rounded-lg bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 p-3 text-[11px]">
+                        <div className="flex flex-col gap-2">
+                          {getCallPathSteps(call).map((step: any, idx: number) => (
+                            <div key={idx} className="flex items-center gap-2">
+                              <div className="w-24 shrink-0 text-slate-400 font-bold">{step.label}</div>
+                              <div className="font-mono font-black text-slate-800 dark:text-slate-100">{step.value}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </details>
+
+                    <details className="mt-3">
+                      <summary className="cursor-pointer text-xs font-bold text-indigo-600">Этапы текущего вызова</summary>
+                      <div className="mt-2 rounded-lg bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 p-3 text-[11px] font-mono space-y-1">
+                        <div>1. Источник: {call.from || '—'}</div>
+                        <div>2. Назначение: {call.to || '—'}</div>
+                        <div>3. Статус: {call.state || '—'}</div>
+                        <div>4. Активных каналов: {call.channels.length}</div>
+                        <div>5. Длительность: {formatDuration(call.duration)}</div>
+                        <div>6. Bridge key: {call.bridgeKey || '—'}</div>
+                      </div>
+                    </details>
+
+                    <details className="mt-3">
+                      <summary className="cursor-pointer text-xs font-bold text-indigo-600">Показать каналы звонка</summary>
+                      <div className="mt-2 space-y-2">
+                        {call.channels.map((ch: any, idx: number) => (
+                          <div key={idx} className="rounded-lg bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 p-3 text-[11px] font-mono">
+                            <div><b>Channel:</b> {ch.channel || '—'}</div>
+                            <div><b>CallerID raw:</b> {ch.callerId || '—'}</div>
+                            <div><b>Context:</b> {ch.context || '—'}</div>
+                            <div><b>Exten:</b> {ch.exten || '—'}</div>
+                            <div><b>App:</b> {ch.application || '—'}</div>
+                            <div><b>AppData:</b> {ch.appData || '—'}</div>
+                            <div><b>UniqueID:</b> {ch.uniqueid || '—'}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="overflow-x-auto">
+            <div className="px-4 pt-4 text-xs font-black text-slate-600 dark:text-slate-300 uppercase tracking-wider">
+              Все каналы Asterisk
+            </div>
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-50 dark:bg-slate-900/40 text-slate-500 uppercase tracking-wider">
+                <tr>
+                  <th className="py-3 px-4">Состояние</th>
+                  <th className="py-3 px-4">Channel</th>
+                  <th className="py-3 px-4">CallerID</th>
+                  <th className="py-3 px-4">Context</th>
+                  <th className="py-3 px-4">Exten</th>
+                  <th className="py-3 px-4">App</th>
+                  <th className="py-3 px-4">AppData</th>
+                  <th className="py-3 px-4">Duration</th>
+                  <th className="py-3 px-4">Bridge</th>
+                  <th className="py-3 px-4">UniqueID</th>
+                </tr>
+              </thead>
+
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {filteredSessions.length === 0 ? (
+                  <tr>
+                    <td colSpan={10} className="py-8 px-4 text-center text-slate-400">
+                      Активных каналов сейчас нет
+                    </td>
+                  </tr>
+                ) : (
+                  filteredSessions.map((item: any, index: number) => (
+                    <tr key={index} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                      <td className="py-3 px-4">
+                        <span className={`px-2 py-1 rounded-lg border font-bold ${
+                          String(item.state).toLowerCase() === 'up'
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-100'
+                            : String(item.state).toLowerCase().includes('ring')
+                              ? 'bg-cyan-50 text-cyan-700 border-cyan-100'
+                              : 'bg-slate-50 text-slate-600 border-slate-200'
+                        }`}>
+                          {item.state || '—'}
+                        </span>
+                      </td>
+
+                      <td className="py-3 px-4 font-mono font-bold text-slate-800 dark:text-slate-200">{item.channel || '—'}</td>
+                      <td className="py-3 px-4 font-mono">{item.callerId || '—'}</td>
+                      <td className="py-3 px-4 font-mono">{item.context || '—'}</td>
+                      <td className="py-3 px-4 font-mono font-bold">{item.exten || '—'}</td>
+                      <td className="py-3 px-4 font-mono">{item.application || '—'}</td>
+                      <td className="py-3 px-4 font-mono max-w-lg truncate" title={item.appData}>{item.appData || '—'}</td>
+                      <td className="py-3 px-4 font-mono">{item.duration || '—'}</td>
+                      <td className="py-3 px-4 font-mono">
+                        <div className="font-bold text-indigo-600">{item.bridgedChannel || '—'}</div>
+                        <div className="text-[10px] text-slate-400">{item.bridgedUniqueid || '—'}</div>
+                      </td>
+                      <td className="py-3 px-4 font-mono text-[11px]">
+                        <div>{item.uniqueid || '—'}</div>
+                        <div className="text-slate-400">{item.linkedid || '—'}</div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <details className="border-t border-slate-200 dark:border-[#334155]">
             <summary className="p-4 cursor-pointer text-xs font-bold text-slate-500">RAW: core show channels concise</summary>
             <pre className="p-4 bg-slate-950 text-slate-100 text-[11px] overflow-auto max-h-[420px]">{liveSessionsData?.raw?.concise || 'Нет данных'}</pre>
           </details>
 
-          <details className={(monitorMode === "calls" ? "block " : "hidden ") + "border-t border-slate-200 dark:border-[#334155]"}>
+          <details className="border-t border-slate-200 dark:border-[#334155]">
             <summary className="p-4 cursor-pointer text-xs font-bold text-slate-500">RAW: core show channels verbose</summary>
             <pre className="p-4 bg-slate-950 text-slate-100 text-[11px] overflow-auto max-h-[420px]">{liveSessionsData?.raw?.verbose || 'Нет данных'}</pre>
           </details>
 
-          <details className={(monitorMode === "calls" ? "block " : "hidden ") + "border-t border-slate-200 dark:border-[#334155]"}>
+          <details className="border-t border-slate-200 dark:border-[#334155]">
             <summary className="p-4 cursor-pointer text-xs font-bold text-slate-500">RAW: queue show</summary>
             <pre className="p-4 bg-slate-950 text-slate-100 text-[11px] overflow-auto max-h-[420px]">{liveSessionsData?.raw?.queues || 'Нет данных'}</pre>
-          </details>
-
-          <details className={(monitorMode === "calls" ? "block " : "hidden ") + "border-t border-slate-200 dark:border-[#334155]"}>
-            <summary className="p-4 cursor-pointer text-xs font-bold text-slate-500">RAW: sip show channels</summary>
-            <pre className="p-4 bg-slate-950 text-slate-100 text-[11px] overflow-auto max-h-[420px]">{liveSessionsData?.raw?.sipChannels || 'Нет данных'}</pre>
-          </details>
-
-          <details className={(monitorMode === "calls" ? "block " : "hidden ") + "border-t border-slate-200 dark:border-[#334155]"}>
-            <summary className="p-4 cursor-pointer text-xs font-bold text-slate-500">RAW: pjsip show channels</summary>
-            <pre className="p-4 bg-slate-950 text-slate-100 text-[11px] overflow-auto max-h-[420px]">{liveSessionsData?.raw?.pjsipChannels || 'Нет данных'}</pre>
           </details>
         </div>
       </section>
@@ -4645,11 +4566,11 @@ export default function App() {
             <table className="w-full border-collapse text-left text-xs text-slate-500">
               <thead className="bg-slate-50 text-slate-700 uppercase font-bold text-[10px] tracking-wider border-b border-slate-200">
                 <tr>
-                  <th scope="col" className="py-2 px-3">Имя / Описание</th>
-                  <th scope="col" className="py-2 px-3">Телефоны / Ext</th>
-                  <th scope="col" className="py-2 px-3">Компания / должность</th>
-                  <th scope="col" className="py-2 px-3">Теги / статус</th>
-                  <th scope="col" className="py-2 px-3">Комментарий / Отдел</th>
+                  <th scope="col" className="py-3 px-4">Имя / Описание</th>
+                  <th scope="col" className="py-3 px-4">Телефоны / Ext</th>
+                  <th scope="col" className="py-3 px-4">Компания / должность</th>
+                  <th scope="col" className="py-3 px-4">Теги / статус</th>
+                  <th scope="col" className="py-3 px-4">Комментарий / Отдел</th>
                   <th scope="col" className="py-3 px-4 text-right">Действия</th>
                 </tr>
               </thead>

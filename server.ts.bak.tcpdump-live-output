@@ -6,7 +6,7 @@ import mysql from 'mysql2/promise';
 import bcrypt from 'bcryptjs';
 import dotenv from 'dotenv';
 import net from 'net';
-import { spawn, spawnSync } from 'child_process';
+import { spawn } from 'child_process';
 import crypto from 'crypto';
 import http from 'http';
 import https from 'https';
@@ -3442,11 +3442,6 @@ app.post('/api/diagnostics/tcpdump/start', async (req, res) => {
       filter = '(port 5060 or port 5061 or udp portrange 20000-40000)';
     }
 
-    const customTcpdumpFilter = String(req.query.filter || '').trim();
-    if (customTcpdumpFilter) {
-      filter = customTcpdumpFilter;
-    }
-
     const dir = path.join(process.cwd(), 'data', 'pcap');
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
@@ -3455,7 +3450,7 @@ app.post('/api/diagnostics/tcpdump/start', async (req, res) => {
     tcpdumpFilePath = path.join(dir, filename);
     tcpdumpStartedAt = new Date().toISOString();
 
-    const args = ['-i', iface, '-s', '0', '-U', '-w', tcpdumpFilePath, filter];
+    const args = ['-i', iface, '-s', '0', '-w', tcpdumpFilePath, filter];
 
     tcpdumpProcess = spawn('tcpdump', args, {
       stdio: ['ignore', 'ignore', 'pipe']
@@ -3550,31 +3545,6 @@ app.get('/api/diagnostics/tcpdump/download/:filename', async (req, res) => {
     res.download(filepath, filename);
   } catch (e: any) {
     res.status(500).send(e.message || String(e));
-  }
-});
-
-
-app.get('/api/diagnostics/tcpdump/output', async (req, res) => {
-  try {
-    if (!tcpdumpFilePath || !fs.existsSync(tcpdumpFilePath)) {
-      return res.json({ success: true, output: 'PCAP файл ещё не создан или tcpdump не запущен' });
-    }
-
-    const result = spawnSync('tcpdump', ['-nn', '-tttt', '-A', '-r', tcpdumpFilePath], {
-      encoding: 'utf8',
-      maxBuffer: 1024 * 1024
-    });
-
-    const out = [result.stdout || '', result.stderr || ''].join('\n').trim();
-
-    res.json({
-      success: true,
-      running: !!tcpdumpProcess,
-      file: tcpdumpFilePath,
-      output: out || 'Пакетов пока нет'
-    });
-  } catch (e) {
-    res.status(500).json({ success: false, error: e.message || String(e) });
   }
 });
 

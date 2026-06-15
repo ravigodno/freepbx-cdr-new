@@ -3442,11 +3442,6 @@ app.post('/api/diagnostics/tcpdump/start', async (req, res) => {
       filter = '(port 5060 or port 5061 or udp portrange 20000-40000)';
     }
 
-    const customTcpdumpFilter = String(req.query.filter || '').trim();
-    if (customTcpdumpFilter) {
-      filter = customTcpdumpFilter;
-    }
-
     const dir = path.join(process.cwd(), 'data', 'pcap');
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 

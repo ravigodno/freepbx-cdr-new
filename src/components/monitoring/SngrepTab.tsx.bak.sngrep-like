@@ -1,0 +1,243 @@
+import React, { useEffect, useMemo, useState } from 'react';
+
+interface Props {
+  tcpdumpOutput: string;
+  loadTcpdumpOutput: () => void;
+}
+
+type SipEvent = {
+  time: string;
+  direction: string;
+  event: string;
+  meaning: string;
+  raw: string;
+};
+
+type SipDialog = {
+  id: string;
+  title: string;
+  from: string;
+  to: string;
+  status: string;
+  statusClass: string;
+  events: SipEvent[];
+};
+
+function getHeader(block: string, names: string[]) {
+  for (const name of names) {
+    const m = block.match(new RegExp('^' + name + ':\\\\s*([^\\r\\n]+)', 'im'));
+    if (m) return m[1].trim();
+  }
+  return '';
+}
+
+function extractNumber(header: string) {
+  return (
+    header.match(/sip:([^@>;]+)/i)?.[1] ||
+    header.match(/"([^"]+)"/)?.[1] ||
+    header.match(/<([^>]+)>/)?.[1] ||
+    header ||
+    '—'
+  );
+}
+
+function eventInfo(block: string) {
+  if (/INVITE/i.test(block)) return ['INVITE', 'Начало вызова'];
+  if (/100 Trying/i.test(block)) return ['100 Trying', 'АТС приняла вызов в обработку'];
+  if (/180 Ringing/i.test(block)) return ['180 Ringing', 'Телефон звонит'];
+  if (/183 Session Progress/i.test(block)) return ['183 Progress', 'Ранний медиа/гудки'];
+  if (/200 OK/i.test(block)) return ['200 OK', 'Ответ или успешное завершение команды'];
+  if (/401 Unauthorized/i.test(block)) return ['401 Auth', 'Нормальная SIP-авторизация, не ошибка'];
+  if (/403 Forbidden/i.test(block)) return ['403 Forbidden', 'Запрещено провайдером или АТС'];
+  if (/404 Not Found/i.test(block)) return ['404 Not Found', 'Номер/маршрут не найден'];
+  if (/486 Busy/i.test(block)) return ['486 Busy', 'Абонент занят'];
+  if (/487 Request Terminated/i.test(block)) return ['487 Terminated', 'Вызов отменён до ответа'];
+  if (/603 Decline/i.test(block)) return ['603 Decline', 'Вызов отклонён'];
+  if (/CANCEL/i.test(block)) return ['CANCEL', 'Инициатор отменил вызов'];
+  if (/BYE/i.test(block)) return ['BYE', 'Разговор завершён'];
+  if (/ACK/i.test(block)) return ['ACK', 'Подтверждение SIP-сообщения'];
+  return ['SIP', 'SIP-сообщение'];
+}
+
+function eventClass(event: string) {
+  if (event.includes('200')) return 'bg-emerald-50 text-emerald-700 border-emerald-100';
+  if (event.includes('403') || event.includes('404') || event.includes('486') || event.includes('487') || event.includes('603')) {
+    return 'bg-rose-50 text-rose-700 border-rose-100';
+  }
+  if (event.includes('180') || event.includes('183')) return 'bg-amber-50 text-amber-700 border-amber-100';
+  if (event.includes('401')) return 'bg-slate-50 text-slate-600 border-slate-200';
+  if (event.includes('INVITE')) return 'bg-blue-50 text-blue-700 border-blue-100';
+  if (event.includes('CANCEL') || event.includes('BYE')) return 'bg-zinc-50 text-zinc-700 border-zinc-200';
+  return 'bg-slate-50 text-slate-700 border-slate-200';
+}
+
+function splitPackets(output: string) {
+  const blocks: string[] = [];
+  let current: string[] = [];
+
+  for (const line of (output || '').split('\n')) {
+    if (/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d+/.test(line)) {
+      if (current.length) blocks.push(current.join('\n'));
+      current = [line];
+    } else if (current.length) {
+      current.push(line);
+    }
+  }
+
+  if (current.length) blocks.push(current.join('\n'));
+  return blocks;
+}
+
+export default function SngrepTab({ tcpdumpOutput, loadTcpdumpOutput }: Props) {
+  const [message, setMessage] = useState('');
+  const [showRaw, setShowRaw] = useState(false);
+
+  useEffect(() => {
+    loadTcpdumpOutput();
+    const t = setInterval(loadTcpdumpOutput, 2000);
+    return () => clearInterval(t);
+  }, []);
+
+  const startCapture = async (mode: string) => {
+    setMessage('Запускаю захват...');
+    const res = await fetch('/api/diagnostics/tcpdump/start?mode=' + mode + '&iface=any', { method: 'POST' });
+    const data = await res.json();
+    setMessage(data.success ? 'Захват запущен. Сделайте звонок.' : 'Ошибка: ' + (data.error || 'tcpdump'));
+    setTimeout(loadTcpdumpOutput, 1000);
+  };
+
+  const stopCapture = async () => {
+    setMessage('Останавливаю захват...');
+    const res = await fetch('/api/diagnostics/tcpdump/stop', { method: 'POST' });
+    const data = await res.json();
+    setMessage(data.success ? 'Захват остановлен' : 'Ошибка остановки');
+    setTimeout(loadTcpdumpOutput, 1000);
+  };
+
+  const dialogs = useMemo(() => {
+    const map = new Map<string, SipDialog>();
+
+    for (const block of splitPackets(tcpdumpOutput)) {
+      if (!/INVITE|Trying|Ringing|Session Progress|200 OK|401 Unauthorized|403|404|486|487|603|CANCEL|BYE|ACK/i.test(block)) continue;
+      if (/OPTIONS/i.test(block)) continue;
+
+      const firstLine = block.split('\n')[0] || '';
+      const time = firstLine.match(/^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})/)?.[1] || '—';
+      const directionMatch = firstLine.match(/IP\s+([^\s]+)\s+>\s+([^:]+):/);
+      const direction = directionMatch ? `${directionMatch[1]} → ${directionMatch[2]}` : '—';
+
+      const callId =
+        getHeader(block, ['Call-ID', 'i']) ||
+        direction + '-' + (getHeader(block, ['CSeq']) || time);
+
+      const fromHeader = getHeader(block, ['From', 'f']);
+      const toHeader = getHeader(block, ['To', 't']);
+
+      const from = extractNumber(fromHeader);
+      const to = extractNumber(toHeader);
+
+      const [event, meaning] = eventInfo(block);
+
+      if (!map.has(callId)) {
+        map.set(callId, {
+          id: callId,
+          title: `${from} → ${to}`,
+          from,
+          to,
+          status: 'Идёт вызов',
+          statusClass: 'bg-blue-50 text-blue-700 border-blue-100',
+          events: []
+        });
+      }
+
+      const dialog = map.get(callId)!;
+      dialog.events.push({ time, direction, event, meaning, raw: firstLine });
+
+      const allEvents = dialog.events.map(e => e.event).join(' ');
+      if (/403|404|486|487|603/.test(allEvents)) {
+        dialog.status = 'Ошибка / отменён';
+        dialog.statusClass = 'bg-rose-50 text-rose-700 border-rose-100';
+      } else if (allEvents.includes('BYE')) {
+        dialog.status = 'Завершён';
+        dialog.statusClass = 'bg-slate-50 text-slate-700 border-slate-200';
+      } else if (allEvents.includes('200 OK') && allEvents.includes('ACK')) {
+        dialog.status = 'Ответ / разговор';
+        dialog.statusClass = 'bg-emerald-50 text-emerald-700 border-emerald-100';
+      } else if (allEvents.includes('180 Ringing')) {
+        dialog.status = 'Звонит';
+        dialog.statusClass = 'bg-amber-50 text-amber-700 border-amber-100';
+      } else if (allEvents.includes('CANCEL')) {
+        dialog.status = 'Отменён';
+        dialog.statusClass = 'bg-zinc-50 text-zinc-700 border-zinc-200';
+      }
+    }
+
+    return Array.from(map.values()).reverse();
+  }, [tcpdumpOutput]);
+
+  return (
+    <div className="p-4">
+      <div className="flex items-center justify-between mb-4 gap-3">
+        <div>
+          <h3 className="text-sm font-black">SNGREP — понятный SIP-анализ</h3>
+          <div className="text-xs text-slate-500 mt-1">
+            Один блок — один звонок. 401 Auth обычно нормален: это SIP-авторизация.
+          </div>
+          {message && <div className="text-xs font-bold text-indigo-700 mt-2">{message}</div>}
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <button onClick={() => startCapture('sip')} className="px-3 py-2 rounded-lg bg-blue-50 text-blue-700 border border-blue-100 text-xs font-bold">Запустить SIP</button>
+          <button onClick={() => startCapture('siprtp')} className="px-3 py-2 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-100 text-xs font-bold">SIP+RTP</button>
+          <button onClick={stopCapture} className="px-3 py-2 rounded-lg bg-rose-50 text-rose-700 border border-rose-100 text-xs font-bold">Стоп</button>
+          <button onClick={loadTcpdumpOutput} className="px-3 py-2 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-100 text-xs font-bold">Обновить</button>
+          <button onClick={() => setShowRaw(!showRaw)} className="px-3 py-2 rounded-lg bg-slate-50 text-slate-700 border border-slate-200 text-xs font-bold">
+            {showRaw ? 'Скрыть RAW' : 'Показать RAW'}
+          </button>
+        </div>
+      </div>
+
+      {dialogs.length === 0 ? (
+        <div className="rounded-xl border bg-white p-8 text-center text-slate-400 text-xs">
+          SIP-диалогов пока нет. Нажмите «Запустить SIP», сделайте звонок и подождите 2 секунды.
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+          {dialogs.map((dialog) => (
+            <div key={dialog.id} className="rounded-xl border bg-white overflow-hidden">
+              <div className="p-3 bg-slate-50 border-b flex justify-between gap-3">
+                <div>
+                  <div className="text-lg font-black">{dialog.title}</div>
+                  <div className="text-[11px] text-slate-500 font-mono break-all">Call-ID: {dialog.id}</div>
+                </div>
+                <span className={'h-fit px-2 py-1 rounded-full border text-[10px] font-black ' + dialog.statusClass}>
+                  {dialog.status}
+                </span>
+              </div>
+
+              <div className="p-3 space-y-2">
+                {dialog.events.map((ev, idx) => (
+                  <div key={idx} className="flex gap-3 text-xs">
+                    <div className="w-20 shrink-0 font-mono text-slate-400">{ev.time.split(' ')[1] || ev.time}</div>
+                    <div className="w-2 flex flex-col items-center">
+                      <div className="h-2 w-2 rounded-full bg-indigo-500 mt-1" />
+                      {idx < dialog.events.length - 1 && <div className="w-px flex-1 bg-slate-200 mt-1" />}
+                    </div>
+                    <div className="min-w-0">
+                      <span className={'inline-block px-2 py-0.5 rounded-full border text-[10px] font-black ' + eventClass(ev.event)}>
+                        {ev.event}
+                      </span>
+                      <div className="mt-1 font-bold text-slate-700">{ev.meaning}</div>
+                      <div className="font-mono text-[10px] text-slate-400 break-all">{ev.direction}</div>
+                      {showRaw && <div className="mt-1 font-mono text-[10px] text-slate-500 break-all">{ev.raw}</div>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}

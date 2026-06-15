@@ -1,0 +1,114 @@
+import React, { useEffect, useState } from 'react';
+
+interface Props {
+  tcpdumpOutput: string;
+  loadTcpdumpOutput: () => void;
+}
+
+export default function SngrepTab({ tcpdumpOutput, loadTcpdumpOutput }: Props) {
+  const [message, setMessage] = useState('');
+
+  useEffect(() => {
+    loadTcpdumpOutput();
+    const t = setInterval(loadTcpdumpOutput, 2000);
+    return () => clearInterval(t);
+  }, []);
+
+  const startCapture = async (mode: string) => {
+    setMessage('Запускаю захват ' + mode + '...');
+    const res = await fetch('/api/diagnostics/tcpdump/start?mode=' + mode + '&iface=any', { method: 'POST' });
+    const data = await res.json();
+    setMessage(data.success ? 'Захват запущен: ' + mode : 'Ошибка: ' + (data.error || 'tcpdump'));
+    setTimeout(loadTcpdumpOutput, 1000);
+  };
+
+  const stopCapture = async () => {
+    setMessage('Останавливаю захват...');
+    const res = await fetch('/api/diagnostics/tcpdump/stop', { method: 'POST' });
+    const data = await res.json();
+    setMessage(data.success ? 'Захват остановлен' : 'Ошибка остановки');
+    setTimeout(loadTcpdumpOutput, 1000);
+  };
+
+  const lines = (tcpdumpOutput || '')
+    .split('\n')
+    .filter((line) =>
+      /INVITE|Trying|Ringing|200 OK|401 Unauthorized|403|404|486|487|603|CANCEL|BYE|ACK/i.test(line)
+    );
+
+  const eventName = (line: string) => {
+    if (line.includes('INVITE')) return 'INVITE';
+    if (line.includes('100 Trying')) return '100 Trying';
+    if (line.includes('180 Ringing')) return '180 Ringing';
+    if (line.includes('200 OK')) return '200 OK';
+    if (line.includes('401 Unauthorized')) return '401 Unauthorized';
+    if (line.includes('CANCEL')) return 'CANCEL';
+    if (line.includes('BYE')) return 'BYE';
+    if (line.includes('ACK')) return 'ACK';
+    if (line.includes('486')) return '486 Busy';
+    if (line.includes('487')) return '487 Terminated';
+    if (line.includes('603')) return '603 Decline';
+    if (line.includes('403')) return '403 Forbidden';
+    if (line.includes('404')) return '404 Not Found';
+    return 'SIP';
+  };
+
+  return (
+    <div className="p-4">
+      <div className="flex items-center justify-between mb-4 gap-3">
+        <div>
+          <h3 className="text-sm font-black">SNGREP — SIP диалоги</h3>
+          <div className="text-xs text-slate-500 mt-1">
+            Запустите SIP Capture, сделайте звонок — события появятся автоматически.
+          </div>
+          {message && <div className="text-xs font-bold text-indigo-700 mt-2">{message}</div>}
+        </div>
+
+        <div className="flex gap-2">
+          <button onClick={() => startCapture('sip')} className="px-3 py-2 rounded-lg bg-blue-50 text-blue-700 border border-blue-100 text-xs font-bold">Запустить SIP</button>
+          <button onClick={() => startCapture('siprtp')} className="px-3 py-2 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-100 text-xs font-bold">SIP+RTP</button>
+          <button onClick={stopCapture} className="px-3 py-2 rounded-lg bg-rose-50 text-rose-700 border border-rose-100 text-xs font-bold">Стоп</button>
+          <button onClick={loadTcpdumpOutput} className="px-3 py-2 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-100 text-xs font-bold">Обновить</button>
+        </div>
+      </div>
+
+      <div className="rounded-xl border overflow-hidden bg-white">
+        <table className="w-full text-xs">
+          <thead className="bg-slate-50">
+            <tr>
+              <th className="p-2 text-left">Время</th>
+              <th className="p-2 text-left">Источник → Назначение</th>
+              <th className="p-2 text-left">Событие</th>
+              <th className="p-2 text-left">Строка</th>
+            </tr>
+          </thead>
+          <tbody>
+            {lines.map((line, idx) => {
+              const time = line.match(/^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d+)/)?.[1] || '—';
+              const direction = line.match(/IP\s+([^\s]+)\s+>\s+([^:]+):/);
+              const fromTo = direction ? `${direction[1]} → ${direction[2]}` : '—';
+              const event = eventName(line);
+
+              return (
+                <tr key={idx} className="border-t">
+                  <td className="p-2 font-mono whitespace-nowrap">{time}</td>
+                  <td className="p-2 font-mono">{fromTo}</td>
+                  <td className="p-2 font-black">{event}</td>
+                  <td className="p-2 font-mono break-all text-slate-500">{line}</td>
+                </tr>
+              );
+            })}
+
+            {lines.length === 0 && (
+              <tr>
+                <td colSpan={4} className="p-8 text-center text-slate-400">
+                  SIP событий пока нет. Нажмите «Запустить SIP» и сделайте звонок.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
