@@ -3578,6 +3578,400 @@ app.get('/api/diagnostics/tcpdump/output', async (req, res) => {
   }
 });
 
+
+const allowedAsteriskCliCommands = [
+  'core show channels',
+  'core show channels concise',
+  'core show channels verbose',
+  'core show channel',
+  'core show calls',
+  'core show uptime',
+  'core show version',
+  'core show settings',
+  'core show codecs',
+  'core show codec',
+  'core show applications',
+  'core show application',
+  'core show functions',
+  'core show function',
+  'core show hints',
+  'core show hint',
+
+  'sip show peers',
+  'sip show peer',
+  'sip show registry',
+  'sip show channels',
+  'sip show channel',
+  'sip show settings',
+  'sip show users',
+  'sip show user',
+
+  'pjsip show endpoints',
+  'pjsip show endpoint',
+  'pjsip show registrations',
+  'pjsip show registration',
+  'pjsip show contacts',
+  'pjsip show contact',
+  'pjsip show channels',
+  'pjsip show channel',
+  'pjsip show transports',
+  'pjsip show identifies',
+  'pjsip show aors',
+  'pjsip show auths',
+
+  'queue show',
+  'queue show rules',
+
+  'bridge show all',
+  'bridge show',
+
+  'rtp show settings',
+  'rtp show channels',
+
+  'manager show connected',
+  'manager show settings',
+  'manager show users',
+  'manager show user',
+
+  'dialplan show',
+  'dialplan show cdr-panel-click2call',
+  'core show dialplan',
+
+  'voicemail show users',
+  'voicemail show zones',
+
+  'meetme list',
+  'confbridge list',
+
+  'parking show',
+  'features show',
+
+  'iax2 show peers',
+  'iax2 show registry',
+  'iax2 show channels',
+
+  'module show',
+  'module show like',
+
+  'logger show channels',
+
+  'database show',
+  'database showkey'
+]
+
+app.post('/api/asterisk/cli', async (req, res) => {
+  try {
+    const command = String(req.body?.command || '').trim();
+
+    if (!command) {
+      return res.status(400).json({ success: false, error: 'Команда не указана' });
+    }
+
+    const isAllowed = allowedAsteriskCliCommands.some((allowed) =>
+      command === allowed || command.startsWith(allowed + ' ')
+    );
+
+    if (!isAllowed) {
+      return res.status(403).json({
+        success: false,
+        error: 'Команда не разрешена в веб-интерфейсе',
+        allowed: allowedAsteriskCliCommands
+      });
+    }
+
+    const db = JSON.parse(fs.readFileSync('/opt/asterisk-cdr-panel/data/db.json', 'utf8'));
+    const settings = db.settings || {};
+    const result = await runAMICommand(settings, command);
+
+    res.json({
+      success: result.success,
+      command,
+      output: result.message || '',
+      executedAt: new Date().toISOString()
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message || String(e) });
+  }
+});
+
+app.get('/api/asterisk/cli/commands', async (req, res) => {
+  res.json({ success: true, commands: allowedAsteriskCliCommands });
+});
+
+
+const allowedFwconsoleCommands = [
+  'fwconsole --version',
+  'fwconsole list',
+  'fwconsole ma list',
+  'fwconsole ma listonline',
+  'fwconsole ma show',
+  'fwconsole setting',
+  'fwconsole trunks',
+  'fwconsole endpoints',
+  'fwconsole reload',
+  'fwconsole chown',
+  'fwconsole certificates',
+  'fwconsole firewall list',
+  'fwconsole job --list',
+  'fwconsole notification --list',
+  'fwconsole pm2 --list',
+  'fwconsole sysadmin',
+  'fwconsole validate',
+  'fwconsole restart',
+  'fwconsole stop',
+  'fwconsole start'
+];
+
+const dangerousFwconsoleCommands = [
+  'fwconsole ma delete',
+  'fwconsole ma remove',
+  'fwconsole ma uninstall',
+  'fwconsole ma downloadinstall',
+  'fwconsole ma install',
+  'fwconsole ma upgrade',
+  'fwconsole ma upgradeall',
+  'fwconsole dbug',
+  'fwconsole unlock',
+  'fwconsole mysql',
+  'fwconsole migrate',
+  'fwconsole backup',
+  'fwconsole restore'
+];
+
+app.post('/api/freepbx/fwconsole', async (req, res) => {
+  try {
+    const command = String(req.body?.command || '').trim();
+
+    if (!command) {
+      return res.status(400).json({ success: false, error: 'Команда не указана' });
+    }
+
+    if (!command.startsWith('fwconsole')) {
+      return res.status(403).json({ success: false, error: 'Разрешены только команды fwconsole' });
+    }
+
+    const isDangerous = dangerousFwconsoleCommands.some((bad) =>
+      command === bad || command.startsWith(bad + ' ')
+    );
+
+    if (isDangerous) {
+      return res.status(403).json({
+        success: false,
+        error: 'Команда заблокирована как потенциально опасная'
+      });
+    }
+
+    const isAllowed = allowedFwconsoleCommands.some((allowed) =>
+      command === allowed || command.startsWith(allowed + ' ')
+    );
+
+    if (!isAllowed) {
+      return res.status(403).json({
+        success: false,
+        error: 'Команда не разрешена в веб-интерфейсе',
+        allowed: allowedFwconsoleCommands
+      });
+    }
+
+    const result = spawnSync(command, {
+      shell: true,
+      encoding: 'utf8',
+      timeout: 30000,
+      maxBuffer: 1024 * 1024 * 3
+    });
+
+    res.json({
+      success: result.status === 0,
+      command,
+      output: [result.stdout || '', result.stderr || ''].join('\n').trim(),
+      exitCode: result.status,
+      executedAt: new Date().toISOString()
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message || String(e) });
+  }
+});
+
+app.get('/api/freepbx/fwconsole/commands', async (req, res) => {
+  res.json({ success: true, commands: allowedFwconsoleCommands });
+});
+
+
+
+function getDbExplorerSettings() {
+  const localDb = JSON.parse(fs.readFileSync('/opt/asterisk-cdr-panel/data/db.json', 'utf8'));
+  return localDb.settings || {};
+}
+
+const DB_EXPLORER_ALLOWED_DATABASES = ['asteriskcdrdb', 'asterisk'];
+const DB_EXPLORER_ALLOWED_TABLES = [
+  'cdr',
+  'cel',
+  'queue_log',
+  'sip',
+  'ps_endpoints',
+  'ps_auths',
+  'ps_aors',
+  'ps_contacts',
+  'devices',
+  'users',
+  'trunks',
+  'incoming',
+  'outbound_routes',
+  'extensions',
+  'queues_config',
+  'queues_details'
+];
+
+function isSafeSelectSql(sql) {
+  const q = String(sql || '').trim();
+  if (!/^select\s+/i.test(q)) return false;
+  if (/;\s*\S+/i.test(q)) return false;
+  if (/\b(insert|update|delete|drop|truncate|alter|create|replace|grant|revoke|load_file|outfile|dumpfile)\b/i.test(q)) return false;
+  return true;
+}
+
+app.get('/api/db-explorer/tables', async (req, res) => {
+  try {
+    const result = {};
+
+    for (const databaseName of DB_EXPLORER_ALLOWED_DATABASES) {
+      const rows = await queryFreePBXCDR(
+        getDbExplorerSettings(),
+        false,
+        'SELECT TABLE_NAME AS name FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME',
+        [databaseName]
+      );
+
+      result[databaseName] = rows
+        .map((r) => r.name)
+        .filter((name) => DB_EXPLORER_ALLOWED_TABLES.includes(name));
+    }
+
+    res.json({ success: true, databases: result });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message || String(e) });
+  }
+});
+
+app.get('/api/db-explorer/columns', async (req, res) => {
+  try {
+    const databaseName = String(req.query.database || '').trim();
+    const tableName = String(req.query.table || '').trim();
+
+    if (!DB_EXPLORER_ALLOWED_DATABASES.includes(databaseName)) {
+      return res.status(400).json({ success: false, error: 'База не разрешена' });
+    }
+
+    if (!DB_EXPLORER_ALLOWED_TABLES.includes(tableName)) {
+      return res.status(400).json({ success: false, error: 'Таблица не разрешена' });
+    }
+
+    const rows = await queryFreePBXCDR(
+      getDbExplorerSettings(),
+      false,
+      'SELECT COLUMN_NAME AS name, DATA_TYPE AS type FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION',
+      [databaseName, tableName]
+    );
+
+    res.json({ success: true, columns: rows });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message || String(e) });
+  }
+});
+
+app.post('/api/db-explorer/query', async (req, res) => {
+  try {
+    const sql = String(req.body?.sql || '').trim();
+    const limit = Math.min(Number(req.body?.limit || 200), 1000);
+
+    if (!isSafeSelectSql(sql)) {
+      return res.status(403).json({
+        success: false,
+        error: 'Разрешены только безопасные SELECT-запросы без изменения данных'
+      });
+    }
+
+    const limitedSql = /\blimit\s+\d+/i.test(sql) ? sql : sql + ' LIMIT ' + limit;
+
+    const rows = await queryFreePBXCDR(getDbExplorerSettings(), false, limitedSql, []);
+    const columns = rows.length ? Object.keys(rows[0]) : [];
+
+    res.json({
+      success: true,
+      sql: limitedSql,
+      columns,
+      rows,
+      count: rows.length,
+      executedAt: new Date().toISOString()
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message || String(e) });
+  }
+});
+
+app.get('/api/db-explorer/cdr/by-uid/:uid', async (req, res) => {
+  try {
+    const uid = String(req.params.uid || '').trim();
+
+
+    const rows = await queryFreePBXCDR(
+      getDbExplorerSettings(),
+      false,
+      'SELECT uniqueid, linkedid, calldate, clid, src, dst, dcontext, channel, dstchannel, lastapp, lastdata, duration, billsec, disposition, recordingfile, did, cnum, cnam, outbound_cnum FROM asteriskcdrdb.cdr WHERE uniqueid = ? OR linkedid = ? ORDER BY calldate ASC LIMIT 500',
+      [uid, uid]
+    );
+
+    res.json({ success: true, rows, count: rows.length });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message || String(e) });
+  }
+});
+
+app.get('/api/db-explorer/cdr/search', async (req, res) => {
+  try {
+    const from = String(req.query.from || '').trim();
+    const to = String(req.query.to || '').trim();
+    const number = String(req.query.number || '').trim();
+    const disposition = String(req.query.disposition || '').trim();
+
+    const where = [];
+    const params = [];
+
+    if (from) {
+      where.push('calldate >= ?');
+      params.push(from);
+    }
+
+    if (to) {
+      where.push('calldate <= ?');
+      params.push(to);
+    }
+
+    if (number) {
+      where.push('(src LIKE ? OR dst LIKE ? OR cnum LIKE ? OR did LIKE ? OR outbound_cnum LIKE ?)');
+      const n = '%' + number + '%';
+      params.push(n, n, n, n, n);
+    }
+
+    if (disposition) {
+      where.push('disposition = ?');
+      params.push(disposition);
+    }
+
+    const sql =
+      'SELECT uniqueid, linkedid, calldate, clid, src, dst, dcontext, channel, dstchannel, lastapp, lastdata, duration, billsec, disposition, recordingfile, did, cnum, cnam, outbound_cnum FROM asteriskcdrdb.cdr ' +
+      (where.length ? 'WHERE ' + where.join(' AND ') : '') +
+      ' ORDER BY calldate DESC LIMIT 500';
+
+    const rows = await queryFreePBXCDR(getDbExplorerSettings(), false, sql, params);
+
+    res.json({ success: true, rows, count: rows.length });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message || String(e) });
+  }
+});
+
 // FRONTEND DEV / PRODUCTION INTEGRATION HANDLER
 async function startServer() {
   if (NODE_ENV === 'development') {

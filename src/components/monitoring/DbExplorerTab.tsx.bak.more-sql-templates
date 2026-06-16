@@ -1,0 +1,243 @@
+import React, { useState } from 'react';
+
+type Row = Record<string, any>;
+
+function toCsv(rows: Row[]) {
+  if (!rows.length) return '';
+  const cols = Object.keys(rows[0]);
+  const esc = (v: any) => '"' + String(v ?? '').replace(/"/g, '""') + '"';
+  return [cols.join(','), ...rows.map(r => cols.map(c => esc(r[c])).join(','))].join('\n');
+}
+
+export default function DbExplorerTab() {
+  const [uid, setUid] = useState('');
+  const [number, setNumber] = useState('');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const [disposition, setDisposition] = useState('');
+  const [sql, setSql] = useState('SELECT uniqueid, linkedid, calldate, src, dst, duration, billsec, disposition FROM asteriskcdrdb.cdr ORDER BY calldate DESC LIMIT 50');
+  const [rows, setRows] = useState<Row[]>([]);
+  const [columns, setColumns] = useState<string[]>([]);
+  const [message, setMessage] = useState('');
+
+  const setResult = (data: any) => {
+    if (!data.success) {
+      setMessage(data.error || 'Ошибка запроса');
+      return;
+    }
+    const resultRows = data.rows || [];
+    setRows(resultRows);
+    setColumns(data.columns || (resultRows[0] ? Object.keys(resultRows[0]) : []));
+    setMessage(`Найдено строк: ${data.count ?? resultRows.length}`);
+  };
+
+  const searchByUid = async () => {
+    if (!uid.trim()) return setMessage('Укажи uniqueid или linkedid');
+    const res = await fetch('/api/db-explorer/cdr/by-uid/' + encodeURIComponent(uid.trim()));
+    setResult(await res.json());
+  };
+
+  const searchCdr = async () => {
+    const p = new URLSearchParams();
+    if (from) p.set('from', from);
+    if (to) p.set('to', to);
+    if (number) p.set('number', number);
+    if (disposition) p.set('disposition', disposition);
+
+    const res = await fetch('/api/db-explorer/cdr/search?' + p.toString());
+    setResult(await res.json());
+  };
+
+  const runSql = async () => {
+    const res = await fetch('/api/db-explorer/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sql, limit: 300 })
+    });
+    setResult(await res.json());
+  };
+
+  const saveCsv = () => {
+    const blob = new Blob([toCsv(rows)], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+
+    a.href = url;
+    a.download = 'db-explorer-' + new Date().toISOString().replace(/[:.]/g, '-') + '.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+
+    URL.revokeObjectURL(url);
+  };
+
+  const templates = [
+    {
+      title: 'Последние CDR',
+      sql: 'SELECT uniqueid, linkedid, calldate, src, dst, duration, billsec, disposition FROM asteriskcdrdb.cdr ORDER BY calldate DESC LIMIT 100'
+    },
+    {
+      title: 'Пропущенные',
+      sql: "SELECT uniqueid, linkedid, calldate, src, dst, duration, billsec, disposition FROM asteriskcdrdb.cdr WHERE disposition <> 'ANSWERED' ORDER BY calldate DESC LIMIT 100"
+    },
+    {
+      title: 'Записи разговоров',
+      sql: "SELECT uniqueid, linkedid, calldate, src, dst, recordingfile FROM asteriskcdrdb.cdr WHERE recordingfile <> '' ORDER BY calldate DESC LIMIT 100"
+    },
+    {
+      title: 'CEL события',
+      sql: 'SELECT eventtime, eventtype, cid_num, exten, context, channame, appname, uniqueid, linkedid FROM asteriskcdrdb.cel ORDER BY eventtime DESC LIMIT 100'
+    },
+    {
+      title: 'Устройства',
+      sql: 'SELECT id, tech, dial, devicetype, user FROM asterisk.devices ORDER BY id LIMIT 100'
+    },
+    {
+      title: 'Пользователи',
+      sql: 'SELECT extension, name, voicemail FROM asterisk.users ORDER BY extension LIMIT 100'
+    },
+    {
+      title: 'Транки',
+      sql: 'SELECT * FROM asterisk.trunks LIMIT 100'
+    },
+    {
+      title: 'Входящие маршруты',
+      sql: 'SELECT * FROM asterisk.incoming LIMIT 100'
+    }
+  ];
+
+  return (
+    <div className="p-4 space-y-4">
+      <div>
+        <h3 className="text-sm font-black">DB Explorer</h3>
+        <div className="text-xs text-slate-500 mt-1">
+          Безопасный просмотр таблиц FreePBX/Asterisk. Разрешены только SELECT-запросы.
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <div className="rounded-xl border bg-white p-3 space-y-3">
+          <div className="font-black text-xs uppercase">Поиск CDR</div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <label className="text-xs font-bold">
+              UniqueID / LinkedID
+              <input value={uid} onChange={e => setUid(e.target.value)} className="mt-1 w-full border rounded-lg px-2 py-2 font-mono text-xs" />
+            </label>
+
+            <button onClick={searchByUid} className="self-end px-3 py-2 rounded-lg bg-blue-600 text-white text-xs font-black">
+              Найти по UID
+            </button>
+
+            <label className="text-xs font-bold">
+              Номер / DID / src / dst
+              <input value={number} onChange={e => setNumber(e.target.value)} className="mt-1 w-full border rounded-lg px-2 py-2 text-xs" />
+            </label>
+
+            <label className="text-xs font-bold">
+              Статус
+              <select value={disposition} onChange={e => setDisposition(e.target.value)} className="mt-1 w-full border rounded-lg px-2 py-2 text-xs">
+                <option value="">Любой</option>
+                <option value="ANSWERED">ANSWERED</option>
+                <option value="NO ANSWER">NO ANSWER</option>
+                <option value="BUSY">BUSY</option>
+                <option value="FAILED">FAILED</option>
+              </select>
+            </label>
+
+            <label className="text-xs font-bold">
+              С даты
+              <input type="datetime-local" value={from} onChange={e => setFrom(e.target.value)} className="mt-1 w-full border rounded-lg px-2 py-2 text-xs" />
+            </label>
+
+            <label className="text-xs font-bold">
+              По дату
+              <input type="datetime-local" value={to} onChange={e => setTo(e.target.value)} className="mt-1 w-full border rounded-lg px-2 py-2 text-xs" />
+            </label>
+          </div>
+
+          <button onClick={searchCdr} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-xs font-black">
+            Найти CDR
+          </button>
+        </div>
+
+        <div className="rounded-xl border bg-white p-3">
+          <div className="font-black text-xs uppercase mb-2">Шаблоны запросов</div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            {templates.map(t => (
+              <button
+                key={t.title}
+                onClick={() => setSql(t.sql)}
+                className="p-2 rounded-lg border bg-slate-50 hover:bg-blue-50 text-left"
+              >
+                <div className="text-xs font-black">{t.title}</div>
+                <div className="text-[10px] text-slate-500 font-mono truncate">{t.sql}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-xl border bg-white p-3 space-y-2">
+        <div className="font-black text-xs uppercase">SELECT запрос</div>
+        <textarea
+          value={sql}
+          onChange={e => setSql(e.target.value)}
+          className="w-full h-28 border rounded-lg p-2 font-mono text-xs"
+        />
+
+        <div className="flex gap-2">
+          <button onClick={runSql} className="px-3 py-2 rounded-lg bg-slate-900 text-white text-xs font-black">
+            Выполнить SELECT
+          </button>
+
+          <button onClick={saveCsv} disabled={!rows.length} className="px-3 py-2 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-100 text-xs font-black disabled:opacity-40">
+            Скачать CSV
+          </button>
+
+          <button onClick={() => { setRows([]); setColumns([]); setMessage('Окно очищено'); }} className="px-3 py-2 rounded-lg bg-slate-50 text-slate-700 border border-slate-200 text-xs font-black">
+            Очистить
+          </button>
+        </div>
+      </div>
+
+      {message && (
+        <div className="rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-100 px-3 py-2 text-xs font-bold">
+          {message}
+        </div>
+      )}
+
+      <div className="rounded-xl border bg-white overflow-auto max-h-[560px]">
+        <table className="w-full text-[11px] font-mono">
+          <thead className="bg-slate-100 sticky top-0">
+            <tr>
+              {columns.map(c => (
+                <th key={c} className="p-2 text-left whitespace-nowrap">{c}</th>
+              ))}
+            </tr>
+          </thead>
+
+          <tbody>
+            {rows.map((r, idx) => (
+              <tr key={idx} className="border-t hover:bg-blue-50">
+                {columns.map(c => (
+                  <td key={c} className="p-2 whitespace-nowrap max-w-[420px] truncate" title={String(r[c] ?? '')}>
+                    {String(r[c] ?? '')}
+                  </td>
+                ))}
+              </tr>
+            ))}
+
+            {!rows.length && (
+              <tr>
+                <td className="p-8 text-center text-slate-400" colSpan={Math.max(columns.length, 1)}>
+                  Нет данных
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}

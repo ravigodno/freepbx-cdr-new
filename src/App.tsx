@@ -56,6 +56,9 @@ import packageJson from '../package.json';
 import SngrepTab from './components/monitoring/SngrepTab';
 import TcpdumpTab from './components/monitoring/TcpdumpTab';
 import ActiveCallsTab from './components/monitoring/ActiveCallsTab';
+import AsteriskCliTab from './components/monitoring/AsteriskCliTab';
+import FreepbxCliTab from './components/monitoring/FreepbxCliTab';
+import DbExplorerTab from './components/monitoring/DbExplorerTab';
 
 
 
@@ -422,7 +425,10 @@ export default function App() {
   const [tcpdumpFiles, setTcpdumpFiles] = useState<any[]>([]);
   const [tcpdumpMessage, setTcpdumpMessage] = useState('');
   const [tcpdumpOutput, setTcpdumpOutput] = useState('');
-  const [monitorMode, setMonitorMode] = useState<'calls' | 'tcpdump' | 'sngrep'>('calls');
+  const [monitorMode, setMonitorMode] = useState<'calls' | 'tcpdump' | 'sngrep' | 'cli' | 'freepbx' | 'db'>(() => {
+    const saved = localStorage.getItem('asterisk_cdr_monitor_mode') as 'calls' | 'tcpdump' | 'sngrep' | 'cli' | 'freepbx' | 'db' | null;
+    return saved || 'calls';
+  });
 
   const [isSidebarExpanded, setIsSidebarExpanded] = useState<boolean>(() => {
     return localStorage.getItem('asterisk_cdr_sidebar_expanded') === 'true';
@@ -435,6 +441,10 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('asterisk_cdr_active_view', activeView);
   }, [activeView]);
+
+  useEffect(() => {
+    localStorage.setItem('asterisk_cdr_monitor_mode', monitorMode);
+  }, [monitorMode]);
 
   const [directory, setDirectory] = useState<DirectoryEntry[]>([]);
   const [isLoadingDirectory, setIsLoadingDirectory] = useState(false);
@@ -2623,6 +2633,23 @@ export default function App() {
   }, [activeView]);
 
   const renderMonitoringView = () => {
+    const monitoringTitle =
+      monitorMode === 'calls' ? 'Активные звонки' :
+      monitorMode === 'tcpdump' ? 'TCPDUMP / SIP-RTP' :
+      monitorMode === 'sngrep' ? 'SNGREP' :
+      monitorMode === 'cli' ? 'Asterisk CLI' :
+      monitorMode === 'freepbx' ? 'FreePBX CLI' :
+      monitorMode === 'db' ? 'DB Explorer' :
+      'Мониторинг';
+
+    const monitoringSubtitle =
+      monitorMode === 'calls' ? 'Источник: AMI → core show channels concise / verbose / queue show' :
+      monitorMode === 'tcpdump' ? 'Захват и анализ сетевого трафика SIP/RTP через tcpdump' :
+      monitorMode === 'sngrep' ? 'Анализ SIP-диалогов и событий сигнализации' :
+      monitorMode === 'cli' ? 'Безопасные команды Asterisk CLI через AMI' :
+      monitorMode === 'freepbx' ? 'Команды FreePBX fwconsole' :
+      monitorMode === 'db' ? 'Просмотр CDR/CEL и таблиц FreePBX/Asterisk' :
+      '';
     const sessions = liveSessionsData?.sessions || [];
     const q = liveSearch.trim().toLowerCase();
 
@@ -2864,40 +2891,10 @@ export default function App() {
 
     return (
       <section className="space-y-4 animate-fade-in">
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-          <div className="bg-white dark:bg-[#1e293b] border border-slate-200 dark:border-[#334155] rounded-xl p-4 shadow-xs">
-            <div className="text-xs font-bold text-slate-500">Активные каналы</div>
-            <div className="mt-2 text-2xl font-black text-slate-900 dark:text-white font-mono">{liveSessionsData?.summary?.total ?? 0}</div>
-          </div>
-
-          <div className="bg-white dark:bg-[#1e293b] border border-slate-200 dark:border-[#334155] rounded-xl p-4 shadow-xs">
-            <div className="text-xs font-bold text-slate-500">Звонков</div>
-            <div className="mt-2 text-2xl font-black text-indigo-600 font-mono">{filteredCalls.length}</div>
-          </div>
-
-          <div className="bg-white dark:bg-[#1e293b] border border-slate-200 dark:border-[#334155] rounded-xl p-4 shadow-xs">
-            <div className="text-xs font-bold text-slate-500">Разговор</div>
-            <div className="mt-2 text-2xl font-black text-emerald-600 font-mono">{liveSessionsData?.summary?.up ?? 0}</div>
-          </div>
-
-          <div className="bg-white dark:bg-[#1e293b] border border-slate-200 dark:border-[#334155] rounded-xl p-4 shadow-xs">
-            <div className="text-xs font-bold text-slate-500">Звонит</div>
-            <div className="mt-2 text-2xl font-black text-cyan-600 font-mono">{liveSessionsData?.summary?.ringing ?? 0}</div>
-          </div>
-
-          <div className="bg-white dark:bg-[#1e293b] border border-slate-200 dark:border-[#334155] rounded-xl p-4 shadow-xs">
-            <div className="text-xs font-bold text-slate-500">Обновление</div>
-            <div className="mt-2 text-xs font-bold text-slate-700 dark:text-slate-300">
-              {liveSessionsData?.summary?.updatedAt ? new Date(liveSessionsData.summary.updatedAt).toLocaleTimeString('ru-RU') : '—'}
-            </div>
-          </div>
-        </div>
-
         <div className="bg-white dark:bg-[#1e293b] border border-slate-200 dark:border-[#334155] rounded-xl shadow-xs overflow-hidden">
           <div className="p-4 border-b border-slate-200 dark:border-[#334155] flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
             <div>
-              <h2 className="text-sm font-black text-slate-900 dark:text-white">Мониторинг активных звонков</h2>
-            <div className="mt-3 flex gap-2">
+              <div className="mb-3 flex flex-wrap gap-2">
               <button
                 onClick={() => setMonitorMode('calls')}
                 className={`px-3 py-2 rounded-lg text-xs font-bold border ${monitorMode === 'calls'
@@ -2924,10 +2921,44 @@ export default function App() {
               >
                 SNGREP
               </button>
-            </div>
-              <p className="text-xs text-slate-500 mt-1">Источник: AMI → core show channels concise / verbose / queue show</p>
+
+              <button
+                onClick={() => setMonitorMode('cli')}
+                className={`px-3 py-2 rounded-lg text-xs font-bold border ${monitorMode === 'cli'
+                  ? 'bg-slate-900 text-white border-slate-900'
+                  : 'bg-white text-slate-600 border-slate-200'}`}
+              >
+                Asterisk CLI
+              </button>
+
+              <button
+                onClick={() => setMonitorMode('freepbx')}
+                className={`px-3 py-2 rounded-lg text-xs font-bold border ${monitorMode === 'freepbx'
+                  ? 'bg-purple-50 text-purple-700 border-purple-200'
+                  : 'bg-white text-slate-600 border-slate-200'}`}
+              >
+                FreePBX CLI
+              </button>
+
+              <button
+                onClick={() => setMonitorMode('db')}
+                className={`px-3 py-2 rounded-lg text-xs font-bold border ${monitorMode === 'db'
+                  ? 'bg-cyan-50 text-cyan-700 border-cyan-200'
+                  : 'bg-white text-slate-600 border-slate-200'}`}
+              >
+                DB Explorer
+              </button>
+              </div>
+
+              {monitorMode === 'calls' && (
+                <h2 className="text-sm font-black text-slate-900 dark:text-white">{monitoringTitle}</h2>
+              )}
+              {monitorMode === 'calls' && (
+                <p className="text-xs text-slate-500 mt-1">{monitoringSubtitle}</p>
+              )}
             </div>
 
+            {monitorMode === 'calls' && (
             <div className="flex flex-wrap items-center gap-2">
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
@@ -2970,8 +3001,8 @@ export default function App() {
                 Обновить
               </button>
             </div>
+            )}
           </div>
-
 
           {monitorMode === 'tcpdump' && (
             <TcpdumpTab />
@@ -2982,6 +3013,18 @@ export default function App() {
               tcpdumpOutput={tcpdumpOutput}
               loadTcpdumpOutput={loadTcpdumpOutput}
             />
+          )}
+
+          {monitorMode === 'cli' && (
+            <AsteriskCliTab />
+          )}
+
+          {monitorMode === 'freepbx' && (
+            <FreepbxCliTab />
+          )}
+
+          {monitorMode === 'db' && (
+            <DbExplorerTab />
           )}
 
           {snapshotStatus && (
@@ -3034,6 +3077,41 @@ export default function App() {
             <summary className="p-4 cursor-pointer text-xs font-bold text-slate-500">RAW: pjsip show channels</summary>
             <pre className="p-4 bg-slate-950 text-slate-100 text-[11px] overflow-auto max-h-[420px]">{liveSessionsData?.raw?.pjsipChannels || 'Нет данных'}</pre>
           </details>
+
+          {/* PBXPULS_ACTIVE_CALLS_BOTTOM_COUNTERS */}
+          {monitorMode === 'calls' && (
+            <div className="sticky bottom-0 z-20 border-t border-slate-200 dark:border-[#334155] bg-white/95 dark:bg-[#1e293b]/95 backdrop-blur px-4 py-3">
+              <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+                <div className="bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-[#334155] rounded-xl p-3">
+                  <div className="text-xs font-bold text-slate-500">Активные каналы</div>
+                  <div className="mt-1 text-xl font-black text-slate-900 dark:text-white font-mono">{liveSessionsData?.summary?.total ?? 0}</div>
+                </div>
+
+                <div className="bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-[#334155] rounded-xl p-3">
+                  <div className="text-xs font-bold text-slate-500">Звонков</div>
+                  <div className="mt-1 text-xl font-black text-indigo-600 font-mono">{filteredCalls.length}</div>
+                </div>
+
+                <div className="bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-[#334155] rounded-xl p-3">
+                  <div className="text-xs font-bold text-slate-500">Разговор</div>
+                  <div className="mt-1 text-xl font-black text-emerald-600 font-mono">{liveSessionsData?.summary?.up ?? 0}</div>
+                </div>
+
+                <div className="bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-[#334155] rounded-xl p-3">
+                  <div className="text-xs font-bold text-slate-500">Звонит</div>
+                  <div className="mt-1 text-xl font-black text-cyan-600 font-mono">{liveSessionsData?.summary?.ringing ?? 0}</div>
+                </div>
+
+                <div className="bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-[#334155] rounded-xl p-3">
+                  <div className="text-xs font-bold text-slate-500">Обновление</div>
+                  <div className="mt-1 text-xs font-bold text-slate-700 dark:text-slate-300">
+                    {liveSessionsData?.summary?.updatedAt ? new Date(liveSessionsData.summary.updatedAt).toLocaleTimeString('ru-RU') : '—'}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
         </div>
       </section>
     );
