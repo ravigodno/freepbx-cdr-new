@@ -124,7 +124,7 @@ export interface DirectoryEntry {
   name: string;
   number: string;              // primary phone/ext, kept for backward compatibility
   phones?: string[];           // all phones/exts attached to one contact
-  type: 'internal' | 'client';
+  type: 'internal' | 'client' | 'supplier' | 'government';
   company?: string;
   position?: string;
   department?: string;

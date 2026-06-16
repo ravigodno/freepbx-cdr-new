@@ -395,14 +395,17 @@ const normalizeDirectoryEntry = (entry: any, settings?: AppSettings): any => {
     ? entry.tags
     : String(entry?.tags || entry?.tag || '').split(/[;,|]+/);
   const tags = tagsRaw.map((t: any) => String(t || '').trim()).filter(Boolean);
-  const isInternal = entry?.type === 'internal' || (phones[0] && onlyDigits(phones[0]).length <= 5);
+  const rawType = String(entry?.type || '').trim().toLowerCase();
+  const allowedType = ['internal', 'client', 'supplier', 'government'].includes(rawType) ? rawType : '';
+  const isInternal = allowedType === 'internal' || (!allowedType && phones[0] && onlyDigits(phones[0]).length <= 5);
+  const normalizedType = allowedType || (isInternal ? 'internal' : 'client');
 
   return {
     id: entry?.id || ('dir_' + Date.now() + '_' + Math.floor(Math.random() * 100000)),
     name: String(entry?.name || entry?.fio || entry?.fullname || entry?.contact || '').trim(),
     number: phones[0] || String(entry?.number || '').trim(),
     phones,
-    type: isInternal ? 'internal' : 'client',
+    type: normalizedType,
     company: String(entry?.company || entry?.organization || entry?.org || '').trim(),
     department: String(entry?.department || '').trim(),
       position: String(entry?.position || entry?.job || entry?.title || '').trim(),
