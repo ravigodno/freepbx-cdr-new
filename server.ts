@@ -404,7 +404,8 @@ const normalizeDirectoryEntry = (entry: any, settings?: AppSettings): any => {
     phones,
     type: isInternal ? 'internal' : 'client',
     company: String(entry?.company || entry?.organization || entry?.org || '').trim(),
-    position: String(entry?.position || entry?.job || entry?.title || '').trim(),
+    department: String(entry?.department || '').trim(),
+      position: String(entry?.position || entry?.job || entry?.title || '').trim(),
     email: String(entry?.email || '').trim(),
     website: String(entry?.website || entry?.site || '').trim(),
     tags,
@@ -1470,7 +1471,8 @@ app.post('/api/directory', requireAuth(), async (req, res) => {
     const localDb = await readLocalDb();
     if (!localDb.directory) localDb.directory = [];
 
-    const newEntry = normalizeDirectoryEntry(req.body, localDb.settings);
+    const safeBody = { ...req.body, department: req.body.department || '' };
+    const newEntry = normalizeDirectoryEntry(safeBody, localDb.settings);
     if (!newEntry.name || !newEntry.phones.length) {
       res.status(400).json({ error: 'Поля Имя и хотя бы один телефон обязательны' });
       return;
@@ -1497,9 +1499,14 @@ app.put('/api/directory/:id', requireAuth(), async (req, res) => {
       return;
     }
 
+    const safeBody = {
+      ...req.body,
+      department: req.body.department || ''
+    };
+
     const updatedEntry = normalizeDirectoryEntry({
       ...localDb.directory[entryIdx],
-      ...req.body,
+      ...safeBody,
       id
     }, localDb.settings);
 

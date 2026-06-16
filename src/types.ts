@@ -127,6 +127,7 @@ export interface DirectoryEntry {
   type: 'internal' | 'client';
   company?: string;
   position?: string;
+  department?: string;
   email?: string;
   website?: string;
   tags?: string[];

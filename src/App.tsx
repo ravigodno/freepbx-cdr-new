@@ -455,6 +455,7 @@ export default function App() {
   const [dirPhonesText, setDirPhonesText] = useState('');
   const [dirCompany, setDirCompany] = useState('');
   const [dirPosition, setDirPosition] = useState('');
+  const [dirDepartment, setDirDepartment] = useState('');
   const [dirEmail, setDirEmail] = useState('');
   const [dirWebsite, setDirWebsite] = useState('');
   const [dirTagsText, setDirTagsText] = useState('');
@@ -499,6 +500,7 @@ export default function App() {
     setDirPhonesText('');
     setDirCompany('');
     setDirPosition('');
+    setDirDepartment('');
     setDirEmail('');
     setDirWebsite('');
     setDirTagsText('');
@@ -993,6 +995,7 @@ export default function App() {
           type: dirType,
           company: dirCompany,
           position: dirPosition,
+          department: dirDepartment.trim(),
           email: dirEmail,
           website: dirWebsite,
           tags: dirTagsText.split(/[;,|]+/).map(t => t.trim()).filter(Boolean),
@@ -1081,6 +1084,7 @@ export default function App() {
     setDirPhonesText(phones.slice(1).join('\n'));
     setDirCompany(entry.company || '');
     setDirPosition(entry.position || '');
+    setDirDepartment((entry as any).department || '');
     setDirEmail(entry.email || '');
     setDirWebsite(entry.website || '');
     setDirTagsText(getDirectoryEntryTags(entry).join('; '));
@@ -4723,11 +4727,16 @@ export default function App() {
             <table className="w-full border-collapse text-left text-xs text-slate-500">
               <thead className="bg-slate-50 text-slate-700 uppercase font-bold text-[10px] tracking-wider border-b border-slate-200">
                 <tr>
-                  <th scope="col" className="py-2 px-3">Имя / Описание</th>
-                  <th scope="col" className="py-2 px-3">Телефоны / Ext</th>
-                  <th scope="col" className="py-2 px-3">Компания / должность</th>
-                  <th scope="col" className="py-2 px-3">Теги / статус</th>
-                  <th scope="col" className="py-2 px-3">Комментарий / Отдел</th>
+                  <th scope="col" className="py-2 px-3">ФИО</th>
+                  <th scope="col" className="py-2 px-3">Телефоны</th>
+                  <th scope="col" className="py-2 px-3">Компания</th>
+                  <th scope="col" className="py-2 px-3">Должность</th>
+                  <th scope="col" className="py-2 px-3">Отдел</th>
+                  <th scope="col" className="py-2 px-3">Статус</th>
+                  <th scope="col" className="py-2 px-3">Теги</th>
+                  <th scope="col" className="py-2 px-3">Комментарий</th>
+                  <th scope="col" className="py-2 px-3">Email</th>
+                  <th scope="col" className="py-2 px-3">Сайт</th>
                   <th scope="col" className="py-3 px-4 text-right">Действия</th>
                 </tr>
               </thead>
@@ -4758,7 +4767,7 @@ export default function App() {
                   if (list.length === 0) {
                     return (
                       <tr>
-                        <td colSpan={6} className="py-8 text-center text-slate-400">
+                        <td colSpan={11} className="py-8 text-center text-slate-400">
                           {isLoadingDirectory ? (
                             <div className="flex items-center justify-center gap-2">
                               <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
@@ -4774,15 +4783,11 @@ export default function App() {
 
                   return list.map((entry) => (
                     <tr key={entry.id} className="hover:bg-slate-50/80 transition-colors">
-                      <td className="py-3.5 px-4 font-bold text-slate-900 font-sans">
-                        <div>{entry.name}</div>
-                        <div className="mt-1 flex flex-wrap gap-1">
-                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium border ${entry.type === 'internal' ? 'bg-slate-100 text-slate-700 border-slate-200' : 'bg-red-50 text-red-600 border-red-150'}`}>{entry.type === 'internal' ? 'Внутренний' : 'Клиент'}</span>
-                          {entry.isSpam && <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">СПАМ</span>}
-                          {entry.isBlacklisted && <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-700 border border-red-200">ЧС</span>}
-                        </div>
+                      <td className="py-3.5 px-3 text-[15px] text-slate-900 font-medium">
+                        {entry.name}
                       </td>
-                      <td className="py-3.5 px-4 text-red-800 dark:text-rose-200 font-mono font-bold select-all">
+
+                      <td className="py-3.5 px-3 text-red-800 dark:text-rose-200 font-mono font-bold select-all">
                         <div className="flex flex-col gap-1">
                           {getEntryPhones(entry).map(phone => (
                             <div key={phone} className="flex items-center gap-2">
@@ -4798,21 +4803,77 @@ export default function App() {
                           ))}
                         </div>
                       </td>
-                      <td className="py-3.5 px-4 text-slate-700">
-                        <div className="font-bold">{entry.company || <span className="text-slate-350 italic">—</span>}</div>
-                        <div className="text-[11px] text-slate-500">{entry.position || ''}</div>
-                        {entry.email && <div className="text-[10px] text-slate-400">{entry.email}</div>}
+
+                      <td className="py-3.5 px-3 text-slate-700">
+                        {entry.company || <span className="text-slate-350 italic">—</span>}
                       </td>
-                      <td className="py-3.5 px-4">
+
+                      <td className="py-3.5 px-3 text-slate-700">
+                        {entry.position || <span className="text-slate-350 italic">—</span>}
+                      </td>
+
+                      <td className="py-3.5 px-3 text-slate-700">
+                        {(entry as any).department || <span className="text-slate-350 italic">—</span>}
+                      </td>
+
+                      <td className="py-3.5 px-3 whitespace-nowrap">
+                        <span className={`px-2 py-1 rounded-full text-[10px] font-bold border ${
+                          entry.isBlacklisted
+                            ? 'bg-slate-900 text-white border-slate-900'
+                            : entry.isSpam
+                              ? 'bg-rose-50 text-rose-700 border-rose-100'
+                              : entry.type === 'internal'
+                                ? 'bg-blue-50 text-blue-700 border-blue-100'
+                                : 'bg-emerald-50 text-emerald-700 border-emerald-100'
+                        }`}>
+                          {entry.isBlacklisted ? 'ЧС' : entry.isSpam ? 'Спам' : entry.type === 'internal' ? 'Внутренний' : 'Клиент'}
+                        </span>
+                      </td>
+
+                      <td className="py-3.5 px-3">
                         <div className="flex flex-wrap gap-1">
                           {getDirectoryEntryTags(entry).length ? getDirectoryEntryTags(entry).map(tag => (
                             <span key={tag} className="px-2 py-0.5 rounded-full bg-slate-100 border border-slate-200 text-[10px] font-bold text-slate-600">{tag}</span>
                           )) : <span className="text-slate-350 italic">—</span>}
                         </div>
                       </td>
-                      <td className="py-3.5 px-4 text-slate-650">
-                        {entry.comment || <span className="text-slate-350 italic">—</span>}
+
+                      <td className="py-3.5 px-3 max-w-[260px] text-slate-650">
+                        <div className="truncate" title={entry.comment || ''}>
+                          {entry.comment || <span className="text-slate-350 italic">—</span>}
+                        </div>
                       </td>
+
+                      <td className="py-3.5 px-3 text-slate-700 max-w-[190px]">
+                        {entry.email ? (
+                          <a
+                            href={`mailto:${entry.email}`}
+                            className="text-blue-600 hover:text-blue-700 hover:underline truncate block"
+                            title={entry.email}
+                          >
+                            {entry.email}
+                          </a>
+                        ) : (
+                          <span className="text-slate-350 italic">—</span>
+                        )}
+                      </td>
+
+                      <td className="py-3.5 px-3 text-slate-700 max-w-[180px]">
+                        {entry.website ? (
+                          <a
+                            href={String(entry.website).startsWith('http') ? entry.website : `https://${entry.website}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-blue-600 hover:text-blue-700 hover:underline truncate block"
+                            title={entry.website}
+                          >
+                            {entry.website}
+                          </a>
+                        ) : (
+                          <span className="text-slate-350 italic">—</span>
+                        )}
+                      </td>
+
                       <td className="py-3.5 px-4 text-right">
                         <div className="flex items-center justify-end gap-1.5">
                           {session?.role === 'admin' && (
@@ -5833,63 +5894,78 @@ export default function App() {
                 </div>
               )}
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="text-slate-650 text-xs font-semibold">ФИО / Наименование *</label>
-                  <input type="text" required value={dirName} onChange={(e) => setDirName(e.target.value)} placeholder="Иван Смирнов" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-red-500" />
+              <div className="space-y-4">
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <label className="text-slate-650 text-xs font-semibold">Статус контакта</label>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-2">
+                    <button type="button" onClick={() => setDirType('internal')} className={`py-2 px-3 rounded-lg border text-xs font-semibold cursor-pointer transition-all ${dirType === 'internal' ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
+                      Внутренний
+                    </button>
+                    <button type="button" onClick={() => setDirType('client')} className={`py-2 px-3 rounded-lg border text-xs font-semibold cursor-pointer transition-all ${dirType === 'client' ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
+                      Клиент
+                    </button>
+                    <label className="flex items-center justify-center gap-2 py-2 px-3 rounded-lg border border-amber-200 bg-amber-50 text-xs text-amber-800 font-bold cursor-pointer">
+                      <input type="checkbox" checked={dirIsSpam} onChange={(e) => setDirIsSpam(e.target.checked)} className="rounded border-amber-300 text-amber-600" />
+                      СПАМ
+                    </label>
+                    <label className="flex items-center justify-center gap-2 py-2 px-3 rounded-lg border border-red-200 bg-red-50 text-xs text-red-700 font-bold cursor-pointer">
+                      <input type="checkbox" checked={dirIsBlacklisted} onChange={(e) => setDirIsBlacklisted(e.target.checked)} className="rounded border-red-300 text-red-600" />
+                      ЧС
+                    </label>
+                  </div>
                 </div>
-                <div className="space-y-1">
-                  <label className="text-slate-650 text-xs font-semibold">Компания</label>
-                  <input type="text" value={dirCompany} onChange={(e) => setDirCompany(e.target.value)} placeholder="ООО Компания" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-red-500" />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-slate-650 text-xs font-semibold">Должность</label>
-                  <input type="text" value={dirPosition} onChange={(e) => setDirPosition(e.target.value)} placeholder="Директор / менеджер" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-red-500" />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-slate-650 text-xs font-semibold">Основной телефон / SIP *</label>
-                  <input type="text" required value={dirNumber} onChange={(e) => setDirNumber(e.target.value)} placeholder="100 или 79781234567" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 font-mono focus:outline-none focus:ring-1 focus:ring-red-500" />
-                </div>
-                <div className="space-y-1 md:col-span-2">
-                  <label className="text-slate-650 text-xs font-semibold">Дополнительные телефоны</label>
-                  <textarea value={dirPhonesText} onChange={(e) => setDirPhonesText(e.target.value)} rows={3} placeholder="Каждый номер с новой строки или через запятую" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 font-mono focus:outline-none focus:ring-1 focus:ring-red-500" />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-slate-650 text-xs font-semibold">Email</label>
-                  <input type="email" value={dirEmail} onChange={(e) => setDirEmail(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-red-500" />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-slate-650 text-xs font-semibold">Сайт</label>
-                  <input type="text" value={dirWebsite} onChange={(e) => setDirWebsite(e.target.value)} placeholder="site.ru" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-red-500" />
-                </div>
-                <div className="space-y-1 md:col-span-2">
-                  <label className="text-slate-650 text-xs font-semibold">Теги</label>
-                  <input type="text" value={dirTagsText} onChange={(e) => setDirTagsText(e.target.value)} placeholder="VIP; Клиент; СПАМ" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-red-500" />
-                </div>
-              </div>
 
-              <div className="space-y-1">
-                <label className="text-slate-650 text-xs font-semibold">Категория номера</label>
-                <div className="grid grid-cols-2 gap-2 pt-1">
-                  <button type="button" onClick={() => setDirType('internal')} className={`py-2 px-3 rounded-lg border text-xs font-semibold cursor-pointer transition-all ${dirType === 'internal' ? 'bg-red-50 border-red-200 text-red-600' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}>Внутренний номер</button>
-                  <button type="button" onClick={() => setDirType('client')} className={`py-2 px-3 rounded-lg border text-xs font-semibold cursor-pointer transition-all ${dirType === 'client' ? 'bg-red-50 border-red-200 text-red-600' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}>Клиент</button>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-slate-650 text-xs font-semibold">ФИО *</label>
+                    <input type="text" required value={dirName} onChange={(e) => setDirName(e.target.value)} placeholder="Иван Смирнов" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-red-500" />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-slate-650 text-xs font-semibold">Основной телефон / SIP *</label>
+                    <input type="text" required value={dirNumber} onChange={(e) => setDirNumber(e.target.value)} placeholder="100 или 79781234567" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 font-mono focus:outline-none focus:ring-1 focus:ring-red-500" />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-slate-650 text-xs font-semibold">Компания</label>
+                    <input type="text" value={dirCompany} onChange={(e) => setDirCompany(e.target.value)} placeholder="ООО Компания" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-red-500" />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-slate-650 text-xs font-semibold">Должность</label>
+                    <input type="text" value={dirPosition} onChange={(e) => setDirPosition(e.target.value)} placeholder="Директор / менеджер" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-red-500" />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-slate-650 text-xs font-semibold">Отдел</label>
+                    <input type="text" value={dirDepartment} onChange={(e) => setDirDepartment(e.target.value)} placeholder="Продажи, IT, Бухгалтерия" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-red-500" />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-slate-650 text-xs font-semibold">Теги</label>
+                    <input type="text" value={dirTagsText} onChange={(e) => setDirTagsText(e.target.value)} placeholder="VIP; Клиент; СПАМ" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-red-500" />
+                  </div>
+
+                  <div className="space-y-1 md:col-span-2">
+                    <label className="text-slate-650 text-xs font-semibold">Дополнительные телефоны</label>
+                    <textarea value={dirPhonesText} onChange={(e) => setDirPhonesText(e.target.value)} rows={3} placeholder="Каждый номер с новой строки или через запятую" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 font-mono focus:outline-none focus:ring-1 focus:ring-red-500" />
+                  </div>
+
+                  <div className="space-y-1 md:col-span-2">
+                    <label className="text-slate-650 text-xs font-semibold">Комментарий</label>
+                    <input type="text" value={dirComment} onChange={(e) => setDirComment(e.target.value)} placeholder="Комментарий, примечание, источник" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-red-500" />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-slate-650 text-xs font-semibold">Email</label>
+                    <input type="email" value={dirEmail} onChange={(e) => setDirEmail(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-red-500" />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-slate-650 text-xs font-semibold">Сайт</label>
+                    <input type="text" value={dirWebsite} onChange={(e) => setDirWebsite(e.target.value)} placeholder="site.ru" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-red-500" />
+                  </div>
                 </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                <label className="flex items-center gap-2 p-3 rounded-xl border border-amber-200 bg-amber-50 text-xs text-amber-800 font-bold">
-                  <input type="checkbox" checked={dirIsSpam} onChange={(e) => setDirIsSpam(e.target.checked)} className="rounded border-amber-300 text-amber-600" />
-                  Пометить как СПАМ
-                </label>
-                <label className="flex items-center gap-2 p-3 rounded-xl border border-red-200 bg-red-50 text-xs text-red-700 font-bold">
-                  <input type="checkbox" checked={dirIsBlacklisted} onChange={(e) => setDirIsBlacklisted(e.target.checked)} className="rounded border-red-300 text-red-600" />
-                  Локальный черный список
-                </label>
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-slate-650 text-xs font-semibold">Комментарий / отдел</label>
-                <input type="text" value={dirComment} onChange={(e) => setDirComment(e.target.value)} placeholder="Отдел, примечание, источник" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-red-500" />
               </div>
 
               <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
