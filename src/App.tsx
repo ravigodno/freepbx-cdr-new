@@ -4280,7 +4280,7 @@ export default function App() {
                                       : 'bg-emerald-50 text-emerald-700 border-emerald-200'
                           }`}
                         >
-                          {entry.isBlacklisted ? <Ban className="h-3.5 w-3.5" /> : entry.isSpam ? <AlertTriangle className="h-3.5 w-3.5" /> : entry.type === 'internal' ? <StatusSvg type="internal" /> : entry.type === 'supplier' ? <StatusSvg type="supplier" /> : entry.type === 'government' ? <StatusSvg type="government" /> : <StatusSvg type="client" />}
+                          <DirectoryStatusIcon entry={entry} />
                         </span>
                       </td>
 
