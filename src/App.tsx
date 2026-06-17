@@ -64,6 +64,7 @@ import AsteriskCliTab from './components/monitoring/AsteriskCliTab';
 import FreepbxCliTab from './components/monitoring/FreepbxCliTab';
 import DbExplorerTab from './components/monitoring/DbExplorerTab';
 import { DirectoryStatusIcon } from './modules/directory/components/DirectoryStatusIcon';
+import { DirectoryPhonesCell } from './modules/directory/components/DirectoryPhonesCell';
 
 
 
@@ -4288,22 +4289,11 @@ export default function App() {
                         {entry.name}
                       </td>
 
-                      <td className="py-3.5 px-3 text-red-800 dark:text-rose-200 font-mono font-bold select-all">
-                        <div className="flex flex-col gap-1">
-                          {getEntryPhones(entry).map(phone => (
-                            <div key={phone} className="flex items-center gap-2">
-                              <span>{phone}</span>
-                              <button
-                                onClick={() => triggerClickToCall(phone, entry.name)}
-                                className="p-1 rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-150 cursor-pointer flex items-center transition-all shadow-xs hover:scale-105 active:scale-95"
-                                title={`Позвонить на ${phone} через SIP/AMI`}
-                              >
-                                <PhoneCall className="h-3 w-3" />
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      </td>
+                      <DirectoryPhonesCell
+                        phones={getEntryPhones(entry)}
+                        contactName={entry.name}
+                        onCall={triggerClickToCall}
+                      />
 
                       <td className="py-3.5 px-2 text-slate-700 w-[230px] max-w-[230px]">
                         {entry.company ? (
