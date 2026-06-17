@@ -64,6 +64,7 @@ import AsteriskCliTab from './modules/monitoring/tabs/monitoring/AsteriskCliTab'
 import FreepbxCliTab from './modules/monitoring/tabs/monitoring/FreepbxCliTab';
 import DbExplorerTab from './modules/monitoring/tabs/monitoring/DbExplorerTab';
 import { DirectoryStatusIcon } from './modules/directory/components/DirectoryStatusIcon';
+import CDRPage from './modules/cdr/pages/CDRPage';
 
 
 
@@ -3047,6 +3048,22 @@ export default function App() {
 
         {activeView === 'calls' && (
           <>
+            {false && (
+              <CDRPage
+                calls={calls}
+                session={session}
+                directory={directory}
+                playingCallId={playingCallId}
+                isAudioPaused={isAudioPaused}
+                activeDropdownCallId={activeDropdownCallId}
+                setActiveDropdownCallId={setActiveDropdownCallId}
+                triggerClickToCall={triggerClickToCall}
+                openAddFromCall={openAddFromCall}
+                playRecording={playRecording}
+                openProcessModal={openProcessModal}
+                fetchChronology={fetchChronology}
+              />
+            )}
             {/* KPI Dashboard cards section */}
             <section id="kpi-dashboard" className="grid grid-cols-2 lg:grid-cols-6 gap-3">
               {/* Входящие */}
