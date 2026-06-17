@@ -5,6 +5,7 @@ import { CDRRecordingBadge } from './CDRRecordingBadge';
 import { CDRRowActions } from './CDRRowActions';
 import { CDRPhoneCell } from './CDRPhoneCell';
 import { CDRDurationCell } from './CDRDurationCell';
+import { CDRCompanyCell } from './CDRCompanyCell';
 
 type Props = {
   call: any;
@@ -52,10 +53,7 @@ export function CDRRow({
       <CDRPhoneCell value={call.src} />
       <CDRPhoneCell value={call.dst} />
 
-      {/* ===== COMPANY ===== */}
-      <td className="py-3 px-2 text-xs">
-        {call.company || '—'}
-      </td>
+      <CDRCompanyCell company={call.company} />
 
       {/* ===== STATUS ===== */}
       <td className="py-3 px-2 text-xs">
