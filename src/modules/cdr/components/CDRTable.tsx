@@ -1,9 +1,13 @@
 import React from 'react';
 
-export function CDRTable() {
+type Props = {
+  calls: any[];
+};
+
+export function CDRTable({ calls }: Props) {
   return (
-    <div>
-      {/* TODO: Call table will be moved here */}
+    <div className="bg-white border border-slate-200 rounded-xl p-4 text-xs text-slate-500">
+      CDRTable module ready: {calls.length} calls
     </div>
   );
 }
