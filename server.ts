@@ -211,7 +211,7 @@ const hasInboundTrunkSignal = (c: any): boolean => {
   const did = onlyDigits(c.did);
 
   // did иногда содержит служебный текст "→ ответил: 200".
-  // DID считаем внешним признаком только если в нём есть минимум 6 цифр.
+  // DID считаем внешним признаком только если в ��ём есть минимум 6 цифр.
   return (
     did.length >= 6 ||
     dctx.includes('from-trunk') ||
@@ -487,7 +487,7 @@ const parseDirectoryText = (text: string, settings?: AppSettings): any[] => {
       raw = {
         name: get('name','имя','фио','contact','контакт') || cols[0],
         company: get('company','компания','organization','организация'),
-        position: get('position','должность','job','title'),
+        position: get('position','��олжность','job','title'),
         phone1: get('phone1','телефон1','номер1','phone','телефон','номер') || cols[1],
         phone2: get('phone2','телефон2','номер2'),
         phone3: get('phone3','телефон3','номер3'),
@@ -628,7 +628,7 @@ function runAMICommand(settings: AppSettings, command: string): Promise<{ succes
 async function syncDirectoryFromConfiguredUrl(localDb: any): Promise<{ count: number; added: number; updated: number; message: string }> {
   const settings = localDb.settings || {};
   const url = String(settings.directoryImportUrl || '').trim();
-  if (!url) throw new Error('URL импорта справочника не задан');
+  if (!url) throw new Error('URL импорта справо��ника не задан');
 
   const text = await fetchTextFromUrl(url);
   const format = settings.directoryImportFormat || (url.toLowerCase().endsWith('.json') ? 'json' : 'csv');
@@ -3110,6 +3110,566 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
 });
 
 // Play audio recording binary if present on host, using smart stream chunking
+// Reports trend and dynamics endpoint
+app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
+  try {
+    const localDb = await readLocalDb();
+    const settings = localDb.settings;
+    const isDemo = isDemoMode(settings);
+
+    const startDate = req.query.startDate as string;
+    const endDate = req.query.endDate as string;
+    const groupType = (req.query.groupType as 'day' | 'week' | 'month' | 'year' | 'hour' | 'weekday') || 'day';
+
+    const startTime = normalizeTimeFilter(req.query.startTime, '00:00');
+    const endTime = normalizeTimeFilter(req.query.endTime, '23:59');
+    const requestedOperatorExt = (req.query.operatorExt as string || '').trim();
+    const requestedOnlyMyCalls = req.query.onlyMyCalls === 'true';
+    const operatorExt = getEffectiveOperatorExt(localDb, req, requestedOperatorExt);
+    const onlyMyCalls = requestedOnlyMyCalls || isOperatorForcedOwnCalls(localDb, req);
+    const department = req.query.department as string || 'all';
+
+    let calls: CallEntry[] = [];
+    if (isDemo) {
+      calls = JSON.parse(JSON.stringify(mockCDRData));
+    } else {
+      let sql = 'SELECT uniqueid, calldate, clid, src, dst, dcontext, channel, dstchannel, lastapp, lastdata, duration, billsec, disposition, recordingfile, did, cnum, cnam, outbound_cnum, linkedid FROM cdr WHERE 1=1';
+      const sqlParams: any[] = [];
+
+      if (startDate) {
+        sql += ' AND calldate >= ?';
+        sqlParams.push(buildDateTimeFilter(startDate, startTime));
+      } else {
+        sql += ' AND calldate >= DATE_SUB(NOW(), INTERVAL 30 DAY)'; // default of last 30 days for reports
+      }
+      if (endDate) {
+        sql += ' AND calldate <= ?';
+        sqlParams.push(buildDateTimeFilter(endDate, endTime, true));
+      }
+
+      sql += ' ORDER BY calldate DESC LIMIT 10000'; // Higher limit for wider analytical trend queries
+
+      try {
+        calls = await queryFreePBXCDR(localDb.settings, false, sql, sqlParams);
+      } catch (e: any) {
+        calls = JSON.parse(JSON.stringify(mockCDRData));
+        (req as any).dbError = `База данных CDR недоступна. Отображаются демонстрационные данные.`;
+      }
+    }
+
+    // Collapse CDR legs
+    const statsLinkedGroups = new Map<string, CallEntry[]>();
+    calls.forEach(c => {
+      const key = c.linkedid || c.uniqueid;
+      if (!statsLinkedGroups.has(key)) statsLinkedGroups.set(key, []);
+      statsLinkedGroups.get(key)!.push(c);
+    });
+
+    calls = Array.from(statsLinkedGroups.values()).map(group => {
+      if (group.length === 1) return normalizeClickToCallForDisplay(normalizeInboundCallerForDisplay(group[0]));
+      const sorted = [...group].map(c => normalizeClickToCallForDisplay(c)).sort((a, b) => new Date(a.calldate).getTime() - new Date(b.calldate).getTime());
+      const answered = sorted.find(c => (c.disposition || "").toUpperCase() === "ANSWERED" && Number(c.billsec || 0) > 0);
+      const queueLeg = sorted.find(c => c.dcontext === "ext-queues" || c.lastapp === "Queue");
+      const groupLeg = sorted.find(c => c.dcontext === "ext-group");
+      const routeLeg = queueLeg || groupLeg || sorted[0];
+      const externalCallerNumber = getExternalCallerNumber(sorted);
+      const external = sorted.find(c => (c.src || "").replace(/\D/g, "").length >= 7) || routeLeg;
+      const extLegs = sorted.filter(c => c.dcontext === "ext-local" && /^[0-9]{2,5}$/.test(String(c.dst || "")));
+      let missedExts = uniqueExts(extLegs
+        .filter(c => (c.disposition || "").toUpperCase() !== "ANSWERED" || Number(c.billsec || 0) === 0)
+        .map(c => String(c.dst)));
+      let answeredExts = uniqueExts(extLegs
+        .filter(c => (c.disposition || "").toUpperCase() === "ANSWERED" && Number(c.billsec || 0) > 0)
+        .map(c => String(c.dst)));
+
+      const allDialedExts = uniqueExts([
+        ...sorted.flatMap(c => getDialedExtsFromLastData(c.lastdata)),
+        ...answeredExts,
+        ...missedExts
+      ]);
+
+      const answeredChannel = String(answered?.dstchannel || "");
+      const answeredMatch = answeredChannel.match(/(?:SIP|PJSIP)\/([0-9]{2,5})-/i);
+      if (answered && answeredMatch && answeredMatch[1]) {
+        answeredExts = uniqueExts([answeredMatch[1]]);
+      }
+
+      if ((groupLeg || queueLeg) && allDialedExts.length) {
+        missedExts = allDialedExts.filter(ext => !answeredExts.includes(ext));
+      }
+
+      const did = routeLeg.did || sorted.find(c => c.did)?.did || "";
+      return {
+        ...routeLeg,
+        uniqueid: routeLeg.linkedid || routeLeg.uniqueid,
+        linkedid: routeLeg.linkedid || routeLeg.uniqueid,
+        calldate: sorted[0].calldate,
+        src: (queueLeg || groupLeg || hasInboundTrunkSignal(routeLeg) || isIncomingRouteContext(routeLeg)) ? (externalCallerNumber || external.src || routeLeg.src) : (external.src || routeLeg.src),
+        dst: (String(routeLeg.dcontext || "").toLowerCase() === "from-internal" && isExternalNumber(routeLeg.dst)) ? routeLeg.dst : queueLeg ? `Очередь ` : groupLeg ? `Группа ` : (routeLeg.dst || sorted[0].dst),
+        dstchannel: "",
+        did: buildDidWithAnsweredAndMissed(did, answeredExts, missedExts) || did,
+        disposition: answered ? "ANSWERED" : "NO ANSWER",
+        billsec: answered ? answered.billsec : 0,
+        duration: Math.max(...sorted.map(c => Number(c.duration || 0))),
+        recordingfile: answered?.recordingfile || sorted.find(c => c.recordingfile)?.recordingfile || "",
+      };
+    });
+
+    // Handle missed call resolutions exactly like /api/stats for Processed/Lost counts alignment
+    const chronologicalStatsCalls = [...calls].sort((a, b) => new Date(a.calldate).getTime() - new Date(b.calldate).getTime());
+    const callMap = new Map<string, CallEntry>();
+    calls.forEach(c => {
+      const local = localDb.missedCallStatuses?.find(status => status.uniqueid === c.uniqueid);
+      if (local) {
+        c.processed = local.processed;
+        c.comment = local.comment;
+        c.processedBy = local.processedBy;
+        c.processedAt = local.processedAt;
+      } else {
+        c.processed = false;
+        c.comment = '';
+      }
+      callMap.set(c.uniqueid, c);
+    });
+
+    chronologicalStatsCalls.forEach((call) => {
+      const disposition = call.disposition?.toUpperCase();
+      const isMissedType = disposition === 'NO ANSWER' || disposition === 'BUSY' || disposition === 'FAILED';
+      const isIncomingMissed = isMissedType && isIncoming(call);
+
+      if (isIncomingMissed && call.src && call.src.trim().length > 3) {
+        const clientNum = call.src.trim();
+        const callTime = new Date(call.calldate).getTime();
+
+        const resolution = chronologicalStatsCalls.find(c => {
+          const cTime = new Date(c.calldate).getTime();
+          if (cTime <= callTime) return false;
+
+          const isAnswered = c.disposition === 'ANSWERED' && Number(c.billsec || 0) > 0;
+          if (!isAnswered) return false;
+
+          const isOutboundResolved = c.dst === clientNum;
+          const isInboundResolved = c.src === clientNum;
+
+          return isOutboundResolved || isInboundResolved;
+        });
+
+        if (resolution) {
+          const originalCall = callMap.get(call.uniqueid);
+          if (originalCall) {
+            originalCall.wasCallbacked = true;
+            originalCall.callbackCallId = resolution.uniqueid;
+            originalCall.callbackTime = resolution.calldate;
+
+            const resTime = new Date(resolution.calldate).getTime();
+            const diffMs = resTime - callTime;
+            const diffMin = Math.floor(diffMs / 60000);
+            const kpiMinutes = settings && settings.callbackKpiMinutes !== undefined ? Number(settings.callbackKpiMinutes) : 60;
+
+            if (diffMin <= kpiMinutes) {
+              originalCall.wasKpiResolved = true;
+              if (!originalCall.processed) {
+                originalCall.processed = true;
+                originalCall.processedBy = 'Система KPI';
+                originalCall.processedAt = resolution.calldate;
+                originalCall.comment = `Авто-отзвон осуществлен за ${diffMin} мин (Лимит KPI: ${kpiMinutes} мин).`;
+              }
+            } else {
+              originalCall.wasKpiResolved = false;
+            }
+          }
+        }
+      }
+    });
+
+    // Helper formatting function for grouping
+    const getWeekNumber = (d: Date): number => {
+      const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+      const dayNum = date.getUTCDay() || 7;
+      date.setUTCDate(date.getUTCDate() + 4 - dayNum);
+      const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+      return Math.ceil((((date.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+    };
+
+    const formatGroupKey = (dateStr: string, type: 'day' | 'week' | 'month' | 'year' | 'hour' | 'weekday'): { key: string, sortKey: number } => {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return { key: 'Неизвестно', sortKey: 0 };
+      
+      const ruMonths = [
+        'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
+        'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'
+      ];
+
+      if (type === 'hour') {
+        const hr = d.getHours();
+        return { key: `${String(hr).padStart(2, '0')}:00`, sortKey: hr };
+      }
+      if (type === 'weekday') {
+        const dayIndex = d.getDay(); // 0 is Sun, 1 is Mon, ... 6 is Sat
+        const daySortKey = dayIndex === 0 ? 7 : dayIndex; // Mon=1, Tue=2, ... Sun=7
+        const ruWeekdays = [
+          'Воскресенье', 'Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота'
+        ];
+        return { key: ruWeekdays[dayIndex], sortKey: daySortKey };
+      }
+      if (type === 'year') {
+        const yr = d.getFullYear();
+        return { key: String(yr), sortKey: yr };
+      }
+      if (type === 'month') {
+        const yr = d.getFullYear();
+        const mo = d.getMonth();
+        return { key: `${ruMonths[mo]} ${yr}`, sortKey: yr * 12 + mo };
+      }
+      if (type === 'week') {
+        const yr = d.getFullYear();
+        const wk = getWeekNumber(d);
+        return { key: `W${String(wk).padStart(2, '0')} ${yr}`, sortKey: yr * 53 + wk };
+      }
+      // default: day
+      const day = String(d.getDate()).padStart(2, '0');
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      return { key: `${day}.${month}`, sortKey: d.getTime() };
+    };
+
+    // Pre-populate empty bins
+    const bins = new Map<string, any>();
+    if (groupType === 'hour') {
+      for (let h = 0; h < 24; h++) {
+        const key = `${String(h).padStart(2, '0')}:00`;
+        bins.set(key, {
+          label: key,
+          sortKey: h,
+          totalCalls: 0,
+          inboundCalls: 0,
+          outboundCalls: 0,
+          internalCalls: 0,
+          missedCalls: 0,
+          processedCalls: 0,
+          lostCalls: 0,
+          totalDuration: 0,
+          answeredDuration: 0,
+          answeredCount: 0
+        });
+      }
+    } else if (groupType === 'weekday') {
+      const ruWeekdaysOrdered = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье'];
+      ruWeekdaysOrdered.forEach((key, index) => {
+        bins.set(key, {
+          label: key,
+          sortKey: index + 1,
+          totalCalls: 0,
+          inboundCalls: 0,
+          outboundCalls: 0,
+          internalCalls: 0,
+          missedCalls: 0,
+          processedCalls: 0,
+          lostCalls: 0,
+          totalDuration: 0,
+          answeredDuration: 0,
+          answeredCount: 0
+        });
+      });
+    } else if (startDate && endDate) {
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      const current = new Date(start);
+      let safety = 0;
+      while (current <= end && safety < 1000) {
+        const { key, sortKey } = formatGroupKey(current.toISOString(), groupType);
+        if (!bins.has(key)) {
+          bins.set(key, {
+            label: key,
+            sortKey,
+            totalCalls: 0,
+            inboundCalls: 0,
+            outboundCalls: 0,
+            internalCalls: 0,
+            missedCalls: 0,
+            processedCalls: 0,
+            lostCalls: 0,
+            totalDuration: 0,
+            answeredDuration: 0,
+            answeredCount: 0
+          });
+        }
+        if (groupType === 'day') {
+          current.setDate(current.getDate() + 1);
+        } else if (groupType === 'week') {
+          current.setDate(current.getDate() + 7);
+        } else if (groupType === 'month') {
+          current.setMonth(current.getMonth() + 1);
+        } else {
+          current.setFullYear(current.getFullYear() + 1);
+        }
+        safety++;
+      }
+      const { key, sortKey } = formatGroupKey(end.toISOString(), groupType);
+      if (!bins.has(key)) {
+         bins.set(key, { label: key, sortKey, totalCalls:0, inboundCalls:0, outboundCalls:0, internalCalls:0, missedCalls:0, processedCalls:0, lostCalls:0, totalDuration:0, answeredDuration:0, answeredCount:0, extCalls: {} });
+      }
+    }
+
+    const checkCallDepartmentMatch = (c: any, dept: string, directory: any[]): boolean => {
+      const num = isIncoming(c) ? c.dst : c.src;
+      const entry = directory.find(e => {
+        const phones = [e.number, ...(Array.isArray(e.phones) ? e.phones : [])];
+        return phones.some(p => p && String(p).replace(/\D/g, '') === String(num).replace(/\D/g, ''));
+      });
+      if (entry) {
+        const dStr = String(entry.company || entry.position || '').toLowerCase();
+        if (dept === 'sales' && (dStr.includes('продаж') || dStr.includes('sales'))) return true;
+        if (dept === 'support' && (dStr.includes('тех') || dStr.includes('поддерж') || dStr.includes('support') || dStr.includes('help'))) return true;
+        if (dept === 'accounting' && (dStr.includes('бух') || dStr.includes('учет') || dStr.includes('account'))) return true;
+        if (dept === 'logistics' && (dStr.includes('лог') || dStr.includes('склад') || dStr.includes('достав') || dStr.includes('logis'))) return true;
+        if (dept === 'other') {
+          const known = dStr.includes('продаж') || dStr.includes('тех') || dStr.includes('поддерж') || dStr.includes('бух') || dStr.includes('лог');
+          return !known;
+        }
+      }
+      const dstStr = String(c.dst || '');
+      const dcontext = String(c.dcontext || '').toLowerCase();
+      if (dept === 'sales') {
+        return dcontext.includes('sales') || dstStr.includes('queue-sales') || dstStr.includes('101') || dstStr.includes('102');
+      }
+      if (dept === 'support') {
+        return dcontext.includes('support') || dstStr.includes('queue-support') || dstStr.includes('201') || dstStr.includes('202');
+      }
+      if (dept === 'accounting') {
+        return dstStr.includes('301') || dstStr.includes('302');
+      }
+      if (dept === 'logistics') {
+        return dstStr.includes('401') || dstStr.includes('402');
+      }
+      return dept === 'other';
+    };
+
+    // Detailing accumulation structures
+    const detailing = {
+      extensions: new Map<string, any>(),
+      trunks: new Map<string, any>(),
+      queues: new Map<string, any>(),
+      groups: new Map<string, any>(),
+      outboundRules: new Map<string, any>()
+    };
+
+    const getTrunkName = (channelStr: string): string | null => {
+      if (!channelStr) return null;
+      const m = channelStr.match(/^(?:SIP|PJSIP)\/([A-Za-z0-0_-]+)-/i);
+      if (m) {
+        const name = m[1];
+        if (/^[0-9]{2,5}$/.test(name)) return null;
+        return name;
+      }
+      return null;
+    };
+
+    // Classify calls into bins
+    calls.forEach(c => {
+      // Date filter
+      if (startDate) {
+        const sVal = getDateTimeFilterMs(startDate, startTime);
+        if (getCallDateMs(c.calldate) < sVal) return;
+      }
+      if (endDate) {
+        const eVal = getDateTimeFilterMs(endDate, endTime, true);
+        if (getCallDateMs(c.calldate) > eVal) return;
+      }
+
+      // Extension filter
+      if (onlyMyCalls && operatorExt) {
+        if (!callHasExactNumber(c, operatorExt)) return;
+      }
+
+      // Department filter
+      if (department && department !== 'all') {
+        if (!checkCallDepartmentMatch(c, department, localDb.directory || [])) return;
+      }
+
+      // Increment trends line
+      const { key, sortKey } = formatGroupKey(c.calldate, groupType);
+      let bin = bins.get(key);
+      if (!bin) {
+        bin = {
+          label: key,
+          sortKey,
+          totalCalls: 0,
+          inboundCalls: 0,
+          outboundCalls: 0,
+          internalCalls: 0,
+          missedCalls: 0,
+          processedCalls: 0,
+          lostCalls: 0,
+          totalDuration: 0,
+          answeredDuration: 0,
+          answeredCount: 0,
+          extCalls: {}
+        };
+        bins.set(key, bin);
+      }
+
+      bin.totalCalls++;
+      const isIncomingCall = isIncoming(c);
+      const isOutgoingCall = isOutgoing(c);
+      const isInternalCall = isInternal(c);
+
+      if (isIncomingCall) bin.inboundCalls++;
+      else if (isOutgoingCall) bin.outboundCalls++;
+      else if (isInternalCall) bin.internalCalls++;
+
+      const disposition = c.disposition?.toUpperCase();
+      const isMissedType = disposition === 'NO ANSWER' || disposition === 'BUSY' || disposition === 'FAILED';
+      const isIncomingMissed = isIncomingCall && isMissedType;
+
+      if (isIncomingMissed) {
+        bin.missedCalls++;
+        const isHandledInSla = c.wasKpiResolved === true;
+        const isLateCallback = c.wasCallbacked === true && c.wasKpiResolved !== true;
+        
+        const kpiMinutes = localDb.settings && localDb.settings.callbackKpiMinutes !== undefined
+          ? Number(localDb.settings.callbackKpiMinutes)
+          : 60;
+        const callTime = new Date(c.calldate).getTime();
+        const slaExpired = Number.isFinite(callTime) && (Date.now() - callTime) > kpiMinutes * 60 * 1000;
+
+        if (isHandledInSla) {
+          bin.processedCalls++;
+        } else if (isLateCallback || slaExpired) {
+          bin.lostCalls++;
+        }
+      }
+
+      bin.totalDuration += Number(c.duration || 0);
+      if (disposition === 'ANSWERED') {
+        bin.answeredDuration += Number(c.billsec || 0);
+        bin.answeredCount++;
+      }
+
+      // Detailing load accumulation
+      const isCurAnswered = disposition === 'ANSWERED';
+
+      // 1. Extensions involvement
+      const involvedExts = new Set<string>();
+      const extSrc = getCallerInternalExt(c);
+      const extDst = getCalleeInternalExt(c);
+      if (extSrc) involvedExts.add(extSrc);
+      if (extDst) involvedExts.add(extDst);
+
+      const dialedOthers = getDialedExtsFromLastData(c.lastdata);
+      dialedOthers.forEach(ext => involvedExts.add(ext));
+
+      involvedExts.forEach(ext => {
+        if (!bin.extCalls) bin.extCalls = {};
+        bin.extCalls[ext] = (bin.extCalls[ext] || 0) + 1;
+
+        let entry = detailing.extensions.get(ext);
+        if (!entry) {
+          entry = { name: ext, totalCalls: 0, answeredCalls: 0, duration: 0 };
+          detailing.extensions.set(ext, entry);
+        }
+        entry.totalCalls++;
+        if (isCurAnswered) {
+          entry.answeredCalls++;
+          entry.duration += Number(c.billsec || 0);
+        }
+      });
+
+      // 2. Trunk load
+      const trunkSrc = getTrunkName(c.channel);
+      const trunkDst = getTrunkName(c.dstchannel);
+      const involvedTrunks = new Set<string>();
+      if (trunkSrc) involvedTrunks.add(trunkSrc);
+      if (trunkDst) involvedTrunks.add(trunkDst);
+
+      involvedTrunks.forEach(trunk => {
+        let entry = detailing.trunks.get(trunk);
+        if (!entry) {
+          entry = { name: trunk, totalCalls: 0, answeredCalls: 0, duration: 0 };
+          detailing.trunks.set(trunk, entry);
+        }
+        entry.totalCalls++;
+        if (isCurAnswered) {
+          entry.answeredCalls++;
+          entry.duration += Number(c.billsec || 0);
+        }
+      });
+
+      // 3. Queues load
+      let queueNum = '';
+      if (c.lastapp === 'Queue') {
+        queueNum = String(c.lastdata || '').split(',')[0].trim();
+      } else if (String(c.dcontext).toLowerCase() === 'ext-queues') {
+        queueNum = String(c.dst).replace(/\D/g, '');
+      }
+      if (queueNum && /^[0-9]{2,5}$/.test(queueNum)) {
+        let entry = detailing.queues.get(queueNum);
+        if (!entry) {
+          entry = { name: queueNum, totalCalls: 0, answeredCalls: 0, duration: 0 };
+          detailing.queues.set(queueNum, entry);
+        }
+        entry.totalCalls++;
+        if (isCurAnswered) {
+          entry.answeredCalls++;
+          entry.duration += Number(c.billsec || 0);
+        }
+      }
+
+      // 4. Ring groups load
+      if (String(c.dcontext).toLowerCase() === 'ext-group') {
+        const groupNum = String(c.dst).replace(/\D/g, '');
+        if (groupNum && /^[0-9]{2,5}$/.test(groupNum)) {
+          let entry = detailing.groups.get(groupNum);
+          if (!entry) {
+            entry = { name: groupNum, totalCalls: 0, answeredCalls: 0, duration: 0 };
+            detailing.groups.set(groupNum, entry);
+          }
+          entry.totalCalls++;
+          if (isCurAnswered) {
+            entry.answeredCalls++;
+            entry.duration += Number(c.billsec || 0);
+          }
+        }
+      }
+
+      // 5. Outbound Rules (outrt-X)
+      const dctxVal = String(c.dcontext || '').toLowerCase();
+      if (dctxVal.startsWith('outrt-')) {
+        let entry = detailing.outboundRules.get(dctxVal);
+        if (!entry) {
+          entry = { name: dctxVal, totalCalls: 0, answeredCalls: 0, duration: 0 };
+          detailing.outboundRules.set(dctxVal, entry);
+        }
+        entry.totalCalls++;
+        if (isCurAnswered) {
+          entry.answeredCalls++;
+          entry.duration += Number(c.billsec || 0);
+        }
+      }
+    });
+
+    const resultList = Array.from(bins.values()).sort((a, b) => a.sortKey - b.sortKey);
+
+    const detailingResults = {
+      extensions: Array.from(detailing.extensions.values()).sort((a, b) => b.totalCalls - a.totalCalls).slice(0, 30),
+      trunks: Array.from(detailing.trunks.values()).sort((a, b) => b.totalCalls - a.totalCalls).slice(0, 30),
+      queues: Array.from(detailing.queues.values()).sort((a, b) => b.totalCalls - a.totalCalls).slice(0, 30),
+      groups: Array.from(detailing.groups.values()).sort((a, b) => b.totalCalls - a.totalCalls).slice(0, 30),
+      outboundRules: Array.from(detailing.outboundRules.values()).sort((a, b) => b.totalCalls - a.totalCalls).slice(0, 30)
+    };
+
+    res.json({
+      dynamics: resultList,
+      detailing: detailingResults,
+      dbError: (req as any).dbError || undefined,
+      demoModeActive: isDemo
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Play audio recording binary if present on host, using smart stream chunking
+
 app.get('/api/recordings/:filename', async (req, res) => {
   const { filename } = req.params;
   const localDb = await readLocalDb();
@@ -3235,6 +3795,8 @@ app.get('/api/live-sessions', requireAuth(), async (req, res) => {
     const channels = await runAMICommand(rawSettings, 'core show channels concise');
     const verbose = await runAMICommand(rawSettings, 'core show channels verbose');
     const queues = await runAMICommand(rawSettings, 'queue show');
+    const sipChannels = await runAMICommand(rawSettings, 'sip show channels');
+    const pjsipChannels = await runAMICommand(rawSettings, 'pjsip show channels');
 
     const sessions = channels.success ? parseCoreShowChannelsConcise(channels.message) : [];
 
