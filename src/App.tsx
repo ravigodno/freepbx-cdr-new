@@ -64,12 +64,6 @@ import AsteriskCliTab from './modules/monitoring/tabs/monitoring/AsteriskCliTab'
 import FreepbxCliTab from './modules/monitoring/tabs/monitoring/FreepbxCliTab';
 import DbExplorerTab from './modules/monitoring/tabs/monitoring/DbExplorerTab';
 import { DirectoryStatusIcon } from './modules/directory/components/DirectoryStatusIcon';
-import { DirectoryPhonesCell } from './modules/directory/components/DirectoryPhonesCell';
-import { DirectoryCompanyCell } from './modules/directory/components/DirectoryCompanyCell';
-import { DirectoryPositionCell } from './modules/directory/components/DirectoryPositionCell';
-import { DirectoryTable } from './modules/directory/components/DirectoryTable';
-import { fetchCalls, fetchStats } from './modules/cdr/services/callsService';
-import { DirectoryDepartmentCell } from './modules/directory/components/DirectoryDepartmentCell';
 
 
 
@@ -1126,18 +1120,22 @@ export default function App() {
     if (!session) return;
     setIsLoadingStats(true);
     try {
-      const resp = await fetchStats({
-        token: session.token,
+      const qParams = new URLSearchParams({
+        demo: isDemoModeActive ? 'true' : 'false',
         startDate,
         endDate,
         startTime,
         endTime,
-        statusFilter,
-        searchQuery,
-        numberFilter,
-        isDemoModeActive,
+        status: statusFilter,
+        search: searchQuery,
+        number: numberFilter,
         operatorExt: myExt,
-        onlyMyCalls
+        onlyMyCalls: onlyMyCalls ? 'true' : 'false'
+      });
+      const resp = await fetch(`/api/stats?${qParams.toString()}`, {
+        headers: {
+          'Authorization': `Bearer ${session.token}`
+        }
       });
       if (resp.status === 401) {
         handleAuthError(resp);
@@ -1165,20 +1163,25 @@ export default function App() {
     if (!session) return;
     setIsLoadingCalls(true);
     try {
-      const resp = await fetchCalls({
-        token: session.token,
-        page: targetPage,
-        limit,
+      const qParams = new URLSearchParams({
+        page: targetPage.toString(),
+        limit: limit.toString(),
         startDate,
         endDate,
         startTime,
         endTime,
-        statusFilter,
-        searchQuery,
-        numberFilter,
-        isDemoModeActive,
+        status: statusFilter,
+        search: searchQuery,
+        number: numberFilter,
+        demo: isDemoModeActive ? 'true' : 'false',
         operatorExt: myExt,
-        onlyMyCalls
+        onlyMyCalls: onlyMyCalls ? 'true' : 'false'
+      });
+
+      const resp = await fetch(`/api/calls?${qParams.toString()}`, {
+        headers: {
+          'Authorization': `Bearer ${session.token}`
+        }
       });
 
       if (resp.status === 401) {
@@ -4285,19 +4288,40 @@ export default function App() {
                         {entry.name}
                       </td>
 
-                      <DirectoryPhonesCell
-                        phones={getEntryPhones(entry)}
-                        contactName={entry.name}
-                        onCall={triggerClickToCall}
-                      />
-
-                      <DirectoryCompanyCell company={entry.company} />
-
-                      <td className="py-3.5 px-3 text-slate-700">
-                        <DirectoryPositionCell position={entry.position} />
+                      <td className="py-3.5 px-3 text-red-800 dark:text-rose-200 font-mono font-bold select-all">
+                        <div className="flex flex-col gap-1">
+                          {getEntryPhones(entry).map(phone => (
+                            <div key={phone} className="flex items-center gap-2">
+                              <span>{phone}</span>
+                              <button
+                                onClick={() => triggerClickToCall(phone, entry.name)}
+                                className="p-1 rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-150 cursor-pointer flex items-center transition-all shadow-xs hover:scale-105 active:scale-95"
+                                title={`Позвонить на ${phone} через SIP/AMI`}
+                              >
+                                <PhoneCall className="h-3 w-3" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
                       </td>
 
-                      <DirectoryDepartmentCell department={(entry as any).department} />
+                      <td className="py-3.5 px-2 text-slate-700 w-[230px] max-w-[230px]">
+                        {entry.company ? (
+                          <div className="block truncate max-w-[210px]" title={entry.company}>
+                            {entry.company}
+                          </div>
+                        ) : (
+                          <span className="text-slate-350 italic">—</span>
+                        )}
+                      </td>
+
+                      <td className="py-3.5 px-3 text-slate-700">
+                        {entry.position || <span className="text-slate-350 italic">—</span>}
+                      </td>
+
+                      <td className="py-3.5 px-3 text-slate-700">
+                        {(entry as any).department || <span className="text-slate-350 italic">—</span>}
+                      </td>
 
 
 
