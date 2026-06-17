@@ -65,7 +65,8 @@ import FreepbxCliTab from './modules/monitoring/tabs/monitoring/FreepbxCliTab';
 import DbExplorerTab from './modules/monitoring/tabs/monitoring/DbExplorerTab';
 import { DirectoryStatusIcon } from './modules/directory/components/DirectoryStatusIcon';
 import CDRPage from './modules/cdr/pages/CDRPage';
-import { extractExternalFromLastdata, isDstBad } from './modules/cdr/utils/cdrRowLogic';
+import { extractExternalFromLastdata, isDstBad } from './modules/cdr/utils/callParser';
+import { buildCdrQueryParams } from './modules/cdr/utils/buildCdrQueryParams';
 
 
 
@@ -953,12 +954,15 @@ export default function App() {
           'Authorization': `Bearer ${session.token}`
         }
       });
+
       if (resp.status === 401) {
         handleAuthError(resp);
         return;
       }
+
+      const data = await resp.json();
+
       if (resp.ok) {
-        const data = await resp.json();
         setDirectory(data);
       }
     } catch (e) {
@@ -1134,11 +1138,7 @@ export default function App() {
         myExt,
         onlyMyCalls
       });
-      const resp = await fetch(`/api/stats?${qParams.toString()}`, {
-        headers: {
-          'Authorization': `Bearer ${session.token}`
-        }
-      });
+      const data = await fetchCdrStats(qParams, session.token);
       if (resp.status === 401) {
         handleAuthError(resp);
         return;
