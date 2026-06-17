@@ -1115,19 +1115,15 @@ export default function App() {
         onlyMyCalls
       });
       const data = await fetchCdrStats(qParams, session.token);
-      if (resp.status === 401) {
-        handleAuthError(resp);
-        return;
+
+      setStats(data);
+
+      if (data.dbError) {
+        setDbWarning(data.dbError);
       }
-      if (resp.ok) {
-        const data = await resp.json();
-        setStats(data);
-        if (data.dbError) {
-          setDbWarning(data.dbError);
-        }
-        if (data.demoModeActive !== undefined) {
-          setIsDemoModeActive(data.demoModeActive);
-        }
+
+      if (data.demoModeActive !== undefined) {
+        setIsDemoModeActive(data.demoModeActive);
       }
     } catch (e) {
       console.error('Error fetching dashboard statistics:', e);
@@ -4260,7 +4256,6 @@ export default function App() {
                           }`}
                         >
                           <DirectoryStatusIcon entry={entry} />
-import { fetchDirectory, saveDirectoryEntry, deleteDirectoryEntry } from './modules/directory/services/directoryApi';
                         </span>
                       </td>
 
