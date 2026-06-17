@@ -36,3 +36,38 @@ export async function fetchCalls(params: FetchCallsParams) {
     }
   });
 }
+
+export type FetchStatsParams = {
+  token: string;
+  startDate: string;
+  endDate: string;
+  startTime: string;
+  endTime: string;
+  statusFilter: string;
+  searchQuery: string;
+  numberFilter: string;
+  isDemoModeActive: boolean;
+  operatorExt: string;
+  onlyMyCalls: boolean;
+};
+
+export async function fetchStats(params: FetchStatsParams) {
+  const qParams = new URLSearchParams({
+    demo: params.isDemoModeActive ? 'true' : 'false',
+    startDate: params.startDate,
+    endDate: params.endDate,
+    startTime: params.startTime,
+    endTime: params.endTime,
+    status: params.statusFilter,
+    search: params.searchQuery,
+    number: params.numberFilter,
+    operatorExt: params.operatorExt,
+    onlyMyCalls: params.onlyMyCalls ? 'true' : 'false'
+  });
+
+  return fetch(`/api/stats?${qParams.toString()}`, {
+    headers: {
+      Authorization: `Bearer ${params.token}`
+    }
+  });
+}

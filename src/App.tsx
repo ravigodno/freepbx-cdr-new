@@ -68,7 +68,7 @@ import { DirectoryPhonesCell } from './modules/directory/components/DirectoryPho
 import { DirectoryCompanyCell } from './modules/directory/components/DirectoryCompanyCell';
 import { DirectoryPositionCell } from './modules/directory/components/DirectoryPositionCell';
 import { DirectoryTable } from './modules/directory/components/DirectoryTable';
-import { fetchCalls } from './modules/cdr/services/callsService';
+import { fetchCalls, fetchStats } from './modules/cdr/services/callsService';
 import { DirectoryDepartmentCell } from './modules/directory/components/DirectoryDepartmentCell';
 
 
@@ -1126,22 +1126,18 @@ export default function App() {
     if (!session) return;
     setIsLoadingStats(true);
     try {
-      const qParams = new URLSearchParams({
-        demo: isDemoModeActive ? 'true' : 'false',
+      const resp = await fetchStats({
+        token: session.token,
         startDate,
         endDate,
         startTime,
         endTime,
-        status: statusFilter,
-        search: searchQuery,
-        number: numberFilter,
+        statusFilter,
+        searchQuery,
+        numberFilter,
+        isDemoModeActive,
         operatorExt: myExt,
-        onlyMyCalls: onlyMyCalls ? 'true' : 'false'
-      });
-      const resp = await fetch(`/api/stats?${qParams.toString()}`, {
-        headers: {
-          'Authorization': `Bearer ${session.token}`
-        }
+        onlyMyCalls
       });
       if (resp.status === 401) {
         handleAuthError(resp);
