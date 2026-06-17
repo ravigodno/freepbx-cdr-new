@@ -1,4 +1,5 @@
 import React from 'react';
+import { formatSeconds } from '../utils/formatCall';
 
 type Props = {
   call: any;
