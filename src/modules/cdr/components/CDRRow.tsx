@@ -1,6 +1,7 @@
 import React from 'react';
 import { formatSeconds } from '../utils/formatCall';
 import { CDRStatusBadge } from './CDRStatusBadge';
+import { CDRRecordingBadge } from './CDRRecordingBadge';
 
 type Props = {
   call: any;
@@ -78,6 +79,8 @@ export function CDRRow({
         >
           Call
         </button>
+
+        <CDRRecordingBadge recordingfile={call.recordingfile} />
 
         {call.recordingfile && (
           <button
