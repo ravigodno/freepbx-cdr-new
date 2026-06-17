@@ -65,6 +65,7 @@ import FreepbxCliTab from './modules/monitoring/tabs/monitoring/FreepbxCliTab';
 import DbExplorerTab from './modules/monitoring/tabs/monitoring/DbExplorerTab';
 import { DirectoryStatusIcon } from './modules/directory/components/DirectoryStatusIcon';
 import CDRPage from './modules/cdr/pages/CDRPage';
+import { extractExternalFromLastdata, isDstBad } from './modules/cdr/utils/cdrRowLogic';
 
 
 
