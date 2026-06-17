@@ -3,6 +3,7 @@ import { formatSeconds } from '../utils/formatCall';
 import { CDRStatusBadge } from './CDRStatusBadge';
 import { CDRRecordingBadge } from './CDRRecordingBadge';
 import { CDRRowActions } from './CDRRowActions';
+import { CDRPhoneCell } from './CDRPhoneCell';
 
 type Props = {
   call: any;
@@ -47,15 +48,8 @@ export function CDRRow({
 }: Props) {
   return (
     <tr>
-      {/* ===== SOURCE ===== */}
-      <td className="py-3 px-2 text-xs font-mono">
-        {call.src || '—'}
-      </td>
-
-      {/* ===== DEST ===== */}
-      <td className="py-3 px-2 text-xs font-mono">
-        {call.dst || '—'}
-      </td>
+      <CDRPhoneCell value={call.src} />
+      <CDRPhoneCell value={call.dst} />
 
       {/* ===== COMPANY ===== */}
       <td className="py-3 px-2 text-xs">
