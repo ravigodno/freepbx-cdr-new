@@ -6,6 +6,7 @@ import { CDRRowActions } from './CDRRowActions';
 import { CDRPhoneCell } from './CDRPhoneCell';
 import { CDRDurationCell } from './CDRDurationCell';
 import { CDRCompanyCell } from './CDRCompanyCell';
+import { CDRDateCell } from './CDRDateCell';
 
 type Props = {
   call: any;
@@ -50,6 +51,7 @@ export function CDRRow({
 }: Props) {
   return (
     <tr>
+      <CDRDateCell calldate={call.calldate} uniqueid={call.uniqueid} />
       <CDRPhoneCell value={call.src} />
       <CDRPhoneCell value={call.dst} />
 
