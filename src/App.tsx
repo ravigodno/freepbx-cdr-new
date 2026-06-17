@@ -1122,17 +1122,17 @@ export default function App() {
     if (!session) return;
     setIsLoadingStats(true);
     try {
-      const qParams = new URLSearchParams({
-        demo: isDemoModeActive ? 'true' : 'false',
+      const qParams = buildCdrQueryParams({
+        isDemoModeActive,
         startDate,
         endDate,
         startTime,
         endTime,
-        status: statusFilter,
-        search: searchQuery,
-        number: numberFilter,
-        operatorExt: myExt,
-        onlyMyCalls: onlyMyCalls ? 'true' : 'false'
+        statusFilter,
+        searchQuery,
+        numberFilter,
+        myExt,
+        onlyMyCalls
       });
       const resp = await fetch(`/api/stats?${qParams.toString()}`, {
         headers: {
@@ -1165,19 +1165,19 @@ export default function App() {
     if (!session) return;
     setIsLoadingCalls(true);
     try {
-      const qParams = new URLSearchParams({
-        page: targetPage.toString(),
-        limit: limit.toString(),
+      const qParams = buildCdrQueryParams({
+        page: targetPage,
+        limit,
+        isDemoModeActive,
         startDate,
         endDate,
         startTime,
         endTime,
-        status: statusFilter,
-        search: searchQuery,
-        number: numberFilter,
-        demo: isDemoModeActive ? 'true' : 'false',
-        operatorExt: myExt,
-        onlyMyCalls: onlyMyCalls ? 'true' : 'false'
+        statusFilter,
+        searchQuery,
+        numberFilter,
+        myExt,
+        onlyMyCalls
       });
 
       const resp = await fetch(`/api/calls?${qParams.toString()}`, {
