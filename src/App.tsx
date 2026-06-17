@@ -65,6 +65,7 @@ import FreepbxCliTab from './components/monitoring/FreepbxCliTab';
 import DbExplorerTab from './components/monitoring/DbExplorerTab';
 import { DirectoryStatusIcon } from './modules/directory/components/DirectoryStatusIcon';
 import { DirectoryPhonesCell } from './modules/directory/components/DirectoryPhonesCell';
+import { DirectoryCompanyCell } from './modules/directory/components/DirectoryCompanyCell';
 
 
 
@@ -4295,15 +4296,7 @@ export default function App() {
                         onCall={triggerClickToCall}
                       />
 
-                      <td className="py-3.5 px-2 text-slate-700 w-[230px] max-w-[230px]">
-                        {entry.company ? (
-                          <div className="block truncate max-w-[210px]" title={entry.company}>
-                            {entry.company}
-                          </div>
-                        ) : (
-                          <span className="text-slate-350 italic">—</span>
-                        )}
-                      </td>
+                      <DirectoryCompanyCell company={entry.company} />
 
                       <td className="py-3.5 px-3 text-slate-700">
                         {entry.position || <span className="text-slate-350 italic">—</span>}
