@@ -4,6 +4,7 @@ import { CDRStatusBadge } from './CDRStatusBadge';
 import { CDRRecordingBadge } from './CDRRecordingBadge';
 import { CDRRowActions } from './CDRRowActions';
 import { CDRPhoneCell } from './CDRPhoneCell';
+import { CDRDurationCell } from './CDRDurationCell';
 
 type Props = {
   call: any;
@@ -61,10 +62,7 @@ export function CDRRow({
         <CDRStatusBadge status={call.disposition} />
       </td>
 
-      {/* ===== DURATION ===== */}
-      <td className="py-3 px-2 text-xs font-mono">
-        {call.duration || 0}s
-      </td>
+      <CDRDurationCell duration={call.duration} />
 
       {/* ===== ACTIONS ===== */}
       <td className="py-3 px-2 text-xs">
