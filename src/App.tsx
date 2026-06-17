@@ -4592,7 +4592,7 @@ export default function App() {
         <>
           <section id="directory-panel" className="space-y-4">
         {/* Directory Overview cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="hidden">
           <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-col justify-between shadow-sm">
             <span className="text-xs text-slate-500 font-medium tracking-wide font-sans">Всего контактов</span>
             <div className="mt-2 flex items-baseline justify-between font-sans">
