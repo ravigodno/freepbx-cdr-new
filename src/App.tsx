@@ -56,16 +56,19 @@ import {
 } from 'lucide-react';
 import { CallEntry, DashboardStats, AppSettings, UserRole, DirectoryEntry } from './types';
 import packageJson from '../package.json';
-import SngrepTab from './components/monitoring/SngrepTab';
-import TcpdumpTab from './components/monitoring/TcpdumpTab';
+import SngrepTab from './modules/monitoring/tabs/monitoring/SngrepTab';
+import TcpdumpTab from './modules/monitoring/tabs/monitoring/TcpdumpTab';
 import ReportsTab from './components/reports/ReportsTab';
-import ActiveCallsTab from './components/monitoring/ActiveCallsTab';
-import AsteriskCliTab from './components/monitoring/AsteriskCliTab';
-import FreepbxCliTab from './components/monitoring/FreepbxCliTab';
-import DbExplorerTab from './components/monitoring/DbExplorerTab';
+import ActiveCallsTab from './modules/monitoring/tabs/monitoring/ActiveCallsTab';
+import AsteriskCliTab from './modules/monitoring/tabs/monitoring/AsteriskCliTab';
+import FreepbxCliTab from './modules/monitoring/tabs/monitoring/FreepbxCliTab';
+import DbExplorerTab from './modules/monitoring/tabs/monitoring/DbExplorerTab';
 import { DirectoryStatusIcon } from './modules/directory/components/DirectoryStatusIcon';
 import { DirectoryPhonesCell } from './modules/directory/components/DirectoryPhonesCell';
 import { DirectoryCompanyCell } from './modules/directory/components/DirectoryCompanyCell';
+import { DirectoryPositionCell } from './modules/directory/components/DirectoryPositionCell';
+import { DirectoryTable } from './modules/directory/components/DirectoryTable';
+import { DirectoryDepartmentCell } from './modules/directory/components/DirectoryDepartmentCell';
 
 
 
@@ -4299,12 +4302,10 @@ export default function App() {
                       <DirectoryCompanyCell company={entry.company} />
 
                       <td className="py-3.5 px-3 text-slate-700">
-                        {entry.position || <span className="text-slate-350 italic">—</span>}
+                        <DirectoryPositionCell position={entry.position} />
                       </td>
 
-                      <td className="py-3.5 px-3 text-slate-700">
-                        {(entry as any).department || <span className="text-slate-350 italic">—</span>}
-                      </td>
+                      <DirectoryDepartmentCell department={(entry as any).department} />
 
 
 
