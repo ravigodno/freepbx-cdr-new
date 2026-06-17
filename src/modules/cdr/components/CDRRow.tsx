@@ -1,5 +1,6 @@
 import React from 'react';
 import { formatSeconds } from '../utils/formatCall';
+import { CDRStatusBadge } from './CDRStatusBadge';
 
 type Props = {
   call: any;
@@ -61,7 +62,7 @@ export function CDRRow({
 
       {/* ===== STATUS ===== */}
       <td className="py-3 px-2 text-xs">
-        {call.disposition || '—'}
+        <CDRStatusBadge status={call.disposition} />
       </td>
 
       {/* ===== DURATION ===== */}
