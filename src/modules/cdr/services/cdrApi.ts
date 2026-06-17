@@ -1,5 +1,5 @@
-export async function fetchCdrStats(url: string, token: string) {
-  const resp = await fetch(url, {
+export async function fetchCdrStats(params: URLSearchParams, token: string) {
+  const resp = await fetch(`/api/stats?${params.toString()}`, {
     headers: {
       Authorization: `Bearer ${token}`
     }
@@ -12,8 +12,8 @@ export async function fetchCdrStats(url: string, token: string) {
   return resp.json();
 }
 
-export async function fetchCdrCalls(url: string, token: string) {
-  const resp = await fetch(url, {
+export async function fetchCdrCalls(params: URLSearchParams, token: string) {
+  const resp = await fetch(`/api/calls?${params.toString()}`, {
     headers: {
       Authorization: `Bearer ${token}`
     }
@@ -21,6 +21,11 @@ export async function fetchCdrCalls(url: string, token: string) {
 
   if (resp.status === 401) {
     throw new Error('UNAUTHORIZED');
+  }
+
+  if (!resp.ok) {
+    const errorData = await resp.json().catch(() => ({}));
+    throw new Error(errorData.error || 'Не удалось загрузить реестр вызовов');
   }
 
   return resp.json();

@@ -67,6 +67,7 @@ import { DirectoryStatusIcon } from './modules/directory/components/DirectorySta
 import CDRPage from './modules/cdr/pages/CDRPage';
 import { extractExternalFromLastdata, isDstBad } from './modules/cdr/utils/callParser';
 import { buildCdrQueryParams } from './modules/cdr/utils/buildCdrQueryParams';
+import { fetchCdrStats, fetchCdrCalls } from './modules/cdr/services/cdrApi';
 
 
 
@@ -1180,36 +1181,21 @@ export default function App() {
         onlyMyCalls
       });
 
-      const resp = await fetch(`/api/calls?${qParams.toString()}`, {
-        headers: {
-          'Authorization': `Bearer ${session.token}`
-        }
-      });
+      const data = await fetchCdrCalls(qParams, session.token);
+      setCalls(data.calls);
+      setTotalCalls(data.total);
+      setTotalPages(data.totalPages || 1);
+      setPage(data.page || 1);
+      setCallsError(null);
 
-      if (resp.status === 401) {
-        handleAuthError(resp);
-        return;
+      if (data.dbError) {
+        setDbWarning(data.dbError);
+      } else {
+        setDbWarning(null);
       }
 
-      if (resp.ok) {
-        const data = await resp.json();
-        setCalls(data.calls);
-        setTotalCalls(data.total);
-        setTotalPages(data.totalPages || 1);
-        setPage(data.page || 1);
-        setCallsError(null);
-        if (data.dbError) {
-          setDbWarning(data.dbError);
-        } else {
-          setDbWarning(null);
-        }
-        if (data.demoModeActive !== undefined) {
-          setIsDemoModeActive(data.demoModeActive);
-        }
-      } else {
-        const errorData = await resp.json();
-        console.error('Error parsing CDR call logs:', errorData.error);
-        setCallsError(errorData.error || 'Не удалось загрузить реестр вызовов');
+      if (data.demoModeActive !== undefined) {
+        setIsDemoModeActive(data.demoModeActive);
       }
     } catch (e: any) {
       console.error('Network failure loading records:', e);
