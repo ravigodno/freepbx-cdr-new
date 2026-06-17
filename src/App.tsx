@@ -64,6 +64,7 @@ import AsteriskCliTab from './modules/monitoring/tabs/monitoring/AsteriskCliTab'
 import FreepbxCliTab from './modules/monitoring/tabs/monitoring/FreepbxCliTab';
 import DbExplorerTab from './modules/monitoring/tabs/monitoring/DbExplorerTab';
 import { DirectoryStatusIcon } from './modules/directory/components/DirectoryStatusIcon';
+import { fetchDirectory } from './modules/directory/services/directoryApi';
 import CDRPage from './modules/cdr/pages/CDRPage';
 import { extractExternalFromLastdata, isDstBad } from './modules/cdr/utils/callParser';
 import { buildCdrQueryParams } from './modules/cdr/utils/buildCdrQueryParams';
@@ -950,22 +951,8 @@ export default function App() {
     if (!session) return;
     setIsLoadingDirectory(true);
     try {
-      const resp = await fetch('/api/directory', {
-        headers: {
-          'Authorization': `Bearer ${session.token}`
-        }
-      });
-
-      if (resp.status === 401) {
-        handleAuthError(resp);
-        return;
-      }
-
-      const data = await resp.json();
-
-      if (resp.ok) {
-        setDirectory(data);
-      }
+      const data = await fetchDirectory(session.token);
+      setDirectory(data);
     } catch (e) {
       console.error('Error loading directory:', e);
     } finally {
@@ -4285,6 +4272,7 @@ export default function App() {
                           }`}
                         >
                           <DirectoryStatusIcon entry={entry} />
+import { fetchDirectory } from './modules/directory/services/directoryApi';
                         </span>
                       </td>
 
