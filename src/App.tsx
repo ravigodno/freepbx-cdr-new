@@ -64,7 +64,7 @@ import AsteriskCliTab from './modules/monitoring/tabs/monitoring/AsteriskCliTab'
 import FreepbxCliTab from './modules/monitoring/tabs/monitoring/FreepbxCliTab';
 import DbExplorerTab from './modules/monitoring/tabs/monitoring/DbExplorerTab';
 import { DirectoryStatusIcon } from './modules/directory/components/DirectoryStatusIcon';
-import { fetchDirectory, saveDirectoryEntry, deleteDirectoryEntry } from './modules/directory/services/directoryApi';
+import { fetchDirectory, saveDirectoryEntry, deleteDirectoryEntry, toggleDirectoryBlacklist } from './modules/directory/services/directoryApi';
 import CDRPage from './modules/cdr/pages/CDRPage';
 import { extractExternalFromLastdata, isDstBad } from './modules/cdr/utils/callParser';
 import { buildCdrQueryParams } from './modules/cdr/utils/buildCdrQueryParams';
@@ -1043,21 +1043,9 @@ export default function App() {
   const handleToggleBlacklist = async (entry: DirectoryEntry, enabled: boolean, syncAsterisk = true) => {
     if (!session || session.role !== 'admin') return;
     try {
-      const resp = await fetch(`/api/directory/${entry.id}/blacklist`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session.token}`
-        },
-        body: JSON.stringify({ enabled, syncAsterisk })
-      });
-      const data = await resp.json().catch(() => ({}));
-      if (resp.ok) {
-        await loadDirectory();
-        alert(enabled ? 'Контакт добавлен в черный список.' : 'Контакт удален из черного списка.');
-      } else {
-        alert(data.error || 'Не удалось изменить черный список.');
-      }
+      await toggleDirectoryBlacklist(session.token, entry.id, enabled, syncAsterisk);
+      await loadDirectory();
+      alert(enabled ? 'Контакт добавлен в черный список.' : 'Контакт удален из черного списка.');
     } catch (e: any) {
       alert(e.message || 'Ошибка связи с сервером.');
     }

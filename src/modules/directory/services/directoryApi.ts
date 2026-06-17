@@ -47,3 +47,31 @@ export async function deleteDirectoryEntry(token: string, id: string) {
 
   return resp.json();
 }
+
+export async function toggleDirectoryBlacklist(
+  token: string,
+  id: string,
+  enabled: boolean,
+  syncAsterisk = true
+) {
+  const resp = await fetch(`/api/directory/${id}/blacklist`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify({ enabled, syncAsterisk })
+  });
+
+  if (resp.status === 401) {
+    throw new Error('UNAUTHORIZED');
+  }
+
+  const data = await resp.json().catch(() => ({}));
+
+  if (!resp.ok) {
+    throw new Error(data.error || 'Не удалось изменить черный список.');
+  }
+
+  return data;
+}
