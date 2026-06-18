@@ -18,6 +18,8 @@ import { buildCdrRowViewModel, isInternalExt } from '../utils/CDRRowHelpers';
 import CDRDurationCell from './CDRDurationCell';
 import CDRStatusCell from './CDRStatusCell';
 import CDRCommentCell from './CDRCommentCell';
+import CDRTimeCell from './CDRTimeCell';
+import CDRRecordingCell from './CDRRecordingCell';
 
 interface LegacyCDRTableProps {
   calls: any[];
@@ -104,33 +106,14 @@ export default function LegacyCDRTable({
               }`}
             >
               {/* Column 1: TIME AND ID */}
-              <td className="py-4 px-4 font-normal text-slate-705 dark:text-slate-350">
-                <div className="flex items-center gap-3">
-                  {/* Call type icon circle */}
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 border shadow-3xs `}>
-                    {isIncoming ? <PhoneIncoming className="h-4.5 w-4.5" /> : isOutgoing ? <PhoneOutgoing className="h-4.5 w-4.5" /> : <PhoneCall className="h-4.5 w-4.5" />}
-                  </div>
-                  <div className="flex flex-col">
-                    <span className="font-bold text-slate-800 dark:text-slate-200 text-[13px] tracking-tight">
-                      {call.calldate}
-                    </span>
-                    <span className="text-[11px] text-slate-400 dark:text-slate-505 font-mono mt-0.5 animate-none">
-                      ID:{' '}
-                      {session?.role === 'admin' ? (
-                        <button
-                          onClick={() => fetchChronology(call.uniqueid)}
-                          className="text-slate-400 hover:text-red-705 hover:underline cursor-pointer font-medium"
-                          title="Посмотреть хронологию прохождения звонка"
-                        >
-                          {call.uniqueid}
-                        </button>
-                      ) : (
-                        <span className="select-all">{call.uniqueid}</span>
-                      )}
-                    </span>
-                  </div>
-                </div>
-              </td>
+              <CDRTimeCell
+                calldate={call.calldate}
+                uniqueid={call.uniqueid}
+                isIncoming={isIncoming}
+                isOutgoing={isOutgoing}
+                isAdmin={session?.role === 'admin'}
+                fetchChronology={fetchChronology}
+              />
 
               {/* Column 2: WHO CALLED (Кто звонил) */}
               <td className="py-4 px-4 m-0">
@@ -248,32 +231,12 @@ export default function LegacyCDRTable({
               />
 
               {/* Column 5b: ЗАПИСЬ */}
-              <td className="py-4 px-4">
-                {call.recordingfile ? (
-                  <button
-                    onClick={() => playRecording(call)}
-                    className={`inline-flex items-center gap-1.5 py-1 px-3 bg-white hover:bg-slate-50 dark:bg-slate-800 dark:hover:bg-slate-700 border border-slate-250/70 dark:border-slate-800/40 text-[10.5px] font-bold rounded-lg cursor-pointer transition-colors shadow-3xs ${
-                      playingCallId === call.uniqueid
-                        ? 'bg-rose-50 dark:bg-rose-950/30 border-rose-200 text-rose-600 hover:bg-rose-100/50 dark:text-rose-400'
-                        : 'text-slate-700 dark:text-slate-300 hover:text-slate-950'
-                    }`}
-                  >
-                    {playingCallId === call.uniqueid && !isAudioPaused ? (
-                      <>
-                        <Pause className="h-3.5 w-3.5 fill-current" />
-                        <span>Слушать</span>
-                      </>
-                    ) : (
-                      <>
-                        <Play className="h-3.5 w-3.5 fill-current" />
-                        <span>Воспроизвести</span>
-                      </>
-                    )}
-                  </button>
-                ) : (
-                  <span className="text-slate-405 dark:text-slate-500 italic text-xs select-none font-light">Нет записи</span>
-                )}
-              </td>
+              <CDRRecordingCell
+                call={call}
+                playingCallId={playingCallId}
+                isAudioPaused={isAudioPaused}
+                playRecording={playRecording}
+              />
 
               {/* Column 6: COMMENT */}
               <CDRCommentCell
