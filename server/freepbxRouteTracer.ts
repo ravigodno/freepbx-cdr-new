@@ -67,3 +67,84 @@ export function extractRingGroupIdsFromLegs(legs: any[]): string[] {
       .map((l: any) => String(l.dst))
   ));
 }
+
+export async function analyzeRingGroups({
+  settings,
+  legs,
+  queryFreePBXCDR,
+}: {
+  settings: any;
+  legs: any[];
+  queryFreePBXCDR: (settings: any, useFreepbxDb: boolean, sql: string, params?: any[]) => Promise<any[]>;
+}): Promise<FreepbxRouteTraceStep[]> {
+  const steps: FreepbxRouteTraceStep[] = [];
+  const ringGroupIds = extractRingGroupIdsFromLegs(legs);
+
+  for (const groupId of ringGroupIds) {
+    try {
+      const rgRows = await queryFreePBXCDR(
+        settings,
+        true,
+        'SELECT grpnum, description, strategy, grptime, grplist, postdest, annmsg_id, ringing, recording FROM ringgroups WHERE grpnum = ? LIMIT 1',
+        [groupId]
+      );
+
+      if (rgRows && rgRows.length > 0) {
+        const rg: any = rgRows[0];
+        const members = String(rg.grplist || '')
+          .split('-')
+          .map((x: string) => x.trim())
+          .filter(Boolean);
+
+        let users: any[] = [];
+        if (members.length > 0) {
+          const placeholders = members.map(() => '?').join(',');
+          users = await queryFreePBXCDR(
+            settings,
+            true,
+            `SELECT extension, name, outboundcid, ringtimer, noanswer_dest, busy_dest, chanunavail_dest FROM users WHERE extension IN (${placeholders}) ORDER BY extension ASC`,
+            members
+          );
+        }
+
+        steps.push({
+          type: 'ring_group',
+          title: rg.description || `Группа обзвона ${groupId}`,
+          label: 'Ring Group',
+          number: groupId,
+          destination: rg.postdest || '',
+          details: {
+            grpnum: rg.grpnum,
+            description: rg.description || '',
+            strategy: rg.strategy || '',
+            ringTime: rg.grptime || '',
+            members,
+            postDestination: rg.postdest || '',
+            announcementId: rg.annmsg_id || null,
+            ringing: rg.ringing || '',
+            recording: rg.recording || '',
+          },
+          members: users.map((u: any) => ({
+            extension: u.extension,
+            name: u.name || '',
+            outboundcid: u.outboundcid || '',
+            ringtimer: u.ringtimer || '',
+            noanswerDest: u.noanswer_dest || '',
+            busyDest: u.busy_dest || '',
+            unavailableDest: u.chanunavail_dest || '',
+          })),
+        });
+      }
+    } catch (e: any) {
+      steps.push({
+        type: 'ring_group_error',
+        title: `Ошибка чтения группы ${groupId}`,
+        label: 'Ring Group',
+        number: groupId,
+        error: e.message,
+      });
+    }
+  }
+
+  return steps;
+}

@@ -1,4 +1,4 @@
-import { detectCallDirection, getRealCallerExtFromCall, isOutboundCall, extractRingGroupIdsFromLegs } from './server/freepbxRouteTracer';
+import { detectCallDirection, getRealCallerExtFromCall, isOutboundCall, extractRingGroupIdsFromLegs, analyzeRingGroups } from './server/freepbxRouteTracer';
 import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import fs from 'fs';
@@ -2379,71 +2379,11 @@ async function enrichFreePBXRoute(settings: any, legs: any[]) {
     }
   }
 
-  for (const groupId of ringGroupIds) {
-    try {
-      const rgRows = await queryFreePBXCDR(
-        settings,
-        true,
-        'SELECT grpnum, description, strategy, grptime, grplist, postdest, annmsg_id, ringing, recording FROM ringgroups WHERE grpnum = ? LIMIT 1',
-        [groupId]
-      );
-
-      if (rgRows && rgRows.length > 0) {
-        const rg: any = rgRows[0];
-        const members = String(rg.grplist || '')
-          .split('-')
-          .map((x: string) => x.trim())
-          .filter(Boolean);
-
-        let users: any[] = [];
-        if (members.length > 0) {
-          const placeholders = members.map(() => '?').join(',');
-          users = await queryFreePBXCDR(
-            settings,
-            true,
-            `SELECT extension, name, outboundcid, ringtimer, noanswer_dest, busy_dest, chanunavail_dest FROM users WHERE extension IN (${placeholders}) ORDER BY extension ASC`,
-            members
-          );
-        }
-
-        routeSteps.push({
-          type: 'ring_group',
-          title: rg.description || `Группа обзвона ${groupId}`,
-          label: 'Ring Group',
-          number: groupId,
-          destination: rg.postdest || '',
-          details: {
-            grpnum: rg.grpnum,
-            description: rg.description || '',
-            strategy: rg.strategy || '',
-            ringTime: rg.grptime || '',
-            members,
-            postDestination: rg.postdest || '',
-            announcementId: rg.annmsg_id || null,
-            ringing: rg.ringing || '',
-            recording: rg.recording || '',
-          },
-          members: users.map((u: any) => ({
-            extension: u.extension,
-            name: u.name || '',
-            outboundcid: u.outboundcid || '',
-            ringtimer: u.ringtimer || '',
-            noanswerDest: u.noanswer_dest || '',
-            busyDest: u.busy_dest || '',
-            unavailableDest: u.chanunavail_dest || '',
-          })),
-        });
-      }
-    } catch (e: any) {
-      routeSteps.push({
-        type: 'ring_group_error',
-        title: `Ошибка чтения группы ${groupId}`,
-        label: 'Ring Group',
-        number: groupId,
-        error: e.message,
-      });
-    }
-  }
+  routeSteps.push(...await analyzeRingGroups({
+    settings,
+    legs,
+    queryFreePBXCDR,
+  }));
 
   return {
     did,
