@@ -27,3 +27,37 @@ export function isDstBad(num: string, isOutgoing: boolean) {
 
   return false;
 }
+
+export function renderClidName(clid: string, fallbackPhone: string): string {
+  if (!clid) return fallbackPhone;
+
+  const match = clid.match(/"([^"]+)"/);
+  if (match) return match[1];
+
+  return clid.split('<')[0].trim() || fallbackPhone;
+}
+
+export function isInternalExt(num: string): boolean {
+  if (!num) return false;
+
+  const digits = num.replace(/\D/g, '');
+
+  return digits.length > 0 && digits.length <= 5 && /^\d+$/.test(num.trim());
+}
+
+export function getTrunkName(channelStr: string): string {
+  if (!channelStr) return '';
+
+  let clean = channelStr.includes('/') ? channelStr.split('/')[1] : channelStr;
+  const lastDashIndex = clean.lastIndexOf('-');
+
+  if (lastDashIndex !== -1) {
+    const suffix = clean.substring(lastDashIndex + 1);
+
+    if (/^[0-9a-fA-F]{3,}$/.test(suffix) || /^\d+$/.test(suffix)) {
+      clean = clean.substring(0, lastDashIndex);
+    }
+  }
+
+  return clean;
+}
