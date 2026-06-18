@@ -67,7 +67,7 @@ import { DirectoryStatusIcon } from './modules/directory/components/DirectorySta
 import { fetchDirectory, saveDirectoryEntry, deleteDirectoryEntry, toggleDirectoryBlacklist } from './modules/directory/services/directoryApi';
 import { resetDirFormFieldsHelper, openEditDirEntryHelper, openCreateDirEntryHelper, openAddFromCallHelper } from './modules/directory/utils/directoryFormHelpers';
 import CDRPage from './modules/cdr/pages/CDRPage';
-import { buildCdrRowViewModel, extractExternalFromLastdata, isDstBad, renderClidName, isInternalExt, getTrunkName } from './modules/cdr/utils/CDRRowHelpers';
+import { buildCdrRowViewModel, isInternalExt } from './modules/cdr/utils/CDRRowHelpers';
 import { buildCdrQueryParams } from './modules/cdr/utils/buildCdrQueryParams';
 import { fetchCdrStats, fetchCdrCalls } from './modules/cdr/services/cdrApi';
 
@@ -3418,148 +3418,22 @@ export default function App() {
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800/45 text-xs bg-white dark:bg-slate-900">
                   {calls.map((call, index) => {
-                    const dctx = call.dcontext || '';
-                    const ch = call.channel || '';
-                    const srcVal = (call.src || '').trim();
-                    const dstVal = (call.dst || '').trim();
+                    const rowVm = buildCdrRowViewModel(call, directory);
 
-                    // --- 1. CALL TYPE DETECTION ---
-                    const isIncoming = (() => {
-                      if (isInternalExt(srcVal)) {
-                        return false;
-                      }
-                      const dctxLower = dctx.toLowerCase();
-                      const chLower = ch.toLowerCase();
-                      if (
-                        dctxLower.includes('from-trunk') ||
-                        dctxLower.includes('from-pstn') ||
-                        dctxLower.includes('sip-external') ||
-                        dctxLower.includes('from-digital') ||
-                        dctxLower.includes('from-outside') ||
-                        (call.did && call.did.length > 0)
-                      ) {
-                        return true;
-                      }
-                      const isIncomingRoute = 
-                        dctxLower === 'ext-queues' ||
-                        dctxLower === 'ext-group' ||
-                        dctxLower === 'ext-local' ||
-                        dctxLower.startsWith('ivr-') ||
-                        dstVal === '600' ||
-                        isInternalExt(dstVal);
-                      const isTrunkChannel = chLower.includes('-in-') || chLower.includes('trunk');
-                      return isIncomingRoute || isTrunkChannel;
-                    })();
-
-                    const isMissed = (() => {
-                      const callDisp = (call.disposition || '').toUpperCase();
-                      return (callDisp === 'NO ANSWER' || callDisp === 'BUSY' || callDisp === 'FAILED') && (isIncoming || !call.dstchannel);
-                    })();
-
-                    const isOutgoing = dctx === 'from-internal' && isInternalExt(srcVal) && !isInternalExt(dstVal) && dstVal.length >= 7;
-
-                    const isInternal = isInternalExt(srcVal) && isInternalExt(dstVal);
-
-                    // --- 3. COLUMN 1: "KTO ZVONIL" (SENDER ENGINE) ---
-                    const getCallerNumber = () => {
-                      if (isIncoming) {
-                        if (srcVal && !isInternalExt(srcVal)) {
-                          return srcVal;
-                        }
-                        if (call.clid) {
-                          const match = call.clid.match(/<([^>]+)>/);
-                          if (match && match[1].trim()) {
-                            return match[1].trim();
-                          }
-                        }
-                        return srcVal;
-                      } else {
-                        // Outgoing or Internal
-                        if (call.cnum && call.cnum.trim()) {
-                          return call.cnum.trim();
-                        }
-                        if (call.src && call.src.trim()) {
-                          return call.src.trim();
-                        }
-                        if (call.channel) {
-                          const chExt = getTrunkName(call.channel);
-                          if (chExt) return chExt;
-                        }
-                        return '';
-                      }
-                    };
-
-                    const displayedSrc = getCallerNumber() || call.src || 'Неизвестно';
-
-                    // --- 4. COLUMN 2: "KUDA ZVONIL" (RECEIVER ENGINE) ---
-                    const getCalleeNumber = () => {
-                      if (isIncoming) {
-                        if (call.dstchannel) {
-                          const ext = getTrunkName(call.dstchannel);
-                          if (ext && isInternalExt(ext)) {
-                            return ext;
-                          }
-                          if (ext) return ext;
-                        }
-                        if (call.dst) {
-                          return call.dst;
-                        }
-                        if (call.did) {
-                          return call.did;
-                        }
-                        return '';
-                      } else {
-                        // Outgoing or Internal
-                        if (!isDstBad(dstVal, isOutgoing)) {
-                          return dstVal;
-                        }
-                        const lastdata = call.lastdata || '';
-                        const parsed = extractExternalFromLastdata(lastdata);
-                        if (parsed) return parsed;
-                        return dstVal;
-                      }
-                    };
-
-                    const displayedDst = getCalleeNumber() || call.dst || 'Неизвестно';
-
-                    const dMatch = directory.find(e => e.number.trim() === displayedSrc.trim());
-                    const isSrcInternal = isInternalExt(displayedSrc);
-                    let callerName = '';
-                    let callerType = isSrcInternal ? 'internal' : 'client';
-                    let isFound = false;
-
-                    if (dMatch) {
-                      callerName = dMatch.name;
-                      callerType = dMatch.type;
-                      isFound = true;
-                    } else {
-                      if (isIncoming) {
-                        const clidName = renderClidName(call.clid, displayedSrc);
-                        if (clidName && clidName.trim() !== '' && clidName !== displayedSrc) {
-                          callerName = clidName;
-                        } else {
-                          callerName = isSrcInternal ? `Внутренний ${displayedSrc}` : 'Внешний клиент';
-                        }
-                      } else {
-                        callerName = isSrcInternal ? `Внутренний ${displayedSrc}` : 'Внешний клиент';
-                      }
-                    }
-
-                    const dstContact = directory.find(e => e.number.trim() === displayedDst.trim());
-                    const isDstInternal = isInternalExt(displayedDst);
-                    let calleeName = '';
-                    let calleeType = isDstInternal ? 'internal' : 'client';
-                    let isFoundDst = false;
-
-                    if (dstContact) {
-                      calleeName = dstContact.name;
-                      calleeType = dstContact.type;
-                      isFoundDst = true;
-                    } else {
-                      calleeName = isDstInternal ? `Внутренний ${displayedDst}` : 'Внешний номер';
-                    }
-
-                    const callDisp = (call.disposition || '').toUpperCase();
+                    const {
+                      isIncoming,
+                      isMissed,
+                      isOutgoing,
+                      displayedSrc,
+                      displayedDst,
+                      callerName,
+                      callerType,
+                      isFound,
+                      calleeName,
+                      calleeType,
+                      isFoundDst,
+                      callDisp,
+                    } = rowVm;
 
                     return (
                       <tr
