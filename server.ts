@@ -2225,6 +2225,240 @@ app.post('/api/calls/:uniqueid/process', requireAuth(), async (req, res) => {
   res.json({ success: true, status: statusItem });
 });
 
+
+
+async function enrichFreePBXRoute(settings: any, legs: any[]) {
+  const routeSteps: any[] = [];
+
+  const first = legs[0] || {};
+  const firstContext = String(first.dcontext || '');
+  const firstLastapp = String(first.lastapp || '').toUpperCase();
+  const firstLastdata = String(first.lastdata || '');
+  const firstSrc = String(first.src || '');
+  const firstDst = String(first.dst || '');
+  const channelExtMatch = String(first.channel || '').match(/\/(\d{2,6})-/);
+  const realCallerExt = String(
+    (channelExtMatch && channelExtMatch[1]) ||
+    first.cnum ||
+    firstSrc ||
+    ''
+  );
+
+  if (firstContext === 'from-internal' && firstDst) {
+    let callerUser: any = null;
+    try {
+      const userRows = realCallerExt
+        ? await queryFreePBXCDR(
+            settings,
+            true,
+            'SELECT extension, name, outboundcid, ringtimer FROM users WHERE extension = ? LIMIT 1',
+            [realCallerExt]
+          )
+        : [];
+      callerUser = userRows && userRows.length > 0 ? userRows[0] : null;
+    } catch (e) {}
+
+    routeSteps.push({
+      type: 'outbound_start',
+      title: `Исходящий вызов от внутреннего номера ${realCallerExt || '—'}${callerUser?.name ? ' — ' + callerUser.name : ''}`,
+      label: 'Extension',
+      number: realCallerExt,
+      destination: firstDst,
+      details: {
+        from: realCallerExt,
+        name: callerUser?.name || '',
+        outboundcid: callerUser?.outboundcid || '',
+        rawSrc: firstSrc,
+        channel: first.channel || '',
+        to: firstDst,
+        context: firstContext,
+      },
+    });
+
+    if (firstLastapp === 'AGI') {
+      routeSteps.push({
+        type: 'agi_route',
+        title: `Проверка маршрута через AGI`,
+        label: 'AGI',
+        number: firstLastdata,
+        destination: firstDst,
+        details: {
+          script: firstLastdata,
+          description: 'Пользовательский скрипт выбора/проверки транка перед исходящим вызовом',
+        },
+      });
+    }
+
+    try {
+      const trunkRows = await queryFreePBXCDR(
+        settings,
+        true,
+        'SELECT trunkid, name, tech, channelid, outcid FROM trunks ORDER BY trunkid ASC LIMIT 50',
+        []
+      );
+
+      routeSteps.push({
+        type: 'outbound_trunks_available',
+        title: 'Доступные транки FreePBX',
+        label: 'Trunks',
+        destination: firstDst,
+        details: {
+          count: trunkRows.length,
+          trunks: trunkRows.map((t: any) => ({
+            trunkid: t.trunkid,
+            name: t.name,
+            tech: t.tech,
+            channelid: t.channelid,
+            outcid: t.outcid,
+          })),
+        },
+      });
+    } catch (e: any) {
+      routeSteps.push({
+        type: 'outbound_trunks_error',
+        title: 'Ошибка чтения транков',
+        label: 'Trunks',
+        error: e.message,
+      });
+    }
+  }
+  const did = String(
+    first.did ||
+    legs.find((l: any) => l.did)?.did ||
+    legs.find((l: any) => /^\\d{3,15}$/.test(String(l.dst || '')))?.dst ||
+    legs.find((l: any) => /^\\d{3,15}$/.test(String(l.cnum || '')))?.cnum ||
+    ''
+  ).trim();
+  const ringGroupIds = Array.from(new Set(
+    legs
+      .filter((l: any) => l.dcontext === 'ext-group' && l.dst)
+      .map((l: any) => String(l.dst))
+  ));
+
+  if (did) {
+    try {
+      const incomingRows = await queryFreePBXCDR(
+        settings,
+        true,
+        'SELECT extension, cidnum, destination, description, ringing, grppre, delay_answer FROM incoming WHERE extension = ? OR extension = "any" OR extension = "" ORDER BY extension = ? DESC, extension <> "" DESC LIMIT 1',
+        [did, did]
+      );
+
+      if (incomingRows && incomingRows.length > 0) {
+        const r: any = incomingRows[0];
+        routeSteps.push({
+          type: 'inbound_route',
+          title: r.description || 'Входящее правило',
+          label: 'Inbound Route',
+          number: r.extension || did,
+          pattern: r.extension || did,
+          cidPattern: r.cidnum || '',
+          destination: r.destination || '',
+          details: {
+            did,
+            description: r.description || '',
+            destination: r.destination || '',
+            ringing: r.ringing || '',
+            grppre: r.grppre || '',
+            delayAnswer: r.delay_answer || 0,
+          },
+        });
+      } else {
+        routeSteps.push({
+          type: 'inbound_route_missing',
+          title: 'Входящее правило не найдено',
+          label: 'Inbound Route',
+          number: did,
+          pattern: did,
+          destination: '',
+          details: { did },
+        });
+      }
+    } catch (e: any) {
+      routeSteps.push({
+        type: 'inbound_route_error',
+        title: 'Ошибка чтения входящего правила',
+        label: 'Inbound Route',
+        number: did,
+        pattern: did,
+        error: e.message,
+        details: { did },
+      });
+    }
+  }
+
+  for (const groupId of ringGroupIds) {
+    try {
+      const rgRows = await queryFreePBXCDR(
+        settings,
+        true,
+        'SELECT grpnum, description, strategy, grptime, grplist, postdest, annmsg_id, ringing, recording FROM ringgroups WHERE grpnum = ? LIMIT 1',
+        [groupId]
+      );
+
+      if (rgRows && rgRows.length > 0) {
+        const rg: any = rgRows[0];
+        const members = String(rg.grplist || '')
+          .split('-')
+          .map((x: string) => x.trim())
+          .filter(Boolean);
+
+        let users: any[] = [];
+        if (members.length > 0) {
+          const placeholders = members.map(() => '?').join(',');
+          users = await queryFreePBXCDR(
+            settings,
+            true,
+            `SELECT extension, name, outboundcid, ringtimer, noanswer_dest, busy_dest, chanunavail_dest FROM users WHERE extension IN (${placeholders}) ORDER BY extension ASC`,
+            members
+          );
+        }
+
+        routeSteps.push({
+          type: 'ring_group',
+          title: rg.description || `Группа обзвона ${groupId}`,
+          label: 'Ring Group',
+          number: groupId,
+          destination: rg.postdest || '',
+          details: {
+            grpnum: rg.grpnum,
+            description: rg.description || '',
+            strategy: rg.strategy || '',
+            ringTime: rg.grptime || '',
+            members,
+            postDestination: rg.postdest || '',
+            announcementId: rg.annmsg_id || null,
+            ringing: rg.ringing || '',
+            recording: rg.recording || '',
+          },
+          members: users.map((u: any) => ({
+            extension: u.extension,
+            name: u.name || '',
+            outboundcid: u.outboundcid || '',
+            ringtimer: u.ringtimer || '',
+            noanswerDest: u.noanswer_dest || '',
+            busyDest: u.busy_dest || '',
+            unavailableDest: u.chanunavail_dest || '',
+          })),
+        });
+      }
+    } catch (e: any) {
+      routeSteps.push({
+        type: 'ring_group_error',
+        title: `Ошибка чтения группы ${groupId}`,
+        label: 'Ring Group',
+        number: groupId,
+        error: e.message,
+      });
+    }
+  }
+
+  return {
+    did,
+    steps: routeSteps,
+  };
+}
+
 // Chronology / Timeline of a call by uniqueid
 app.get('/api/calls/:uniqueid/chronology', requireAuth(), async (req, res) => {
   const { uniqueid } = req.params;
@@ -2338,12 +2572,16 @@ app.get('/api/calls/:uniqueid/chronology', requireAuth(), async (req, res) => {
       };
     });
 
+    const routeAnalysis = isDemo ? null : await enrichFreePBXRoute(settings, legs);
+    console.log('ROUTE_ANALYSIS_DEBUG', JSON.stringify(routeAnalysis));
+
     res.json({
       success: true,
       uniqueid,
       linkedid: legs[0]?.linkedid || uniqueid,
       legsCount: legs.length,
-      timeline
+      timeline,
+      routeAnalysis
     });
 
   } catch (error: any) {
