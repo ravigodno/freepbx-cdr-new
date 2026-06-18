@@ -67,7 +67,7 @@ import { DirectoryStatusIcon } from './modules/directory/components/DirectorySta
 import { fetchDirectory, saveDirectoryEntry, deleteDirectoryEntry, toggleDirectoryBlacklist } from './modules/directory/services/directoryApi';
 import { resetDirFormFieldsHelper, openEditDirEntryHelper, openCreateDirEntryHelper, openAddFromCallHelper } from './modules/directory/utils/directoryFormHelpers';
 import CDRPage from './modules/cdr/pages/CDRPage';
-import { extractExternalFromLastdata, isDstBad, renderClidName, isInternalExt, getTrunkName } from './modules/cdr/utils/CDRRowHelpers';
+import { buildCdrRowViewModel, extractExternalFromLastdata, isDstBad, renderClidName, isInternalExt, getTrunkName } from './modules/cdr/utils/CDRRowHelpers';
 import { buildCdrQueryParams } from './modules/cdr/utils/buildCdrQueryParams';
 import { fetchCdrStats, fetchCdrCalls } from './modules/cdr/services/cdrApi';
 
