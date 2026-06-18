@@ -15,6 +15,9 @@ import {
   Volume2,
 } from 'lucide-react';
 import { buildCdrRowViewModel, isInternalExt } from '../utils/CDRRowHelpers';
+import CDRDurationCell from './CDRDurationCell';
+import CDRStatusCell from './CDRStatusCell';
+import CDRCommentCell from './CDRCommentCell';
 
 interface LegacyCDRTableProps {
   calls: any[];
@@ -227,65 +230,22 @@ export default function LegacyCDRTable({
               </td>
 
               {/* Column 4: REKHEM (СТАТУС) */}
-              <td className="py-4 px-4">
-                <div className="flex flex-col gap-1 items-start text-[11px] select-none">
-                  {(() => {
-                    const isAwaitingBadge = isMissed && !call.processed && !call.wasCallbacked && (index === 1 || index === 4 || index === 6 || (index > 6 && index % 2 === 0));
-
-                    if (callDisp === 'ANSWERED') {
-                      return (
-                        <span className="inline-flex items-center gap-1.5 bg-emerald-50/40 dark:bg-emerald-950/10 text-emerald-500 dark:text-emerald-400 border border-emerald-250/30 dark:border-emerald-800/40 px-2.5 py-1 rounded-lg text-[11px] font-bold">
-                          <CheckCircle className="h-3.5 w-3.5" />
-                          Отвечен
-                        </span>
-                      );
-                    }
-
-                    if (isAwaitingBadge) {
-                      return (
-                        <span className="inline-flex items-center gap-1.5 bg-amber-50/40 dark:bg-amber-950/10 text-amber-500 dark:text-amber-400 border border-amber-250/30 dark:border-amber-800/40 px-2.5 py-1 rounded-lg text-[11px] font-bold">
-                          <AlertTriangle className="h-3.5 w-3.5" />
-                          Ожидает
-                        </span>
-                      );
-                    }
-
-                    // Default layout status missed (Без ответа)
-                    return (
-                      <span className="inline-flex items-center gap-1.5 bg-rose-50/40 dark:bg-rose-950/10 text-rose-500 dark:text-rose-400 border border-rose-250/30 dark:border-rose-905/30 px-2.5 py-1 rounded-lg text-[11px] font-bold">
-                        <Target className="h-3.5 w-3.5" />
-                        Без ответа
-                      </span>
-                    );
-                  })()}
-
-                  {/* Callback resolution badge */}
-                  {call.wasCallbacked && (
-                    <span
-                      className={`inline-flex items-center gap-1 border px-1.5 py-0.5 rounded text-[10px] font-semibold mt-1 ${
-                        call.wasKpiResolved
-                          ? 'bg-emerald-55 text-emerald-700 border-emerald-250 font-bold'
-                          : 'bg-amber-50 text-amber-600 border-amber-300 font-medium'
-                      }`}
-                      title={`Клиенту успешно перезвонили в ${call.callbackTime}. Лимит времени по KPI: ${call.wasKpiResolved ? 'соблюден' : 'превышен!'}`}
-                    >
-                      📱 ПЕРЕЗВОНЕНО {call.wasKpiResolved ? '(SLA OK)' : '(SLA ПРЕВЫШЕН)'}
-                    </span>
-                  )}
-                </div>
-              </td>
+              <CDRStatusCell
+                isMissed={isMissed}
+                callDisp={callDisp}
+                processed={call.processed}
+                wasCallbacked={call.wasCallbacked}
+                wasKpiResolved={call.wasKpiResolved}
+                callbackTime={call.callbackTime}
+                index={index}
+              />
 
               {/* Column 5: ДЛИТЕЛЬНОСТЬ */}
-              <td className="py-4 px-4 font-normal">
-                <div className="text-slate-500 text-xs gap-1 flex flex-col">
-                  <div>
-                    Длительность:&nbsp;&nbsp;<span className="font-bold font-mono text-slate-800 dark:text-slate-200">{formatSeconds(call.duration)}</span>
-                  </div>
-                  <div>
-                    Разговор:&nbsp;&nbsp;<span className="font-bold font-mono text-slate-800 dark:text-slate-200">{formatSeconds(call.billsec)}</span>
-                  </div>
-                </div>
-              </td>
+              <CDRDurationCell
+                duration={call.duration}
+                billsec={call.billsec}
+                formatSeconds={formatSeconds}
+              />
 
               {/* Column 5b: ЗАПИСЬ */}
               <td className="py-4 px-4">
@@ -316,22 +276,11 @@ export default function LegacyCDRTable({
               </td>
 
               {/* Column 6: COMMENT */}
-              <td className="py-4 px-4 max-w-xs">
-                {call.comment ? (
-                  <div className="flex flex-col gap-1">
-                    <p className="text-slate-700 dark:text-slate-350 bg-slate-50 dark:bg-slate-900/30 rounded-lg p-2.5 border border-slate-200/60 dark:border-slate-800/40 text-[11.5px] font-normal select-all shadow-3xs">
-                      "{call.comment}"
-                    </p>
-                    {call.processedBy && (
-                      <span className="text-[10px] text-slate-400 mt-0.5 block">
-                        Автор: {call.processedBy} ({new Date(call.processedAt || '').toLocaleDateString('ru-RU')})
-                      </span>
-                    )}
-                  </div>
-                ) : (
-                  <span className="text-slate-400 italic text-xs select-none font-light">Нет комментариев</span>
-                )}
-              </td>
+              <CDRCommentCell
+                comment={call.comment}
+                processedBy={call.processedBy}
+                processedAt={call.processedAt}
+              />
 
               {/* Column 7: Actions */}
               <td className="py-4 px-4">
