@@ -1,3 +1,4 @@
+import { detectCallDirection, getRealCallerExtFromCall, isOutboundCall } from './server/freepbxRouteTracer';
 import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import fs from 'fs';
@@ -2231,20 +2232,15 @@ async function enrichFreePBXRoute(settings: any, legs: any[]) {
   const routeSteps: any[] = [];
 
   const first = legs[0] || {};
+  const detectedDirection = detectCallDirection(first);
   const firstContext = String(first.dcontext || '');
   const firstLastapp = String(first.lastapp || '').toUpperCase();
   const firstLastdata = String(first.lastdata || '');
   const firstSrc = String(first.src || '');
   const firstDst = String(first.dst || '');
-  const channelExtMatch = String(first.channel || '').match(/\/(\d{2,6})-/);
-  const realCallerExt = String(
-    (channelExtMatch && channelExtMatch[1]) ||
-    first.cnum ||
-    firstSrc ||
-    ''
-  );
+  const realCallerExt = getRealCallerExtFromCall(first);
 
-  if (firstContext === 'from-internal' && firstDst) {
+  if (isOutboundCall(first)) {
     let callerUser: any = null;
     try {
       const userRows = realCallerExt
@@ -2455,6 +2451,7 @@ async function enrichFreePBXRoute(settings: any, legs: any[]) {
 
   return {
     did,
+    direction: detectedDirection,
     steps: routeSteps,
   };
 }
