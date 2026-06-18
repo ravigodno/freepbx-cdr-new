@@ -72,6 +72,7 @@ import CDRProcessModal from './modules/cdr/components/CDRProcessModal';
 import { buildCdrRowViewModel, isInternalExt } from './modules/cdr/utils/CDRRowHelpers';
 import { buildCdrQueryParams } from './modules/cdr/utils/buildCdrQueryParams';
 import { fetchCdrStats, fetchCdrCalls } from './modules/cdr/services/cdrApi';
+import { processCallSubmit } from './modules/cdr/utils/processCallSubmit';
 
 
 
@@ -1276,41 +1277,17 @@ export default function App() {
   // Process / Comment Missed Call
   const handleProcessMissedCall = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedCall || !session) return;
 
-    setIsSavingProcess(true);
-    try {
-      const resp = await fetch(`/api/calls/${selectedCall.uniqueid}/process`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session.token}`
-        },
-        body: JSON.stringify({
-          comment: commentInput,
-          processed: isProcessedInput,
-          src: selectedCall.src,
-          calldate: selectedCall.calldate
-        })
-      });
-
-      if (resp.status === 401) {
-        handleAuthError(resp);
-        return;
-      }
-
-      if (resp.ok) {
-        // Optimistically update list or fully reload
-        setSelectedCall(null);
-        reloadData();
-      } else {
-        alert('Не удалось записать статус звонка в базу данных.');
-      }
-    } catch (e) {
-      alert('Сбой сетевой отправки статуса вызова.');
-    } finally {
-      setIsSavingProcess(false);
-    }
+    await processCallSubmit({
+      selectedCall,
+      session,
+      commentInput,
+      isProcessedInput,
+      handleAuthError,
+      reloadData,
+      setSelectedCall,
+      setIsSavingProcess,
+    });
   };
 
   // Admin Settings Loader
