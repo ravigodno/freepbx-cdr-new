@@ -67,8 +67,7 @@ import { DirectoryStatusIcon } from './modules/directory/components/DirectorySta
 import { fetchDirectory, saveDirectoryEntry, deleteDirectoryEntry, toggleDirectoryBlacklist } from './modules/directory/services/directoryApi';
 import { resetDirFormFieldsHelper, openEditDirEntryHelper, openCreateDirEntryHelper, openAddFromCallHelper } from './modules/directory/utils/directoryFormHelpers';
 import CDRPage from './modules/cdr/pages/CDRPage';
-import LegacyCDRTable from './modules/cdr/components/LegacyCDRTable';
-import { buildCdrRowViewModel, isInternalExt } from './modules/cdr/utils/CDRRowHelpers';
+import { extractExternalFromLastdata, isDstBad, renderClidName, isInternalExt, getTrunkName } from './modules/cdr/utils/CDRRowHelpers';
 import { buildCdrQueryParams } from './modules/cdr/utils/buildCdrQueryParams';
 import { fetchCdrStats, fetchCdrCalls } from './modules/cdr/services/cdrApi';
 
@@ -1779,6 +1778,35 @@ export default function App() {
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
+  // Clean Clid name display helper
+  const renderClidName = (clid: string, fallbackPhone: string) => {
+    if (!clid) return fallbackPhone;
+    const match = clid.match(/"([^"]+)"/);
+    if (match) return match[1];
+    return clid.split('<')[0].trim() || fallbackPhone;
+  };
+
+  // Check if string holds a short numeric internal extension
+  const isInternalExt = (num: string) => {
+    if (!num) return false;
+    const digits = num.replace(/\D/g, '');
+    return digits.length > 0 && digits.length <= 5 && /^\d+$/.test(num.trim());
+  };
+
+  // Helper to extract clean trunk names from SIP channel configurations
+  const getTrunkName = (channelStr: string) => {
+    if (!channelStr) return '';
+    let clean = channelStr.includes('/') ? channelStr.split('/')[1] : channelStr;
+    const lastDashIndex = clean.lastIndexOf('-');
+    if (lastDashIndex !== -1) {
+      const suffix = clean.substring(lastDashIndex + 1);
+      if (/^[0-9a-fA-F]{3,}$/.test(suffix) || /^\d+$/.test(suffix)) {
+        clean = clean.substring(0, lastDashIndex);
+      }
+    }
+    return clean;
+  };
+
   // Date bounds presets
   const applyPeriodPreset = (daysAgo: number) => {
     const start = new Date();
@@ -3404,44 +3432,163 @@ export default function App() {
                 </p>
               </div>
             ) : (
-              <>
-                <LegacyCDRTable
-                  calls={calls}
-                  directory={directory}
-                  session={session}
-                  copiedNumber={copiedNumber}
-                  playingCallId={playingCallId}
-                  isAudioPaused={isAudioPaused}
-                  activeDropdownCallId={activeDropdownCallId}
-                  handleCopy={handleCopy}
-                  triggerClickToCall={triggerClickToCall}
-                  openAddFromCall={openAddFromCall}
-                  playRecording={playRecording}
-                  openProcessModal={openProcessModal}
-                  toggleRowDropdown={toggleRowDropdown}
-                  fetchChronology={fetchChronology}
-                  setActiveDropdownCallId={setActiveDropdownCallId}
-                  formatSeconds={formatSeconds}
-                />
               <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-[#1e293b]/20 text-[10px] text-slate-500 dark:text-slate-400 uppercase tracking-widest font-bold">
+                    <th className="py-4 px-4">ВРЕМЯ ВЫЗОВА / ID</th>
+                    <th className="py-4 px-4 font-bold">КТО ЗВОНИЛ</th>
+                    <th className="py-4 px-4 font-bold">КУДА ЗВОНИЛ</th>
+                    <th className="py-4 px-4 font-bold">РЕШЕНИЕ (СТАТУС)</th>
+                    <th className="py-4 px-4 font-bold">ДЛИТЕЛЬНОСТЬ</th>
+                    <th className="py-4 px-4 font-bold">ЗАПИСЬ</th>
+                    <th className="py-4 px-4 font-bold">КОММЕНТАРИЙ ОПЕРАТОРА</th>
+                    <th className="py-4 px-4 font-bold text-left">УПРАВЛЕНИЕ</th>
+                  </tr>
+                </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800/45 text-xs bg-white dark:bg-slate-900">
                   {calls.map((call, index) => {
-                    const rowVm = buildCdrRowViewModel(call, directory);
+                    const dctx = call.dcontext || '';
+                    const ch = call.channel || '';
+                    const srcVal = (call.src || '').trim();
+                    const dstVal = (call.dst || '').trim();
 
-                    const {
-                      isIncoming,
-                      isMissed,
-                      isOutgoing,
-                      displayedSrc,
-                      displayedDst,
-                      callerName,
-                      callerType,
-                      isFound,
-                      calleeName,
-                      calleeType,
-                      isFoundDst,
-                      callDisp,
-                    } = rowVm;
+                    // --- 1. CALL TYPE DETECTION ---
+                    const isIncoming = (() => {
+                      if (isInternalExt(srcVal)) {
+                        return false;
+                      }
+                      const dctxLower = dctx.toLowerCase();
+                      const chLower = ch.toLowerCase();
+                      if (
+                        dctxLower.includes('from-trunk') ||
+                        dctxLower.includes('from-pstn') ||
+                        dctxLower.includes('sip-external') ||
+                        dctxLower.includes('from-digital') ||
+                        dctxLower.includes('from-outside') ||
+                        (call.did && call.did.length > 0)
+                      ) {
+                        return true;
+                      }
+                      const isIncomingRoute = 
+                        dctxLower === 'ext-queues' ||
+                        dctxLower === 'ext-group' ||
+                        dctxLower === 'ext-local' ||
+                        dctxLower.startsWith('ivr-') ||
+                        dstVal === '600' ||
+                        isInternalExt(dstVal);
+                      const isTrunkChannel = chLower.includes('-in-') || chLower.includes('trunk');
+                      return isIncomingRoute || isTrunkChannel;
+                    })();
+
+                    const isMissed = (() => {
+                      const callDisp = (call.disposition || '').toUpperCase();
+                      return (callDisp === 'NO ANSWER' || callDisp === 'BUSY' || callDisp === 'FAILED') && (isIncoming || !call.dstchannel);
+                    })();
+
+                    const isOutgoing = dctx === 'from-internal' && isInternalExt(srcVal) && !isInternalExt(dstVal) && dstVal.length >= 7;
+
+                    const isInternal = isInternalExt(srcVal) && isInternalExt(dstVal);
+
+                    // --- 3. COLUMN 1: "KTO ZVONIL" (SENDER ENGINE) ---
+                    const getCallerNumber = () => {
+                      if (isIncoming) {
+                        if (srcVal && !isInternalExt(srcVal)) {
+                          return srcVal;
+                        }
+                        if (call.clid) {
+                          const match = call.clid.match(/<([^>]+)>/);
+                          if (match && match[1].trim()) {
+                            return match[1].trim();
+                          }
+                        }
+                        return srcVal;
+                      } else {
+                        // Outgoing or Internal
+                        if (call.cnum && call.cnum.trim()) {
+                          return call.cnum.trim();
+                        }
+                        if (call.src && call.src.trim()) {
+                          return call.src.trim();
+                        }
+                        if (call.channel) {
+                          const chExt = getTrunkName(call.channel);
+                          if (chExt) return chExt;
+                        }
+                        return '';
+                      }
+                    };
+
+                    const displayedSrc = getCallerNumber() || call.src || 'Неизвестно';
+
+                    // --- 4. COLUMN 2: "KUDA ZVONIL" (RECEIVER ENGINE) ---
+                    const getCalleeNumber = () => {
+                      if (isIncoming) {
+                        if (call.dstchannel) {
+                          const ext = getTrunkName(call.dstchannel);
+                          if (ext && isInternalExt(ext)) {
+                            return ext;
+                          }
+                          if (ext) return ext;
+                        }
+                        if (call.dst) {
+                          return call.dst;
+                        }
+                        if (call.did) {
+                          return call.did;
+                        }
+                        return '';
+                      } else {
+                        // Outgoing or Internal
+                        if (!isDstBad(dstVal, isOutgoing)) {
+                          return dstVal;
+                        }
+                        const lastdata = call.lastdata || '';
+                        const parsed = extractExternalFromLastdata(lastdata);
+                        if (parsed) return parsed;
+                        return dstVal;
+                      }
+                    };
+
+                    const displayedDst = getCalleeNumber() || call.dst || 'Неизвестно';
+
+                    const dMatch = directory.find(e => e.number.trim() === displayedSrc.trim());
+                    const isSrcInternal = isInternalExt(displayedSrc);
+                    let callerName = '';
+                    let callerType = isSrcInternal ? 'internal' : 'client';
+                    let isFound = false;
+
+                    if (dMatch) {
+                      callerName = dMatch.name;
+                      callerType = dMatch.type;
+                      isFound = true;
+                    } else {
+                      if (isIncoming) {
+                        const clidName = renderClidName(call.clid, displayedSrc);
+                        if (clidName && clidName.trim() !== '' && clidName !== displayedSrc) {
+                          callerName = clidName;
+                        } else {
+                          callerName = isSrcInternal ? `Внутренний ${displayedSrc}` : 'Внешний клиент';
+                        }
+                      } else {
+                        callerName = isSrcInternal ? `Внутренний ${displayedSrc}` : 'Внешний клиент';
+                      }
+                    }
+
+                    const dstContact = directory.find(e => e.number.trim() === displayedDst.trim());
+                    const isDstInternal = isInternalExt(displayedDst);
+                    let calleeName = '';
+                    let calleeType = isDstInternal ? 'internal' : 'client';
+                    let isFoundDst = false;
+
+                    if (dstContact) {
+                      calleeName = dstContact.name;
+                      calleeType = dstContact.type;
+                      isFoundDst = true;
+                    } else {
+                      calleeName = isDstInternal ? `Внутренний ${displayedDst}` : 'Внешний номер';
+                    }
+
+                    const callDisp = (call.disposition || '').toUpperCase();
 
                     return (
                       <tr
@@ -3779,7 +3926,6 @@ export default function App() {
                   })}
                 </tbody>
               </table>
-              </>
             )}
           </div>
 
