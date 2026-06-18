@@ -1,4 +1,4 @@
-import { detectCallDirection, getRealCallerExtFromCall, isOutboundCall, extractRingGroupIdsFromLegs, analyzeRingGroups } from './server/freepbxRouteTracer';
+import { detectCallDirection, getRealCallerExtFromCall, isOutboundCall, extractRingGroupIdsFromLegs, analyzeRingGroups, getAnsweredExtFromLegs, analyzeOutboundRoute } from './server/freepbxRouteTracer';
 import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import fs from 'fs';
@@ -2239,6 +2239,7 @@ async function enrichFreePBXRoute(settings: any, legs: any[]) {
   const firstSrc = String(first.src || '');
   const firstDst = String(first.dst || '');
   const realCallerExt = getRealCallerExtFromCall(first);
+  const answeredExt = getAnsweredExtFromLegs(legs);
 
   if (isOutboundCall(first)) {
     let callerUser: any = null;
@@ -2246,8 +2247,8 @@ async function enrichFreePBXRoute(settings: any, legs: any[]) {
       const userRows = realCallerExt
         ? await queryFreePBXCDR(
             settings,
-            true,
-            'SELECT extension, name, outboundcid, ringtimer FROM users WHERE extension = ? LIMIT 1',
+            false,
+            'SELECT extension, name, outboundcid, ringtimer FROM asterisk.users WHERE extension = ? LIMIT 1',
             [realCallerExt]
           )
         : [];
@@ -2286,10 +2287,26 @@ async function enrichFreePBXRoute(settings: any, legs: any[]) {
     }
 
     try {
+      routeSteps.push(...await analyzeOutboundRoute({
+        settings,
+        dialedNumber: firstDst,
+        queryFreePBXCDR,
+      }));
+    } catch (e: any) {
+      routeSteps.push({
+        type: 'outbound_route_error',
+        title: 'Ошибка поиска исходящего правила',
+        label: 'Outbound Route',
+        destination: firstDst,
+        error: e.message,
+      });
+    }
+
+    try {
       const trunkRows = await queryFreePBXCDR(
         settings,
-        true,
-        'SELECT trunkid, name, tech, channelid, outcid FROM trunks ORDER BY trunkid ASC LIMIT 50',
+        false,
+        'SELECT trunkid, name, tech, channelid, outcid FROM asterisk.trunks ORDER BY trunkid ASC LIMIT 50',
         []
       );
 
@@ -2331,24 +2348,31 @@ async function enrichFreePBXRoute(settings: any, legs: any[]) {
     try {
       const incomingRows = await queryFreePBXCDR(
         settings,
-        true,
-        'SELECT extension, cidnum, destination, description, ringing, grppre, delay_answer FROM incoming WHERE extension = ? OR extension = "any" OR extension = "" ORDER BY extension = ? DESC, extension <> "" DESC LIMIT 1',
+        false,
+        'SELECT extension, cidnum, destination, description, ringing, grppre, delay_answer FROM asterisk.incoming WHERE extension = ? OR extension = "any" OR extension = "" ORDER BY extension = ? DESC, extension <> "" DESC LIMIT 1',
         [did, did]
       );
 
       if (incomingRows && incomingRows.length > 0) {
         const r: any = incomingRows[0];
+        const inboundRuleName = r.description || (r.extension ? `DID ${r.extension}` : 'ANY');
+        const inboundPattern = r.extension || 'ANY';
+
         routeSteps.push({
           type: 'inbound_route',
-          title: r.description || 'Входящее правило',
+          title: `Входящее правило: ${inboundRuleName}`,
           label: 'Inbound Route',
-          number: r.extension || did,
-          pattern: r.extension || did,
+          number: inboundPattern,
+          pattern: inboundPattern,
           cidPattern: r.cidnum || '',
           destination: r.destination || '',
           details: {
             did,
+            matchedRule: inboundRuleName,
+            matchedPattern: inboundPattern,
             description: r.description || '',
+            extension: r.extension || '',
+            cidPattern: r.cidnum || '',
             destination: r.destination || '',
             ringing: r.ringing || '',
             grppre: r.grppre || '',
@@ -2388,6 +2412,7 @@ async function enrichFreePBXRoute(settings: any, legs: any[]) {
   return {
     did,
     direction: detectedDirection,
+    answeredExt,
     steps: routeSteps,
   };
 }
