@@ -163,6 +163,7 @@ export default function LegacyCDRTable({
               <CDRActionsCell
                 call={call}
                 isMissed={isMissed}
+                isIncoming={isIncoming}
                 isFound={isFound}
                 displayedSrc={displayedSrc}
                 displayedDst={displayedDst}

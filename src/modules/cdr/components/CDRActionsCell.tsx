@@ -1,5 +1,6 @@
 import React from 'react';
 import {
+  Edit2,
   PhoneCall,
   UserPlus,
   MoreVertical,
@@ -9,6 +10,7 @@ import {
 interface Props {
   call: any;
   isMissed: boolean;
+  isIncoming: boolean;
   isFound: boolean;
   displayedSrc: string;
   displayedDst: string;
@@ -28,6 +30,7 @@ interface Props {
 export default function CDRActionsCell({
   call,
   isMissed,
+  isIncoming,
   isFound,
   displayedSrc,
   displayedDst,
@@ -42,22 +45,26 @@ export default function CDRActionsCell({
   openAddFromCall,
   fetchChronology,
 }: Props) {
+  const isProcessedLike = Boolean(call.processed || call.comment);
+
   return (
     <td className="py-4 px-4">
       <div className="flex items-center justify-start gap-2.5">
-        {isMissed ? (
+        <button
+          onClick={() => openProcessModal(call)}
+          className="px-2 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-705 dark:text-slate-300 dark:border-slate-800 transition-all text-xs font-bold whitespace-nowrap cursor-pointer shadow-3xs"
+          title="Комментарий / редактирование звонка"
+        >
+          <Edit2 className="h-3.5 w-3.5" />
+        </button>
+
+        {isMissed && isIncoming && !isProcessedLike && (
           <button
             onClick={() => openProcessModal(call)}
-            className={`px-3.5 py-1.5 rounded-lg border transition-all text-xs font-bold whitespace-nowrap cursor-pointer shadow-3xs ${
-              call.processed
-                ? 'border-slate-200 bg-white hover:bg-slate-50 text-slate-705 dark:text-slate-300 dark:border-slate-800'
-                : 'border-red-200 bg-white hover:bg-red-50/40 text-red-500 hover:text-red-600 dark:border-red-900/40 dark:hover:bg-red-950/20'
-            }`}
+            className="px-3.5 py-1.5 rounded-lg border border-red-200 bg-white hover:bg-red-50/40 text-red-500 hover:text-red-600 dark:border-red-900/40 dark:hover:bg-red-950/20 transition-all text-xs font-bold whitespace-nowrap cursor-pointer shadow-3xs"
           >
-            {call.processed ? 'Изменить' : 'Обработать'}
+            Обработать
           </button>
-        ) : (
-          <div className="w-[102px]" />
         )}
 
         <div className="relative inline-block leading-none">
