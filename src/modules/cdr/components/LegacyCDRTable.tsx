@@ -1,11 +1,5 @@
 import React from 'react';
-import {
-  PhoneCall,
-  UserPlus,
-  MoreVertical,
-  Volume2,
-} from 'lucide-react';
-import { buildCdrRowViewModel, isInternalExt } from '../utils/CDRRowHelpers';
+import { buildCdrRowViewModel } from '../utils/CDRRowHelpers';
 import CDRDurationCell from './CDRDurationCell';
 import CDRStatusCell from './CDRStatusCell';
 import CDRCommentCell from './CDRCommentCell';
