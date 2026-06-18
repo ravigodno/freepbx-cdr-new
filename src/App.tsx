@@ -65,6 +65,7 @@ import FreepbxCliTab from './modules/monitoring/tabs/monitoring/FreepbxCliTab';
 import DbExplorerTab from './modules/monitoring/tabs/monitoring/DbExplorerTab';
 import { DirectoryStatusIcon } from './modules/directory/components/DirectoryStatusIcon';
 import { fetchDirectory, saveDirectoryEntry, deleteDirectoryEntry, toggleDirectoryBlacklist } from './modules/directory/services/directoryApi';
+import { resetDirFormFieldsHelper, openEditDirEntryHelper, openCreateDirEntryHelper, openAddFromCallHelper } from './modules/directory/utils/directoryFormHelpers';
 import CDRPage from './modules/cdr/pages/CDRPage';
 import { extractExternalFromLastdata, isDstBad } from './modules/cdr/utils/callParser';
 import { buildCdrQueryParams } from './modules/cdr/utils/buildCdrQueryParams';
@@ -501,6 +502,25 @@ export default function App() {
 
   const getDirectoryEntryTags = (entry: DirectoryEntry): string[] => {
     return Array.isArray(entry.tags) ? entry.tags : [];
+  };
+
+  const directoryFormSetters = {
+    setEditingDirEntry,
+    setDirName,
+    setDirNumber,
+    setDirPhonesText,
+    setDirCompany,
+    setDirPosition,
+    setDirDepartment,
+    setDirEmail,
+    setDirWebsite,
+    setDirTagsText,
+    setDirIsSpam,
+    setDirIsBlacklisted,
+    setDirType,
+    setDirComment,
+    setDirError,
+    setIsDirFormOpen
   };
 
   const resetDirFormFields = () => {
