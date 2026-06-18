@@ -59,3 +59,11 @@ export function getRealCallerExtFromCall(first: any): string {
 export function isOutboundCall(first: any): boolean {
   return String(first?.dcontext || '') === 'from-internal' && Boolean(first?.dst);
 }
+
+export function extractRingGroupIdsFromLegs(legs: any[]): string[] {
+  return Array.from(new Set(
+    legs
+      .filter((l: any) => l.dcontext === 'ext-group' && l.dst)
+      .map((l: any) => String(l.dst))
+  ));
+}

@@ -1,4 +1,4 @@
-import { detectCallDirection, getRealCallerExtFromCall, isOutboundCall } from './server/freepbxRouteTracer';
+import { detectCallDirection, getRealCallerExtFromCall, isOutboundCall, extractRingGroupIdsFromLegs } from './server/freepbxRouteTracer';
 import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import fs from 'fs';
@@ -2325,11 +2325,7 @@ async function enrichFreePBXRoute(settings: any, legs: any[]) {
     legs.find((l: any) => /^\\d{3,15}$/.test(String(l.cnum || '')))?.cnum ||
     ''
   ).trim();
-  const ringGroupIds = Array.from(new Set(
-    legs
-      .filter((l: any) => l.dcontext === 'ext-group' && l.dst)
-      .map((l: any) => String(l.dst))
-  ));
+  const ringGroupIds = extractRingGroupIdsFromLegs(legs);
 
   if (did) {
     try {
