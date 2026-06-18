@@ -21,6 +21,7 @@ import CDRCommentCell from './CDRCommentCell';
 import CDRTimeCell from './CDRTimeCell';
 import CDRRecordingCell from './CDRRecordingCell';
 import CDRCallerCell from './CDRCallerCell';
+import CDRCalleeCell from './CDRCalleeCell';
 
 interface LegacyCDRTableProps {
   calls: any[];
@@ -129,48 +130,15 @@ export default function LegacyCDRTable({
               />
 
               {/* Column 3: Callee display (Куда звонил) */}
-              <td className="py-4 px-4">
-                <div className="flex items-center justify-between gap-6 max-w-xs select-text">
-                  {/* Left Block */}
-                  <div className="flex flex-col gap-1.5">
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <span className={`font-bold text-xs ${isFoundDst ? "text-red-800 dark:text-red-400" : "text-slate-800 dark:text-slate-100"}`}>
-                        {calleeName}
-                      </span>
-                      <span className="text-[9.5px] font-bold px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border border-slate-200/50 dark:border-slate-800/40 select-none">
-                        {calleeType === 'internal' ? 'Внутр.' : 'Клиент'}
-                      </span>
-                    </div>
-                    <div className="text-xs font-bold text-slate-800 dark:text-slate-200 flex flex-wrap items-center gap-1.5">
-                      <span>{displayedDst}</span>
-                      <div className="flex items-center gap-1">
-                        <button
-                          onClick={() => triggerClickToCall(displayedDst, calleeName)}
-                          className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 text-emerald-600 hover:text-emerald-700 transition-colors cursor-pointer"
-                          title={`Позвонить на ${displayedDst}`}
-                        >
-                          <PhoneCall className="h-3 w-3" />
-                        </button>
-                        {!isFoundDst && (
-                          <button
-                            onClick={() => openAddFromCall(displayedDst, calleeName && !calleeName.startsWith('Внешний') && !calleeName.startsWith('Внутренний') ? calleeName : '')}
-                            className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 text-indigo-605 hover:text-indigo-700 transition-colors cursor-pointer"
-                            title={`Добавить ${displayedDst} в справочник`}
-                          >
-                            <UserPlus className="h-3 w-3" />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Right Block */}
-                  <div className="flex flex-col items-end text-right font-mono text-[10.5px] text-slate-400 dark:text-slate-500 gap-1 select-none">
-                    <span>DID: {call.did || '841282'}</span>
-                    <span>не отвечает: {isInternalExt(call.dst) && call.dst !== '9999' ? call.dst : '100, 200'}</span>
-                  </div>
-                </div>
-              </td>
+              <CDRCalleeCell
+                call={call}
+                calleeName={calleeName}
+                calleeType={calleeType}
+                displayedDst={displayedDst}
+                isFoundDst={isFoundDst}
+                triggerClickToCall={triggerClickToCall}
+                openAddFromCall={openAddFromCall}
+              />
 
               {/* Column 4: REKHEM (СТАТУС) */}
               <CDRStatusCell
