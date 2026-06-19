@@ -3451,10 +3451,10 @@ export default function App() {
 
       {activeView === 'directory' && (
         <>
-          <section id="directory-panel" className="space-y-4">
+          <section id="directory-panel" className="flex flex-col gap-4">
         {/* Admin Directory Controls Panel */}
         {session?.role === 'admin' && (
-          <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3 shadow-sm select-none">
+          <div className="order-last bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3 shadow-sm select-none">
             <div 
               className="flex items-center justify-between cursor-pointer"
               onClick={() => setIsAdminPanelExpanded(!isAdminPanelExpanded)}
