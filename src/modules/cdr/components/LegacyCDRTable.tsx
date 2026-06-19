@@ -62,7 +62,7 @@ export default function LegacyCDRTable({
           <th className="py-4 px-4 font-bold">ДЛИТЕЛЬНОСТЬ</th>
           <th className="py-4 px-4 font-bold">ЗАПИСЬ</th>
           <th className="py-4 px-4 font-bold">КОММЕНТАРИЙ ОПЕРАТОРА</th>
-          <th className="py-4 px-4 font-bold text-left">УПРАВЛЕНИЕ</th>
+          <th className="py-4 px-4 font-bold text-right pr-6">УПРАВЛЕНИЕ</th>
         </tr>
       </thead>
       <tbody className="divide-y divide-slate-100 dark:divide-slate-800/45 text-xs bg-white dark:bg-slate-900">

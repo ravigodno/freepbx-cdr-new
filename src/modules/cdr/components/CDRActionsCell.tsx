@@ -1,11 +1,5 @@
 import React from 'react';
-import {
-  Edit2,
-  PhoneCall,
-  UserPlus,
-  MoreVertical,
-  Volume2,
-} from 'lucide-react';
+import { Edit2 } from 'lucide-react';
 
 interface Props {
   call: any;
@@ -31,113 +25,25 @@ export default function CDRActionsCell({
   call,
   isMissed,
   isIncoming,
-  isFound,
-  displayedSrc,
-  displayedDst,
-  callerName,
-  calleeName,
-  isAdmin,
-  activeDropdownCallId,
   openProcessModal,
-  toggleRowDropdown,
-  setActiveDropdownCallId,
-  triggerClickToCall,
-  openAddFromCall,
-  fetchChronology,
 }: Props) {
   const isProcessedLike = Boolean(call.processed || call.comment);
+  const needsProcessing = isMissed && isIncoming && !isProcessedLike;
 
   return (
     <td className="py-4 px-4">
-      <div className="flex items-center justify-start gap-2.5">
+      <div className="flex items-center justify-end w-full pr-2">
         <button
           onClick={() => openProcessModal(call)}
-          className="px-2 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-705 dark:text-slate-300 dark:border-slate-800 transition-all text-xs font-bold whitespace-nowrap cursor-pointer shadow-3xs"
-          title="Комментарий / редактирование звонка"
+          className={`px-2 py-1.5 rounded-lg border transition-all text-xs font-bold whitespace-nowrap cursor-pointer shadow-3xs ${
+            needsProcessing
+              ? 'border-red-300 bg-red-50 hover:bg-red-100 text-red-600 dark:border-red-900/50 dark:bg-red-950/20 dark:text-red-400'
+              : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-705 dark:text-slate-300 dark:border-slate-800'
+          }`}
+          title={needsProcessing ? 'Обработать пропущенный звонок' : 'Комментарий / редактирование звонка'}
         >
           <Edit2 className="h-3.5 w-3.5" />
         </button>
-
-        {isMissed && isIncoming && !isProcessedLike && (
-          <button
-            onClick={() => openProcessModal(call)}
-            className="px-3.5 py-1.5 rounded-lg border border-red-200 bg-white hover:bg-red-50/40 text-red-500 hover:text-red-600 dark:border-red-900/40 dark:hover:bg-red-950/20 transition-all text-xs font-bold whitespace-nowrap cursor-pointer shadow-3xs"
-          >
-            Обработать
-          </button>
-        )}
-
-        <div className="relative inline-block leading-none">
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              toggleRowDropdown(call.uniqueid);
-            }}
-            className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
-            title="Дополнительные действия"
-          >
-            <MoreVertical className="h-4 w-4" />
-          </button>
-
-          {activeDropdownCallId === call.uniqueid && (
-            <div className="absolute right-0 mt-1 w-48 bg-white dark:bg-slate-905 border border-slate-150 dark:border-slate-800 rounded-lg shadow-lg py-1 z-30 font-sans text-xs text-left text-slate-700 dark:text-slate-200">
-              <button
-                onClick={() => {
-                  setActiveDropdownCallId(null);
-                  triggerClickToCall(displayedSrc, callerName);
-                }}
-                className="w-full px-3 py-2 text-slate-700 dark:text-slate-350 hover:bg-slate-50 dark:hover:bg-slate-800/50 flex items-center gap-2 cursor-pointer font-medium"
-              >
-                <PhoneCall className="h-3.5 w-3.5 text-emerald-500" />
-                <span>Позвонить вызыв.</span>
-              </button>
-
-              <button
-                onClick={() => {
-                  setActiveDropdownCallId(null);
-                  triggerClickToCall(displayedDst, calleeName);
-                }}
-                className="w-full px-3 py-2 text-slate-700 dark:text-slate-350 hover:bg-slate-50 dark:hover:bg-slate-800/50 flex items-center gap-2 cursor-pointer font-medium"
-              >
-                <PhoneCall className="h-3.5 w-3.5 text-blue-500" />
-                <span>Позвонить куда</span>
-              </button>
-
-              {!isFound && (
-                <button
-                  onClick={() => {
-                    setActiveDropdownCallId(null);
-                    openAddFromCall(
-                      displayedSrc,
-                      callerName &&
-                      !callerName.startsWith('Внешний') &&
-                      !callerName.startsWith('Внутренний')
-                        ? callerName
-                        : ''
-                    );
-                  }}
-                  className="w-full px-3 py-2 text-slate-700 dark:text-slate-355 hover:bg-slate-50 dark:hover:bg-slate-800/50 flex items-center gap-2 cursor-pointer border-t border-slate-100 dark:border-slate-800 font-medium"
-                >
-                  <UserPlus className="h-3.5 w-3.5 text-indigo-505" />
-                  <span>Добавить {displayedSrc}</span>
-                </button>
-              )}
-
-              {isAdmin && (
-                <button
-                  onClick={() => {
-                    setActiveDropdownCallId(null);
-                    fetchChronology(call.uniqueid);
-                  }}
-                  className="w-full px-3 py-2 text-slate-700 dark:text-slate-350 hover:bg-slate-50 dark:hover:bg-slate-800/50 flex items-center gap-2 cursor-pointer border-t border-slate-100 dark:border-slate-800 font-medium"
-                >
-                  <Volume2 className="h-3.5 w-3.5 text-purple-500" />
-                  <span>Хронология вызова</span>
-                </button>
-              )}
-            </div>
-          )}
-        </div>
       </div>
     </td>
   );
