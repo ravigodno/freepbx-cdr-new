@@ -1,3 +1,6 @@
+import { buildFollowMeStep } from '../tracers/followMeTracer';
+import { buildAnnouncementStep } from '../tracers/announcementTracer';
+import { buildTimeConditionStep } from '../tracers/timeConditionTracer';
 import { buildQueueStep } from '../tracers/queueTracer';
 function getExtFromChannel(value: any): string {
   const m = String(value || '').match(/\/(\d{2,6})-/);
@@ -36,6 +39,14 @@ export function buildCallRouteView(chronologyData: any): RouteView {
   const trunksStep = steps.find((s: any) => String(s.type || '').includes('trunk'));
 
   const groupMembers = ringGroupStep?.members || [];
+  const routeDestinationSteps = steps
+    .map((step: any) => [
+      buildTimeConditionStep(step),
+      buildAnnouncementStep(step),
+      buildFollowMeStep(step),
+    ])
+    .flat()
+    .filter(Boolean);
 
   const outboundSelectedTrunk = outboundRouteStep?.details?.trunks?.[0] || null;
   const outboundTrunkTitle = outboundSelectedTrunk?.name
@@ -99,6 +110,7 @@ export function buildCallRouteView(chronologyData: any): RouteView {
           number: inboundRouteStep?.number || '',
           members: [],
         },
+        ...(routeDestinationSteps as any[]),
         ...(ivrRouteStep ? [{
           label: 'IVR',
           title: ivrRouteStep.title || 'IVR меню',
