@@ -1,3 +1,4 @@
+import { buildQueueStep } from '../tracers/queueTracer';
 function getExtFromChannel(value: any): string {
   const m = String(value || '').match(/\/(\d{2,6})-/);
   return m?.[1] || '';
@@ -45,6 +46,9 @@ export function buildCallRouteView(chronologyData: any): RouteView {
     .filter(Boolean)
     .filter((ext: string) => ext !== String(answeredExt));
 
+  const queueStep = buildQueueStep(timeline, answeredExt);
+
+
   const routeSteps = direction === 'inbound'
     ? [
         {
@@ -79,6 +83,8 @@ export function buildCallRouteView(chronologyData: any): RouteView {
           number: ringGroupStep.number || '',
           members: groupMembers,
         }] : []),
+        ...(queueStep ? [queueStep] : []),
+        ...(queueStep ? [queueStep] : []),
         ...(groupMembers.length ? [{
           label: 'MEMBERS',
           title: 'Участники группы',
