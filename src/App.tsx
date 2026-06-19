@@ -72,6 +72,7 @@ import CDRProcessModal from './modules/cdr/components/CDRProcessModal';
 import CDRChronologyModal from './modules/cdr/components/CDRChronologyModal';
 import { buildCdrRowViewModel, isInternalExt } from './modules/cdr/utils/CDRRowHelpers';
 import { buildCdrQueryParams } from './modules/cdr/utils/buildCdrQueryParams';
+import { hasUserPermission, PermissionKey } from './modules/access/permissions';
 import { fetchCdrStats, fetchCdrCalls } from './modules/cdr/services/cdrApi';
 import { processCallSubmit } from './modules/cdr/utils/processCallSubmit';
 
@@ -342,37 +343,8 @@ export default function App() {
     setActiveDropdownCallId((prev) => (prev === uniqueid ? null : uniqueid));
   };
 
-  const hasPermission = (perm: 'view_calls' | 'view_directory' | 'view_reports' | 'listen_recordings' | 'make_calls' | 'edit_directory') => {
-    if (!session) return false;
-    if (session.role === 'admin') return true;
-    
-    if (session.role === 'directory_only') {
-      if (perm === 'view_directory') return true;
-      return false;
-    }
-    
-    if (session.role === 'custom') {
-      const pSettings: Partial<AppSettings> = settings || {};
-      if (perm === 'view_calls') return pSettings.customCanViewCalls !== false;
-      if (perm === 'view_directory') return pSettings.customCanViewDirectory !== false;
-      if (perm === 'view_reports') return !!pSettings.customCanViewReports;
-      if (perm === 'listen_recordings') return pSettings.customCanListenRecordings !== false;
-      if (perm === 'make_calls') return pSettings.customCanMakeCalls !== false;
-      if (perm === 'edit_directory') return !!pSettings.customCanEditDirectory;
-      return false;
-    }
-    
-    if (session.role === 'manager') {
-      return true;
-    }
-    
-    if (session.role === 'operator') {
-      if (perm === 'view_reports') return false;
-      if (perm === 'edit_directory') return false;
-      return true;
-    }
-    
-    return false;
+  const hasPermission = (perm: PermissionKey) => {
+    return hasUserPermission(session, settings, perm);
   };
 
   // Settings Modal state
