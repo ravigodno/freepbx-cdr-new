@@ -76,6 +76,7 @@ import { hasUserPermission, PermissionKey } from './modules/access/permissions';
 import PermissionsMatrixTab from './modules/access/components/PermissionsMatrixTab';
 import AccessUsersTab from './modules/access/components/AccessUsersTab';
 import { AccessUser } from './modules/access/types';
+import { fetchAccessUsers, saveAccessUserApi, deleteAccessUserApi } from './modules/access/services/accessApi';
 import { fetchCdrStats, fetchCdrCalls } from './modules/cdr/services/cdrApi';
 import { processCallSubmit } from './modules/cdr/utils/processCallSubmit';
 
@@ -1293,15 +1294,8 @@ export default function App() {
     if (!session || session.role !== 'admin') return;
     setIsLoadingUsers(true);
     try {
-      const resp = await fetch('/api/users', { headers: { 'Authorization': `Bearer ${session.token}` } });
-      if (resp.status === 401) {
-        handleAuthError(resp);
-        return;
-      }
-      if (resp.ok) {
-        const data = await resp.json();
-        setAccessUsers(data);
-      }
+      const data = await fetchAccessUsers(session.token);
+      setAccessUsers(data);
     } catch (e) {
       console.error('Error loading users:', e);
     } finally {
@@ -1336,20 +1330,9 @@ export default function App() {
     setIsSavingUser(true);
     setAccessError('');
     try {
-      const url = editingUserId ? `/api/users/${editingUserId}` : '/api/users';
-      const method = editingUserId ? 'PUT' : 'POST';
-      const resp = await fetch(url, {
-        method,
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.token}` },
-        body: JSON.stringify(userForm)
-      });
-      const data = await resp.json().catch(() => ({}));
-      if (resp.ok) {
-        await loadAccessUsers();
-        resetUserForm();
-      } else {
-        setAccessError(data.error || 'Не удалось сохранить пользователя.');
-      }
+      await saveAccessUserApi(session.token, userForm, editingUserId);
+      await loadAccessUsers();
+      resetUserForm();
     } catch (e: any) {
       setAccessError(e.message || 'Ошибка соединения с сервером.');
     } finally {
@@ -1361,14 +1344,9 @@ export default function App() {
     if (!session || session.role !== 'admin') return;
     if (!window.confirm(`Удалить пользователя ${user.username}?`)) return;
     try {
-      const resp = await fetch(`/api/users/${user.id}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${session.token}` } });
-      if (resp.ok) {
-        await loadAccessUsers();
-        if (editingUserId === user.id) resetUserForm();
-      } else {
-        const data = await resp.json().catch(() => ({}));
-        alert(data.error || 'Не удалось удалить пользователя.');
-      }
+      await deleteAccessUserApi(session.token, user.id);
+      await loadAccessUsers();
+      if (editingUserId === user.id) resetUserForm();
     } catch (e: any) {
       alert(e.message || 'Ошибка соединения с сервером.');
     }
