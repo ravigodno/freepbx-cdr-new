@@ -2442,6 +2442,31 @@ async function enrichFreePBXRoute(settings: any, legs: any[]) {
     });
   }
 
+  const inboundIvrStep = routeSteps.find((r: any) =>
+    r.type === 'inbound_route' &&
+    String(r.destination || '').toLowerCase().startsWith('ivr-')
+  );
+
+  if (inboundIvrStep) {
+    const m = String(inboundIvrStep.destination || '').match(/^ivr-(\d+)/i);
+    const ivrNumber = m?.[1] || '';
+
+    routeSteps.push({
+      type: 'ivr',
+      title: ivrNumber ? `IVR меню ${ivrNumber}` : 'IVR меню',
+      label: 'IVR',
+      number: ivrNumber,
+      pattern: 'Переход через IVR',
+      destination: inboundIvrStep.destination || '',
+      details: {
+        source: 'inbound_route',
+        destination: inboundIvrStep.destination || '',
+        pressedDigit: '',
+        note: 'DTMF-кнопка не показана, потому что в CDR нет факта нажатия',
+      },
+    });
+  }
+
   const queueLeg = legs.find((l: any) =>
     String(l.dcontext || '').toLowerCase() === 'ext-queues' ||
     String(l.lastapp || '').toLowerCase() === 'queue'

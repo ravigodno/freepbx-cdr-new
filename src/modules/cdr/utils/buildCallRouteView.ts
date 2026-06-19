@@ -29,6 +29,7 @@ export function buildCallRouteView(chronologyData: any): RouteView {
   const trunkNumber = first.did || routeAnalysis.did || getTrunkFromChannel(first.channel) || '—';
 
   const ringGroupStep = steps.find((s: any) => s.type === 'ring_group');
+  const ivrRouteStep = steps.find((s: any) => s.type === 'ivr');
   const inboundRouteStep = steps.find((s: any) => s.type === 'inbound_route');
   const outboundRouteStep = steps.find((s: any) => s.type === 'outbound_route');
   const trunksStep = steps.find((s: any) => String(s.type || '').includes('trunk'));
@@ -87,6 +88,14 @@ export function buildCallRouteView(chronologyData: any): RouteView {
           number: inboundRouteStep?.number || '',
           members: [],
         },
+        ...(ivrRouteStep ? [{
+          label: 'IVR',
+          title: ivrRouteStep.title || 'IVR меню',
+          pattern: ivrRouteStep.pattern || '',
+          destination: ivrRouteStep.destination || '',
+          number: ivrRouteStep.number || '',
+          members: [],
+        }] : []),
         ...(ringGroupStep ? [{
           label: 'RING GROUP',
           title: ringGroupStep.title || `Группа ${ringGroupStep.number}`,
