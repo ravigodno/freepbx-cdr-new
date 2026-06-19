@@ -1224,8 +1224,9 @@ export default function App() {
           extension: data.user.extension || '',
           disabled: !!data.user.disabled
         };
-        setSession(nextSession);
         localStorage.setItem('asterisk_cdr_session', JSON.stringify(nextSession));
+        window.location.href = '/';
+        return;
       } else {
         setLoginError(data.error || 'Ошибка входа в систему.');
       }
@@ -1238,8 +1239,9 @@ export default function App() {
 
   // Authentication: Logout
   const handleLogout = () => {
-    setSession(null);
     localStorage.removeItem('asterisk_cdr_session');
+    window.location.href = '/';
+    return;
     // Clear audio states
     if (audioRef.current) {
       audioRef.current.pause();

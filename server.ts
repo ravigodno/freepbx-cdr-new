@@ -1342,7 +1342,10 @@ app.use(express.json());
 app.post('/api/auth/login', async (req, res) => {
   const { username, password } = req.body;
   
+  console.log(`[AUTH] Login attempt username=${String(username || '').trim()} ip=${req.ip || req.socket.remoteAddress || ''}`);
+
   if (!username || !password) {
+    console.warn('[AUTH] Login failed: missing username or password');
     res.status(400).json({ error: 'Username and password are required' });
     return;
   }
@@ -1351,6 +1354,7 @@ app.post('/api/auth/login', async (req, res) => {
   const user = localDb.users.find(u => u.username.toLowerCase() === username.toLowerCase());
 
   if (!user || user.disabled) {
+    console.warn(`[AUTH] Login failed username=${String(username || '').trim()} reason=${!user ? 'not_found' : 'disabled'}`);
     res.status(401).json({ error: 'Неверные имя пользователя или пароль' });
     return;
   }
@@ -1374,9 +1378,12 @@ app.post('/api/auth/login', async (req, res) => {
   }
 
   if (!isMatch) {
+    console.warn(`[AUTH] Login failed username=${user.username} reason=bad_password`);
     res.status(401).json({ error: 'Неверные имя пользователя или пароль' });
     return;
   }
+
+  console.log(`[AUTH] Login success username=${user.username} role=${user.role} extension=${user.extension || ''}`);
 
   // Create a signed token valid for 24 hours
   const token = createAuthToken({
