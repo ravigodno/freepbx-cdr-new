@@ -3132,12 +3132,7 @@ export default function App() {
         <section id="filters-bar" className="bg-white dark:bg-[#1e293b] border border-slate-200 dark:border-[#334155] rounded-xl p-4 shadow-sm">
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-              <div className="flex items-center gap-2 text-slate-705 dark:text-slate-350 text-sm font-bold select-none">
-                <Filter className="h-4 w-4 text-red-500" />
-                <span>Фильтрация звонков</span>
-              </div>
               
-              <div className="h-4 w-[1px] bg-slate-200 dark:bg-slate-700 hidden sm:block" />
 
               {/* SIP & My Calls filtering */}
               <div className="flex items-center gap-2 bg-slate-50 dark:bg-[#0f172a]/60 border border-slate-200 dark:border-[#334155]/80 p-1 px-2.5 rounded-lg select-none">
@@ -3171,7 +3166,6 @@ export default function App() {
                 </label>
               </div>
 
-              <div className="h-4 w-[1px] bg-slate-200 dark:bg-slate-700 hidden sm:block" />
 
               <div className="flex flex-wrap items-center gap-1.5 bg-slate-50 dark:bg-[#0f172a]/60 border border-slate-200 dark:border-[#334155]/80 p-1 rounded-lg">
                 <span className="text-[11px] text-slate-550 dark:text-slate-450 font-semibold px-1 select-none">Период:</span>
@@ -3306,16 +3300,30 @@ export default function App() {
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Поиск по любой строке..."
-                className="w-full bg-slate-50 border border-slate-200 rounded-lg py-1.5 pl-9 pr-3 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-red-500 focus:border-red-500 transition-all font-light"
+                placeholder="Поиск..."
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg py-1.5 pl-9 pr-8 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-red-500 focus:border-red-500 transition-all font-light"
               />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchQuery('');
+                    setPage(1);
+                  }}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 h-5 w-5 rounded-full text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors flex items-center justify-center text-sm font-bold cursor-pointer"
+                  title="Очистить поиск"
+                  aria-label="Очистить поиск"
+                >
+                  ×
+                </button>
+              )}
             </div>
             
             {/* Auto-refresh timer info & Reset Filters button combined */}
             <div className="flex items-center gap-2.5 text-xs text-slate-500 shrink-0 select-none">
               <div className="flex items-center gap-1 font-mono">
                 <RefreshCw className="h-3.5 w-3.5 animate-spin-slow text-slate-400" />
-                <span>Обновление через {timeToNextRefresh}с</span>
+                <span>Через {timeToNextRefresh}с</span>
               </div>
               <button
                 onClick={() => reloadData()}
@@ -3344,15 +3352,6 @@ export default function App() {
 
         {/* CDR LOG LIST */}
         <section id="cdr-log" className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm flex flex-col">
-          <div className="px-4 py-3 bg-slate-50/70 border-b border-slate-200 flex items-center justify-between shrink-0">
-            <h2 className="text-sm font-semibold text-slate-800 tracking-tight flex items-center gap-2">
-              <span>История вызовов и статус обработки</span>
-              <span className="bg-slate-200 text-slate-700 font-mono text-xs px-2 py-0.5 rounded-full">
-                {totalCalls} строк найдено
-              </span>
-            </h2>
-          </div>
-
           <div className="overflow-x-auto min-h-[400px]">
             {isLoadingCalls ? (
               <div className="flex flex-col items-center justify-center p-20 space-y-3">

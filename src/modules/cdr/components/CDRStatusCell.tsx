@@ -52,14 +52,15 @@ export function CDRStatusCell({
 
         {wasCallbacked && (
           <span
-            className={`inline-flex items-center gap-1 border px-1.5 py-0.5 rounded text-[10px] font-semibold mt-1 ${
-              wasKpiResolved
-                ? 'bg-emerald-55 text-emerald-700 border-emerald-250 font-bold'
-                : 'bg-amber-50 text-amber-600 border-amber-300 font-medium'
-            }`}
+            className="inline-flex items-center gap-1.5 mt-1 px-2 py-0.5 rounded-lg border border-slate-200 bg-white text-[10px] font-bold text-slate-700 shadow-xs"
             title={`Клиенту успешно перезвонили в ${callbackTime}. Лимит времени по KPI: ${wasKpiResolved ? 'соблюден' : 'превышен!'}`}
           >
-            📱 ПЕРЕЗВОНЕНО {wasKpiResolved ? '(SLA OK)' : '(SLA ПРЕВЫШЕН)'}
+            <span
+              className={`h-1.5 w-1.5 rounded-full shrink-0 ${
+                wasKpiResolved ? 'bg-emerald-500' : 'bg-rose-500'
+              }`}
+            />
+            <span>Обработано</span>
           </span>
         )}
       </div>

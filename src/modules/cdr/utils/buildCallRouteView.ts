@@ -17,7 +17,21 @@ export function buildCallRouteView(chronologyData: any): RouteView {
   const first = timeline[0] || {};
   const routeAnalysis = chronologyData?.routeAnalysis || {};
   const steps = routeAnalysis.steps || [];
-  const direction = routeAnalysis.direction || 'unknown';
+  const rawDirection = routeAnalysis.direction || 'unknown';
+
+  const firstDcontext = String(first.dcontext || '').toLowerCase();
+  const firstChannel = String(first.channel || '').toLowerCase();
+  const firstDstChannel = String(first.dstchannel || '').toLowerCase();
+
+  const looksInbound =
+    Boolean(first.did || routeAnalysis.did) ||
+    firstDcontext.includes('from-trunk') ||
+    firstDcontext.includes('from-pstn') ||
+    firstDcontext.includes('from-did') ||
+    firstChannel.includes('-in-') ||
+    firstDstChannel.includes('/');
+
+  const direction = rawDirection === 'unknown' && looksInbound ? 'inbound' : rawDirection;
 
   const answeredLeg = timeline.find((t: any) =>
     String(t.disposition || '').toUpperCase() === 'ANSWERED' &&
@@ -77,6 +91,13 @@ export function buildCallRouteView(chronologyData: any): RouteView {
   );
   const queueWaitSeconds = Number(queueWaitLeg?.duration || 0);
   const queueWaitText = queueWaitSeconds ? ` Ожидание в очереди: ${queueWaitSeconds} сек.` : '';
+
+  const directInboundExt =
+    direction === 'inbound' &&
+    String(first.dcontext || '').toLowerCase() === 'ext-local' &&
+    /^\d{2,6}$/.test(String(first.dst || ''))
+      ? String(first.dst)
+      : '';
 
 
   const isInternalRoute =
@@ -186,10 +207,22 @@ export function buildCallRouteView(chronologyData: any): RouteView {
           }] : []),
         ]);
 
+  const ivrStepForResult = routeSteps.find((step: any) => step.label === 'IVR' || step.type === 'ivr');
+
+  const ivrOnlyNoDigit =
+    direction === 'inbound' &&
+    Boolean(ivrStepForResult) &&
+    !String(ivrStepForResult?.details?.pressedDigit || '').trim() &&
+    !routeSteps.some((step: any) => step.label === 'QUEUE' || step.label === 'RING GROUP' || step.label === 'EXTENSION');
+
   const resultText = direction === 'inbound'
-    ? (anyAnswered
-        ? `Абонент ${externalNumber} дозвонился.${queueWaitText} Ответил внутренний номер ${answeredExt || '—'}.`
-        : `Абонент ${externalNumber} не дозвонился.${queueWaitText} Не ответили: ${missedMembers.length ? missedMembers.join(', ') : (queueMissedMembers.length ? queueMissedMembers.join(', ') : 'участники группы или очереди')}.`)
+    ? (ivrOnlyNoDigit
+        ? `Абонент ${externalNumber} попал в IVR, но не выбрал пункт меню.`
+        : (directInboundExt && !anyAnswered
+            ? `Вызов на внутренний номер ${directInboundExt}. Абонент не ответил на вызов.`
+            : (anyAnswered
+                ? `Абонент ${externalNumber} дозвонился.${queueWaitText} Ответил внутренний номер ${answeredExt || directInboundExt || '—'}.`
+                : `Абонент ${externalNumber} не дозвонился.${queueWaitText} Не ответили: ${missedMembers.length ? missedMembers.join(', ') : (queueMissedMembers.length ? queueMissedMembers.join(', ') : 'участники группы или очереди')}.`)))
     : (isInternalRoute
         ? (anyAnswered
             ? `Внутренний номер ${dialedNumber} ответил на вызов от ${callerExt}.`
@@ -201,6 +234,6 @@ export function buildCallRouteView(chronologyData: any): RouteView {
   return {
     routeSteps,
     resultText,
-    anyAnswered,
+    anyAnswered: ivrOnlyNoDigit ? false : anyAnswered,
   };
 }
