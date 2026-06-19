@@ -9,14 +9,22 @@ export type PermissionKey =
   | 'make_calls'
   | 'edit_directory';
 
+export type UserPermissions = Partial<Record<PermissionKey, boolean>>;
+
 export interface PermissionSession {
   role: UserRole;
+  permissions?: UserPermissions;
 }
 
 function customRoleHasPermission(
+  session: PermissionSession,
   settings: Partial<AppSettings> | null | undefined,
   perm: PermissionKey
 ): boolean {
+  if (session.permissions && Object.prototype.hasOwnProperty.call(session.permissions, perm)) {
+    return session.permissions[perm] === true;
+  }
+
   const pSettings = settings || {};
 
   if (perm === 'view_calls') return pSettings.customCanViewCalls !== false;
@@ -37,7 +45,7 @@ export function hasUserPermission(
   if (!session) return false;
 
   if (session.role === 'custom') {
-    return customRoleHasPermission(settings, perm);
+    return customRoleHasPermission(session, settings, perm);
   }
 
   return roleHasPermission(session.role, perm);

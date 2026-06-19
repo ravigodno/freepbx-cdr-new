@@ -1,4 +1,7 @@
 import { UserRole } from '../../types';
+import { PermissionKey } from './permissions';
+
+export type UserPermissions = Partial<Record<PermissionKey, boolean>>;
 
 export interface AccessUser {
   id: string;
@@ -6,6 +9,7 @@ export interface AccessUser {
   role: UserRole;
   extension?: string;
   disabled?: boolean;
+  permissions?: UserPermissions;
 }
 
 export interface UserFormState {
@@ -14,4 +18,5 @@ export interface UserFormState {
   role: UserRole;
   extension: string;
   disabled: boolean;
+  permissions?: UserPermissions;
 }

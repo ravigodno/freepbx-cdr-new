@@ -75,7 +75,7 @@ import { buildCdrQueryParams } from './modules/cdr/utils/buildCdrQueryParams';
 import { hasUserPermission, PermissionKey } from './modules/access/permissions';
 import PermissionsMatrixTab from './modules/access/components/PermissionsMatrixTab';
 import AccessUsersTab from './modules/access/components/AccessUsersTab';
-import { AccessUser } from './modules/access/types';
+import { AccessUser, UserPermissions } from './modules/access/types';
 import { fetchAccessUsers, saveAccessUserApi, deleteAccessUserApi } from './modules/access/services/accessApi';
 import { fetchCdrStats, fetchCdrCalls } from './modules/cdr/services/cdrApi';
 import { processCallSubmit } from './modules/cdr/utils/processCallSubmit';
@@ -239,6 +239,7 @@ interface UserSession {
   role: UserRole;
   extension?: string;
   disabled?: boolean;
+  permissions?: UserPermissions;
 }
 
 const Logo3D = ({ className = "h-5 w-5" }: { className?: string }) => (
@@ -374,12 +375,13 @@ export default function App() {
   const [isSavingUser, setIsSavingUser] = useState(false);
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [accessError, setAccessError] = useState('');
-  const [userForm, setUserForm] = useState<{ username: string; password: string; role: UserRole; extension: string; disabled: boolean }>({
+  const [userForm, setUserForm] = useState({
     username: '',
     password: '',
-    role: 'operator',
+    role: 'operator' as UserRole,
     extension: '',
-    disabled: false
+    disabled: false,
+    permissions: {}
   });
   const [isDemoClearing, setIsDemoClearing] = useState(false);
   const [isDemoGenerating, setIsDemoGenerating] = useState(false);
@@ -1305,13 +1307,13 @@ export default function App() {
 
   const resetUserForm = () => {
     setEditingUserId(null);
-    setUserForm({ username: '', password: '', role: 'operator', extension: '', disabled: false });
+    setUserForm({ username: '', password: '', role: 'operator', extension: '', disabled: false, permissions: {} });
     setAccessError('');
   };
 
   const openEditUser = (user: AccessUser) => {
     setEditingUserId(user.id);
-    setUserForm({ username: user.username, password: '', role: user.role, extension: user.extension || '', disabled: !!user.disabled });
+    setUserForm({ username: user.username, password: '', role: user.role, extension: user.extension || '', disabled: !!user.disabled, permissions: user.permissions || {} });
     setAccessError('');
     setSettingsTab('access');
   };
