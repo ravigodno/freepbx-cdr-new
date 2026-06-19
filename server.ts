@@ -3042,12 +3042,14 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
         linkedid: first.linkedid || first.uniqueid,
         calldate: first.calldate,
         src: (queueLeg || groupLeg || hasInboundTrunkSignal(routeLeg) || isIncomingRouteContext(routeLeg)) ? (externalCallerNumber || external.src || first.src) : (external.src || first.src),
-        dst: queueLeg ? `Очередь ${queueLeg.dst}` : groupLeg ? `Группа ${groupLeg.dst}` : (routeLeg.dst || first.dst),
+        dst: answeredExts.length ? answeredExts.join(', ') : missedExts.length ? missedExts.join(', ') : queueLeg ? `Очередь ${queueLeg.dst}` : groupLeg ? `Группа ${groupLeg.dst}` : (routeLeg.dst || first.dst),
         dstchannel: "",
         disposition: answered ? "ANSWERED" : "NO ANSWER",
         billsec: answered ? answered.billsec : 0,
         duration: Math.max(...sorted.map(c => Number(c.duration || 0))),
         did: buildDidWithAnsweredAndMissed((queueLeg?.did || groupLeg?.did || sorted.find(c => c.did)?.did || ""), answeredExts, missedExts) || (sorted.find(c => c.did)?.did || first.did),
+        answeredExts,
+        missedExts,
       };
     });
 
@@ -3105,9 +3107,21 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
         linkedid: routeLeg.linkedid || routeLeg.uniqueid,
         calldate: sorted[0].calldate,
         src: (queueLeg || groupLeg || hasInboundTrunkSignal(routeLeg) || isIncomingRouteContext(routeLeg)) ? (externalCallerNumber || external.src || routeLeg.src) : (external.src || routeLeg.src),
-        dst: (String(routeLeg.dcontext || "").toLowerCase() === "from-internal" && isExternalNumber(routeLeg.dst)) ? routeLeg.dst : queueLeg ? `Очередь ` : groupLeg ? `Группа ` : (routeLeg.dst || sorted[0].dst),
+        dst: (String(routeLeg.dcontext || "").toLowerCase() === "from-internal" && isExternalNumber(routeLeg.dst))
+          ? routeLeg.dst
+          : answeredExts.length
+            ? answeredExts.join(', ')
+            : missedExts.length
+              ? missedExts.join(', ')
+              : queueLeg
+                ? `Очередь ${queueLeg.dst || ''}`
+                : groupLeg
+                  ? `Группа ${groupLeg.dst || ''}`
+                  : (routeLeg.dst || sorted[0].dst),
         dstchannel: "",
         did: buildDidWithAnsweredAndMissed(did, answeredExts, missedExts) || did,
+        answeredExts,
+        missedExts,
         disposition: answered ? "ANSWERED" : "NO ANSWER",
         billsec: answered ? answered.billsec : 0,
         duration: Math.max(...sorted.map(c => Number(c.duration || 0))),
@@ -3424,9 +3438,21 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
         linkedid: routeLeg.linkedid || routeLeg.uniqueid,
         calldate: sorted[0].calldate,
         src: (queueLeg || groupLeg || hasInboundTrunkSignal(routeLeg) || isIncomingRouteContext(routeLeg)) ? (externalCallerNumber || external.src || routeLeg.src) : (external.src || routeLeg.src),
-        dst: (String(routeLeg.dcontext || "").toLowerCase() === "from-internal" && isExternalNumber(routeLeg.dst)) ? routeLeg.dst : queueLeg ? `Очередь ` : groupLeg ? `Группа ` : (routeLeg.dst || sorted[0].dst),
+        dst: (String(routeLeg.dcontext || "").toLowerCase() === "from-internal" && isExternalNumber(routeLeg.dst))
+          ? routeLeg.dst
+          : answeredExts.length
+            ? answeredExts.join(', ')
+            : missedExts.length
+              ? missedExts.join(', ')
+              : queueLeg
+                ? `Очередь ${queueLeg.dst || ''}`
+                : groupLeg
+                  ? `Группа ${groupLeg.dst || ''}`
+                  : (routeLeg.dst || sorted[0].dst),
         dstchannel: "",
         did: buildDidWithAnsweredAndMissed(did, answeredExts, missedExts) || did,
+        answeredExts,
+        missedExts,
         disposition: answered ? "ANSWERED" : "NO ANSWER",
         billsec: answered ? answered.billsec : 0,
         duration: Math.max(...sorted.map(c => Number(c.duration || 0))),
@@ -3723,9 +3749,21 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
         linkedid: routeLeg.linkedid || routeLeg.uniqueid,
         calldate: sorted[0].calldate,
         src: (queueLeg || groupLeg || hasInboundTrunkSignal(routeLeg) || isIncomingRouteContext(routeLeg)) ? (externalCallerNumber || external.src || routeLeg.src) : (external.src || routeLeg.src),
-        dst: (String(routeLeg.dcontext || "").toLowerCase() === "from-internal" && isExternalNumber(routeLeg.dst)) ? routeLeg.dst : queueLeg ? `Очередь ` : groupLeg ? `Группа ` : (routeLeg.dst || sorted[0].dst),
+        dst: (String(routeLeg.dcontext || "").toLowerCase() === "from-internal" && isExternalNumber(routeLeg.dst))
+          ? routeLeg.dst
+          : answeredExts.length
+            ? answeredExts.join(', ')
+            : missedExts.length
+              ? missedExts.join(', ')
+              : queueLeg
+                ? `Очередь ${queueLeg.dst || ''}`
+                : groupLeg
+                  ? `Группа ${groupLeg.dst || ''}`
+                  : (routeLeg.dst || sorted[0].dst),
         dstchannel: "",
         did: buildDidWithAnsweredAndMissed(did, answeredExts, missedExts) || did,
+        answeredExts,
+        missedExts,
         disposition: answered ? "ANSWERED" : "NO ANSWER",
         billsec: answered ? answered.billsec : 0,
         duration: Math.max(...sorted.map(c => Number(c.duration || 0))),

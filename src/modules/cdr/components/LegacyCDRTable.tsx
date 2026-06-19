@@ -59,15 +59,21 @@ export default function LegacyCDRTable({
           <th className="py-4 px-4 font-bold">КТО ЗВОНИЛ</th>
           <th className="py-4 px-4 font-bold">КУДА ЗВОНИЛ</th>
           <th className="py-4 px-4 font-bold">РЕШЕНИЕ (СТАТУС)</th>
-          <th className="py-4 px-4 font-bold">ДЛИТЕЛЬНОСТЬ</th>
           <th className="py-4 px-4 font-bold">ЗАПИСЬ</th>
+          <th className="py-4 px-4 font-bold">ДЛИТЕЛЬНОСТЬ</th>
           <th className="py-4 px-4 font-bold">КОММЕНТАРИЙ ОПЕРАТОРА</th>
           <th className="py-4 px-4 font-bold text-right pr-6">УПРАВЛЕНИЕ</th>
         </tr>
       </thead>
       <tbody className="divide-y divide-slate-100 dark:divide-slate-800/45 text-xs bg-white dark:bg-slate-900">
         {calls.map((call, index) => {
-          const rowVm = buildCdrRowViewModel(call, directory);
+          const callLinkId = String(call.linkedid || call.uniqueid || '');
+          const relatedLegs = calls.filter((leg: any) => {
+            const legLinkId = String(leg.linkedid || leg.uniqueid || '');
+            return callLinkId && legLinkId === callLinkId;
+          });
+
+          const rowVm = buildCdrRowViewModel(call, directory, relatedLegs);
 
           const {
             isIncoming,
@@ -137,19 +143,19 @@ export default function LegacyCDRTable({
                 index={index}
               />
 
-              {/* Column 5: ДЛИТЕЛЬНОСТЬ */}
-              <CDRDurationCell
-                duration={call.duration}
-                billsec={call.billsec}
-                formatSeconds={formatSeconds}
-              />
-
-              {/* Column 5b: ЗАПИСЬ */}
+              {/* Column 5: ЗАПИСЬ */}
               <CDRRecordingCell
                 call={call}
                 playingCallId={playingCallId}
                 isAudioPaused={isAudioPaused}
                 playRecording={playRecording}
+              />
+
+              {/* Column 5b: ДЛИТЕЛЬНОСТЬ */}
+              <CDRDurationCell
+                duration={call.duration}
+                billsec={call.billsec}
+                formatSeconds={formatSeconds}
               />
 
               {/* Column 6: COMMENT */}
