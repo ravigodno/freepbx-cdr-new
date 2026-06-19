@@ -802,6 +802,57 @@ async function syncDirectoryFromConfiguredUrl(localDb: any): Promise<{ count: nu
 }
 
 
+
+function getDefaultAccessRoles() {
+  return [
+    {
+      id: 'admin',
+      name: 'Администратор',
+      system: true,
+      permissions: {
+        view_calls: true,
+        view_directory: true,
+        view_reports: true,
+        listen_recordings: true,
+        make_calls: true,
+        edit_directory: true
+      }
+    },
+    {
+      id: 'manager',
+      name: 'Руководитель',
+      system: true,
+      permissions: {
+        view_calls: true,
+        view_directory: true,
+        view_reports: true,
+        listen_recordings: true,
+        make_calls: true,
+        edit_directory: true
+      }
+    },
+    {
+      id: 'operator',
+      name: 'Оператор',
+      system: true,
+      permissions: {
+        view_calls: true,
+        view_directory: true,
+        listen_recordings: true,
+        make_calls: true
+      }
+    },
+    {
+      id: 'directory_only',
+      name: 'Только справочник',
+      system: true,
+      permissions: {
+        view_directory: true
+      }
+    }
+  ];
+}
+
 // Ensure standard database schema is initialized
 function bootstrapDatabase() {
   if (!fs.existsSync(DB_FILE)) {
@@ -833,6 +884,7 @@ function bootstrapDatabase() {
         }
       ],
       missedCallStatuses: [] as MissedCallStatus[],
+      roles: getDefaultAccessRoles(),
       settings: {
         recordingsPath: process.env.RECORDINGS_PATH || '/var/spool/asterisk/monitor',
         recordingsUrlPrefix: process.env.RECORDINGS_URL_PREFIX || '',
@@ -896,6 +948,7 @@ async function readLocalDb(): Promise<{
   missedCallStatuses: MissedCallStatus[];
   settings: AppSettings;
   directory?: any[];
+  roles?: any[];
 }> {
   await dbLock.acquire();
   try {
@@ -903,6 +956,11 @@ async function readLocalDb(): Promise<{
     const data = JSON.parse(content);
     let changed = false;
     
+    if (!Array.isArray(data.roles)) {
+      data.roles = getDefaultAccessRoles();
+      changed = true;
+    }
+
     if (!data.directory) {
       data.directory = [
         { id: 'dir1', name: 'Алексей Смирнов (Менеджер)', number: '101', type: 'internal', comment: 'Отдел продаж', createdAt: new Date().toISOString() },
@@ -1409,6 +1467,55 @@ app.post('/api/auth/login', async (req, res) => {
       permissions: user.permissions || {}
     }
   });
+});
+
+
+// --- ACCESS ROLES MANAGEMENT ENDPOINTS ---
+app.get('/api/roles', requireAuth('admin'), async (req, res) => {
+  try {
+    const localDb = await readLocalDb();
+    res.json(localDb.roles || getDefaultAccessRoles());
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/roles', requireAuth('admin'), async (req, res) => {
+  try {
+    const incomingRoles = Array.isArray(req.body?.roles) ? req.body.roles : null;
+    if (!incomingRoles) {
+      res.status(400).json({ error: 'Некорректный список ролей' });
+      return;
+    }
+
+    const defaultRoles = getDefaultAccessRoles();
+    const safeRoles = incomingRoles
+      .filter((role: any) => role && typeof role.id === 'string' && typeof role.name === 'string')
+      .map((role: any) => {
+        const defaultRole = defaultRoles.find((item: any) => item.id === role.id);
+        return {
+          id: String(role.id).trim(),
+          name: String(role.name).trim(),
+          system: !!defaultRole || !!role.system,
+          permissions: role.permissions && typeof role.permissions === 'object' ? role.permissions : {}
+        };
+      });
+
+    const existingIds = new Set(safeRoles.map((role: any) => role.id));
+    for (const defaultRole of defaultRoles) {
+      if (!existingIds.has(defaultRole.id)) {
+        safeRoles.push(defaultRole);
+      }
+    }
+
+    const localDb = await readLocalDb();
+    localDb.roles = safeRoles;
+    await writeLocalDb(localDb);
+
+    res.json({ success: true, roles: safeRoles });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 
