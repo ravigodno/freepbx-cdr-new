@@ -1,4 +1,12 @@
-import { detectCallDirection, getRealCallerExtFromCall, isOutboundCall, extractRingGroupIdsFromLegs, analyzeRingGroups, getAnsweredExtFromLegs, analyzeOutboundRoute } from './server/freepbxRouteTracer';
+import {
+  detectCallDirection,
+  getRealCallerExtFromCall,
+  isOutboundCall,
+  extractRingGroupIdsFromLegs,
+  analyzeRingGroups,
+  getAnsweredExtFromLegs,
+  analyzeOutboundRoute
+} from './server/freepbx/routeBuilder';
 import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import fs from 'fs';
