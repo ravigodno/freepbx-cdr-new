@@ -1,22 +1,9 @@
 import React from 'react';
 import { Edit2, Trash2 } from 'lucide-react';
 import { UserRole } from '../../../types';
+import { AccessUser, UserFormState } from '../types';
 
-interface AccessUser {
-  id: string;
-  username: string;
-  role: UserRole;
-  extension?: string;
-  disabled?: boolean;
-}
 
-interface UserFormState {
-  username: string;
-  password: string;
-  role: UserRole;
-  extension: string;
-  disabled: boolean;
-}
 
 interface AccessUsersTabProps {
   accessUsers: AccessUser[];

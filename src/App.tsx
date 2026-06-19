@@ -75,6 +75,7 @@ import { buildCdrQueryParams } from './modules/cdr/utils/buildCdrQueryParams';
 import { hasUserPermission, PermissionKey } from './modules/access/permissions';
 import PermissionsMatrixTab from './modules/access/components/PermissionsMatrixTab';
 import AccessUsersTab from './modules/access/components/AccessUsersTab';
+import { AccessUser } from './modules/access/types';
 import { fetchCdrStats, fetchCdrCalls } from './modules/cdr/services/cdrApi';
 import { processCallSubmit } from './modules/cdr/utils/processCallSubmit';
 
@@ -243,13 +244,6 @@ const Logo3D = ({ className = "h-5 w-5" }: { className?: string }) => (
   <img src="/freepbx-cdr-logo.svg" className={className} alt="PBXPULS" />
 );
 
-interface AccessUser {
-  id: string;
-  username: string;
-  role: UserRole;
-  extension?: string;
-  disabled?: boolean;
-}
 
 
 interface LiveCallBanner {
