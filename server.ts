@@ -43,11 +43,161 @@ const PORT = process.env.PORT || '3000';
 const NODE_ENV = process.env.NODE_ENV || 'development';
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
+const DTMF_EVENTS_FILE = path.join(DATA_DIR, 'dtmfEvents.json');
 
 // Ensure data directory exists
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
+
+// DTMF events storage
+type DtmfEventRecord = {
+  ts: string;
+  linkedid: string;
+  uniqueid: string;
+  channel: string;
+  digit: string;
+  direction: string;
+  event: string;
+};
+
+function readDtmfEvents(): DtmfEventRecord[] {
+  try {
+    if (!fs.existsSync(DTMF_EVENTS_FILE)) return [];
+    const raw = fs.readFileSync(DTMF_EVENTS_FILE, 'utf8');
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e: any) {
+    console.error('[DTMF] read error:', e.message);
+    return [];
+  }
+}
+
+function writeDtmfEvents(events: DtmfEventRecord[]) {
+  try {
+    const maxAgeMs = 30 * 24 * 60 * 60 * 1000;
+    const cutoff = Date.now() - maxAgeMs;
+
+    const cleaned = (events || [])
+      .filter((e: DtmfEventRecord) => {
+        const t = Date.parse(e.ts || '');
+        return Number.isFinite(t) && t >= cutoff;
+      })
+      .slice(-100000);
+
+    fs.writeFileSync(DTMF_EVENTS_FILE, JSON.stringify(cleaned, null, 2));
+  } catch (e: any) {
+    console.error('[DTMF] write error:', e.message);
+  }
+}
+
+function appendDtmfEvent(event: DtmfEventRecord) {
+  const events = readDtmfEvents();
+  events.push(event);
+  writeDtmfEvents(events);
+}
+
+function parseAmiPacket(packet: string): Record<string, string> {
+  const obj: Record<string, string> = {};
+  String(packet || '').split(/\r?\n/).forEach((line) => {
+    const idx = line.indexOf(':');
+    if (idx > 0) {
+      const key = line.slice(0, idx).trim();
+      const value = line.slice(idx + 1).trim();
+      obj[key] = value;
+    }
+  });
+  return obj;
+}
+
+let dtmfListenerStarted = false;
+let dtmfListenerSocket: net.Socket | null = null;
+let dtmfReconnectTimer: NodeJS.Timeout | null = null;
+
+async function startDtmfAmiListener(settings: AppSettings) {
+  if (dtmfListenerStarted) return;
+
+  const host = settings.amiHost || 'localhost';
+  const port = Number(settings.amiPort || 5038);
+  const user = settings.amiUser || '';
+  const pass = settings.amiPass || '';
+
+  if (!host || !user || !pass) {
+    console.log('[DTMF] AMI listener skipped: AMI settings are incomplete');
+    return;
+  }
+
+  dtmfListenerStarted = true;
+
+  const connect = () => {
+    let buffer = '';
+    let loggedIn = false;
+
+    const socket = new net.Socket();
+    dtmfListenerSocket = socket;
+
+    socket.connect(port, host, () => {
+      console.log(`[DTMF] AMI listener connected to ${host}:${port}`);
+    });
+
+    socket.on('data', (data) => {
+      buffer += data.toString();
+
+      if (!loggedIn && buffer.includes('Asterisk Call Manager')) {
+        socket.write(`Action: Login\r\nUsername: ${user}\r\nSecret: ${pass}\r\nEvents: on\r\n\r\n`);
+        loggedIn = true;
+      }
+
+      const packets = buffer.split(/\r?\n\r?\n/);
+      buffer = packets.pop() || '';
+
+      for (const packet of packets) {
+        const ami = parseAmiPacket(packet);
+        const eventName = ami.Event || '';
+
+        if (eventName === 'DTMFBegin' || eventName === 'DTMFEnd') {
+          const digit = ami.Digit || '';
+          const linkedid = ami.Linkedid || ami.LinkedID || ami.Uniqueid || ami.UniqueID || '';
+          const uniqueid = ami.Uniqueid || ami.UniqueID || '';
+          const channel = ami.Channel || '';
+
+          if (digit && linkedid) {
+            appendDtmfEvent({
+              ts: new Date().toISOString(),
+              linkedid,
+              uniqueid,
+              channel,
+              digit,
+              direction: ami.Direction || '',
+              event: eventName,
+            });
+
+            console.log(`[DTMF] ${eventName} digit=${digit} linkedid=${linkedid} channel=${channel}`);
+          }
+        }
+      }
+    });
+
+    socket.on('error', (err) => {
+      console.error('[DTMF] AMI listener error:', err.message);
+    });
+
+    socket.on('close', () => {
+      console.warn('[DTMF] AMI listener disconnected');
+      dtmfListenerSocket = null;
+      dtmfListenerStarted = false;
+
+      if (dtmfReconnectTimer) clearTimeout(dtmfReconnectTimer);
+      dtmfReconnectTimer = setTimeout(() => {
+        startDtmfAmiListener(settings).catch((e: any) => console.error('[DTMF] reconnect failed:', e.message));
+      }, 5000);
+    });
+  };
+
+  connect();
+}
+
+
 
 // Global server secret for HMAC signing of auth tokens.
 // Tokens are intentionally compact and self-contained for this local app,
@@ -2352,6 +2502,54 @@ async function enrichFreePBXRoute(settings: any, legs: any[]) {
   ).trim();
   const ringGroupIds = extractRingGroupIdsFromLegs(legs);
 
+  if (did && detectedDirection === 'inbound') {
+    try {
+      const inboundChannel = String(
+        legs.find((l: any) => String(l.channel || '').includes('-in-'))?.channel ||
+        legs[0]?.channel ||
+        ''
+      );
+
+      const trunkRows = await queryFreePBXCDR(
+        settings,
+        false,
+        'SELECT trunkid, name, tech, channelid, outcid FROM asterisk.trunks',
+        []
+      );
+
+      const matchedTrunk = (trunkRows || []).find((t: any) => {
+        const channelid = String(t.channelid || '').trim();
+        return channelid && inboundChannel.includes(channelid);
+      });
+
+      routeSteps.push({
+        type: 'inbound_trunk',
+        title: matchedTrunk?.name || `Транк ${did}`,
+        label: 'Trunk',
+        number: did,
+        destination: did,
+        details: {
+          did,
+          channel: inboundChannel,
+          trunkid: matchedTrunk?.trunkid || '',
+          name: matchedTrunk?.name || '',
+          tech: matchedTrunk?.tech || '',
+          channelid: matchedTrunk?.channelid || '',
+          outcid: matchedTrunk?.outcid || '',
+        },
+      });
+    } catch (e: any) {
+      routeSteps.push({
+        type: 'inbound_trunk',
+        title: `Транк ${did}`,
+        label: 'Trunk',
+        number: did,
+        destination: did,
+        details: { did, error: e.message },
+      });
+    }
+  }
+
   if (did) {
     try {
       const incomingRows = await queryFreePBXCDR(
@@ -2451,18 +2649,27 @@ async function enrichFreePBXRoute(settings: any, legs: any[]) {
     const m = String(inboundIvrStep.destination || '').match(/^ivr-(\d+)/i);
     const ivrNumber = m?.[1] || '';
 
+    const realDtmf = readDtmfEvents()
+      .filter((e: any) =>
+        String(e.linkedid || '') === String(legs[0]?.linkedid || legs[0]?.uniqueid || '') &&
+        String(e.event || '') === 'DTMFEnd' &&
+        String(e.digit || '').trim()
+      )
+      .slice(-1)[0];
+
     routeSteps.push({
       type: 'ivr',
       title: ivrNumber ? `IVR меню ${ivrNumber}` : 'IVR меню',
       label: 'IVR',
       number: ivrNumber,
-      pattern: 'Переход через IVR',
+      pattern: realDtmf?.digit ? `Нажата кнопка: ${realDtmf.digit}` : 'Переход через IVR',
       destination: inboundIvrStep.destination || '',
       details: {
         source: 'inbound_route',
         destination: inboundIvrStep.destination || '',
-        pressedDigit: '',
-        note: 'DTMF-кнопка не показана, потому что в CDR нет факта нажатия',
+        pressedDigit: realDtmf?.digit || '',
+        dtmfSource: realDtmf ? 'AMI DTMFEnd' : '',
+        note: realDtmf ? 'DTMF-кнопка получена из AMI-события' : 'DTMF-кнопка не найдена в AMI-событиях',
       },
     });
   }
@@ -4880,6 +5087,9 @@ async function startServer() {
     const dummyMp3Hex = "fff334c00000003815000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
     fs.writeFileSync(sampleAudioPath, Buffer.from(dummyMp3Hex, 'hex'));
   }
+
+  const startupDb = await readLocalDb();
+  startDtmfAmiListener(startupDb.settings).catch((e: any) => console.error('[DTMF] listener start failed:', e.message));
 
   app.listen(parseInt(PORT, 10), '0.0.0.0', () => {
     console.log(`VOIP CDR Missed Calls Service is operational on port ${PORT}`);

@@ -29,12 +29,18 @@ export function buildCallRouteView(chronologyData: any): RouteView {
   const trunkNumber = first.did || routeAnalysis.did || getTrunkFromChannel(first.channel) || '—';
 
   const ringGroupStep = steps.find((s: any) => s.type === 'ring_group');
+  const inboundTrunkStep = steps.find((s: any) => s.type === 'inbound_trunk');
   const ivrRouteStep = steps.find((s: any) => s.type === 'ivr');
   const inboundRouteStep = steps.find((s: any) => s.type === 'inbound_route');
   const outboundRouteStep = steps.find((s: any) => s.type === 'outbound_route');
   const trunksStep = steps.find((s: any) => String(s.type || '').includes('trunk'));
 
   const groupMembers = ringGroupStep?.members || [];
+
+  const outboundSelectedTrunk = outboundRouteStep?.details?.trunks?.[0] || null;
+  const outboundTrunkTitle = outboundSelectedTrunk?.name
+    ? `${outboundSelectedTrunk.name}${outboundSelectedTrunk.outcid ? ` (${outboundSelectedTrunk.outcid})` : ''}`
+    : (trunksStep?.title || 'Транк исходящего вызова');
 
   const answeredExt =
     routeAnalysis.answeredExt ||
@@ -62,11 +68,16 @@ export function buildCallRouteView(chronologyData: any): RouteView {
   const queueWaitText = queueWaitSeconds ? ` Ожидание в очереди: ${queueWaitSeconds} сек.` : '';
 
 
+  const isInternalRoute =
+    direction !== 'inbound' &&
+    /^\d{2,6}$/.test(String(dialedNumber || '')) &&
+    /^\d{2,6}$/.test(String(callerExt || ''));
+
   const routeSteps = direction === 'inbound'
     ? [
         {
           label: 'CALLER',
-          title: 'Абонент набирает номер',
+          title: `Звонок от ${externalNumber}`,
           pattern: '',
           destination: trunkNumber,
           number: externalNumber,
@@ -74,10 +85,10 @@ export function buildCallRouteView(chronologyData: any): RouteView {
         },
         {
           label: 'TRUNK',
-          title: `Транк ${trunkNumber}`,
+          title: inboundTrunkStep?.title || `Транк ${trunkNumber}`,
           pattern: '',
-          destination: trunkNumber,
-          number: trunkNumber,
+          destination: inboundTrunkStep?.destination || trunkNumber,
+          number: inboundTrunkStep?.number || trunkNumber,
           members: [],
         },
         {
@@ -117,40 +128,63 @@ export function buildCallRouteView(chronologyData: any): RouteView {
           })),
         }] : []),
       ]
-    : [
-        {
-          label: 'EXTENSION',
-          title: `Исходящий вызов от внутреннего номера ${callerExt}`,
-          pattern: '',
-          destination: dialedNumber,
-          number: callerExt,
-          members: [],
-        },
-        {
-          label: 'OUTBOUND ROUTE',
-          title: outboundRouteStep?.title || 'Исходящее правило',
-          pattern: outboundRouteStep?.pattern || '',
-          destination: dialedNumber,
-          number: outboundRouteStep?.number || '',
-          members: [],
-        },
-        {
-          label: 'TRUNKS',
-          title: trunksStep?.title || 'Доступные транки FreePBX',
-          pattern: '',
-          destination: dialedNumber,
-          number: trunksStep?.number || '',
-          members: [],
-        },
-      ];
+    : (isInternalRoute
+      ? [
+          {
+            label: 'EXTENSION',
+            title: `Внутренний вызов от номера ${callerExt}`,
+            pattern: '',
+            destination: dialedNumber,
+            number: callerExt,
+            members: [],
+          },
+          {
+            label: 'EXTENSION',
+            title: `Вызов на внутренний номер ${dialedNumber}`,
+            pattern: '',
+            destination: dialedNumber,
+            number: dialedNumber,
+            members: [],
+          },
+        ]
+      : [
+          {
+            label: 'EXTENSION',
+            title: `Исходящий вызов от внутреннего номера ${callerExt}`,
+            pattern: '',
+            destination: dialedNumber,
+            number: callerExt,
+            members: [],
+          },
+          {
+            label: 'OUTBOUND ROUTE',
+            title: outboundRouteStep?.title || 'Исходящее правило',
+            pattern: outboundRouteStep?.pattern || '',
+            destination: dialedNumber,
+            number: outboundRouteStep?.number || '',
+            members: [],
+          },
+          ...(direction === 'outbound' ? [{
+            label: 'TRUNK',
+            title: outboundTrunkTitle,
+            pattern: outboundSelectedTrunk?.channelid || '',
+            destination: dialedNumber,
+            number: outboundSelectedTrunk?.outcid || outboundSelectedTrunk?.channelid || '',
+            members: [],
+          }] : []),
+        ]);
 
   const resultText = direction === 'inbound'
     ? (anyAnswered
         ? `Абонент ${externalNumber} дозвонился.${queueWaitText} Ответил внутренний номер ${answeredExt || '—'}.`
         : `Абонент ${externalNumber} не дозвонился.${queueWaitText} Не ответили: ${missedMembers.length ? missedMembers.join(', ') : (queueMissedMembers.length ? queueMissedMembers.join(', ') : 'участники группы или очереди')}.`)
-    : (anyAnswered
-        ? `Номер ${dialedNumber} ответил на вызов с внутреннего номера ${callerExt}.`
-        : `Номер ${dialedNumber} не ответил на вызов с внутреннего номера ${callerExt}.`);
+    : (isInternalRoute
+        ? (anyAnswered
+            ? `Внутренний номер ${dialedNumber} ответил на вызов от ${callerExt}.`
+            : `Внутренний номер ${dialedNumber} не ответил на вызов от ${callerExt}.`)
+        : (anyAnswered
+            ? `Номер ${dialedNumber} ответил на вызов с внутреннего номера ${callerExt}.`
+            : `Номер ${dialedNumber} не ответил на вызов с внутреннего номера ${callerExt}.`));
 
   return {
     routeSteps,
