@@ -949,6 +949,10 @@ async function readLocalDb(): Promise<{
           next.disabled = false;
           changed = true;
         }
+        if (!next.hasOwnProperty('permissions') || typeof next.permissions !== 'object' || next.permissions === null) {
+          next.permissions = {};
+          changed = true;
+        }
         return next;
       });
     }
@@ -1390,6 +1394,7 @@ app.post('/api/auth/login', async (req, res) => {
     username: user.username,
     role: user.role,
     extension: user.extension || '',
+    permissions: user.permissions || {},
     expiresAt: Date.now() + 24 * 60 * 60 * 1000
   });
 
@@ -1400,7 +1405,8 @@ app.post('/api/auth/login', async (req, res) => {
       username: user.username,
       role: user.role,
       extension: user.extension || '',
-      disabled: !!user.disabled
+      disabled: !!user.disabled,
+      permissions: user.permissions || {}
     }
   });
 });
@@ -1418,7 +1424,7 @@ app.get('/api/users', requireAuth('admin'), async (req, res) => {
 
 app.post('/api/users', requireAuth('admin'), async (req, res) => {
   try {
-    const { username, password, role, extension, disabled } = req.body;
+    const { username, password, role, extension, disabled, permissions } = req.body;
     const cleanUsername = String(username || '').trim();
     if (!cleanUsername || !password) {
       res.status(400).json({ error: 'Логин и пароль обязательны' });
@@ -1443,6 +1449,7 @@ app.post('/api/users', requireAuth('admin'), async (req, res) => {
       role,
       extension: String(extension || '').trim(),
       disabled: !!disabled,
+      permissions: permissions && typeof permissions === 'object' ? permissions : {},
       createdAt: new Date().toISOString()
     };
 
@@ -1457,7 +1464,7 @@ app.post('/api/users', requireAuth('admin'), async (req, res) => {
 app.put('/api/users/:id', requireAuth('admin'), async (req, res) => {
   try {
     const { id } = req.params;
-    const { username, password, role, extension, disabled } = req.body;
+    const { username, password, role, extension, disabled, permissions } = req.body;
     const localDb = await readLocalDb();
     const idx = (localDb.users || []).findIndex((u: any) => u.id === id);
     if (idx < 0) {
@@ -1486,6 +1493,7 @@ app.put('/api/users/:id', requireAuth('admin'), async (req, res) => {
       role,
       extension: String(extension || '').trim(),
       disabled: !!disabled,
+      permissions: permissions && typeof permissions === 'object' ? permissions : {},
       updatedAt: new Date().toISOString()
     };
     if (password) {
