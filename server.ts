@@ -2411,6 +2411,50 @@ async function enrichFreePBXRoute(settings: any, legs: any[]) {
     }
   }
 
+  const queueLeg = legs.find((l: any) =>
+    String(l.dcontext || '').toLowerCase() === 'ext-queues' ||
+    String(l.lastapp || '').toLowerCase() === 'queue'
+  );
+
+  if (queueLeg) {
+    const queueNumber = String(
+      String(queueLeg.lastapp || '').toLowerCase() === 'queue'
+        ? String(queueLeg.lastdata || '').split(',')[0]
+        : queueLeg.dst || ''
+    ).replace(/\D/g, '');
+
+    const queueMemberExts = Array.from(new Set(
+      legs
+        .filter((l: any) =>
+          String(l.dcontext || '').toLowerCase() === 'ext-local' &&
+          String(l.lastapp || '').toLowerCase() === 'dial'
+        )
+        .map((l: any) => String(l.dst || '').trim())
+        .filter((ext: string) => /^\d{2,6}$/.test(ext))
+    ));
+
+    routeSteps.push({
+      type: 'queue',
+      title: queueNumber ? `Очередь ${queueNumber}` : 'Очередь вызовов',
+      label: 'Queue',
+      number: queueNumber,
+      destination: queueNumber,
+      details: {
+        queueNumber,
+        strategy: '',
+        waitTime: queueLeg.duration || 0,
+        rawDestination: queueLeg.dst || '',
+        rawLastData: queueLeg.lastdata || '',
+      },
+      members: queueMemberExts.map((extension: string) => ({
+        extension,
+        name: extension,
+        status: String(extension) === String(answeredExt) ? 'Ответил' : 'Не ответил',
+      })),
+    });
+  }
+
+
   routeSteps.push(...await analyzeRingGroups({
     settings,
     legs,

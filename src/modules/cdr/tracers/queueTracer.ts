@@ -43,10 +43,15 @@ export function buildQueueStep(timeline: any[], answeredExt?: string): RouteStep
   }
 
   const queueNumber = getQueueNumberFromLeg(queueLeg);
+  const waitSeconds = Number(queueLeg?.duration || 0);
 
   const dialedMembers = (timeline || [])
-    .map((leg: any) => getExtFromChannel(leg?.dstchannel) || getExtFromChannel(leg?.channel))
-    .filter(Boolean)
+    .filter((leg: any) =>
+      String(leg?.dcontext || '').toLowerCase() === 'ext-local' &&
+      String(leg?.lastapp || '').toLowerCase() === 'dial'
+    )
+    .map((leg: any) => String(leg?.dst || '').trim())
+    .filter((ext: string) => /^\d{2,6}$/.test(ext))
     .filter((value: string, index: number, arr: string[]) => arr.indexOf(value) === index);
 
   const members: RouteMember[] = dialedMembers.map((extension: string) => ({
@@ -58,7 +63,7 @@ export function buildQueueStep(timeline: any[], answeredExt?: string): RouteStep
     label: 'QUEUE',
     title: queueNumber ? `Очередь ${queueNumber}` : 'Очередь вызовов',
     number: queueNumber,
-    pattern: '',
+    pattern: waitSeconds ? `Ожидание: ${waitSeconds} сек.` : '',
     destination: queueNumber,
     members,
   };

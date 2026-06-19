@@ -47,6 +47,18 @@ export function buildCallRouteView(chronologyData: any): RouteView {
     .filter((ext: string) => ext !== String(answeredExt));
 
   const queueStep = buildQueueStep(timeline, answeredExt);
+  const queueMembers = queueStep?.members || [];
+  const queueMissedMembers = queueMembers
+    .map((m: any) => String(m.extension || ''))
+    .filter(Boolean)
+    .filter((ext: string) => ext !== String(answeredExt));
+
+  const queueWaitLeg = timeline.find((t: any) =>
+    String(t.dcontext || '').toLowerCase() === 'ext-queues' ||
+    String(t.lastapp || '').toLowerCase() === 'queue'
+  );
+  const queueWaitSeconds = Number(queueWaitLeg?.duration || 0);
+  const queueWaitText = queueWaitSeconds ? ` Ожидание в очереди: ${queueWaitSeconds} сек.` : '';
 
 
   const routeSteps = direction === 'inbound'
@@ -83,7 +95,6 @@ export function buildCallRouteView(chronologyData: any): RouteView {
           number: ringGroupStep.number || '',
           members: groupMembers,
         }] : []),
-        ...(queueStep ? [queueStep] : []),
         ...(queueStep ? [queueStep] : []),
         ...(groupMembers.length ? [{
           label: 'MEMBERS',
@@ -126,8 +137,8 @@ export function buildCallRouteView(chronologyData: any): RouteView {
 
   const resultText = direction === 'inbound'
     ? (anyAnswered
-        ? `Абонент ${externalNumber} дозвонился. Ответил внутренний номер ${answeredExt || '—'}.`
-        : `Абонент ${externalNumber} не дозвонился. Не ответили: ${missedMembers.length ? missedMembers.join(', ') : 'участники группы'}.`)
+        ? `Абонент ${externalNumber} дозвонился.${queueWaitText} Ответил внутренний номер ${answeredExt || '—'}.`
+        : `Абонент ${externalNumber} не дозвонился.${queueWaitText} Не ответили: ${missedMembers.length ? missedMembers.join(', ') : (queueMissedMembers.length ? queueMissedMembers.join(', ') : 'участники группы или очереди')}.`)
     : (anyAnswered
         ? `Номер ${dialedNumber} ответил на вызов с внутреннего номера ${callerExt}.`
         : `Номер ${dialedNumber} не ответил на вызов с внутреннего номера ${callerExt}.`);
