@@ -2,6 +2,7 @@ import React from 'react';
 import { Edit2, Trash2 } from 'lucide-react';
 import { UserRole } from '../../../types';
 import { AccessUser, UserFormState } from '../types';
+import { PermissionKey } from '../permissions';
 
 
 
@@ -30,6 +31,25 @@ export default function AccessUsersTab({
   saveAccessUser,
   resetUserForm
 }: AccessUsersTabProps) {
+  const permissionRows: Array<{ key: PermissionKey; label: string; description: string }> = [
+    { key: 'view_calls', label: 'Просмотр звонков', description: 'Доступ к журналу CDR и списку вызовов' },
+    { key: 'view_directory', label: 'Просмотр справочника', description: 'Доступ к телефонному справочнику' },
+    { key: 'view_reports', label: 'Просмотр отчетов', description: 'Доступ к отчетам и статистике' },
+    { key: 'listen_recordings', label: 'Прослушивание записей', description: 'Доступ к аудиозаписям разговоров' },
+    { key: 'make_calls', label: 'Click2Call', description: 'Возможность инициировать звонки' },
+    { key: 'edit_directory', label: 'Редактирование справочника', description: 'Создание и изменение контактов' }
+  ];
+
+  const togglePermission = (key: PermissionKey, checked: boolean) => {
+    setUserForm({
+      ...userForm,
+      permissions: {
+        ...(userForm.permissions || {}),
+        [key]: checked
+      }
+    });
+  };
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
@@ -130,8 +150,47 @@ export default function AccessUsersTab({
             <option value="admin">Администратор</option>
             <option value="manager">Руководитель</option>
             <option value="operator">Оператор</option>
+            <option value="directory_only">Только справочник</option>
+            <option value="custom">Индивидуальные права</option>
           </select>
         </label>
+
+        {userForm.role === 'custom' && (
+          <div className="rounded-xl border border-slate-200 bg-white p-3 space-y-2">
+            <div>
+              <div className="text-xs font-black text-slate-800">
+                Индивидуальные права
+              </div>
+              <div className="text-[11px] text-slate-500 mt-0.5">
+                Эти настройки применяются только к пользователю с ролью custom.
+              </div>
+            </div>
+
+            <div className="space-y-2 pt-1">
+              {permissionRows.map(permission => (
+                <label
+                  key={permission.key}
+                  className="flex items-start gap-2 rounded-lg border border-slate-100 bg-slate-50 p-2 text-xs"
+                >
+                  <input
+                    type="checkbox"
+                    checked={userForm.permissions?.[permission.key] === true}
+                    onChange={(e) => togglePermission(permission.key, e.target.checked)}
+                    className="mt-0.5 rounded border-slate-300 text-red-600"
+                  />
+                  <span>
+                    <span className="block font-bold text-slate-700">
+                      {permission.label}
+                    </span>
+                    <span className="block text-[11px] text-slate-500">
+                      {permission.description}
+                    </span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
 
         <label className="text-xs font-bold text-slate-600 block">
           SIP номер
