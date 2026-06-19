@@ -2411,6 +2411,37 @@ async function enrichFreePBXRoute(settings: any, legs: any[]) {
     }
   }
 
+  const ivrLeg = legs.find((l: any) =>
+    String(l.dcontext || '').toLowerCase().startsWith('ivr-') ||
+    String(l.lastapp || '').toLowerCase() === 'background'
+  );
+
+  if (ivrLeg) {
+    const ivrContext = String(ivrLeg.dcontext || '').trim();
+    const ivrNumber = ivrContext.toLowerCase().startsWith('ivr-')
+      ? ivrContext.replace(/^ivr-/i, '')
+      : '';
+
+    const pressedDigit = String(ivrLeg.dst || '').trim();
+    const isRealDigit = pressedDigit && pressedDigit !== 's' && /^\d+$/.test(pressedDigit);
+
+    routeSteps.push({
+      type: 'ivr',
+      title: ivrNumber ? `IVR меню ${ivrNumber}` : 'IVR меню',
+      label: 'IVR',
+      number: ivrNumber,
+      pattern: isRealDigit ? `Нажата цифра: ${pressedDigit}` : 'Ожидание выбора абонента',
+      destination: ivrContext,
+      details: {
+        ivrNumber,
+        context: ivrContext,
+        pressedDigit: isRealDigit ? pressedDigit : '',
+        lastapp: ivrLeg.lastapp || '',
+        lastdata: ivrLeg.lastdata || '',
+      },
+    });
+  }
+
   const queueLeg = legs.find((l: any) =>
     String(l.dcontext || '').toLowerCase() === 'ext-queues' ||
     String(l.lastapp || '').toLowerCase() === 'queue'
