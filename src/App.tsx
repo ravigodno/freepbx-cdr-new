@@ -3452,37 +3452,6 @@ export default function App() {
       {activeView === 'directory' && (
         <>
           <section id="directory-panel" className="space-y-4">
-        {/* Directory Overview cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-col justify-between shadow-sm">
-            <span className="text-xs text-slate-500 font-medium tracking-wide font-sans">Всего контактов</span>
-            <div className="mt-2 flex items-baseline justify-between font-sans">
-              <span className="text-2xl font-bold text-slate-900 font-mono">{directory.length}</span>
-              <BookOpen className="h-5 w-5 text-slate-400 self-center" />
-            </div>
-          </div>
-
-          <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-col justify-between shadow-sm">
-            <span className="text-xs text-slate-550 font-medium tracking-wide">Внутренние номера</span>
-            <div className="mt-2 flex items-baseline justify-between font-sans">
-              <span className="text-2xl font-bold text-slate-900 font-mono">
-                {directory.filter(e => e.type === 'internal').length}
-              </span>
-              <UserCheck className="h-5 w-5 text-indigo-400 self-center" />
-            </div>
-          </div>
-
-          <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-col justify-between shadow-sm">
-            <span className="text-xs text-slate-550 font-medium tracking-wide">Телефоны клиентов</span>
-            <div className="mt-2 flex items-baseline justify-between font-sans">
-              <span className="text-2xl font-bold text-slate-900 font-mono">
-                {directory.filter(e => e.type === 'client').length}
-              </span>
-              <UserCheck className="h-5 w-5 text-red-400 self-center" />
-            </div>
-          </div>
-        </div>
-
         {/* Admin Directory Controls Panel */}
         {session?.role === 'admin' && (
           <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3 shadow-sm select-none">
