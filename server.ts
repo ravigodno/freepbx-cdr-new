@@ -1731,7 +1731,7 @@ app.delete('/api/users/:id', requireAuth('admin'), async (req, res) => {
 app.get('/api/settings', requireAuth(), async (req, res) => {
   const localDb = await readLocalDb();
   const user = (req as any).user;
-  if (user && user.role === 'admin') {
+  if (user && (user.role === 'admin' || user.role === 'su')) {
     res.json(localDb.settings);
   } else {
     // Non-admins only get public/permissions settings
