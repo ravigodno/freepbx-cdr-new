@@ -65,9 +65,13 @@ export function hasUserPermission(
 ): boolean {
   if (!session) return false;
 
+  if (session.permissions && Object.prototype.hasOwnProperty.call(session.permissions, perm)) {
+    return session.permissions[perm] === true;
+  }
+
   if (session.role === 'custom') {
     return customRoleHasPermission(session, settings, perm);
   }
 
-  return roleHasPermission(session.role, perm);
+  return roleHasPermission(session.role as UserRole, perm);
 }

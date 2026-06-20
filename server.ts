@@ -1509,12 +1509,18 @@ app.post('/api/auth/login', async (req, res) => {
 
   console.log(`[AUTH] Login success username=${user.username} role=${user.role} extension=${user.extension || ''}`);
 
+  const roleConfig = (localDb.roles || getDefaultAccessRoles()).find((item: any) => item.id === user.role);
+  const effectivePermissions = {
+    ...(roleConfig?.permissions || {}),
+    ...(user.permissions || {})
+  };
+
   // Create a signed token valid for 24 hours
   const token = createAuthToken({
     username: user.username,
     role: user.role,
     extension: user.extension || '',
-    permissions: user.permissions || {},
+    permissions: effectivePermissions,
     expiresAt: Date.now() + 24 * 60 * 60 * 1000
   });
 
@@ -1526,7 +1532,7 @@ app.post('/api/auth/login', async (req, res) => {
       role: user.role,
       extension: user.extension || '',
       disabled: !!user.disabled,
-      permissions: user.permissions || {}
+      permissions: effectivePermissions
     }
   });
 });
@@ -1536,7 +1542,13 @@ app.post('/api/auth/login', async (req, res) => {
 app.get('/api/roles', requireAuth('admin'), async (req, res) => {
   try {
     const localDb = await readLocalDb();
-    res.json(localDb.roles || getDefaultAccessRoles());
+    const currentUser = (req as any).user;
+    const roles = localDb.roles || getDefaultAccessRoles();
+    res.json(
+      currentUser?.role === 'su'
+        ? roles
+        : roles.filter((role: any) => !role.hidden)
+    );
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -1551,6 +1563,9 @@ app.put('/api/roles', requireAuth('admin'), async (req, res) => {
     }
 
     const defaultRoles = getDefaultAccessRoles();
+    const currentUser = (req as any).user;
+    const existingHiddenRoles = (localDb.roles || getDefaultAccessRoles()).filter((role: any) => role.hidden);
+
     const safeRoles = incomingRoles
       .filter((role: any) => role && typeof role.id === 'string' && typeof role.name === 'string')
       .map((role: any) => {
@@ -1562,6 +1577,12 @@ app.put('/api/roles', requireAuth('admin'), async (req, res) => {
           permissions: role.permissions && typeof role.permissions === 'object' ? role.permissions : {}
         };
       });
+
+    for (const hiddenRole of existingHiddenRoles) {
+      if (currentUser?.role !== 'su' && !safeRoles.some((role: any) => role.id === hiddenRole.id)) {
+        safeRoles.push(hiddenRole);
+      }
+    }
 
     const existingIds = new Set(safeRoles.map((role: any) => role.id));
     for (const defaultRole of defaultRoles) {
