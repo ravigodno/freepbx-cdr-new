@@ -360,6 +360,8 @@ export default function App() {
     return hasUserPermission(session, settings, perm);
   };
 
+  const isAdminRole = (role?: string | null) => role === 'admin' || role === 'su';
+
   // Settings Modal state
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<AppSettings | null>(null);
@@ -1055,7 +1057,7 @@ export default function App() {
   };
 
   const handleToggleBlacklist = async (entry: DirectoryEntry, enabled: boolean, syncAsterisk = true) => {
-    if (!session || (session.role !== 'admin' && session.role !== 'su')) return;
+    if (!session || (!isAdminRole(session.role) && session.role !== 'su')) return;
     try {
       await toggleDirectoryBlacklist(session.token, entry.id, enabled, syncAsterisk);
       await loadDirectory();
@@ -1302,7 +1304,7 @@ export default function App() {
         const data = await resp.json();
         setSettings(data);
         setDraftSettings(JSON.parse(JSON.stringify(data)));
-        if (((session.role === 'admin' || session.role === 'su') || session.role === 'su')) {
+        if (((isAdminRole(session.role) || session.role === 'su') || session.role === 'su')) {
           await Promise.all([
             loadAccessUsers(),
             loadRoles()
@@ -1315,7 +1317,7 @@ export default function App() {
   };
 
   const loadAccessUsers = async () => {
-    if (!session || (session.role !== 'admin' && session.role !== 'su')) return;
+    if (!session || (!isAdminRole(session.role) && session.role !== 'su')) return;
     setIsLoadingUsers(true);
     try {
       const data = await fetchAccessUsers(session.token);
@@ -1329,7 +1331,7 @@ export default function App() {
 
   
   const loadRoles = async () => {
-    if (!session || (session.role !== 'admin' && session.role !== 'su')) return;
+    if (!session || (!isAdminRole(session.role) && session.role !== 'su')) return;
 
     setIsLoadingRoles(true);
 
@@ -1345,7 +1347,7 @@ export default function App() {
   };
 
   const saveRoles = async () => {
-    if (!session || (session.role !== 'admin' && session.role !== 'su')) return;
+    if (!session || (!isAdminRole(session.role) && session.role !== 'su')) return;
 
     setIsSavingRoles(true);
 
@@ -1374,7 +1376,7 @@ export default function App() {
 
   const saveAccessUser = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!session || (session.role !== 'admin' && session.role !== 'su')) return;
+    if (!session || (!isAdminRole(session.role) && session.role !== 'su')) return;
     if (!userForm.username.trim()) {
       setAccessError('Укажите логин пользователя.');
       return;
@@ -1397,7 +1399,7 @@ export default function App() {
   };
 
   const deleteAccessUser = async (user: AccessUser) => {
-    if (!session || (session.role !== 'admin' && session.role !== 'su')) return;
+    if (!session || (!isAdminRole(session.role) && session.role !== 'su')) return;
     if (!window.confirm(`Удалить пользователя ${user.username}?`)) return;
     try {
       await deleteAccessUserApi(session.token, user.id);
@@ -1417,7 +1419,7 @@ export default function App() {
       return;
     }
 
-    if (!draftSettings || !session || (session.role !== 'admin' && session.role !== 'su')) return;
+    if (!draftSettings || !session || (!isAdminRole(session.role) && session.role !== 'su')) return;
 
     setIsSavingSettings(true);
     try {
@@ -2718,7 +2720,7 @@ export default function App() {
           {/* Settings icon */}
           <button
             onClick={() => {
-              if ((session?.role === 'admin' || session?.role === 'su')) {
+              if ((isAdminRole(session?.role) || session?.role === 'su')) {
                 loadAdminSettings();
                 setSettingsTab('pbx');
               } else {
@@ -2886,7 +2888,7 @@ export default function App() {
               
               <button
                 onClick={() => {
-                  if (((session.role === 'admin' || session.role === 'su') || session.role === 'su')) {
+                  if (((isAdminRole(session.role) || session.role === 'su') || session.role === 'su')) {
                     loadAdminSettings();
                     setSettingsTab('pbx');
                   } else {
@@ -3503,7 +3505,7 @@ export default function App() {
         <>
           <section id="directory-panel" className="flex flex-col gap-4">
         {/* Admin Directory Controls Panel */}
-        {(session?.role === 'admin' || session?.role === 'su') && (
+        {(isAdminRole(session?.role) || session?.role === 'su') && (
           <div className="order-last bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3 shadow-sm select-none">
             <div 
               className="flex items-center justify-between cursor-pointer"
@@ -3833,7 +3835,7 @@ export default function App() {
 
                       <td className="py-3.5 px-4 text-right">
                         <div className="flex items-center justify-end gap-1.5">
-                          {(session?.role === 'admin' || session?.role === 'su') && (
+                          {(isAdminRole(session?.role) || session?.role === 'su') && (
                             <button
                               onClick={() => handleToggleBlacklist(entry, !entry.isBlacklisted, true)}
                               className={`p-1.5 rounded-lg border transition-all cursor-pointer ${entry.isBlacklisted ? 'text-red-700 bg-red-50 border-red-200' : 'text-slate-500 hover:text-red-700 hover:bg-red-50 border-transparent hover:border-red-200'}`}
@@ -4075,7 +4077,7 @@ export default function App() {
             <div className="p-6 pb-2 border-b border-slate-200 bg-slate-50/50 shrink-0">
               <div className="flex flex-wrap gap-1.5 p-1 bg-slate-100 rounded-xl">
                 {Object.entries({
-                  ...((session?.role === 'admin' || session?.role === 'su') ? {
+                  ...((isAdminRole(session?.role) || session?.role === 'su') ? {
                     pbx: 'Настройки АТС',
                     directory: 'Телефонный справочник',
                     access: 'Доступ и пользователи',
@@ -4312,7 +4314,7 @@ export default function App() {
                   {dbTestResult && (<div className={`p-3.5 border rounded-lg text-xs flex items-start gap-2 ${dbTestResult.success ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-red-50 border-red-200 text-red-700'}`}><AlertCircle className={`h-4.5 w-4.5 shrink-0 mt-0.5 ${dbTestResult.success ? 'text-emerald-600' : 'text-red-600'}`} /><span>{dbTestResult.message}</span></div>)}
                 </div>
                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 p-6 pt-4 border-t border-slate-200 bg-slate-50 shrink-0">
-                  {(session?.role === 'admin' || session?.role === 'su') ? (
+                  {(isAdminRole(session?.role) || session?.role === 'su') ? (
                     <>
                       <button type="button" onClick={testDbConnection} disabled={isTestingDb} className="px-3.5 py-2 bg-white hover:bg-slate-100 text-slate-700 rounded-lg text-xs font-bold border border-slate-200 active:scale-95 transition-transform cursor-pointer flex items-center justify-center gap-1">
                         {isTestingDb && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
