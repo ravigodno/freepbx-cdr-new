@@ -1055,7 +1055,7 @@ export default function App() {
   };
 
   const handleToggleBlacklist = async (entry: DirectoryEntry, enabled: boolean, syncAsterisk = true) => {
-    if (!session || session.role !== 'admin') return;
+    if (!session || (session.role !== 'admin' && session.role !== 'su')) return;
     try {
       await toggleDirectoryBlacklist(session.token, entry.id, enabled, syncAsterisk);
       await loadDirectory();
@@ -1302,7 +1302,7 @@ export default function App() {
         const data = await resp.json();
         setSettings(data);
         setDraftSettings(JSON.parse(JSON.stringify(data)));
-        if ((session.role === 'admin' || session.role === 'su')) {
+        if (((session.role === 'admin' || session.role === 'su') || session.role === 'su')) {
           await Promise.all([
             loadAccessUsers(),
             loadRoles()
@@ -1315,7 +1315,7 @@ export default function App() {
   };
 
   const loadAccessUsers = async () => {
-    if (!session || session.role !== 'admin') return;
+    if (!session || (session.role !== 'admin' && session.role !== 'su')) return;
     setIsLoadingUsers(true);
     try {
       const data = await fetchAccessUsers(session.token);
@@ -1329,7 +1329,7 @@ export default function App() {
 
   
   const loadRoles = async () => {
-    if (!session || session.role !== 'admin') return;
+    if (!session || (session.role !== 'admin' && session.role !== 'su')) return;
 
     setIsLoadingRoles(true);
 
@@ -1345,7 +1345,7 @@ export default function App() {
   };
 
   const saveRoles = async () => {
-    if (!session || session.role !== 'admin') return;
+    if (!session || (session.role !== 'admin' && session.role !== 'su')) return;
 
     setIsSavingRoles(true);
 
@@ -1374,7 +1374,7 @@ export default function App() {
 
   const saveAccessUser = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!session || session.role !== 'admin') return;
+    if (!session || (session.role !== 'admin' && session.role !== 'su')) return;
     if (!userForm.username.trim()) {
       setAccessError('Укажите логин пользователя.');
       return;
@@ -1397,7 +1397,7 @@ export default function App() {
   };
 
   const deleteAccessUser = async (user: AccessUser) => {
-    if (!session || session.role !== 'admin') return;
+    if (!session || (session.role !== 'admin' && session.role !== 'su')) return;
     if (!window.confirm(`Удалить пользователя ${user.username}?`)) return;
     try {
       await deleteAccessUserApi(session.token, user.id);
@@ -1417,7 +1417,7 @@ export default function App() {
       return;
     }
 
-    if (!draftSettings || !session || session.role !== 'admin') return;
+    if (!draftSettings || !session || (session.role !== 'admin' && session.role !== 'su')) return;
 
     setIsSavingSettings(true);
     try {
@@ -2886,7 +2886,7 @@ export default function App() {
               
               <button
                 onClick={() => {
-                  if ((session.role === 'admin' || session.role === 'su')) {
+                  if (((session.role === 'admin' || session.role === 'su') || session.role === 'su')) {
                     loadAdminSettings();
                     setSettingsTab('pbx');
                   } else {
