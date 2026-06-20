@@ -75,8 +75,21 @@ import { buildCdrQueryParams } from './modules/cdr/utils/buildCdrQueryParams';
 import { hasUserPermission, PermissionKey } from './modules/access/permissions';
 import PermissionsMatrixTab from './modules/access/components/PermissionsMatrixTab';
 import AccessUsersTab from './modules/access/components/AccessUsersTab';
-import { AccessUser, UserPermissions } from './modules/access/types';
-import { fetchAccessUsers, saveAccessUserApi, deleteAccessUserApi } from './modules/access/services/accessApi';
+import {
+  AccessUser,
+  AccessRole,
+  UserPermissions
+} from './modules/access/types';
+import {
+  fetchAccessUsers,
+  saveAccessUserApi,
+  deleteAccessUserApi
+} from './modules/access/services/accessApi';
+
+import {
+  fetchAccessRoles,
+  saveAccessRoles
+} from './modules/access/services/rolesApi';
 import { fetchCdrStats, fetchCdrCalls } from './modules/cdr/services/cdrApi';
 import { processCallSubmit } from './modules/cdr/utils/processCallSubmit';
 
@@ -375,6 +388,10 @@ export default function App() {
   const [isSavingUser, setIsSavingUser] = useState(false);
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [accessError, setAccessError] = useState('');
+
+  const [roles, setRoles] = useState<AccessRole[]>([]);
+  const [isLoadingRoles, setIsLoadingRoles] = useState(false);
+  const [isSavingRoles, setIsSavingRoles] = useState(false);
   const [userForm, setUserForm] = useState({
     username: '',
     password: '',
@@ -1284,7 +1301,10 @@ export default function App() {
         setSettings(data);
         setDraftSettings(JSON.parse(JSON.stringify(data)));
         if (session.role === 'admin') {
-          await loadAccessUsers();
+          await Promise.all([
+            loadAccessUsers(),
+            loadRoles()
+          ]);
         }
       }
     } catch (e) {
@@ -1302,6 +1322,37 @@ export default function App() {
       console.error('Error loading users:', e);
     } finally {
       setIsLoadingUsers(false);
+    }
+  };
+
+  
+  const loadRoles = async () => {
+    if (!session || session.role !== 'admin') return;
+
+    setIsLoadingRoles(true);
+
+    try {
+      const data = await fetchAccessRoles(session.token);
+      setRoles(data);
+    } catch (e) {
+      console.error('Error loading roles:', e);
+    } finally {
+      setIsLoadingRoles(false);
+    }
+  };
+
+  const saveRoles = async () => {
+    if (!session || session.role !== 'admin') return;
+
+    setIsSavingRoles(true);
+
+    try {
+      const savedRoles = await saveAccessRoles(session.token, roles);
+      setRoles(savedRoles);
+    } catch (e: any) {
+      alert(e.message || 'Не удалось сохранить роли.');
+    } finally {
+      setIsSavingRoles(false);
     }
   };
 
@@ -4147,7 +4198,15 @@ export default function App() {
                       resetUserForm={resetUserForm}
                     />
                   )}
-                  {settingsTab === 'permissions' && <PermissionsMatrixTab />}
+                  {settingsTab === 'permissions' && (
+                    <PermissionsMatrixTab
+                      roles={roles}
+                      isLoadingRoles={isLoadingRoles}
+                      isSavingRoles={isSavingRoles}
+                      onRolesChange={setRoles}
+                      onSaveRoles={saveRoles}
+                    />
+                  )}
                   {settingsTab === 'appearance' && (
                     <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 space-y-4">
                       <h4 className="text-sm font-black text-slate-900 flex items-center gap-2">
