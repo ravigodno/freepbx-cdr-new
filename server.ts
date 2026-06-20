@@ -4613,6 +4613,13 @@ function parseCoreShowChannelsConcise(raw: string): any[] {
 
 app.get('/api/live-sessions', requireAuth(), async (req, res) => {
   try {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.permissions?.view_active_calls !== true) {
+    res.status(403).json({ error: 'Нет прав на активные звонки' });
+    return;
+  }
+
+
     const db = JSON.parse(fs.readFileSync("/opt/asterisk-cdr-panel/data/db.json", "utf8"));
     const rawSettings = db.settings || {};
     const amiSettings = {
@@ -4663,6 +4670,13 @@ app.get('/api/live-sessions', requireAuth(), async (req, res) => {
 
 app.post('/api/live-sessions/save-log', requireAuth(), async (req, res) => {
   try {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.permissions?.view_active_calls !== true) {
+    res.status(403).json({ error: 'Нет прав на активные звонки' });
+    return;
+  }
+
+
     const db = JSON.parse(fs.readFileSync("/opt/asterisk-cdr-panel/data/db.json", "utf8"));
     const rawSettings = db.settings || {};
 
@@ -4730,8 +4744,15 @@ function parseLiveConciseOutput(raw: string): any[] {
     });
 }
 
-app.get('/api/live-sessions-test', async (req, res) => {
+app.get('/api/live-sessions-test', requireAuth(), async (req, res) => {
   try {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.permissions?.view_active_calls !== true) {
+    res.status(403).json({ error: 'Нет прав на активные звонки' });
+    return;
+  }
+
+
     const db = JSON.parse(fs.readFileSync('/opt/asterisk-cdr-panel/data/db.json', 'utf8'));
     const settings = db.settings || {};
 
@@ -4767,8 +4788,15 @@ app.get('/api/live-sessions-test', async (req, res) => {
 });
 
 
-app.post('/api/live-sessions/snapshot', async (req, res) => {
+app.post('/api/live-sessions/snapshot', requireAuth(), async (req, res) => {
   try {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.permissions?.view_active_calls !== true) {
+    res.status(403).json({ error: 'Нет прав на активные звонки' });
+    return;
+  }
+
+
     const db = JSON.parse(fs.readFileSync('/opt/asterisk-cdr-panel/data/db.json', 'utf8'));
     const settings = db.settings || {};
 
