@@ -1569,6 +1569,7 @@ app.put('/api/roles', requireAuth('admin'), async (req, res) => {
       return;
     }
 
+    const localDb = await readLocalDb();
     const defaultRoles = getDefaultAccessRoles();
     const currentUser = (req as any).user;
     const existingHiddenRoles = (localDb.roles || getDefaultAccessRoles()).filter((role: any) => role.hidden);
@@ -1598,7 +1599,6 @@ app.put('/api/roles', requireAuth('admin'), async (req, res) => {
       }
     }
 
-    const localDb = await readLocalDb();
     localDb.roles = safeRoles;
     await writeLocalDb(localDb);
 
