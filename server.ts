@@ -2575,9 +2575,16 @@ app.post('/api/click-to-call', requireAuth(), async (req, res) => {
 
 // Process/comment on a missed call (Operator or Admin)
 app.post('/api/calls/:uniqueid/process', requireAuth(), async (req, res) => {
+  const authUser = (req as any).user;
+
+  if (authUser?.role !== 'su' && authUser?.permissions?.process_calls !== true) {
+    res.status(403).json({ error: 'Нет прав на обработку звонков' });
+    return;
+  }
+
   const { uniqueid } = req.params;
   const { comment, processed, src, calldate } = req.body;
-  const operator = (req as any).user.username;
+  const operator = authUser.username;
 
   const localDb = await readLocalDb();
   let statusIdx = localDb.missedCallStatuses.findIndex(s => s.uniqueid === uniqueid);

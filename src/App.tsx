@@ -1279,6 +1279,11 @@ export default function App() {
   const handleProcessMissedCall = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    if (!hasPermission('process_calls')) {
+      alert('Нет прав на обработку звонков.');
+      return;
+    }
+
     await processCallSubmit({
       selectedCall,
       session,
