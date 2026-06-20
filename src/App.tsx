@@ -2366,6 +2366,7 @@ export default function App() {
           <div className="p-4 border-b border-slate-200 dark:border-[#334155] flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
             <div>
               <div className="mb-3 flex flex-wrap gap-2">
+              {hasPermission('view_active_calls') && (
               <button
                 onClick={() => setMonitorMode('calls')}
                 className={`px-3 py-2 rounded-lg text-xs font-bold border ${monitorMode === 'calls'
@@ -2374,7 +2375,9 @@ export default function App() {
               >
                 Активные звонки
               </button>
+              )}
 
+              {hasPermission('view_tcpdump') && (
               <button
                 onClick={() => setMonitorMode('tcpdump')}
                 className={`px-3 py-2 rounded-lg text-xs font-bold border ${monitorMode === 'tcpdump'
@@ -2383,7 +2386,9 @@ export default function App() {
               >
                 TCPDUMP / SIP-RTP
               </button>
+              )}
 
+              {hasPermission('view_sngrep') && (
               <button
                 onClick={() => setMonitorMode('sngrep')}
                 className={`px-3 py-2 rounded-lg text-xs font-bold border ${monitorMode === 'sngrep'
@@ -2392,7 +2397,9 @@ export default function App() {
               >
                 SNGREP
               </button>
+              )}
 
+              {hasPermission('view_cli') && (
               <button
                 onClick={() => setMonitorMode('cli')}
                 className={`px-3 py-2 rounded-lg text-xs font-bold border ${monitorMode === 'cli'
@@ -2401,7 +2408,9 @@ export default function App() {
               >
                 Asterisk CLI
               </button>
+              )}
 
+              {hasPermission('view_cli') && (
               <button
                 onClick={() => setMonitorMode('freepbx')}
                 className={`px-3 py-2 rounded-lg text-xs font-bold border ${monitorMode === 'freepbx'
@@ -2410,7 +2419,9 @@ export default function App() {
               >
                 FreePBX CLI
               </button>
+              )}
 
+              {hasPermission('view_cli') && (
               <button
                 onClick={() => setMonitorMode('db')}
                 className={`px-3 py-2 rounded-lg text-xs font-bold border ${monitorMode === 'db'
@@ -2419,6 +2430,7 @@ export default function App() {
               >
                 DB Explorer
               </button>
+              )}
               </div>
 
               {monitorMode === 'calls' && (
@@ -2475,26 +2487,26 @@ export default function App() {
             )}
           </div>
 
-          {monitorMode === 'tcpdump' && (
+          {monitorMode === 'tcpdump' && hasPermission('view_tcpdump') && (
             <TcpdumpTab />
           )}
 
-          {monitorMode === 'sngrep' && (
+          {monitorMode === 'sngrep' && hasPermission('view_sngrep') && (
             <SngrepTab
               tcpdumpOutput={tcpdumpOutput}
               loadTcpdumpOutput={loadTcpdumpOutput}
             />
           )}
 
-          {monitorMode === 'cli' && (
+          {monitorMode === 'cli' && hasPermission('view_cli') && (
             <AsteriskCliTab />
           )}
 
-          {monitorMode === 'freepbx' && (
+          {monitorMode === 'freepbx' && hasPermission('view_cli') && (
             <FreepbxCliTab />
           )}
 
-          {monitorMode === 'db' && (
+          {monitorMode === 'db' && hasPermission('view_cli') && (
             <DbExplorerTab />
           )}
 
@@ -2516,7 +2528,7 @@ export default function App() {
             </div>
           )}
 
-          {monitorMode === 'calls' && (
+          {monitorMode === 'calls' && hasPermission('view_active_calls') && (
             <ActiveCallsTab
               liveSessionsData={liveSessionsData}
               liveSearch={liveSearch}
