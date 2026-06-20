@@ -1912,8 +1912,14 @@ app.put('/api/directory/:id', requireAuth(), async (req, res) => {
 });
 
 // Normalize all directory entries via current settings (Admin only)
-app.post('/api/directory/normalize', requireAuth('admin'), async (req, res) => {
+app.post('/api/directory/normalize', requireAuth(), async (req, res) => {
   try {
+    const authUser = (req as any).user;
+    if (authUser?.role !== 'su' && authUser?.permissions?.manage_directory_import !== true) {
+      res.status(403).json({ error: 'Нет прав на импорт справочника' });
+      return;
+    }
+
     const localDb = await readLocalDb();
     if (!localDb.directory) localDb.directory = [];
 
@@ -1936,8 +1942,14 @@ app.post('/api/directory/normalize', requireAuth('admin'), async (req, res) => {
 });
 
 // Import directory entries in batch (Admins only)
-app.post('/api/directory/import', requireAuth('admin'), async (req, res) => {
+app.post('/api/directory/import', requireAuth(), async (req, res) => {
   try {
+    const authUser = (req as any).user;
+    if (authUser?.role !== 'su' && authUser?.permissions?.manage_directory_import !== true) {
+      res.status(403).json({ error: 'Нет прав на импорт справочника' });
+      return;
+    }
+
     const { entries, overwrite, mode } = req.body;
     if (!Array.isArray(entries)) {
       res.status(400).json({ error: 'Неверный формат. Ожидается массив контактов.' });
@@ -1963,8 +1975,14 @@ app.post('/api/directory/import', requireAuth('admin'), async (req, res) => {
 });
 
 // Test URL import without saving (Admins only)
-app.post('/api/directory/import-url/test', requireAuth('admin'), async (req, res) => {
+app.post('/api/directory/import-url/test', requireAuth(), async (req, res) => {
   try {
+    const authUser = (req as any).user;
+    if (authUser?.role !== 'su' && authUser?.permissions?.manage_directory_import !== true) {
+      res.status(403).json({ error: 'Нет прав на импорт справочника' });
+      return;
+    }
+
     const localDb = await readLocalDb();
     const url = String(req.body?.url || localDb.settings.directoryImportUrl || '').trim();
     const format = String(req.body?.format || localDb.settings.directoryImportFormat || 'csv');
@@ -1986,11 +2004,12 @@ app.post('/api/directory/sync-url', async (req, res) => {
     const localDb = await readLocalDb();
     const token = String(req.headers['x-sync-token'] || req.query.token || '');
     const user = getLoggedInUser(req);
-    const isAdmin = user?.role === 'admin';
+    const isAdmin = user?.role === 'admin' || user?.role === 'su';
+    const canManageImport = user?.role === 'su' || user?.permissions?.manage_directory_import === true;
     const tokenOk = token && token === String(localDb.settings.directorySyncToken || '');
 
-    if (!isAdmin && !tokenOk) {
-      res.status(401).json({ error: 'Нужна авторизация администратора или X-Sync-Token' });
+    if ((!isAdmin || !canManageImport) && !tokenOk) {
+      res.status(401).json({ error: 'Нет прав на синхронизацию справочника или неверный X-Sync-Token' });
       return;
     }
 

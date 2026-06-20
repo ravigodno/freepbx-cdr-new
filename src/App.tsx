@@ -656,6 +656,11 @@ export default function App() {
   };
 
   const handleDownloadTemplate = () => {
+    if (!hasPermission('manage_directory_import')) {
+      alert('Нет прав на работу с импортом справочника.');
+      return;
+    }
+
     try {
       const BOM = "\uFEFF";
       let csvContent = BOM + "Имя,Компания,Должность,Телефон1,Телефон2,Телефон3,Email,Сайт,Теги,Комментарий,is_spam,is_blacklisted,Тип\r\n";
@@ -676,6 +681,11 @@ export default function App() {
   };
 
   const handleExportCSV = () => {
+    if (!hasPermission('manage_directory_import')) {
+      alert('Нет прав на экспорт справочника.');
+      return;
+    }
+
     try {
       const BOM = "\uFEFF";
       let csvContent = BOM + "Имя,Компания,Должность,Телефон1,Телефон2,Телефон3,Email,Сайт,Теги,Комментарий,is_spam,is_blacklisted,Тип\r\n";
@@ -714,6 +724,11 @@ export default function App() {
   };
 
   const handleNormalizeDirectoryDb = async () => {
+    if (!hasPermission('manage_directory_import')) {
+      alert('Нет прав на нормализацию справочника.');
+      return;
+    }
+
     if (!window.confirm('Запустить нормализацию всех номеров в справочнике согласно текущим настройкам?')) {
       return;
     }
@@ -749,6 +764,11 @@ export default function App() {
 
 
   const handleTestUrlImport = async () => {
+    if (!hasPermission('manage_directory_import')) {
+      alert('Нет прав на проверку URL-импорта.');
+      return;
+    }
+
     if (!draftSettings?.directoryImportUrl) {
       setUrlImportTestResult({ success: false, message: 'Укажите URL файла справочника.' });
       return;
@@ -781,6 +801,11 @@ export default function App() {
   };
 
   const handleSyncDirectoryUrl = async () => {
+    if (!hasPermission('manage_directory_import')) {
+      alert('Нет прав на синхронизацию справочника.');
+      return;
+    }
+
     setIsSyncingDirectoryUrl(true);
     setUrlImportTestResult(null);
     try {
@@ -806,6 +831,11 @@ export default function App() {
   };
 
   const handleExecuteImport = async () => {
+    if (!hasPermission('manage_directory_import')) {
+      alert('Нет прав на импорт справочника.');
+      return;
+    }
+
     if (parsedImportEntries.length === 0) return;
     setIsImporting(true);
     try {
@@ -3564,6 +3594,8 @@ export default function App() {
                 </p>
 
                 <div className="flex flex-wrap gap-2.5">
+                  {hasPermission('manage_directory_import') && (
+                  <>
                   <button
                     onClick={() => setIsImportOpen(true)}
                     className="flex items-center gap-1.5 px-3.5 py-2 bg-gradient-to-r from-red-600 to-rose-700 hover:from-red-600 hover:to-rose-600 text-white rounded-lg text-xs font-semibold cursor-pointer shadow-xs transition-all active:scale-95 select-none"
@@ -3596,6 +3628,8 @@ export default function App() {
                     <RefreshCw className={`h-3.5 w-3.5 text-slate-500 ${isNormalizingDb ? 'animate-spin' : ''}`} />
                     {isNormalizingDb ? 'Выполняется нормализация...' : 'Нормализовать все номера в базе'}
                   </button>
+                  </>
+                  )}
                 </div>
 
                 {/* Normalization result banner feedback */}
@@ -4257,8 +4291,12 @@ export default function App() {
                           </label>
                         </div>
                         <div className="mt-3 flex flex-wrap gap-2">
+                          {hasPermission('manage_directory_import') && (
                           <button type="button" onClick={handleTestUrlImport} disabled={isTestingUrlImport} className="px-4 py-2 rounded-lg bg-white border border-slate-200 text-slate-800 text-xs font-bold hover:bg-slate-50 disabled:opacity-50">{isTestingUrlImport ? 'Проверка...' : 'Проверить ссылку'}</button>
+                          )}
+                          {hasPermission('manage_directory_import') && (
                           <button type="button" onClick={handleSyncDirectoryUrl} disabled={isSyncingDirectoryUrl} className="px-4 py-2 rounded-lg bg-red-600 text-white text-xs font-bold hover:bg-red-700 disabled:opacity-50">{isSyncingDirectoryUrl ? 'Синхронизация...' : 'Синхронизировать сейчас'}</button>
+                          )}
                         </div>
                         <div className="mt-3 text-[11px] text-slate-500 font-mono bg-slate-50 border border-slate-200 rounded-lg p-2 overflow-x-auto">
                           Cron: curl -s -X POST http://127.0.0.1:3000/api/directory/sync-url -H "X-Sync-Token: {draftSettings.directorySyncToken || 'TOKEN'}"
@@ -4277,9 +4315,15 @@ export default function App() {
                       <div className="rounded-2xl border border-slate-200 bg-white p-4">
                         <h4 className="text-sm font-black text-slate-900 mb-3">Инструменты справочника</h4>
                         <div className="flex flex-wrap gap-2">
+                          {hasPermission('manage_directory_import') && (
                           <button type="button" onClick={() => setIsImportOpen(true)} className="px-4 py-2 rounded-lg bg-red-600 text-white text-xs font-bold hover:bg-red-700">Импорт контактов</button>
+                          )}
+                          {hasPermission('manage_directory_import') && (
                           <button type="button" onClick={handleExportCSV} className="px-4 py-2 rounded-lg bg-slate-100 text-slate-800 text-xs font-bold hover:bg-slate-200">Экспорт CSV</button>
+                          )}
+                          {hasPermission('manage_directory_import') && (
                           <button type="button" onClick={handleNormalizeDirectoryDb} disabled={isNormalizingDb} className="px-4 py-2 rounded-lg bg-slate-100 text-slate-800 text-xs font-bold hover:bg-slate-200 disabled:opacity-50">Нормализовать базу</button>
+                          )}
                         </div>
                         {normalizedCount !== null && <div className="mt-3 text-xs text-emerald-700 font-bold">Обновлено записей: {normalizedCount}</div>}
                       </div>
