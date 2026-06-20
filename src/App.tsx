@@ -3916,7 +3916,9 @@ export default function App() {
                   {playingRecording}
                 </div>
                 <div className="text-[10px] text-slate-500 font-mono mt-0.5">
-                  <a href={`/api/recordings/${encodeURIComponent(playingRecording)}`} download={playingRecording} className="text-[10px] text-red-600 hover:text-red-700 underline underline-offset-2">Скачать запись</a>
+                  {hasPermission('listen_recordings') && (
+                    <a href={`/api/recordings/${encodeURIComponent(playingRecording)}`} download={playingRecording} className="text-[10px] text-red-600 hover:text-red-700 underline underline-offset-2">Скачать запись</a>
+                  )}
                 </div>
               </div>
             </div>
