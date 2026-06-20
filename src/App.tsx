@@ -1047,6 +1047,11 @@ export default function App() {
   };
 
   const handleDeleteDirEntry = async (id: string) => {
+    if (!hasPermission('edit_directory')) {
+      alert('Нет прав на удаление записей справочника.');
+      return;
+    }
+
     if (!window.confirm('Вы действительно хотите удалить эту запись из справочника?')) {
       return;
     }

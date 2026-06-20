@@ -1844,6 +1844,12 @@ app.get('/api/directory', requireAuth(), async (req, res) => {
 // Create a new directory entry
 app.post('/api/directory', requireAuth(), async (req, res) => {
   try {
+    const authUser = (req as any).user;
+    if (authUser?.role !== 'su' && authUser?.permissions?.edit_directory !== true) {
+      res.status(403).json({ error: 'Нет прав на создание записей справочника' });
+      return;
+    }
+
     const localDb = await readLocalDb();
     if (!localDb.directory) localDb.directory = [];
 
@@ -1865,6 +1871,12 @@ app.post('/api/directory', requireAuth(), async (req, res) => {
 // Update a directory entry
 app.put('/api/directory/:id', requireAuth(), async (req, res) => {
   try {
+    const authUser = (req as any).user;
+    if (authUser?.role !== 'su' && authUser?.permissions?.edit_directory !== true) {
+      res.status(403).json({ error: 'Нет прав на редактирование справочника' });
+      return;
+    }
+
     const { id } = req.params;
     const localDb = await readLocalDb();
     if (!localDb.directory) localDb.directory = [];
@@ -2064,6 +2076,12 @@ app.post('/api/directory/:id/blacklist', requireAuth('admin'), async (req, res) 
 // Delete a directory entry
 app.delete('/api/directory/:id', requireAuth(), async (req, res) => {
   try {
+    const authUser = (req as any).user;
+    if (authUser?.role !== 'su' && authUser?.permissions?.edit_directory !== true) {
+      res.status(403).json({ error: 'Нет прав на удаление записей справочника' });
+      return;
+    }
+
     const { id } = req.params;
     const localDb = await readLocalDb();
     if (!localDb.directory) localDb.directory = [];
