@@ -1408,6 +1408,12 @@ export default function App() {
   // Admin Settings Submitter
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (settingsTab === 'permissions') {
+      await saveRoles();
+      return;
+    }
+
     if (!draftSettings || !session || session.role !== 'admin') return;
 
     setIsSavingSettings(true);

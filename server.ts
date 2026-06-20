@@ -815,7 +815,20 @@ function getDefaultAccessRoles() {
         view_reports: true,
         listen_recordings: true,
         make_calls: true,
-        edit_directory: true
+        edit_directory: true,
+        export_excel: true,
+        view_monitoring: true,
+        view_active_calls: true,
+        view_tcpdump: true,
+        view_sngrep: true,
+        view_cli: true,
+        view_settings: true,
+        manage_users: true,
+        manage_roles: true,
+        manage_directory_import: true,
+        manage_blacklist: true,
+        delete_records: true,
+        process_calls: true
       }
     },
     {
@@ -828,7 +841,20 @@ function getDefaultAccessRoles() {
         view_reports: true,
         listen_recordings: true,
         make_calls: true,
-        edit_directory: true
+        edit_directory: true,
+        export_excel: true,
+        view_monitoring: true,
+        view_active_calls: true,
+        view_tcpdump: true,
+        view_sngrep: true,
+        view_cli: true,
+        view_settings: true,
+        manage_users: true,
+        manage_roles: true,
+        manage_directory_import: true,
+        manage_blacklist: true,
+        delete_records: true,
+        process_calls: true
       }
     },
     {
@@ -839,7 +865,8 @@ function getDefaultAccessRoles() {
         view_calls: true,
         view_directory: true,
         listen_recordings: true,
-        make_calls: true
+        make_calls: true,
+        process_calls: true
       }
     },
     {

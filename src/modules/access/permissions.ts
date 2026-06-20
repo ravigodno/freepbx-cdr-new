@@ -7,7 +7,20 @@ export type PermissionKey =
   | 'view_reports'
   | 'listen_recordings'
   | 'make_calls'
-  | 'edit_directory';
+  | 'edit_directory'
+  | 'export_excel'
+  | 'view_monitoring'
+  | 'view_active_calls'
+  | 'view_tcpdump'
+  | 'view_sngrep'
+  | 'view_cli'
+  | 'view_settings'
+  | 'manage_users'
+  | 'manage_roles'
+  | 'manage_directory_import'
+  | 'manage_blacklist'
+  | 'delete_records'
+  | 'process_calls';
 
 export type UserPermissions = Partial<Record<PermissionKey, boolean>>;
 

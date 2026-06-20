@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Plus, Trash2, Save } from 'lucide-react';
+import { Plus, Trash2 } from 'lucide-react';
 import { AccessRole } from '../types';
 import { PermissionKey } from '../permissions';
 
@@ -13,11 +13,24 @@ interface PermissionsMatrixTabProps {
 
 const PERMISSION_ROWS: Array<{ key: PermissionKey; label: string }> = [
   { key: 'view_calls', label: 'Звонки' },
+  { key: 'process_calls', label: 'Обработка' },
   { key: 'view_directory', label: 'Справочник' },
+  { key: 'edit_directory', label: 'Ред. справочник' },
+  { key: 'manage_directory_import', label: 'Импорт справ.' },
+  { key: 'manage_blacklist', label: 'Черный список' },
   { key: 'view_reports', label: 'Отчеты' },
+  { key: 'export_excel', label: 'Excel' },
   { key: 'listen_recordings', label: 'Записи' },
+  { key: 'delete_records', label: 'Удаление' },
   { key: 'make_calls', label: 'Click2Call' },
-  { key: 'edit_directory', label: 'Ред. справочник' }
+  { key: 'view_monitoring', label: 'Мониторинг' },
+  { key: 'view_active_calls', label: 'Активные' },
+  { key: 'view_tcpdump', label: 'Tcpdump' },
+  { key: 'view_sngrep', label: 'Sngrep' },
+  { key: 'view_cli', label: 'CLI' },
+  { key: 'view_settings', label: 'Настройки' },
+  { key: 'manage_users', label: 'Пользователи' },
+  { key: 'manage_roles', label: 'Роли' }
 ];
 
 export default function PermissionsMatrixTab({
@@ -64,7 +77,10 @@ export default function PermissionsMatrixTab({
       .replace(/[^a-zа-яё0-9]+/gi, '_')
       .replace(/^_+|_+$/g, '');
 
-    const id = `role_${idBase || Date.now()}`;
+    let id = `role_${idBase || Date.now()}`;
+    if (roles.some(role => role.id === id)) {
+      id = `${id}_${Date.now()}`;
+    }
 
     onRolesChange([
       ...roles,
@@ -99,15 +115,6 @@ export default function PermissionsMatrixTab({
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={onSaveRoles}
-          disabled={isSavingRoles}
-          className="inline-flex items-center justify-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-xs font-bold text-white hover:bg-red-700 disabled:opacity-50"
-        >
-          <Save className="h-4 w-4" />
-          {isSavingRoles ? 'Сохранение...' : 'Сохранить'}
-        </button>
       </div>
 
       <div className="p-4 border-b border-slate-100 bg-white flex flex-col gap-2 lg:flex-row">
@@ -134,7 +141,7 @@ export default function PermissionsMatrixTab({
         </div>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[900px] text-xs">
+          <table className="w-full min-w-[1800px] text-xs">
             <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider">
               <tr>
                 <th className="p-3 text-left">Роль</th>
