@@ -1565,8 +1565,8 @@ app.post('/api/users', requireAuth('admin'), async (req, res) => {
       return;
     }
     const localDb = await readLocalDb();
-    const roleExists = (localDb.roles || getDefaultAccessRoles()).some((item: any) => item.id === role);
-    if (!roleExists) {
+    const matchedRole = (localDb.roles || getDefaultAccessRoles()).find((item: any) => item.id === role || item.name === role);
+    if (!matchedRole) {
       res.status(400).json({ error: 'Некорректная роль пользователя' });
       return;
     }
@@ -1611,8 +1611,8 @@ app.put('/api/users/:id', requireAuth('admin'), async (req, res) => {
       res.status(400).json({ error: 'Логин обязателен' });
       return;
     }
-    const roleExists = (localDb.roles || getDefaultAccessRoles()).some((item: any) => item.id === role);
-    if (!roleExists) {
+    const matchedRole = (localDb.roles || getDefaultAccessRoles()).find((item: any) => item.id === role || item.name === role);
+    if (!matchedRole) {
       res.status(400).json({ error: 'Некорректная роль пользователя' });
       return;
     }
