@@ -4433,8 +4433,15 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
 
 // Play audio recording binary if present on host, using smart stream chunking
 
-app.get('/api/recordings/:filename', async (req, res) => {
+app.get('/api/recordings/:filename', requireAuth(), async (req, res) => {
   const { filename } = req.params;
+  const authUser = (req as any).user;
+
+  if (authUser?.role !== 'su' && authUser?.permissions?.listen_recordings !== true) {
+    res.status(403).json({ error: 'Нет прав на прослушивание записей' });
+    return;
+  }
+
   const localDb = await readLocalDb();
   const recordingsDir = localDb.settings.recordingsPath;
   const isDemo = isDemoMode(localDb.settings);
