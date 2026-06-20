@@ -3890,24 +3890,7 @@ export default function App() {
       </div>
     )}
 
-    {activeView === 'management' && (
-      <div className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-        <div className="text-sm font-black text-slate-900">Управление АТС</div>
-        <div className="mt-2 text-sm text-slate-500">
-          Раздел для будущего массового заведения extensions, транков, исходящих маршрутов и паттернов номерной емкости.
-        </div>
-      </div>
-    )}
-
-    {activeView === 'balance' && (
-      <div className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-        <div className="text-sm font-black text-slate-900">Баланс операторов связи</div>
-        <div className="mt-2 text-sm text-slate-500">
-          Раздел для будущей проверки балансов по счетам операторов, предоставляющих SIP-транки.
-        </div>
-      </div>
-    )}
-      </main>
+  </main>
 
       <footer className="border-t border-slate-200 bg-white py-3 text-center text-[11px] text-slate-500">
         © 2026 Freepbx CDR-NEW. Все права защищены. Грунин К.В. ИНН 9102057404.
