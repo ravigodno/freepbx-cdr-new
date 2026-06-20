@@ -1,7 +1,7 @@
 import React from 'react';
 import { Edit2, Trash2 } from 'lucide-react';
 import { UserRole } from '../../../types';
-import { AccessUser, UserFormState } from '../types';
+import { AccessRole, AccessUser, UserFormState } from '../types';
 import { PermissionKey } from '../permissions';
 
 
@@ -17,6 +17,7 @@ interface AccessUsersTabProps {
   deleteAccessUser: (user: AccessUser) => void;
   saveAccessUser: () => void;
   resetUserForm: () => void;
+  roles: AccessRole[];
 }
 
 export default function AccessUsersTab({
@@ -29,7 +30,8 @@ export default function AccessUsersTab({
   openEditUser,
   deleteAccessUser,
   saveAccessUser,
-  resetUserForm
+  resetUserForm,
+  roles
 }: AccessUsersTabProps) {
   const permissionRows: Array<{ key: PermissionKey; label: string; description: string }> = [
     { key: 'view_calls', label: 'Просмотр звонков', description: 'Доступ к журналу CDR и списку вызовов' },
@@ -147,11 +149,11 @@ export default function AccessUsersTab({
             onChange={(e) => setUserForm({ ...userForm, role: e.target.value as UserRole })}
             className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs"
           >
-            <option value="admin">Администратор</option>
-            <option value="manager">Руководитель</option>
-            <option value="operator">Оператор</option>
-            <option value="directory_only">Только справочник</option>
-            <option value="custom">Индивидуальные права</option>
+            {roles.map(role => (
+              <option key={role.id} value={role.id}>
+                {role.name}
+              </option>
+            ))}
           </select>
         </label>
 

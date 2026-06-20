@@ -4202,6 +4202,7 @@ export default function App() {
                       deleteAccessUser={deleteAccessUser}
                       saveAccessUser={saveAccessUser}
                       resetUserForm={resetUserForm}
+                      roles={roles}
                     />
                   )}
                   {settingsTab === 'permissions' && (
