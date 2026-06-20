@@ -30,7 +30,15 @@ const PERMISSION_ROWS: Array<{ key: PermissionKey; label: string }> = [
   { key: 'view_cli', label: 'CLI' },
   { key: 'view_settings', label: 'Настройки' },
   { key: 'manage_users', label: 'Пользователи' },
-  { key: 'manage_roles', label: 'Роли' }
+  { key: 'manage_roles', label: 'Роли' },
+  { key: 'view_management', label: 'Управление' },
+  { key: 'dangerous_pbx_write', label: 'Опасные изменения АТС' },
+  { key: 'bulk_extensions', label: 'Массовые EXT' },
+  { key: 'manage_trunks', label: 'Транки' },
+  { key: 'manage_outbound_routes', label: 'Исходящие правила' },
+  { key: 'manage_numbering_capacity', label: 'Номерная емкость' },
+  { key: 'view_balance', label: 'Баланс' },
+  { key: 'manage_balance_providers', label: 'Провайдеры баланса' }
 ];
 
 export default function PermissionsMatrixTab({
