@@ -5100,8 +5100,15 @@ const allowedAsteriskCliCommands = [
   'database showkey'
 ]
 
-app.post('/api/asterisk/cli', async (req, res) => {
+app.post('/api/asterisk/cli', requireAuth(), async (req, res) => {
   try {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.permissions?.view_cli !== true) {
+    res.status(403).json({ error: 'Нет прав на CLI / DB Explorer' });
+    return;
+  }
+
+
     const command = String(req.body?.command || '').trim();
 
     if (!command) {
@@ -5135,7 +5142,13 @@ app.post('/api/asterisk/cli', async (req, res) => {
   }
 });
 
-app.get('/api/asterisk/cli/commands', async (req, res) => {
+app.get('/api/asterisk/cli/commands', requireAuth(), async (req, res) => {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.permissions?.view_cli !== true) {
+    res.status(403).json({ error: 'Нет прав на CLI / DB Explorer' });
+    return;
+  }
+
   res.json({ success: true, commands: allowedAsteriskCliCommands });
 });
 
@@ -5179,8 +5192,15 @@ const dangerousFwconsoleCommands = [
   'fwconsole restore'
 ];
 
-app.post('/api/freepbx/fwconsole', async (req, res) => {
+app.post('/api/freepbx/fwconsole', requireAuth(), async (req, res) => {
   try {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.permissions?.view_cli !== true) {
+    res.status(403).json({ error: 'Нет прав на CLI / DB Explorer' });
+    return;
+  }
+
+
     const command = String(req.body?.command || '').trim();
 
     if (!command) {
@@ -5233,7 +5253,13 @@ app.post('/api/freepbx/fwconsole', async (req, res) => {
   }
 });
 
-app.get('/api/freepbx/fwconsole/commands', async (req, res) => {
+app.get('/api/freepbx/fwconsole/commands', requireAuth(), async (req, res) => {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.permissions?.view_cli !== true) {
+    res.status(403).json({ error: 'Нет прав на CLI / DB Explorer' });
+    return;
+  }
+
   res.json({ success: true, commands: allowedFwconsoleCommands });
 });
 
@@ -5272,8 +5298,15 @@ function isSafeSelectSql(sql) {
   return true;
 }
 
-app.get('/api/db-explorer/tables', async (req, res) => {
+app.get('/api/db-explorer/tables', requireAuth(), async (req, res) => {
   try {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.permissions?.view_cli !== true) {
+    res.status(403).json({ error: 'Нет прав на CLI / DB Explorer' });
+    return;
+  }
+
+
     const result = {};
 
     for (const databaseName of DB_EXPLORER_ALLOWED_DATABASES) {
@@ -5295,8 +5328,15 @@ app.get('/api/db-explorer/tables', async (req, res) => {
   }
 });
 
-app.get('/api/db-explorer/columns', async (req, res) => {
+app.get('/api/db-explorer/columns', requireAuth(), async (req, res) => {
   try {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.permissions?.view_cli !== true) {
+    res.status(403).json({ error: 'Нет прав на CLI / DB Explorer' });
+    return;
+  }
+
+
     const databaseName = String(req.query.database || '').trim();
     const tableName = String(req.query.table || '').trim();
 
@@ -5321,8 +5361,15 @@ app.get('/api/db-explorer/columns', async (req, res) => {
   }
 });
 
-app.post('/api/db-explorer/query', async (req, res) => {
+app.post('/api/db-explorer/query', requireAuth(), async (req, res) => {
   try {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.permissions?.view_cli !== true) {
+    res.status(403).json({ error: 'Нет прав на CLI / DB Explorer' });
+    return;
+  }
+
+
     const sql = String(req.body?.sql || '').trim();
     const limit = Math.min(Number(req.body?.limit || 200), 1000);
 
@@ -5351,8 +5398,15 @@ app.post('/api/db-explorer/query', async (req, res) => {
   }
 });
 
-app.get('/api/db-explorer/cdr/by-uid/:uid', async (req, res) => {
+app.get('/api/db-explorer/cdr/by-uid/:uid', requireAuth(), async (req, res) => {
   try {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.permissions?.view_cli !== true) {
+    res.status(403).json({ error: 'Нет прав на CLI / DB Explorer' });
+    return;
+  }
+
+
     const uid = String(req.params.uid || '').trim();
 
 
@@ -5369,8 +5423,15 @@ app.get('/api/db-explorer/cdr/by-uid/:uid', async (req, res) => {
   }
 });
 
-app.get('/api/db-explorer/cdr/search', async (req, res) => {
+app.get('/api/db-explorer/cdr/search', requireAuth(), async (req, res) => {
   try {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.permissions?.view_cli !== true) {
+    res.status(403).json({ error: 'Нет прав на CLI / DB Explorer' });
+    return;
+  }
+
+
     const from = String(req.query.from || '').trim();
     const to = String(req.query.to || '').trim();
     const number = String(req.query.number || '').trim();
