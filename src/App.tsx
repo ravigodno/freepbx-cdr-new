@@ -1337,19 +1337,6 @@ export default function App() {
       const data = await fetchAccessRoles(session.token);
       setRoles(data);
 
-      const currentRole = data.find(role => role.id === session.role);
-      if (currentRole) {
-        setSession(prev => prev
-          ? {
-              ...prev,
-              permissions: {
-                ...(currentRole.permissions || {}),
-                ...(prev.permissions || {})
-              }
-            }
-          : prev
-        );
-      }
     } catch (e) {
       console.error('Error loading roles:', e);
     } finally {
