@@ -2039,8 +2039,15 @@ app.get('/api/directory/sync-status', requireAuth('admin'), async (req, res) => 
 });
 
 // Local/Asterisk blacklist operations
-app.post('/api/directory/:id/blacklist', requireAuth('admin'), async (req, res) => {
+app.post('/api/directory/:id/blacklist', requireAuth(), async (req, res) => {
   try {
+    const authUser = (req as any).user;
+
+    if (authUser?.role !== 'su' && authUser?.permissions?.manage_blacklist !== true) {
+      res.status(403).json({ error: 'Нет прав на управление черным списком' });
+      return;
+    }
+
     const { id } = req.params;
     const { enabled, syncAsterisk } = req.body;
     const localDb = await readLocalDb();

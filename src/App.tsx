@@ -1067,7 +1067,13 @@ export default function App() {
   };
 
   const handleToggleBlacklist = async (entry: DirectoryEntry, enabled: boolean, syncAsterisk = true) => {
-    if (!session || !isAdminRole(session.role)) return;
+    if (!session) return;
+
+    if (!hasPermission('manage_blacklist')) {
+      alert('Нет прав на управление черным списком.');
+      return;
+    }
+
     try {
       await toggleDirectoryBlacklist(session.token, entry.id, enabled, syncAsterisk);
       await loadDirectory();
@@ -3856,7 +3862,7 @@ export default function App() {
 
                       <td className="py-3.5 px-4 text-right">
                         <div className="flex items-center justify-end gap-1.5">
-                          {isAdminRole(session?.role) && (
+                          {hasPermission('manage_blacklist') && (
                             <button
                               onClick={() => handleToggleBlacklist(entry, !entry.isBlacklisted, true)}
                               className={`p-1.5 rounded-lg border transition-all cursor-pointer ${entry.isBlacklisted ? 'text-red-700 bg-red-50 border-red-200' : 'text-slate-500 hover:text-red-700 hover:bg-red-50 border-transparent hover:border-red-200'}`}
