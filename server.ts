@@ -1564,12 +1564,12 @@ app.post('/api/users', requireAuth('admin'), async (req, res) => {
       res.status(400).json({ error: 'Логин и пароль обязательны' });
       return;
     }
-    if (!['admin', 'manager', 'operator', 'directory_only', 'custom'].includes(role)) {
+    const localDb = await readLocalDb();
+    const roleExists = (localDb.roles || getDefaultAccessRoles()).some((item: any) => item.id === role);
+    if (!roleExists) {
       res.status(400).json({ error: 'Некорректная роль пользователя' });
       return;
     }
-
-    const localDb = await readLocalDb();
     if ((localDb.users || []).some((u: any) => String(u.username).toLowerCase() === cleanUsername.toLowerCase())) {
       res.status(409).json({ error: 'Пользователь с таким логином уже существует' });
       return;
@@ -1580,7 +1580,7 @@ app.post('/api/users', requireAuth('admin'), async (req, res) => {
       id: crypto.randomBytes(8).toString('hex'),
       username: cleanUsername,
       passwordHash,
-      role,
+      role: matchedRole.id,
       extension: String(extension || '').trim(),
       disabled: !!disabled,
       permissions: permissions && typeof permissions === 'object' ? permissions : {},
@@ -1611,10 +1611,12 @@ app.put('/api/users/:id', requireAuth('admin'), async (req, res) => {
       res.status(400).json({ error: 'Логин обязателен' });
       return;
     }
-    if (!['admin', 'manager', 'operator', 'directory_only', 'custom'].includes(role)) {
+    const roleExists = (localDb.roles || getDefaultAccessRoles()).some((item: any) => item.id === role);
+    if (!roleExists) {
       res.status(400).json({ error: 'Некорректная роль пользователя' });
       return;
     }
+
     const duplicate = (localDb.users || []).some((u: any) => u.id !== id && String(u.username).toLowerCase() === cleanUsername.toLowerCase());
     if (duplicate) {
       res.status(409).json({ error: 'Пользователь с таким логином уже существует' });
@@ -1624,7 +1626,7 @@ app.put('/api/users/:id', requireAuth('admin'), async (req, res) => {
     const nextUser = {
       ...localDb.users[idx],
       username: cleanUsername,
-      role,
+      role: matchedRole.id,
       extension: String(extension || '').trim(),
       disabled: !!disabled,
       permissions: permissions && typeof permissions === 'object' ? permissions : {},
