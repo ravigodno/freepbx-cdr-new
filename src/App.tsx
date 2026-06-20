@@ -1600,6 +1600,11 @@ export default function App() {
   const playRecording = (call: CallEntry) => {
     if (!session || !call.recordingfile) return;
 
+    if (!hasPermission('listen_recordings')) {
+      setAudioError('Нет прав на прослушивание записей.');
+      return;
+    }
+
     setAudioError(null);
     
     if (playingCallId === call.uniqueid) {
