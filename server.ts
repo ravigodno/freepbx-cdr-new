@@ -4809,7 +4809,13 @@ let tcpdumpProcess: any = null;
 let tcpdumpFilePath = '';
 let tcpdumpStartedAt = '';
 
-app.get('/api/diagnostics/tcpdump/status', async (req, res) => {
+app.get('/api/diagnostics/tcpdump/status', requireAuth(), async (req, res) => {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.permissions?.view_tcpdump !== true) {
+    res.status(403).json({ error: 'Нет прав на TCPDUMP' });
+    return;
+  }
+
   res.json({
     success: true,
     running: !!tcpdumpProcess,
@@ -4818,8 +4824,15 @@ app.get('/api/diagnostics/tcpdump/status', async (req, res) => {
   });
 });
 
-app.post('/api/diagnostics/tcpdump/start', async (req, res) => {
+app.post('/api/diagnostics/tcpdump/start', requireAuth(), async (req, res) => {
   try {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.permissions?.view_tcpdump !== true) {
+    res.status(403).json({ error: 'Нет прав на TCPDUMP' });
+    return;
+  }
+
+
     if (tcpdumpProcess) {
       return res.json({
         success: true,
@@ -4887,8 +4900,15 @@ app.post('/api/diagnostics/tcpdump/start', async (req, res) => {
   }
 });
 
-app.post('/api/diagnostics/tcpdump/stop', async (req, res) => {
+app.post('/api/diagnostics/tcpdump/stop', requireAuth(), async (req, res) => {
   try {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.permissions?.view_tcpdump !== true) {
+    res.status(403).json({ error: 'Нет прав на TCPDUMP' });
+    return;
+  }
+
+
     if (!tcpdumpProcess) {
       return res.json({
         success: true,
@@ -4914,8 +4934,15 @@ app.post('/api/diagnostics/tcpdump/stop', async (req, res) => {
   }
 });
 
-app.get('/api/diagnostics/tcpdump/files', async (req, res) => {
+app.get('/api/diagnostics/tcpdump/files', requireAuth(), async (req, res) => {
   try {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.permissions?.view_tcpdump !== true) {
+    res.status(403).json({ error: 'Нет прав на TCPDUMP' });
+    return;
+  }
+
+
     const dir = path.join(process.cwd(), 'data', 'pcap');
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
@@ -4938,8 +4965,15 @@ app.get('/api/diagnostics/tcpdump/files', async (req, res) => {
   }
 });
 
-app.get('/api/diagnostics/tcpdump/download/:filename', async (req, res) => {
+app.get('/api/diagnostics/tcpdump/download/:filename', requireAuth(), async (req, res) => {
   try {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.permissions?.view_tcpdump !== true) {
+    res.status(403).json({ error: 'Нет прав на TCPDUMP' });
+    return;
+  }
+
+
     const filename = path.basename(req.params.filename || '');
     const filepath = path.join(process.cwd(), 'data', 'pcap', filename);
 
@@ -4954,8 +4988,15 @@ app.get('/api/diagnostics/tcpdump/download/:filename', async (req, res) => {
 });
 
 
-app.get('/api/diagnostics/tcpdump/output', async (req, res) => {
+app.get('/api/diagnostics/tcpdump/output', requireAuth(), async (req, res) => {
   try {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.permissions?.view_tcpdump !== true) {
+    res.status(403).json({ error: 'Нет прав на TCPDUMP' });
+    return;
+  }
+
+
     if (!tcpdumpFilePath || !fs.existsSync(tcpdumpFilePath)) {
       return res.json({ success: true, output: 'PCAP файл ещё не создан или tcpdump не запущен' });
     }
