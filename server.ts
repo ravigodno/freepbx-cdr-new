@@ -1424,6 +1424,13 @@ function requireAuth(role?: UserRole | UserRole[]) {
     }
 
     const allowedRoles = role ? (Array.isArray(role) ? role : [role]) : [];
+
+    if (user.role === 'su') {
+      (req as any).user = user;
+      next();
+      return;
+    }
+
     if (allowedRoles.length > 0 && !allowedRoles.includes(user.role)) {
       res.status(403).json({ error: 'Access denied: insufficient permissions' });
       return;
