@@ -806,6 +806,41 @@ async function syncDirectoryFromConfiguredUrl(localDb: any): Promise<{ count: nu
 function getDefaultAccessRoles() {
   return [
     {
+      id: 'su',
+      name: 'SU',
+      system: true,
+      hidden: true,
+      permissions: {
+        view_calls: true,
+        process_calls: true,
+        view_directory: true,
+        edit_directory: true,
+        manage_directory_import: true,
+        manage_blacklist: true,
+        view_reports: true,
+        export_excel: true,
+        listen_recordings: true,
+        delete_records: true,
+        make_calls: true,
+        view_monitoring: true,
+        view_active_calls: true,
+        view_tcpdump: true,
+        view_sngrep: true,
+        view_cli: true,
+        view_settings: true,
+        manage_users: true,
+        manage_roles: true,
+        view_management: true,
+        dangerous_pbx_write: true,
+        bulk_extensions: true,
+        manage_trunks: true,
+        manage_outbound_routes: true,
+        manage_numbering_capacity: true,
+        view_balance: true,
+        manage_balance_providers: true
+      }
+    },
+    {
       id: 'admin',
       name: 'Администратор',
       system: true,

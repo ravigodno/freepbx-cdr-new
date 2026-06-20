@@ -7,6 +7,7 @@ export interface AccessRole {
   id: string;
   name: string;
   system?: boolean;
+  hidden?: boolean;
   permissions: UserPermissions;
 }
 

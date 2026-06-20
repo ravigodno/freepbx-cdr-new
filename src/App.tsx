@@ -50,9 +50,11 @@ import {
   MoreVertical,
   Target,
   AlertTriangle,
-  Home,  Truck,
+  Home,
+  Truck,
   Landmark,
-  Ban
+  Ban,
+  Wallet
 } from 'lucide-react';
 import { CallEntry, DashboardStats, AppSettings, UserRole, DirectoryEntry } from './types';
 import packageJson from '../package.json';
@@ -414,8 +416,8 @@ export default function App() {
   const [timeToNextRefresh, setTimeToNextRefresh] = useState<number>(30);
 
   // --- TELEPHONE DIRECTORY STATE & HANDLERS ---
-  const [activeView, setActiveView] = useState<'calls' | 'directory' | 'reports' | 'monitoring'>(() => {
-    const saved = localStorage.getItem('asterisk_cdr_active_view') as 'calls' | 'directory' | 'reports' | 'monitoring' | null;
+  const [activeView, setActiveView] = useState<'calls' | 'directory' | 'reports' | 'monitoring' | 'management' | 'balance'>(() => {
+    const saved = localStorage.getItem('asterisk_cdr_active_view') as 'calls' | 'directory' | 'reports' | 'monitoring' | 'management' | 'balance' | null;
     return saved || 'calls';
   });
   const [liveSessionsData, setLiveSessionsData] = useState<any>(null);
@@ -2648,6 +2650,44 @@ export default function App() {
                 </button>
               )}
 
+              {hasPermission('view_management') && (
+                <button
+                  onClick={() => setActiveView('management')}
+                  className={`flex items-center ${isSidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl transition-all relative group cursor-pointer ${
+                    activeView === 'management'
+                      ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-900/30 shadow-inner'
+                      : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent'
+                  }`}
+                  title={isSidebarExpanded ? "" : "Управление"}
+                >
+                  <Settings className="h-5 w-5 shrink-0" />
+                  {isSidebarExpanded && (
+                    <span className="text-xs font-semibold truncate animate-fade-in text-slate-705 dark:text-slate-200">
+                      Управление
+                    </span>
+                  )}
+                </button>
+              )}
+
+              {hasPermission('view_balance') && (
+                <button
+                  onClick={() => setActiveView('balance')}
+                  className={`flex items-center ${isSidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl transition-all relative group cursor-pointer ${
+                    activeView === 'balance'
+                      ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-900/30 shadow-inner'
+                      : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent'
+                  }`}
+                  title={isSidebarExpanded ? "" : "Баланс"}
+                >
+                  <Wallet className="h-5 w-5 shrink-0" />
+                  {isSidebarExpanded && (
+                    <span className="text-xs font-semibold truncate animate-fade-in text-slate-705 dark:text-slate-200">
+                      Баланс
+                    </span>
+                  )}
+                </button>
+              )}
+
           </div>
         </div>
 
@@ -2769,6 +2809,8 @@ export default function App() {
                   {activeView === 'directory' && <BookOpen className="h-5 w-5" />}
                   {activeView === 'reports' && <BarChart3 className="h-5 w-5 animate-pulse" />}
                   {activeView === 'monitoring' && <Activity className="h-5 w-5 animate-pulse" />}
+                  {activeView === 'management' && <Settings className="h-5 w-5" />}
+                  {activeView === 'balance' && <Wallet className="h-5 w-5" />}
                 </div>
                 <div>
                   <h1 className="text-base font-bold text-slate-900 dark:text-slate-100 tracking-tight flex items-center gap-2 font-sans uppercase">
@@ -2776,6 +2818,8 @@ export default function App() {
                     {activeView === 'directory' && 'Телефонный справочник'}
                     {activeView === 'reports' && 'Отчеты и Аналитика'}
                     {activeView === 'monitoring' && 'Мониторинг звонков'}
+                    {activeView === 'management' && 'Управление АТС'}
+                    {activeView === 'balance' && 'Баланс операторов'}
                     <span className="text-[10px] bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-normal px-2 py-0.5 rounded-md border border-slate-200 dark:border-slate-700 normal-case">
                       v{packageJson.version}
                     </span>
@@ -3827,6 +3871,42 @@ export default function App() {
     {activeView === 'reports' && renderReportsView()}
 
     {activeView === 'monitoring' && renderMonitoringView()}
+
+    {activeView === 'management' && (
+      <div className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+        <div className="text-sm font-black text-slate-900">Управление АТС</div>
+        <div className="mt-2 text-sm text-slate-500">
+          Раздел для будущего массового заведения extensions, транков, исходящих маршрутов и паттернов номерной емкости.
+        </div>
+      </div>
+    )}
+
+    {activeView === 'balance' && (
+      <div className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+        <div className="text-sm font-black text-slate-900">Баланс операторов связи</div>
+        <div className="mt-2 text-sm text-slate-500">
+          Раздел для будущей проверки балансов по счетам операторов, предоставляющих SIP-транки.
+        </div>
+      </div>
+    )}
+
+    {activeView === 'management' && (
+      <div className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+        <div className="text-sm font-black text-slate-900">Управление АТС</div>
+        <div className="mt-2 text-sm text-slate-500">
+          Раздел для будущего массового заведения extensions, транков, исходящих маршрутов и паттернов номерной емкости.
+        </div>
+      </div>
+    )}
+
+    {activeView === 'balance' && (
+      <div className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+        <div className="text-sm font-black text-slate-900">Баланс операторов связи</div>
+        <div className="mt-2 text-sm text-slate-500">
+          Раздел для будущей проверки балансов по счетам операторов, предоставляющих SIP-транки.
+        </div>
+      </div>
+    )}
       </main>
 
       <footer className="border-t border-slate-200 bg-white py-3 text-center text-[11px] text-slate-500">

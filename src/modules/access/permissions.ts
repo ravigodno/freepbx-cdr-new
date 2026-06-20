@@ -20,7 +20,15 @@ export type PermissionKey =
   | 'manage_directory_import'
   | 'manage_blacklist'
   | 'delete_records'
-  | 'process_calls';
+  | 'process_calls'
+  | 'view_management'
+  | 'dangerous_pbx_write'
+  | 'bulk_extensions'
+  | 'manage_trunks'
+  | 'manage_outbound_routes'
+  | 'manage_numbering_capacity'
+  | 'view_balance'
+  | 'manage_balance_providers';
 
 export type UserPermissions = Partial<Record<PermissionKey, boolean>>;
 
