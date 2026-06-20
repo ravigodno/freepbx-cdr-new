@@ -2546,6 +2546,13 @@ app.get('/api/live/call-banner', requireAuth(), async (req, res) => {
 // POST endpoint to trigger Ami Originate Call
 app.post('/api/click-to-call', requireAuth(), async (req, res) => {
   try {
+    const authUser = (req as any).user;
+
+    if (authUser?.role !== 'su' && authUser?.permissions?.make_calls !== true) {
+      res.status(403).json({ error: 'Нет прав на совершение звонков' });
+      return;
+    }
+
     const { fromExtension, toPhoneNumber } = req.body;
     if (!fromExtension || !toPhoneNumber) {
       res.status(400).json({ error: 'Поля Внутренний номер (fromExtension) и Телефон назначения (toPhoneNumber) обязательны' });

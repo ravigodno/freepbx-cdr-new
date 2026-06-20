@@ -876,6 +876,11 @@ export default function App() {
   };
 
   const triggerClickToCall = async (targetPhone: string, targetName?: string) => {
+    if (!hasPermission('make_calls')) {
+      alert('Нет прав на совершение звонков.');
+      return;
+    }
+
     if (!myExt.trim()) {
       alert('Пожалуйста, укажите ваш рабочий внутренний номер перед совершением звонка.');
       return;
