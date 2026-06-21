@@ -927,6 +927,15 @@ function bootstrapDatabase() {
     const defaultDb = {
       users: [
         {
+          id: 'u0',
+          username: process.env.SU_USERNAME || 'su',
+          passwordHash: suPasswordHash,
+          role: 'su' as UserRole,
+          extension: '',
+          disabled: false,
+          createdAt: new Date().toISOString()
+        },
+        {
           id: 'u1',
           username: process.env.ADMIN_USERNAME || 'admin',
           passwordHash: adminPasswordHash,
