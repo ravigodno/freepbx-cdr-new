@@ -1778,7 +1778,11 @@ app.get('/api/settings', requireAuth(), async (req, res) => {
   }
 });
 
-app.post('/api/settings', requireAuth('admin'), async (req, res) => {
+app.post('/api/settings', requireAuth(), async (req, res) => {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_settings !== true) {
+    return res.status(403).json({ error: 'Access denied: view_settings permission required' });
+  }
   const settingsUpdate = req.body;
   const localDb = await readLocalDb();
   
@@ -1792,7 +1796,12 @@ app.post('/api/settings', requireAuth('admin'), async (req, res) => {
 });
 
 // Test database connection with unsaved/draft settings
-app.post('/api/settings/test-db', requireAuth('admin'), async (req, res) => {
+app.post('/api/settings/test-db', requireAuth(), async (req, res) => {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_settings !== true) {
+    return res.status(403).json({ error: 'Access denied: view_settings permission required' });
+  }
+
   try {
     const settings = req.body;
     const localDb = await readLocalDb();
@@ -1824,7 +1833,12 @@ app.post('/api/settings/test-db', requireAuth('admin'), async (req, res) => {
 });
 
 // Test AMI connection with unsaved/draft settings
-app.post('/api/settings/test-ami', requireAuth('admin'), async (req, res) => {
+app.post('/api/settings/test-ami', requireAuth(), async (req, res) => {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_settings !== true) {
+    return res.status(403).json({ error: 'Access denied: view_settings permission required' });
+  }
+
   try {
     const settings = req.body;
     
@@ -2072,7 +2086,11 @@ app.post('/api/directory/sync-url', async (req, res) => {
   }
 });
 
-app.get('/api/directory/sync-status', requireAuth('admin'), async (req, res) => {
+app.get('/api/directory/sync-status', requireAuth(), async (req, res) => {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.manage_directory_import !== true) {
+    return res.status(403).json({ error: 'Access denied: manage_directory_import permission required' });
+  }
   const localDb = await readLocalDb();
   res.json({
     url: localDb.settings.directoryImportUrl || '',
