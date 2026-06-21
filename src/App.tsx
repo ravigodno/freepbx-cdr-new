@@ -4371,13 +4371,59 @@ export default function App() {
                       roles={roles}
                     />
                   )}
-                  {settingsTab === 'permissions' && (
+                  
+                  {settingsTab === 'permissions' && session?.role === 'su' && draftSettings && (
+                    <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4">
+                      <div className="text-sm font-black text-red-800">Управление привилегиями SU</div>
+                      <p className="mt-1 text-xs text-red-700">
+                        Эти параметры управляют тем, что администратор видит и может менять в матрице доступа.
+                      </p>
+
+                      <div className="mt-3 grid gap-2 text-xs font-bold text-red-900">
+                        <label className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={draftSettings.showSuRoleToAdmin === true}
+                            onChange={(e) => setDraftSettings({ ...draftSettings, showSuRoleToAdmin: e.target.checked })}
+                            className="rounded border-red-300 text-red-600"
+                          />
+                          Показывать роль SU администраторам
+                        </label>
+
+                        <label className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={draftSettings.showSuPermissionsToAdmin === true}
+                            onChange={(e) => setDraftSettings({ ...draftSettings, showSuPermissionsToAdmin: e.target.checked })}
+                            className="rounded border-red-300 text-red-600"
+                          />
+                          Показывать служебные SU-права администраторам
+                        </label>
+
+                        <label className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={draftSettings.allowAdminEditSuPermissions === true}
+                            disabled={draftSettings.showSuPermissionsToAdmin !== true}
+                            onChange={(e) => setDraftSettings({ ...draftSettings, allowAdminEditSuPermissions: e.target.checked })}
+                            className="rounded border-red-300 text-red-600 disabled:opacity-40"
+                          />
+                          Разрешить администраторам изменять служебные SU-права
+                        </label>
+                      </div>
+                    </div>
+                  )}
+
+{settingsTab === 'permissions' && (
                     <PermissionsMatrixTab
                       roles={roles}
                       isLoadingRoles={isLoadingRoles}
                       isSavingRoles={isSavingRoles}
                       onRolesChange={setRoles}
                       onSaveRoles={saveRoles}
+                      isSu={session?.role === 'su'}
+                      showSuPermissionsToAdmin={settings?.showSuPermissionsToAdmin === true}
+                      allowAdminEditSuPermissions={settings?.allowAdminEditSuPermissions === true}
                     />
                   )}
                   {settingsTab === 'appearance' && (

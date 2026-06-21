@@ -65,6 +65,9 @@ export interface MissedCallStatus {
 }
 
 export interface AppSettings {
+  showSuRoleToAdmin?: boolean;
+  showSuPermissionsToAdmin?: boolean;
+  allowAdminEditSuPermissions?: boolean;
   recordingsPath: string;
   recordingsUrlPrefix: string;
   dbHost: string;

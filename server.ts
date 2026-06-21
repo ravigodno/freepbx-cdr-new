@@ -1545,6 +1545,18 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 
+
+const SU_PERMISSION_KEYS = [
+  'manage_users',
+  'manage_roles',
+  'dangerous_pbx_write',
+  'bulk_extensions',
+  'manage_trunks',
+  'manage_outbound_routes',
+  'manage_numbering_capacity',
+  'manage_balance_providers'
+];
+
 // --- ACCESS ROLES MANAGEMENT ENDPOINTS ---
 app.get('/api/roles', requireAuth(), async (req, res) => {
   const authUser = (req as any).user;
@@ -1555,12 +1567,27 @@ app.get('/api/roles', requireAuth(), async (req, res) => {
   try {
     const localDb = await readLocalDb();
     const currentUser = (req as any).user;
+    const settings = localDb.settings || {};
     const roles = localDb.roles || getDefaultAccessRoles();
-    res.json(
-      currentUser?.role === 'su'
-        ? roles
-        : roles.filter((role: any) => !role.hidden)
-    );
+
+    const visibleRoles = currentUser?.role === 'su'
+      ? roles
+      : roles.filter((role: any) => {
+          if (role.hidden) return false;
+          if (role.id === 'su') return settings.showSuRoleToAdmin === true;
+          return true;
+        });
+
+    const safeRoles = currentUser?.role === 'su' || settings.showSuPermissionsToAdmin === true
+      ? visibleRoles
+      : visibleRoles.map((role: any) => ({
+          ...role,
+          permissions: Object.fromEntries(
+            Object.entries(role.permissions || {}).filter(([key]) => !SU_PERMISSION_KEYS.includes(key))
+          )
+        }));
+
+    res.json(safeRoles);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -1582,7 +1609,11 @@ app.put('/api/roles', requireAuth(), async (req, res) => {
     const localDb = await readLocalDb();
     const defaultRoles = getDefaultAccessRoles();
     const currentUser = (req as any).user;
-    const existingHiddenRoles = (localDb.roles || getDefaultAccessRoles()).filter((role: any) => role.hidden);
+    const existingRoles = (localDb.roles || getDefaultAccessRoles());
+    const existingHiddenRoles = existingRoles.filter((role: any) => role.hidden || role.id === 'su');
+    const existingRolesById = new Map(existingRoles.map((role: any) => [role.id, role]));
+    const canEditSuPermissions = currentUser?.role === 'su'
+      || (currentUser?.role === 'admin' && localDb.settings?.allowAdminEditSuPermissions === true);
 
     const safeRoles = incomingRoles
       .filter((role: any) => role && typeof role.id === 'string' && typeof role.name === 'string')
@@ -1599,6 +1630,33 @@ app.put('/api/roles', requireAuth(), async (req, res) => {
     for (const hiddenRole of existingHiddenRoles) {
       if (currentUser?.role !== 'su' && !safeRoles.some((role: any) => role.id === hiddenRole.id)) {
         safeRoles.push(hiddenRole);
+      }
+    }
+
+    if (currentUser?.role !== 'su') {
+      for (const role of safeRoles) {
+        const existingRole: any = existingRolesById.get(role.id);
+
+        if (role.id === 'su') {
+          const preservedSu: any = existingRolesById.get('su');
+          if (preservedSu) {
+            role.name = preservedSu.name;
+            role.system = preservedSu.system;
+            role.permissions = preservedSu.permissions || {};
+          }
+          continue;
+        }
+
+        if (!canEditSuPermissions) {
+          role.permissions = { ...(role.permissions || {}) };
+          for (const key of SU_PERMISSION_KEYS) {
+            if (existingRole?.permissions?.[key] === true) {
+              role.permissions[key] = true;
+            } else {
+              delete role.permissions[key];
+            }
+          }
+        }
       }
     }
 
@@ -1628,7 +1686,11 @@ app.get('/api/users', requireAuth(), async (req, res) => {
 
   try {
     const localDb = await readLocalDb();
-    res.json((localDb.users || []).map(sanitizeUser));
+    const authUser = (req as any).user;
+    const visibleUsers = (localDb.users || []).filter((user: any) => {
+      return authUser?.role === 'su' || user.role !== 'su';
+    });
+    res.json(visibleUsers.map(sanitizeUser));
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -1641,7 +1703,13 @@ app.post('/api/users', requireAuth(), async (req, res) => {
   }
 
   try {
+    const authUser = (req as any).user;
     const { username, password, role, extension, disabled, permissions } = req.body;
+
+    if (role === 'su' && authUser?.role !== 'su') {
+      return res.status(403).json({ error: 'Доступ запрещен' });
+    }
+
     const cleanUsername = String(username || '').trim();
     if (!cleanUsername || !password) {
       res.status(400).json({ error: 'Логин и пароль обязательны' });
@@ -1685,8 +1753,13 @@ app.put('/api/users/:id', requireAuth(), async (req, res) => {
   }
 
   try {
+    const authUser = (req as any).user;
     const { id } = req.params;
     const { username, password, role, extension, disabled, permissions } = req.body;
+
+    if (role === 'su' && authUser?.role !== 'su') {
+      return res.status(403).json({ error: 'Доступ запрещен' });
+    }
     const localDb = await readLocalDb();
     const idx = (localDb.users || []).findIndex((u: any) => u.id === id);
     if (idx < 0) {
@@ -1783,7 +1856,13 @@ app.post('/api/settings', requireAuth(), async (req, res) => {
   if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_settings !== true) {
     return res.status(403).json({ error: 'Access denied: view_settings permission required' });
   }
-  const settingsUpdate = req.body;
+  const settingsUpdate = { ...(req.body || {}) };
+  if (authUser?.role !== 'su') {
+    delete settingsUpdate.showSuRoleToAdmin;
+    delete settingsUpdate.showSuPermissionsToAdmin;
+    delete settingsUpdate.allowAdminEditSuPermissions;
+  }
+
   const localDb = await readLocalDb();
   
   localDb.settings = {
