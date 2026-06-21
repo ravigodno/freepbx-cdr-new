@@ -4618,7 +4618,13 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
 
 // Play audio recording binary if present on host, using smart stream chunking
 
-app.get('/api/recordings/:filename', requireAuth(), async (req, res) => {
+app.get('/api/recordings/:filename', (req, _res, next) => {
+  const queryToken = typeof req.query?.token === 'string' ? req.query.token : '';
+  if (queryToken && !req.headers.authorization) {
+    req.headers.authorization = `Bearer ${queryToken}`;
+  }
+  next();
+}, requireAuth(), async (req, res) => {
   const { filename } = req.params;
   const authUser = (req as any).user;
 
@@ -4670,6 +4676,39 @@ app.get('/api/recordings/:filename', requireAuth(), async (req, res) => {
   let filePath = directPath.startsWith(recordingsRoot + path.sep) && fs.existsSync(directPath) ? directPath : '';
   if (!filePath && fs.existsSync(recordingsRoot)) {
     filePath = findRecordingFile(recordingsRoot, safeFilename) || '';
+  }
+
+  // Fallback: CDR recordingfile may differ from the real Asterisk filename.
+  // Match by uniqueid suffix, e.g. 1781866331.112.wav
+  if (!filePath && fs.existsSync(recordingsRoot)) {
+    const uniqueSuffixMatch = safeFilename.match(/(\d+\.\d+)(?:\.[a-z0-9]+)?$/i);
+    const uniqueSuffix = uniqueSuffixMatch ? uniqueSuffixMatch[1] : '';
+
+    if (uniqueSuffix) {
+      const findByUniqueSuffix = (dir: string): string | null => {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+
+        for (const entry of entries) {
+          const entryPath = path.join(dir, entry.name);
+          const resolvedEntryPath = path.resolve(entryPath);
+
+          if (!resolvedEntryPath.startsWith(recordingsRoot + path.sep)) continue;
+
+          if (entry.isFile() && entry.name.includes(uniqueSuffix)) {
+            return entryPath;
+          }
+
+          if (entry.isDirectory()) {
+            const found = findByUniqueSuffix(entryPath);
+            if (found) return found;
+          }
+        }
+
+        return null;
+      };
+
+      filePath = findByUniqueSuffix(recordingsRoot) || '';
+    }
   }
 
   if (!filePath || !fs.existsSync(filePath)) {

@@ -1677,7 +1677,7 @@ export default function App() {
     setIsAudioPaused(false);
     
     // Mount custom source stream
-    const audioUrl = `/api/recordings/${encodeURIComponent(call.recordingfile)}`;
+    const audioUrl = `/api/recordings/${encodeURIComponent(call.recordingfile)}?token=${encodeURIComponent(session?.token || '')}`;
     
     if (audioRef.current) {
       audioRef.current.src = audioUrl;
@@ -4325,7 +4325,7 @@ export default function App() {
                 </div>
                 <div className="text-[10px] text-slate-500 font-mono mt-0.5">
                   {hasPermission('listen_recordings') && (
-                    <a href={`/api/recordings/${encodeURIComponent(playingRecording)}`} download={playingRecording} className="text-[10px] text-blue-600 hover:text-blue-700 underline underline-offset-2">Скачать запись</a>
+                    <a href={`/api/recordings/${encodeURIComponent(playingRecording)}?token=${encodeURIComponent(session?.token || '')}`} download={playingRecording} className="text-[10px] text-blue-600 hover:text-blue-700 underline underline-offset-2">Скачать запись</a>
                   )}
                 </div></div>
             </div>
