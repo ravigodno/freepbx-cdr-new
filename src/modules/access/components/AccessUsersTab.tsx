@@ -78,7 +78,7 @@ export default function AccessUsersTab({
                     SIP: <b>{user.extension || '—'}</b>
                   </span>
                   {user.disabled && (
-                    <span className="text-red-600 font-bold">Отключён</span>
+                    <span className="text-blue-600 font-bold">Отключён</span>
                   )}
                 </div>
               </div>
@@ -95,7 +95,7 @@ export default function AccessUsersTab({
                 <button
                   type="button"
                   onClick={() => deleteAccessUser(user)}
-                  className="p-2 rounded-lg bg-red-50 text-red-600 hover:bg-red-100"
+                  className="p-2 rounded-lg bg-blue-50 text-blue-600 hover:bg-blue-100"
                 >
                   <Trash2 className="h-4 w-4" />
                 </button>
@@ -117,7 +117,7 @@ export default function AccessUsersTab({
         </h4>
 
         {accessError && (
-          <div className="p-2 rounded-lg bg-red-50 border border-red-200 text-red-700 text-xs font-bold">
+          <div className="p-2 rounded-lg bg-blue-50 border border-red-200 text-red-700 text-xs font-bold">
             {accessError}
           </div>
         )}
@@ -178,7 +178,7 @@ export default function AccessUsersTab({
                     type="checkbox"
                     checked={userForm.permissions?.[permission.key] === true}
                     onChange={(e) => togglePermission(permission.key, e.target.checked)}
-                    className="mt-0.5 rounded border-slate-300 text-red-600"
+                    className="mt-0.5 rounded border-slate-300 text-blue-600"
                   />
                   <span>
                     <span className="block font-bold text-slate-700">
@@ -210,7 +210,7 @@ export default function AccessUsersTab({
             type="checkbox"
             checked={userForm.disabled}
             onChange={(e) => setUserForm({ ...userForm, disabled: e.target.checked })}
-            className="rounded border-slate-300 text-red-600"
+            className="rounded border-slate-300 text-blue-600"
           />
           Отключить пользователя
         </label>
@@ -220,7 +220,7 @@ export default function AccessUsersTab({
             type="button"
             onClick={() => saveAccessUser()}
             disabled={isSavingUser}
-            className="flex-1 px-4 py-2 rounded-lg bg-red-600 text-white text-xs font-bold hover:bg-red-700 disabled:opacity-50"
+            className="flex-1 px-4 py-2 rounded-lg bg-blue-600 text-white text-xs font-bold hover:bg-blue-700 disabled:opacity-50"
           >
             {isSavingUser ? 'Сохранение...' : 'Сохранить'}
           </button>

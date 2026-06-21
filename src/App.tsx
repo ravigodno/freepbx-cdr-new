@@ -170,7 +170,7 @@ function RussianDatePicker({ value, onChange, ariaLabel }: RussianDatePickerProp
         lang="ru-RU"
         aria-label={ariaLabel}
         onClick={() => setIsOpen(prev => !prev)}
-        className="min-w-[112px] bg-white border border-slate-200 rounded px-2.5 py-1 text-[11px] text-slate-700 font-mono focus:outline-none focus:border-red-500 hover:border-slate-300 transition-all text-left flex items-center gap-1.5 cursor-pointer"
+        className="min-w-[112px] bg-white border border-slate-200 rounded px-2.5 py-1 text-[11px] text-slate-700 font-mono focus:outline-none focus:border-blue-500 hover:border-slate-300 transition-all text-left flex items-center gap-1.5 cursor-pointer"
       >
         <Calendar className="h-3.5 w-3.5 text-slate-400 shrink-0" />
         <span>{formatRussianDate(value)}</span>
@@ -217,9 +217,9 @@ function RussianDatePicker({ value, onChange, ariaLabel }: RussianDatePickerProp
                   }}
                   className={`h-8 rounded-lg text-xs font-medium transition-all ${
                     isSelected
-                      ? 'bg-red-600 text-white shadow-sm'
+                      ? 'bg-blue-600 text-white shadow-sm'
                       : isToday
-                        ? 'bg-red-50 text-red-700 border border-red-100'
+                        ? 'bg-blue-50 text-blue-700 border border-blue-100'
                         : isOutsideMonth
                           ? 'text-slate-300 hover:bg-slate-50'
                           : 'text-slate-700 hover:bg-slate-100'
@@ -241,7 +241,7 @@ function RussianDatePicker({ value, onChange, ariaLabel }: RussianDatePickerProp
           >
             Сегодня
           </button>
-        </div>
+          </div>
       )}
     </div>
   );
@@ -418,7 +418,7 @@ export default function App() {
   const [timeToNextRefresh, setTimeToNextRefresh] = useState<number>(30);
 
   // --- TELEPHONE DIRECTORY STATE & HANDLERS ---
-  const [activeView, setActiveView] = useState<'calls' | 'directory' | 'reports' | 'monitoring' | 'management' | 'balance'>(() => {
+  const [activeView, setActiveView] = useState<'calls' | 'directory' | 'reports' | 'monitoring' | 'management' | 'balance' | 'settings'>(() => {
     const saved = localStorage.getItem('asterisk_cdr_active_view') as 'calls' | 'directory' | 'reports' | 'monitoring' | 'management' | 'balance' | null;
     return saved || 'calls';
   });
@@ -1493,7 +1493,7 @@ export default function App() {
         setIsSettingsOpen(false);
         setDbTestResult(null);
         setSettings(draftSettings);
-        alert('Настройки успешно применены! Сервис перезагрузит список CDR.');
+        setDbTestResult({ success: true, message: 'Настройки успешно применены.' });
         reloadData();
       } else {
         alert('Ошибка при сохранении конфигурационного файла.');
@@ -1852,79 +1852,128 @@ export default function App() {
 
   if (!session) {
     return (
-      <div id="login-container" className="min-h-screen flex items-center justify-center bg-slate-100 p-4 relative overflow-hidden">
-        {/* Animated ambient background vectors */}
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(241,245,249,0.95),rgba(226,232,240,1))] z-0" />
-        
-        <div className="relative w-full max-w-md bg-white  rounded-2xl border border-slate-200 p-8 shadow-xl z-10">
-          <div className="flex flex-col items-center mb-6">
-            <div className="bg-white p-2.5 rounded-2xl mb-4 border border-slate-200/80 shadow-md">
-              <Logo3D className="h-10 w-10 md:h-12 md:w-12" />
-            </div>
-            <h1 className="text-xl font-bold text-slate-900 text-center tracking-tight flex items-center justify-center gap-2 font-sans">
-              FreePBX CDR Missed Calls
-              <span className="text-[10px] bg-slate-100 text-slate-600 font-normal px-1.5 py-0.5 rounded-md border border-slate-200">
-                v{packageJson.version}
-              </span>
-            </h1>
-            <p className="text-slate-500 text-xs mt-1 text-center font-light">
-              Система мониторинга и отработки неотвеченных вызовов VoIP
-            </p>
-          </div>
+      <div id="login-container" className="min-h-screen relative overflow-hidden bg-gradient-to-br from-slate-50 via-blue-50/30 to-sky-50/40">
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.98),rgba(239,246,255,0.82))]" />
 
-          {loginError && (
-            <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-00 text-sm rounded-lg flex items-start gap-2.5">
-              <AlertCircle className="h-5 w-5 text-red-650 shrink-0 mt-0.5" />
-              <span>{loginError}</span>
-            </div>
-          )}
+        <div className="absolute inset-x-0 bottom-0 h-[66vh] pointer-events-none overflow-hidden">
+          <svg
+            className="absolute inset-x-0 bottom-0 h-full w-full"
+            viewBox="0 0 1440 520"
+            preserveAspectRatio="none"
+            aria-hidden="true"
+          >
+            <path
+              d="M0,185 C160,135 295,120 440,160 C590,202 690,250 835,214 C1010,170 1138,132 1440,158 L1440,520 L0,520 Z"
+              fill="rgba(191, 219, 254, 0.55)"
+            />
+            <path
+              d="M0,250 C175,205 295,208 455,252 C640,304 745,295 910,248 C1090,198 1245,198 1440,232 L1440,520 L0,520 Z"
+              fill="rgba(186, 230, 253, 0.52)"
+            />
+            <path
+              d="M0,330 C180,282 345,300 505,332 C690,370 835,355 1025,306 C1200,260 1320,272 1440,315 L1440,520 L0,520 Z"
+              fill="rgba(147, 197, 253, 0.42)"
+            />
+            <path
+              d="M0,400 C195,360 360,375 560,410 C755,444 955,430 1140,382 C1280,346 1368,358 1440,382 L1440,520 L0,520 Z"
+              fill="rgba(125, 211, 252, 0.34)"
+            />
+            <path
+              d="M0,305 C190,270 360,278 550,318 C760,362 940,348 1130,300 C1265,266 1360,270 1440,288"
+              fill="none"
+              stroke="rgba(255, 255, 255, 0.70)"
+              strokeWidth="2"
+            />
+            <path
+              d="M0,385 C220,350 410,365 610,396 C815,428 980,412 1160,368 C1290,337 1370,340 1440,360"
+              fill="none"
+              stroke="rgba(255, 255, 255, 0.55)"
+              strokeWidth="2"
+            />
+          </svg>
+        </div>
 
-          <form onSubmit={handleLogin} className="space-y-4">
-            <div>
-              <label className="block text-slate-700 text-xs font-semibold uppercase tracking-wider mb-1.5">Имя пользователя</label>
-              <input
-                type="text"
-                value={loginUsername}
-                onChange={(e) => setLoginUsername(e.target.value)}
-                placeholder="Например, admin..."
-                className="w-full bg-slate-50 border border-slate-300 rounded-lg py-2.5 px-3.5 text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-transparent transition-all text-sm"
-                required
-              />
+        <div className="relative z-10 min-h-screen flex flex-col px-6 py-8">
+          <header className="flex flex-col items-center text-center pt-14">
+            <div className="flex items-center justify-center gap-4">
+              <Logo3D className="h-8 w-8" />
+              <div className="text-3xl font-black tracking-tight text-blue-600 leading-none">PBXPULS</div>
             </div>
-
-            <div>
-              <label className="block text-slate-700 text-xs font-semibold uppercase tracking-wider mb-1.5">Пароль входа</label>
-              <input
-                type="password"
-                value={loginPassword}
-                onChange={(e) => setLoginPassword(e.target.value)}
-                placeholder="••••••••"
-                className="w-full bg-slate-50 border border-slate-300 rounded-lg py-2.5 px-3.5 text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-transparent transition-all text-sm"
-                required
-              />
+            <div className="mt-2 text-sm font-semibold text-slate-600">
+              Мониторинг, аналитика и управление телефонией
             </div>
+          </header>
 
-            <button
-              type="submit"
-              disabled={isLoggingIn}
-              className="w-full mt-2 bg-gradient-to-r from-red-600 to-rose-700 hover:from-red-500 hover:to-rose-600 active:transform active:scale-[0.99] text-white py-2.5 rounded-lg text-sm font-semibold tracking-wide shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
-            >
-              {isLoggingIn ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  <span>Авторизация...</span>
-                </>
-              ) : (
-                <span>Войти в консоль</span>
+          <main className="flex-1 flex items-center justify-center px-4 -mt-6">
+            <div className="w-full max-w-md rounded-3xl border border-slate-200 bg-white/95 p-7 shadow-xl shadow-slate-300/35">
+              {loginError && (
+                <div className="mb-5 rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800 flex items-start gap-2.5">
+                  <AlertCircle className="h-5 w-5 text-blue-600 shrink-0 mt-0.5" />
+                  <span>{loginError}</span>
+                </div>
               )}
-            </button>
-          </form>
 
-          <div className="mt-8 pt-4 border-t border-slate-200 text-center">
-            <span className="text-[10px] text-slate-400 tracking-wider font-mono">
-              РАЗРАБОТАНО ДЛЯ INTERNAL LOCAL NETWORKS
-            </span>
-          </div>
+              <form onSubmit={handleLogin} className="space-y-6">
+                <div>
+                  <label className="mb-2.5 block text-sm font-black uppercase tracking-wide text-slate-800">
+                    Имя пользователя
+                  </label>
+                  <input
+                    type="text"
+                    value={loginUsername}
+                    onChange={(e) => setLoginUsername(e.target.value)}
+                    placeholder="Например, admin..."
+                    className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3.5 text-base text-slate-900 placeholder-slate-400 transition-all focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-2.5 block text-sm font-black uppercase tracking-wide text-slate-800">
+                    Пароль входа
+                  </label>
+                  <input
+                    type="password"
+                    value={loginPassword}
+                    onChange={(e) => setLoginPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3.5 text-base text-slate-900 placeholder-slate-400 transition-all focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    required
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isLoggingIn}
+                  className="w-full rounded-xl bg-gradient-to-r from-blue-600 to-sky-500 px-5 py-3.5 text-base font-black text-white shadow-lg shadow-blue-500/20 transition-all hover:from-blue-700 hover:to-sky-600 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isLoggingIn ? (
+                    <span className="inline-flex items-center justify-center gap-2">
+                      <Loader2 className="h-5 w-5 animate-spin" />
+                      Авторизация...
+                    </span>
+                  ) : (
+                    'Войти в консоль'
+                  )}
+                </button>
+              </form>
+            </div>
+          </main>
+
+          <footer className="pb-3 text-center text-sm text-slate-500">
+            <div>© 2026 PBXPULS. Все права защищены. Грунин К.В. ИНН 9102057404</div>
+            <div className="mt-2">
+              Внедрение, разработка и поддержка VOIP-проектов
+              <span className="mx-2">•</span>
+              <a href="tel:+79787437943" className="font-semibold text-slate-600 hover:text-blue-600">
+                +7 (978) 743-79-43
+              </a>
+              <span className="mx-2">•</span>
+              <a href="https://grunin.org" target="_blank" rel="noopener noreferrer" className="font-semibold text-blue-600 hover:text-blue-700">
+                grunin.org
+              </a>
+            </div>
+          </footer>
         </div>
       </div>
     );
@@ -2464,8 +2513,7 @@ export default function App() {
                   onChange={(e) => setLiveSearch(e.target.value)}
                   placeholder="Поиск по любым данным..."
                   className="pl-8 pr-3 py-2 w-72 rounded-lg border border-slate-200 bg-white text-xs font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
-                />
-              </div>
+                /></div>
 
               <button
                 onClick={saveLiveSnapshot}
@@ -2490,14 +2538,14 @@ export default function App() {
                 disabled={isLiveMonitoringPaused}
                 className={`px-3 py-2 border rounded-lg text-xs font-bold flex items-center gap-2 cursor-pointer ${
                   isLiveMonitoringPaused
-                    ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
+                    ? 'bg-gradient-to-br from-slate-50 via-blue-50/40 to-sky-50/50 text-slate-400 border-slate-200 cursor-not-allowed'
                     : 'bg-blue-50 text-blue-700 border-blue-100'
                 }`}
               >
                 <RefreshCw className={`h-3.5 w-3.5 ${isLoadingLiveSessions ? 'animate-spin' : ''}`} />
                 Обновить
               </button>
-            </div>
+          </div>
             )}
           </div>
 
@@ -2538,7 +2586,7 @@ export default function App() {
           )}
 
           {liveSessionsError && (
-            <div className="p-4 text-sm font-bold text-red-600 bg-red-50 border-b border-red-100">
+            <div className="p-4 text-sm font-bold text-blue-600 bg-blue-50 border-b border-blue-100">
               {liveSessionsError}
             </div>
           )}
@@ -2582,32 +2630,26 @@ export default function App() {
               <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
                 <div className="bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-[#334155] rounded-xl p-3">
                   <div className="text-xs font-bold text-slate-500">Активные каналы</div>
-                  <div className="mt-1 text-xl font-black text-slate-900 dark:text-white font-mono">{liveSessionsData?.summary?.total ?? 0}</div>
-                </div>
+                  <div className="mt-1 text-xl font-black text-slate-900 dark:text-white font-mono">{liveSessionsData?.summary?.total ?? 0}</div></div>
 
                 <div className="bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-[#334155] rounded-xl p-3">
                   <div className="text-xs font-bold text-slate-500">Звонков</div>
-                  <div className="mt-1 text-xl font-black text-indigo-600 font-mono">{filteredCalls.length}</div>
-                </div>
+                  <div className="mt-1 text-xl font-black text-indigo-600 font-mono">{filteredCalls.length}</div></div>
 
                 <div className="bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-[#334155] rounded-xl p-3">
                   <div className="text-xs font-bold text-slate-500">Разговор</div>
-                  <div className="mt-1 text-xl font-black text-emerald-600 font-mono">{liveSessionsData?.summary?.up ?? 0}</div>
-                </div>
+                  <div className="mt-1 text-xl font-black text-emerald-600 font-mono">{liveSessionsData?.summary?.up ?? 0}</div></div>
 
                 <div className="bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-[#334155] rounded-xl p-3">
                   <div className="text-xs font-bold text-slate-500">Звонит</div>
-                  <div className="mt-1 text-xl font-black text-cyan-600 font-mono">{liveSessionsData?.summary?.ringing ?? 0}</div>
-                </div>
+                  <div className="mt-1 text-xl font-black text-cyan-600 font-mono">{liveSessionsData?.summary?.ringing ?? 0}</div></div>
 
                 <div className="bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-[#334155] rounded-xl p-3">
                   <div className="text-xs font-bold text-slate-500">Обновление</div>
                   <div className="mt-1 text-xs font-bold text-slate-700 dark:text-slate-300">
                     {liveSessionsData?.summary?.updatedAt ? new Date(liveSessionsData.summary.updatedAt).toLocaleTimeString('ru-RU') : '—'}
-                  </div>
-                </div>
-              </div>
-            </div>
+                  </div></div>
+              </div></div>
           )}
 
         </div>
@@ -2627,13 +2669,10 @@ export default function App() {
           {/* Logo Element resembling high-end layers icon */}
           <div className={`flex items-center ${isSidebarExpanded ? 'gap-2 w-full' : 'justify-center w-full'}`}>
             <div className="h-[45px] w-[45px] flex items-center justify-center active:scale-95 transition-transform cursor-pointer shrink-0">
-              <Logo3D className="h-[45px] w-[45px]" />
-            </div>
+              <Logo3D className="h-[45px] w-[45px]" /></div>
             {isSidebarExpanded && (
               <div className="min-w-0 animate-fade-in">
-                <span className="font-bold text-[#0f2557] dark:text-slate-100 text-[24px] tracking-tight uppercase block leading-none">PBXPULS</span>
-                
-              </div>
+                <span className="font-bold text-[#0f2557] dark:text-slate-100 text-[24px] tracking-tight uppercase block leading-none">PBXPULS</span></div>
             )}
           </div>
 
@@ -2775,8 +2814,7 @@ export default function App() {
                 </button>
               )}
 
-          </div>
-        </div>
+          </div></div>
 
         {/* Bottom controls */}
         <div className={`flex flex-col ${isSidebarExpanded ? 'items-stretch px-4' : 'items-center'} gap-2 w-full ${isSidebarExpanded ? '' : 'px-2'}`}>
@@ -2810,7 +2848,7 @@ export default function App() {
               } else {
                 setSettingsTab('appearance');
               }
-              setIsSettingsOpen(true);
+              setActiveView('settings');
             }}
             className={`flex items-center ${isSidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent transition-all relative group cursor-pointer`}
             title={isSidebarExpanded ? "" : "Настройки"}
@@ -2828,7 +2866,7 @@ export default function App() {
 
           {/* Help panel triggers general guidelines */}
           <button
-            onClick={() => alert(`Freepbx CDR Missed Calls v${packageJson.version}. Разработано для корпоративных телефонных сетей.`)}
+            onClick={() => alert(`PBXPULS v${packageJson.version}. Разработано для корпоративных телефонных сетей.`)}
             className={`flex items-center ${isSidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent transition-all relative group cursor-pointer`}
             title={isSidebarExpanded ? "" : "Справка"}
           >
@@ -2868,12 +2906,12 @@ export default function App() {
           {/* Logout */}
           <button
             onClick={handleLogout}
-            className={`flex items-center ${isSidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl text-slate-400 hover:text-red-655 hover:bg-red-50 dark:hover:bg-red-950/20 transition-all relative group cursor-pointer`}
+            className={`flex items-center ${isSidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl text-slate-400 hover:text-red-655 hover:bg-blue-50 dark:hover:bg-red-950/20 transition-all relative group cursor-pointer`}
             title={isSidebarExpanded ? "" : "Выйти"}
           >
-            <LogOut className="h-5 w-5 shrink-0 text-slate-400 group-hover:text-red-600" />
+            <LogOut className="h-5 w-5 shrink-0 text-slate-400 group-hover:text-blue-600" />
             {isSidebarExpanded && (
-              <span className="text-xs font-semibold truncate animate-fade-in text-slate-500 group-hover:text-red-600">Выход</span>
+              <span className="text-xs font-semibold truncate animate-fade-in text-slate-500 group-hover:text-blue-600">Выход</span>
             )}
             {!isSidebarExpanded && (
               <span className="absolute left-full ml-3 px-2 py-1 rounded bg-slate-950 text-white text-[10px] font-bold opacity-0 group-hover:opacity-100 transition-opacity z-50 whitespace-nowrap shadow-md pointer-events-none">
@@ -2881,7 +2919,7 @@ export default function App() {
               </span>
             )}
           </button>
-        </div>
+          </div>
       </aside>
 
       {/* RIGHT WORKSPACE PLATFORM */}
@@ -2891,13 +2929,14 @@ export default function App() {
           <div className="max-w-[1800px] mx-auto px-4 py-3 flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
             <div className="flex flex-col sm:flex-row sm:items-center gap-6 w-full xl:w-auto">
               <div className="flex items-center gap-3">
-                <div className="bg-gradient-to-br from-red-600 to-rose-700 p-2 rounded-xl text-white shadow-md shadow-red-500/10 shrink-0">
+                <div className="bg-gradient-to-br from-red-600 to-rose-700 p-2 rounded-xl text-white shadow-md shadow-blue-500/20 shrink-0">
                   {activeView === 'calls' && <Phone className="h-5 w-5" />}
                   {activeView === 'directory' && <BookOpen className="h-5 w-5" />}
                   {activeView === 'reports' && <BarChart3 className="h-5 w-5 animate-pulse" />}
                   {activeView === 'monitoring' && <Activity className="h-5 w-5 animate-pulse" />}
                   {activeView === 'management' && <Settings className="h-5 w-5" />}
                   {activeView === 'balance' && <Wallet className="h-5 w-5" />}
+                  {activeView === 'settings' && <Settings className="h-5 w-5" />}
                 </div>
                 <div>
                   <h1 className="text-base font-bold text-slate-900 dark:text-slate-100 tracking-tight flex items-center gap-2 font-sans uppercase">
@@ -2907,16 +2946,12 @@ export default function App() {
                     {activeView === 'monitoring' && 'Мониторинг звонков'}
                     {activeView === 'management' && 'Управление АТС'}
                     {activeView === 'balance' && 'Баланс операторов'}
-                    <span className="text-[10px] bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-normal px-2 py-0.5 rounded-md border border-slate-200 dark:border-slate-700 normal-case">
-                      v{packageJson.version}
-                    </span>
+                    {activeView === 'settings' && 'Настройки системы'}
                   </h1>
                   <p className="text-slate-500 dark:text-slate-400 text-xs font-light">
                     Панель мониторинга звонков Asterisk & FreePBX
-                  </p>
-                </div>
-              </div>
-            </div>
+                  </p></div>
+              </div></div>
 
           <div className="flex flex-wrap items-center gap-4 w-full xl:w-auto justify-end">
             {/* C2C User work extension input (SIP) next to Demo trigger */}
@@ -2933,10 +2968,9 @@ export default function App() {
                   placeholder="101"
                   maxLength={6}
                   disabled={session.role === 'operator'}
-                  className="w-12 bg-white dark:bg-slate-900 border border-slate-250 dark:border-slate-700 rounded py-0.5 px-1.5 text-xs text-slate-900 dark:text-slate-100 font-bold font-mono focus:outline-none focus:ring-1 focus:ring-red-500 focus:border-red-500 text-center disabled:bg-slate-100 dark:disabled:bg-slate-800 disabled:text-slate-550 dark:disabled:text-slate-500 disabled:cursor-not-allowed"
+                  className="w-12 bg-white dark:bg-slate-900 border border-slate-250 dark:border-slate-700 rounded py-0.5 px-1.5 text-xs text-slate-900 dark:text-slate-100 font-bold font-mono focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 text-center disabled:bg-gradient-to-br from-slate-50 via-blue-50/40 to-sky-50/50 dark:disabled:bg-slate-800 disabled:text-slate-550 dark:disabled:text-slate-500 disabled:cursor-not-allowed"
                   title={session.role === 'operator' ? 'SIP-номер закреплён администратором' : 'Введите ваш внутренний добавочный номер. С этого телефона Asterisk начнет дозвон.'}
-                />
-              </div>
+                /></div>
 
               <label className="flex items-center gap-1.5 cursor-pointer select-none">
                 <input
@@ -2947,11 +2981,10 @@ export default function App() {
                     setOnlyMyCalls(e.target.checked);
                     setPage(1);
                   }}
-                  className="rounded border-slate-300 dark:border-slate-600 text-red-600 focus:ring-red-500 h-3.5 w-3.5 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+                  className="rounded border-slate-300 dark:border-slate-600 text-blue-600 focus:ring-blue-500 h-3.5 w-3.5 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                 />
                 <span className="text-[11px] font-bold text-slate-700 dark:text-slate-300">Мои звонки</span>
-              </label>
-            </div>
+              </label></div>
 
             {/* Config & Profile actions */}
             <div className="h-8 w-[1px] bg-slate-200 dark:bg-slate-700 hidden sm:block" />
@@ -2959,8 +2992,7 @@ export default function App() {
             <div className="flex items-center gap-2">
               <div className="text-right hidden md:block">
                 <div className="text-xs font-semibold text-slate-800 dark:text-slate-200">{session.username}</div>
-                <div className="text-[10px] text-red-600 dark:text-rose-400 font-medium uppercase tracking-wider">{session.role}</div>
-              </div>
+                <div className="text-[10px] text-blue-600 dark:text-rose-400 font-medium uppercase tracking-wider">{session.role}</div></div>
 
               <button
                 onClick={() => setDarkMode(prev => !prev)}
@@ -2978,7 +3010,7 @@ export default function App() {
                   } else {
                     setSettingsTab('appearance');
                   }
-                  setIsSettingsOpen(true);
+                  setActiveView('settings');
                 }}
                 className="p-2 text-slate-500 dark:text-slate-400 hover:text-slate-950 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg border border-transparent hover:border-slate-201 dark:hover:border-[#334155] transition-all cursor-pointer"
                 title="Настройки"
@@ -2988,14 +3020,13 @@ export default function App() {
 
               <button
                 onClick={handleLogout}
-                className="p-2 text-slate-500 dark:text-slate-400 hover:text-red-650 dark:hover:text-rose-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg border border-transparent hover:border-slate-200 dark:hover:border-slate-700 transition-all cursor-pointer"
+                className="p-2 text-slate-500 dark:text-slate-400 hover:text-blue-600 dark:hover:text-rose-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg border border-transparent hover:border-slate-200 dark:hover:border-slate-700 transition-all cursor-pointer"
                 title="Выйти"
               >
                 <LogOut className="h-5 w-5" />
               </button>
-            </div>
           </div>
-        </div>
+          </div></div>
       </header>
 
       {liveCallBanner?.active && (() => {
@@ -3003,9 +3034,9 @@ export default function App() {
         const isOutgoingLive = liveCallBanner.direction === 'outgoing';
         const isInternalLive = liveCallBanner.direction === 'internal';
         const title = isIncomingLive ? 'Входящий звонок' : isOutgoingLive ? 'Исходящий звонок' : 'Внутренний звонок';
-        const iconClass = isIncomingLive ? 'text-red-600 bg-red-50' : isOutgoingLive ? 'text-indigo-600 bg-indigo-50' : 'text-purple-600 bg-purple-50';
+        const iconClass = isIncomingLive ? 'text-blue-600 bg-blue-50' : isOutgoingLive ? 'text-indigo-600 bg-indigo-50' : 'text-purple-600 bg-purple-50';
         const contactTypeLabel = liveCallBanner.contactType === 'internal' ? 'Внутренний' : 'Клиент';
-        const contactTypeClass = liveCallBanner.contactType === 'internal' ? 'bg-slate-100 text-slate-600 border-slate-200' : 'bg-red-50 text-red-600 border-red-100';
+        const contactTypeClass = liveCallBanner.contactType === 'internal' ? 'bg-gradient-to-br from-slate-50 via-blue-50/40 to-sky-50/50 text-slate-600 border-slate-200' : 'bg-blue-50 text-blue-600 border-blue-100';
         const display = liveCallBanner.displayName || liveCallBanner.number || 'Неизвестный номер';
         const isSpamOrBlacklisted = liveCallBanner.isSpam === true || liveCallBanner.isBlacklisted === true;
         const cleanName = display.replace(/\s*\(([^)]*)\)\s*$/, '');
@@ -3015,7 +3046,7 @@ export default function App() {
 
         return (
           <div className="fixed top-[74px] left-1/2 -translate-x-1/2 z-50 w-[calc(100%-32px)] max-w-[1720px] pointer-events-none">
-            <div className="pointer-events-auto relative overflow-hidden rounded-2xl border border-red-200 bg-white shadow-2xl shadow-slate-900/12  animate-fade-in">
+            <div className="pointer-events-auto relative overflow-hidden rounded-2xl border border-blue-200 bg-white shadow-2xl shadow-slate-900/12  animate-fade-in">
               <div className="absolute inset-y-0 left-0 w-2 bg-gradient-to-b from-red-500 to-rose-600" />
               <div className="flex items-stretch min-h-[104px]">
                 <div className="flex items-center gap-4 px-6 py-4 min-w-[420px] max-w-[520px] border-r border-slate-200">
@@ -3025,55 +3056,45 @@ export default function App() {
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 text-[12px] uppercase tracking-[0.12em] font-black text-slate-900">
                       {title}
-                      {isIncomingLive && <span className="h-2.5 w-2.5 rounded-full bg-red-500 animate-pulse" />}
+                      {isIncomingLive && <span className="h-2.5 w-2.5 rounded-full bg-blue-500 animate-pulse" />}
                     </div>
                     <div className="mt-1 flex items-center gap-2 min-w-0" title={display}>
                       <span className="text-xl font-black text-slate-950 truncate">
                         {cleanName || display}
                       </span>
                       {isSpamOrBlacklisted && (
-                        <span className="shrink-0 inline-flex items-center rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-[11px] font-black text-red-700">
+                        <span className="shrink-0 inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-black text-blue-700">
                           СПАМ / ЧС
                         </span>
                       )}
                     </div>
                     <div className="mt-1 flex items-center gap-2 text-sm font-bold text-slate-800">
                       <Phone className="h-4 w-4 text-cyan-500" />
-                      <span>{liveCallBanner.number || '—'}</span>
-                    </div>
-                  </div>
-                </div>
+                      <span>{liveCallBanner.number || '—'}</span></div>
+                  </div></div>
 
                 <div className="grid grid-cols-2 xl:grid-cols-6 flex-1 divide-x divide-slate-200">
                   <div className="px-6 py-4 flex flex-col justify-center">
                     <span className="text-[11px] uppercase tracking-wider font-bold text-slate-500">Тип</span>
-                    <span className={`mt-2 w-fit rounded-md border px-2 py-1 text-xs font-bold ${contactTypeClass}`}>{contactTypeLabel}</span>
-                  </div>
+                    <span className={`mt-2 w-fit rounded-md border px-2 py-1 text-xs font-bold ${contactTypeClass}`}>{contactTypeLabel}</span></div>
                   <div className="px-6 py-4 flex flex-col justify-center min-w-0">
                     <span className="text-[11px] uppercase tracking-wider font-bold text-slate-500">Справочник</span>
-                    <span className="mt-2 text-sm font-black text-slate-900 truncate" title={display}>{cleanName}</span>
-                  </div>
+                    <span className="mt-2 text-sm font-black text-slate-900 truncate" title={display}>{cleanName}</span></div>
                   <div className="px-6 py-4 flex flex-col justify-center min-w-0">
                     <span className="text-[11px] uppercase tracking-wider font-bold text-slate-500">Должность / комментарий</span>
-                    <span className="mt-2 text-sm font-bold text-slate-900 truncate" title={position}>{position || '—'}</span>
-                  </div>
+                    <span className="mt-2 text-sm font-bold text-slate-900 truncate" title={position}>{position || '—'}</span></div>
                   <div className="px-6 py-4 flex flex-col justify-center">
                     <span className="text-[11px] uppercase tracking-wider font-bold text-slate-500">DID</span>
-                    <span className="mt-2 text-base font-black text-slate-950">{liveCallBanner.did || '—'}</span>
-                  </div>
+                    <span className="mt-2 text-base font-black text-slate-950">{liveCallBanner.did || '—'}</span></div>
                   <div className="px-6 py-4 flex flex-col justify-center">
                     <span className="text-[11px] uppercase tracking-wider font-bold text-slate-500">На мой SIP</span>
-                    <span className="mt-2 text-base font-black text-slate-950">{liveCallBanner.operatorExt || myExt || '—'}</span>
-                  </div>
+                    <span className="mt-2 text-base font-black text-slate-950">{liveCallBanner.operatorExt || myExt || '—'}</span></div>
                   <div className="px-6 py-4 flex flex-col justify-center items-start xl:items-end">
                     <span className="text-sm font-black text-slate-900">{liveCallBanner.startedAt || ''}</span>
                     <span className="mt-2 text-[11px] uppercase tracking-wider font-bold text-slate-500">Длительность</span>
-                    <span className="mt-1 text-base font-black text-slate-950 font-mono">{durationText}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
+                    <span className="mt-1 text-base font-black text-slate-950 font-mono">{durationText}</span></div>
+                </div></div>
+            </div></div>
         );
       })()}
 
@@ -3083,14 +3104,12 @@ export default function App() {
           <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 text-amber-900 p-4 rounded-xl flex items-start sm:items-center justify-between shadow-xs gap-3 animate-fade-in relative z-10">
             <div className="flex items-center gap-3">
               <div className="bg-amber-100 p-1.5 rounded-lg text-amber-700 shrink-0">
-                <AlertCircle className="h-4.5 w-4.5" />
-              </div>
+                <AlertCircle className="h-4.5 w-4.5" /></div>
               <div>
                 <p className="text-xs font-semibold text-amber-900 leading-tight">База данных FreePBX недоступна</p>
                 <p className="text-[11px] text-amber-700 font-light mt-0.5">
                   Причина: {dbWarning}. Система автоматически переключена на демонстрационные VoIP данные.
-                </p>
-              </div>
+                </p></div>
             </div>
             <button
               onClick={() => setDbWarning(null)}
@@ -3140,8 +3159,7 @@ export default function App() {
                   ) : (
                     <span className="text-2xl font-bold text-cyan-600 font-mono">{stats?.inboundCalls ?? 0}</span>
                   )}
-                  <PhoneIncoming className="h-5 w-5 text-cyan-500 self-center" />
-                </div>
+                  <PhoneIncoming className="h-5 w-5 text-cyan-500 self-center" /></div>
               </button>
 
               {/* Исходящие */}
@@ -3163,8 +3181,7 @@ export default function App() {
                   ) : (
                     <span className="text-2xl font-bold text-indigo-600 font-mono">{stats?.outboundCalls ?? 0}</span>
                   )}
-                  <PhoneOutgoing className="h-5 w-5 text-indigo-500 self-center" />
-                </div>
+                  <PhoneOutgoing className="h-5 w-5 text-indigo-500 self-center" /></div>
               </button>
 
               {/* Внутренние */}
@@ -3186,8 +3203,7 @@ export default function App() {
                   ) : (
                     <span className="text-2xl font-bold text-purple-650 font-mono">{stats?.internalCalls ?? 0}</span>
                   )}
-                  <Phone className="h-5 w-5 text-purple-500 self-center" />
-                </div>
+                  <Phone className="h-5 w-5 text-purple-500 self-center" /></div>
               </button>
 
               {/* Пропущенные */}
@@ -3198,19 +3214,18 @@ export default function App() {
                 }}
                 className={`text-left p-4 flex flex-col justify-between rounded-xl shadow-sm hover:shadow-md transition-all cursor-pointer border hover:scale-[1.01] active:scale-[0.99] ${
                   statusFilter === 'MISSED'
-                    ? 'bg-red-50 border-red-400 ring-2 ring-red-500/30'
-                    : 'bg-white border-red-100'
+                    ? 'bg-blue-50 border-red-400 ring-2 ring-red-500/30'
+                    : 'bg-white border-blue-100'
                 }`}
               >
-                <span className="text-xs text-red-600 font-bold tracking-wide">Пропущенные</span>
+                <span className="text-xs text-blue-600 font-bold tracking-wide">Пропущенные</span>
                 <div className="mt-2 flex items-baseline justify-between w-full">
                   {isLoadingStats ? (
                     <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
                   ) : (
-                    <span className="text-2xl font-bold text-red-600 font-mono">{stats?.missedCalls ?? 0}</span>
+                    <span className="text-2xl font-bold text-blue-600 font-mono">{stats?.missedCalls ?? 0}</span>
                   )}
-                  <PhoneMissed className="h-5 w-5 text-red-500/80 self-center" />
-                </div>
+                  <PhoneMissed className="h-5 w-5 text-red-500/80 self-center" /></div>
               </button>
 
               {/* Обработанные */}
@@ -3235,8 +3250,7 @@ export default function App() {
                   ) : (
                     <span className="text-2xl font-bold text-emerald-605 font-mono">{stats?.processedCalls ?? 0}</span>
                   )}
-                  <CheckCircle className="h-5 w-5 text-emerald-500/80 self-center" />
-                </div>
+                  <CheckCircle className="h-5 w-5 text-emerald-500/80 self-center" /></div>
               </button>
 
               {/* Потерянные */}
@@ -3259,8 +3273,7 @@ export default function App() {
                   ) : (
                     <span className="text-2xl font-bold text-amber-600 font-mono">{stats?.lostCalls ?? 0}</span>
                   )}
-                  <XCircle className="h-5 w-5 text-amber-500/80 self-center" />
-                </div>
+                  <XCircle className="h-5 w-5 text-amber-500/80 self-center" /></div>
               </button>
             </section>
 
@@ -3283,7 +3296,7 @@ export default function App() {
                   placeholder="101"
                   maxLength={6}
                   disabled={session.role === 'operator'}
-                  className="w-12 bg-white dark:bg-slate-900 border border-slate-250 dark:border-slate-700 rounded py-0.5 px-1 text-xs text-slate-900 dark:text-slate-100 font-bold font-mono focus:outline-none focus:ring-1 focus:ring-red-500 focus:border-red-500 text-center disabled:bg-slate-100 dark:disabled:bg-slate-800 disabled:text-slate-500"
+                  className="w-12 bg-white dark:bg-slate-900 border border-slate-250 dark:border-slate-700 rounded py-0.5 px-1 text-xs text-slate-900 dark:text-slate-100 font-bold font-mono focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 text-center disabled:bg-gradient-to-br from-slate-50 via-blue-50/40 to-sky-50/50 dark:disabled:bg-slate-800 disabled:text-slate-500"
                   title={session.role === 'operator' ? 'SIP-номер закреплён администратором' : 'Введите ваш добавочный номер.'}
                 />
                 <div className="h-4 w-[1px] bg-slate-200 dark:bg-slate-700 mx-1" />
@@ -3296,11 +3309,10 @@ export default function App() {
                       setOnlyMyCalls(e.target.checked);
                       setPage(1);
                     }}
-                    className="rounded border-slate-300 dark:border-slate-600 text-red-655 focus:ring-red-500 h-3.5 w-3.5 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+                    className="rounded border-slate-300 dark:border-slate-600 text-red-655 focus:ring-blue-500 h-3.5 w-3.5 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                   />
                   <span className="text-[11px] font-bold text-slate-705 dark:text-slate-300">Мои звонки</span>
-                </label>
-              </div>
+                </label></div>
 
 
               <div className="flex flex-wrap items-center gap-1.5 bg-slate-50 dark:bg-[#0f172a]/60 border border-slate-200 dark:border-[#334155]/80 p-1 rounded-lg">
@@ -3315,7 +3327,7 @@ export default function App() {
                   }}
                   className={`text-[11px] px-2 py-0.5 rounded font-medium transition-all cursor-pointer ${
                     startDate === toLocalDateInputValue(new Date()) && endDate === toLocalDateInputValue(new Date()) && startTime === '00:00' && endTime === '23:59'
-                      ? 'bg-red-50 text-red-750 font-bold'
+                      ? 'bg-blue-50 text-red-750 font-bold'
                       : 'bg-white text-slate-600 hover:text-slate-900 border border-transparent hover:border-slate-200'
                   }`}
                 >
@@ -3339,7 +3351,7 @@ export default function App() {
                       const yStr = toLocalDateInputValue(yesterday);
                       return startDate === yStr && endDate === yStr && startTime === '00:00' && endTime === '23:59';
                     })()
-                      ? 'bg-red-50 text-red-750 font-bold'
+                      ? 'bg-blue-50 text-red-750 font-bold'
                       : 'bg-white text-slate-600 hover:text-slate-900 border border-transparent hover:border-slate-200'
                   }`}
                 >
@@ -3354,7 +3366,7 @@ export default function App() {
                       const sStr = toLocalDateInputValue(sev);
                       return startDate === sStr && endDate === toLocalDateInputValue(new Date()) && startTime === '00:00' && endTime === '23:59';
                     })()
-                      ? 'bg-red-50 text-red-750 font-bold'
+                      ? 'bg-blue-50 text-red-750 font-bold'
                       : 'bg-white text-slate-600 hover:text-slate-900 border border-transparent hover:border-slate-200'
                   }`}
                 >
@@ -3368,7 +3380,7 @@ export default function App() {
                       const mStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
                       return startDate === mStr && endDate === toLocalDateInputValue(new Date()) && startTime === '00:00' && endTime === '23:59';
                     })()
-                      ? 'bg-red-50 text-red-750 font-bold'
+                      ? 'bg-blue-50 text-red-750 font-bold'
                       : 'bg-white text-slate-600 hover:text-slate-900 border border-transparent hover:border-slate-200'
                   }`}
                 >
@@ -3398,9 +3410,8 @@ export default function App() {
                       step="60"
                       lang="ru-RU"
                       aria-label="Время начала периода"
-                      className="bg-white border border-slate-200 rounded pl-6 pr-1.5 py-1 text-[11px] text-slate-700 font-mono focus:outline-none focus:border-red-500 w-[64px]"
-                    />
-                  </div>
+                      className="bg-white border border-slate-200 rounded pl-6 pr-1.5 py-1 text-[11px] text-slate-700 font-mono focus:outline-none focus:border-blue-500 w-[64px]"
+                    /></div>
                   <span className="text-slate-400 text-xs">—</span>
                   <RussianDatePicker
                     value={endDate}
@@ -3422,11 +3433,9 @@ export default function App() {
                       step="60"
                       lang="ru-RU"
                       aria-label="Время окончания периода"
-                      className="bg-white border border-slate-200 rounded pl-6 pr-1.5 py-1 text-[11px] text-slate-700 font-mono focus:outline-none focus:border-red-500 w-[64px]"
-                    />
-                  </div>
-                </div>
-              </div>
+                      className="bg-white border border-slate-200 rounded pl-6 pr-1.5 py-1 text-[11px] text-slate-700 font-mono focus:outline-none focus:border-blue-500 w-[64px]"
+                    /></div>
+                </div></div>
             </div>
 
             {/* Search querying */}
@@ -3437,7 +3446,7 @@ export default function App() {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Поиск..."
-                className="w-full bg-slate-50 border border-slate-200 rounded-lg py-1.5 pl-9 pr-8 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-red-500 focus:border-red-500 transition-all font-light"
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg py-1.5 pl-9 pr-8 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all font-light"
               />
               {searchQuery && (
                 <button
@@ -3446,7 +3455,7 @@ export default function App() {
                     setSearchQuery('');
                     setPage(1);
                   }}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 h-5 w-5 rounded-full text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors flex items-center justify-center text-sm font-bold cursor-pointer"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 h-5 w-5 rounded-full text-slate-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-red-950/20 transition-colors flex items-center justify-center text-sm font-bold cursor-pointer"
                   title="Очистить поиск"
                   aria-label="Очистить поиск"
                 >
@@ -3459,11 +3468,10 @@ export default function App() {
             <div className="flex items-center gap-2.5 text-xs text-slate-500 shrink-0 select-none">
               <div className="flex items-center gap-1 font-mono">
                 <RefreshCw className="h-3.5 w-3.5 animate-spin-slow text-slate-400" />
-                <span>Через {timeToNextRefresh}с</span>
-              </div>
+                <span>Через {timeToNextRefresh}с</span></div>
               <button
                 onClick={() => reloadData()}
-                className="hover:text-red-600 hover:bg-slate-200 bg-slate-100 border border-slate-200 px-2.5 py-1.5 rounded-md cursor-pointer transition-all font-medium text-xs"
+                className="hover:text-blue-600 hover:bg-slate-200 bg-gradient-to-br from-slate-50 via-blue-50/40 to-sky-50/50 border border-slate-200 px-2.5 py-1.5 rounded-md cursor-pointer transition-all font-medium text-xs"
                 title="Обновить сейчас"
               >
                 Обновить
@@ -3476,14 +3484,13 @@ export default function App() {
                     setStatusFilter('ALL');
                     applyThisMonthPreset();
                   }}
-                  className="hover:bg-red-50 bg-red-50 border border-red-200 text-red-600 px-2.5 py-1.5 rounded-md cursor-pointer transition-all font-semibold text-xs"
+                  className="hover:bg-blue-50 bg-blue-50 border border-blue-200 text-blue-600 px-2.5 py-1.5 rounded-md cursor-pointer transition-all font-semibold text-xs"
                   title="Сбросить все фильтры"
                 >
                   Сбросить фильтры
                 </button>
               )}
-            </div>
-          </div>
+            </div></div>
         </section>
 
         {/* CDR LOG LIST */}
@@ -3492,8 +3499,7 @@ export default function App() {
             {isLoadingCalls ? (
               <div className="flex flex-col items-center justify-center p-20 space-y-3">
                 <Loader2 className="h-10 w-10 animate-spin text-red-500" />
-                <span className="text-xs text-slate-500 font-light">Чтение таблиц CDR базы Asterisk...</span>
-              </div>
+                <span className="text-xs text-slate-500 font-light">Чтение таблиц CDR базы Asterisk...</span></div>
             ) : callsError ? (
               <div className="flex flex-col items-center justify-center p-12 space-y-4 text-center font-sans bg-rose-50/40 border border-rose-100/70 rounded-xl m-6">
                 <AlertCircle className="h-10 w-10 text-rose-500" />
@@ -3501,24 +3507,22 @@ export default function App() {
                   <h3 className="text-sm font-semibold text-rose-800 leading-normal">Ошибка подключения к базе Asterisk/FreePBX</h3>
                   <p className="text-xs text-rose-600 max-w-lg font-light mt-1">
                     {callsError}
-                  </p>
-                </div>
+                  </p></div>
                 <button 
                   type="button"
                   onClick={() => reloadData(page)} 
-                  className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold rounded-lg shadow-sm transition-all active:scale-95 cursor-pointer"
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg shadow-sm transition-all active:scale-95 cursor-pointer"
                 >
                   Повторить попытку
                 </button>
-              </div>
+          </div>
             ) : calls.length === 0 ? (
               <div className="flex flex-col items-center justify-center p-20 space-y-2 text-center font-sans">
                 <Phone className="h-12 w-12 text-slate-400" />
                 <h3 className="text-base font-semibold text-slate-600 leading-normal">Звонки не найдены</h3>
                 <p className="text-xs text-slate-500 max-w-sm font-light">
                   Попробуйте настроить фильтрацию, изменить выбранные даты или ввести более мягкий поисковый запрос.
-                </p>
-              </div>
+                </p></div>
             ) : (
               <>
                 <LegacyCDRTable
@@ -3579,7 +3583,7 @@ export default function App() {
               >
                 <ChevronRight className="h-4 w-4" />
               </button>
-            </div>
+          </div>
           </div>
         </section>
       </>
@@ -3596,14 +3600,13 @@ export default function App() {
               onClick={() => setIsAdminPanelExpanded(!isAdminPanelExpanded)}
             >
               <div className="flex items-center gap-2">
-                <Sliders className="h-4.5 w-4.5 text-red-600" />
+                <Sliders className="h-4.5 w-4.5 text-blue-600" />
                 <h3 className="text-sm font-bold text-slate-800 font-sans">Панель администратора справочника</h3>
                 <span className="text-[11px] text-slate-400 font-normal">
                   ({isAdminPanelExpanded ? 'нажмите, чтобы свернуть' : 'нажмите, чтобы развернуть'})
-                </span>
-              </div>
+                </span></div>
               <div className="flex items-center gap-2">
-                <span className="text-[10px] bg-red-100 text-red-750 font-bold uppercase tracking-wider px-2 py-0.5 rounded">
+                <span className="text-[10px] bg-blue-100 text-red-750 font-bold uppercase tracking-wider px-2 py-0.5 rounded">
                   Администратор
                 </span>
                 {isAdminPanelExpanded ? (
@@ -3611,8 +3614,7 @@ export default function App() {
                 ) : (
                   <ChevronDown className="h-4 w-4 text-slate-400" />
                 )}
-              </div>
-            </div>
+              </div></div>
 
             {isAdminPanelExpanded && (
               <div className="space-y-3.5 pt-2 border-t border-slate-200">
@@ -3633,7 +3635,7 @@ export default function App() {
 
                   <button
                     onClick={handleDownloadTemplate}
-                    className="flex items-center gap-1.5 px-3.5 py-2 bg-white hover:bg-slate-100 text-red-600 rounded-lg text-xs font-semibold cursor-pointer border border-red-200 shadow-xs transition-all active:scale-95 select-none"
+                    className="flex items-center gap-1.5 px-3.5 py-2 bg-white hover:bg-slate-100 text-blue-600 rounded-lg text-xs font-semibold cursor-pointer border border-blue-200 shadow-xs transition-all active:scale-95 select-none"
                   >
                     <Download className="h-3.5 w-3.5 text-red-500" />
                     Шаблон импорта (CSV Excel)
@@ -3666,12 +3668,11 @@ export default function App() {
                       <CheckCircle className="h-4.5 w-4.5 text-emerald-600" />
                       <span>
                         Нормализация успешно завершена! Проверены все записи в справочнике. Число измененных номеров: <strong>{normalizedCount}</strong>.
-                      </span>
-                    </div>
+                      </span></div>
                     <button onClick={() => setNormalizedCount(null)} className="text-emerald-500 hover:text-emerald-700 text-sm font-semibold select-none cursor-pointer">
                       &times;
                     </button>
-                  </div>
+          </div>
                 )}
               </div>
             )}
@@ -3689,12 +3690,11 @@ export default function App() {
                 value={dirSearchQuery}
                 onChange={(e) => setDirSearchQuery(e.target.value)}
                 placeholder="Поиск по имени или номеру..."
-                className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 pl-9 pr-3 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-red-500 focus:border-red-500 transition-all font-light"
-              />
-            </div>
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 pl-9 pr-3 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all font-light"
+              /></div>
 
             {/* Filter Selector */}
-            <div className="flex rounded-lg overflow-hidden border border-slate-200 bg-slate-100 p-0.5 text-xs">
+            <div className="flex rounded-lg overflow-hidden border border-slate-200 bg-gradient-to-br from-slate-50 via-blue-50/40 to-sky-50/50 p-0.5 text-xs">
 
               <button
                 onClick={() => setDirTypeFilter('all')}
@@ -3730,24 +3730,23 @@ export default function App() {
                 onClick={() => setDirTypeFilter('spam')}
                 className={`px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
                   dirTypeFilter === 'spam'
-                    ? 'bg-white text-red-700 shadow-sm'
-                    : 'text-red-500 hover:text-red-700'
+                    ? 'bg-white text-blue-700 shadow-sm'
+                    : 'text-red-500 hover:text-blue-700'
                 }`}
               >
                 Спам/ЧС
               </button>
-            
-            </div>
+          </div>
           </div>
 
           <button
             onClick={openCreateDirEntry}
-            className="flex items-center gap-1.5 px-4 py-2 bg-red-600 text-white rounded-lg text-xs font-semibold cursor-pointer hover:bg-red-600 transition-all select-none shadow-sm"
+            className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-semibold cursor-pointer hover:bg-blue-600 transition-all select-none shadow-sm"
           >
             <Plus className="h-4 w-4" />
             Добавить контакт
           </button>
-        </div>
+          </div>
 
         {/* List Table of directory entries */}
         <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
@@ -3799,8 +3798,7 @@ export default function App() {
                           {isLoadingDirectory ? (
                             <div className="flex items-center justify-center gap-2">
                               <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
-                              <span>Загрузка данных справочника...</span>
-                            </div>
+                              <span>Загрузка данных справочника...</span></div>
                           ) : (
                             "Записи не найдены"
                           )}
@@ -3836,7 +3834,7 @@ export default function App() {
                         {entry.name}
                       </td>
 
-                      <td className="py-3.5 px-3 text-red-800 dark:text-rose-200 font-mono font-bold select-all">
+                      <td className="py-3.5 px-3 text-blue-800 dark:text-rose-200 font-mono font-bold select-all">
                         <div className="flex flex-col gap-1">
                           {getEntryPhones(entry).map(phone => (
                             <div key={phone} className="flex items-center gap-2">
@@ -3848,7 +3846,7 @@ export default function App() {
                               >
                                 <PhoneCall className="h-3 w-3" />
                               </button>
-                            </div>
+          </div>
                           ))}
                         </div>
                       </td>
@@ -3876,7 +3874,7 @@ export default function App() {
                       <td className="py-3.5 px-1.5">
                         <div className="flex flex-wrap gap-1">
                           {getDirectoryEntryTags(entry).length ? getDirectoryEntryTags(entry).map(tag => (
-                            <span key={tag} className="px-2 py-0.5 rounded-full bg-slate-100 border border-slate-200 text-[10px] font-bold text-slate-600">{tag}</span>
+                            <span key={tag} className="px-2 py-0.5 rounded-full bg-gradient-to-br from-slate-50 via-blue-50/40 to-sky-50/50 border border-slate-200 text-[10px] font-bold text-slate-600">{tag}</span>
                           )) : <span className="text-slate-350 italic">—</span>}
                         </div>
                       </td>
@@ -3926,7 +3924,7 @@ export default function App() {
                           {hasPermission('manage_blacklist') && (
                             <button
                               onClick={() => handleToggleBlacklist(entry, !entry.isBlacklisted, true)}
-                              className={`p-1.5 rounded-lg border transition-all cursor-pointer ${entry.isBlacklisted ? 'text-red-700 bg-red-50 border-red-200' : 'text-slate-500 hover:text-red-700 hover:bg-red-50 border-transparent hover:border-red-200'}`}
+                              className={`p-1.5 rounded-lg border transition-all cursor-pointer ${entry.isBlacklisted ? 'text-blue-700 bg-blue-50 border-blue-200' : 'text-slate-500 hover:text-blue-700 hover:bg-blue-50 border-transparent hover:border-blue-200'}`}
                               title={entry.isBlacklisted ? 'Убрать из черного списка' : 'Добавить в черный список АТС'}
                             >
                               <AlertCircle className="h-3.5 w-3.5" />
@@ -3934,26 +3932,25 @@ export default function App() {
                           )}
                           <button
                             onClick={() => openEditDirEntry(entry)}
-                            className="p-1.5 text-slate-500 hover:text-red-700 hover:bg-slate-100 rounded-lg border border-transparent hover:border-slate-200 transition-all cursor-pointer"
+                            className="p-1.5 text-slate-500 hover:text-blue-700 hover:bg-slate-100 rounded-lg border border-transparent hover:border-slate-200 transition-all cursor-pointer"
                             title="Редактировать контакт"
                           >
                             <Edit2 className="h-3.5 w-3.5" />
                           </button>
                           <button
                             onClick={() => handleDeleteDirEntry(entry.id)}
-                            className="p-1.5 text-slate-500 hover:text-red-700 hover:bg-slate-100 rounded-lg border border-transparent hover:border-slate-200 transition-all cursor-pointer"
+                            className="p-1.5 text-slate-500 hover:text-blue-700 hover:bg-slate-100 rounded-lg border border-transparent hover:border-slate-200 transition-all cursor-pointer"
                             title="Удалить контакт"
                           >
                             <Trash2 className="h-3.5 w-3.5" />
                           </button>
-                        </div>
+          </div>
                       </td>
                     </tr>
                   ));
                 })()}
               </tbody>
-            </table>
-          </div>
+            </table></div>
         </div>
       </section>
         </>
@@ -3968,8 +3965,7 @@ export default function App() {
         <div className="text-sm font-black text-slate-900">Управление АТС</div>
         <div className="mt-2 text-sm text-slate-500">
           Раздел для будущего массового заведения extensions, транков, исходящих маршрутов и паттернов номерной емкости.
-        </div>
-      </div>
+        </div></div>
     )}
 
     {activeView === 'balance' && (
@@ -3977,37 +3973,361 @@ export default function App() {
         <div className="text-sm font-black text-slate-900">Баланс операторов связи</div>
         <div className="mt-2 text-sm text-slate-500">
           Раздел для будущей проверки балансов по счетам операторов, предоставляющих SIP-транки.
-        </div>
-      </div>
+        </div></div>
     )}
+
+
+      {/* SYSTEM SETTINGS FULL PAGE */}
+      {activeView === 'settings' && (
+        <section className="space-y-4">
+          <div className="w-full bg-white border border-slate-200 rounded-2xl shadow-sm relative min-h-[calc(100vh-150px)] flex flex-col overflow-hidden font-sans">
+            <div className="flex items-center justify-between border-b border-slate-200 p-6 pb-4 shrink-0 bg-slate-50">
+              <div className="flex items-center gap-2">
+                <Settings className="h-6 w-6 text-blue-600 animate-spin-slow" />
+                <h3 className="text-base font-black text-slate-905">Настройки системы</h3></div>
+              <button
+                type="button"
+                onClick={() => { setActiveView('management'); setDbTestResult(null); resetUserForm(); }}
+                className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-bold text-slate-600 hover:bg-slate-50"
+              >
+                Назад
+              </button>
+          </div>
+
+            <div className="p-6 pb-2 border-b border-slate-200 bg-slate-50/50 shrink-0">
+              <div className="flex flex-wrap gap-1.5 p-1 bg-gradient-to-br from-slate-50 via-blue-50/40 to-sky-50/50 rounded-xl">
+                {Object.entries({
+                  ...(isAdminRole(session?.role) ? {
+                    pbx: 'Настройки АТС',
+                    directory: 'Телефонный справочник',
+                    access: 'Доступ и пользователи',
+                    permissions: 'Права доступа',
+                  } : {}),
+                  appearance: 'Интерфейс'
+                }).map(([tab, label]) => (
+                  <button
+                    key={tab}
+                    type="button"
+                    onClick={() => setSettingsTab(tab as any)}
+                    className={`flex-1 py-1.5 text-center text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                      settingsTab === tab
+                        ? 'bg-blue-600 text-white shadow-md'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div></div>
+
+            {draftSettings || !isAdminRole(session?.role) ? (
+              <form onSubmit={handleSaveSettings} className="flex-1 flex flex-col min-h-0">
+                <div className="flex-1 p-6 space-y-5 bg-white">
+                  {settingsTab === 'pbx' && (
+                    <div className="space-y-5">
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mb-3 border-b border-slate-200 pb-2">
+                          <h4 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                            <Database className="h-4 w-4 text-blue-600" />
+                            MariaDB / FreePBX CDR
+                          </h4>
+                          <button
+                            type="button"
+                            onClick={testDbConnection}
+                            disabled={isTestingDb}
+                            className="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 rounded-lg text-xs font-bold border border-slate-200 active:scale-95 transition-transform cursor-pointer flex items-center justify-center gap-1.5 shadow-sm"
+                          >
+                            {isTestingDb && <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-500" />}
+                            Проверить MariaDB
+                          </button>
+          </div>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                          <label className="md:col-span-2 text-xs font-bold text-slate-600">Хост MariaDB<input type="text" value={draftSettings.dbHost} onChange={(e) => setDraftSettings({ ...draftSettings, dbHost: e.target.value })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" required /></label>
+                          <label className="text-xs font-bold text-slate-600">Порт<input type="number" value={draftSettings.dbPort} onChange={(e) => setDraftSettings({ ...draftSettings, dbPort: parseInt(e.target.value, 10) || 3306 })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" required /></label>
+                          <label className="text-xs font-bold text-slate-600">База<input type="text" value={draftSettings.dbName} onChange={(e) => setDraftSettings({ ...draftSettings, dbName: e.target.value })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" required /></label>
+                          <label className="text-xs font-bold text-slate-600">Пользователь<input type="text" value={draftSettings.dbUser} onChange={(e) => setDraftSettings({ ...draftSettings, dbUser: e.target.value })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" required /></label>
+                          <label className="text-xs font-bold text-slate-600">Пар��ль<input type="password" value={draftSettings.dbPass} onChange={(e) => setDraftSettings({ ...draftSettings, dbPass: e.target.value })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" /></label></div>
+                        {dbTestResult && (
+                          <div className={`mt-3 p-3.5 border rounded-lg text-xs flex items-start gap-2 ${dbTestResult.success ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-blue-50 border-blue-200 text-blue-700'}`}>
+                            <AlertCircle className={`h-4.5 w-4.5 shrink-0 mt-0.5 ${dbTestResult.success ? 'text-emerald-600' : 'text-blue-600'}`} />
+                            <span>{dbTestResult.message}</span></div>
+                        )}
+                      </div>
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mb-3 border-b border-slate-200 pb-2">
+                          <h4 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                            <Phone className="h-4 w-4 text-blue-600" />
+                            AMI / Click2Call
+                          </h4>
+                          <button
+                            type="button"
+                            onClick={testAmiConnection}
+                            disabled={isTestingAmi}
+                            className="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 rounded-lg text-xs font-bold border border-slate-200 active:scale-95 transition-transform cursor-pointer flex items-center justify-center gap-1.5 shadow-sm"
+                          >
+                            {isTestingAmi && <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-500" />}
+                            Проверить AMI
+                          </button>
+          </div>
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                          <label className="md:col-span-2 text-xs font-bold text-slate-600">Хост AMI<input type="text" value={draftSettings.amiHost || ''} onChange={(e) => setDraftSettings({ ...draftSettings, amiHost: e.target.value })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" /></label>
+                          <label className="text-xs font-bold text-slate-600">Порт<input type="number" value={draftSettings.amiPort ?? 5038} onChange={(e) => setDraftSettings({ ...draftSettings, amiPort: parseInt(e.target.value, 10) || 5038 })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" /></label>
+                          <label className="text-xs font-bold text-slate-600">Контекст<input type="text" value={draftSettings.amiContext || 'from-internal'} onChange={(e) => setDraftSettings({ ...draftSettings, amiContext: e.target.value })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" /></label>
+                          <label className="md:col-span-2 text-xs font-bold text-slate-600">AMI User<input type="text" value={draftSettings.amiUser || ''} onChange={(e) => setDraftSettings({ ...draftSettings, amiUser: e.target.value })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" /></label>
+                          <label className="md:col-span-2 text-xs font-bold text-slate-600">AMI Secret<input type="password" value={draftSettings.amiPass || ''} onChange={(e) => setDraftSettings({ ...draftSettings, amiPass: e.target.value })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" /></label></div>
+                        {amiTestResult && (
+                          <div className={`mt-3 p-3.5 border rounded-lg text-xs flex items-start gap-2 ${amiTestResult.success ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-blue-50 border-blue-200 text-blue-700'}`}>
+                            <AlertCircle className={`h-4.5 w-4.5 shrink-0 mt-0.5 ${amiTestResult.success ? 'text-emerald-600' : 'text-blue-600'}`} />
+                            <span>{amiTestResult.message}</span></div>
+                        )}
+                      </div>
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                        <h4 className="text-sm font-black text-slate-900 mb-3 flex items-center gap-2"><Clock className="h-4 w-4 text-blue-600" />Записи и KPI</h4>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                          <label className="md:col-span-2 text-xs font-bold text-slate-600">Путь к записям<input type="text" value={draftSettings.recordingsPath} onChange={(e) => setDraftSettings({ ...draftSettings, recordingsPath: e.target.value })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" required /></label>
+                          <label className="text-xs font-bold text-slate-600">SLA отзвона, мин<input type="number" min={1} max={1440} value={draftSettings.callbackKpiMinutes ?? 60} onChange={(e) => setDraftSettings({ ...draftSettings, callbackKpiMinutes: parseInt(e.target.value, 10) || 60 })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" /></label></div>
+                      </div></div>
+                  )}
+                  {settingsTab === 'directory' && (
+                    <div className="space-y-5">
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                        <h4 className="text-sm font-black text-slate-900 mb-3 flex items-center gap-2"><BookOpen className="h-4 w-4 text-blue-600" />Настройки</h4>
+                        <div className="space-y-3 text-xs text-slate-700">
+                          <label className="flex items-center gap-2"><input type="checkbox" checked={draftSettings.normEnabled ?? true} onChange={(e) => setDraftSettings({ ...draftSettings, normEnabled: e.target.checked })} className="rounded border-slate-300 text-blue-600" />Включить нормализацию</label>
+                          <label className="flex items-center gap-2"><input type="checkbox" checked={draftSettings.normStripSymbols ?? true} disabled={draftSettings.normDigitsOnly ?? false} onChange={(e) => setDraftSettings({ ...draftSettings, normStripSymbols: e.target.checked })} className="rounded border-slate-300 text-blue-600" />Удалять спецсимволы</label>
+                          <label className="flex items-center gap-2"><input type="checkbox" checked={draftSettings.normReplace8With7 ?? true} onChange={(e) => setDraftSettings({ ...draftSettings, normReplace8With7: e.target.checked })} className="rounded border-slate-300 text-blue-600" />Заменять 8 на 7</label>
+                          <label className="flex items-center gap-2"><input type="checkbox" checked={draftSettings.normDigitsOnly ?? false} onChange={(e) => setDraftSettings({ ...draftSettings, normDigitsOnly: e.target.checked, normStripSymbols: e.target.checked ? false : (draftSettings.normStripSymbols ?? true) })} className="rounded border-slate-300 text-blue-600" />Только цифры</label>
+                          <label className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={draftSettings.directorySyncAsteriskBlacklist ?? false}
+                              onChange={(e) => setDraftSettings({ ...draftSettings, directorySyncAsteriskBlacklist: e.target.checked })}
+                              className="rounded border-slate-300 text-blue-600"
+                            />
+                            Синхронизировать ЧС с Asterisk AstDB blacklist
+                          </label></div>
+                      </div>
+
+                      <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                        <h4 className="text-sm font-black text-slate-900 mb-3 flex items-center gap-2"><Globe className="h-4 w-4 text-blue-600" />Импорт справочника по ссылке</h4>
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                          <label className="md:col-span-4 text-xs font-bold text-slate-600">URL файла CSV/JSON
+                            <input type="text" value={draftSettings.directoryImportUrl || ''} onChange={(e) => setDraftSettings({ ...draftSettings, directoryImportUrl: e.target.value })} placeholder="https://site.ru/contacts.csv" className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" />
+                          </label>
+                          <label className="text-xs font-bold text-slate-600">Формат
+                            <select value={draftSettings.directoryImportFormat || 'csv'} onChange={(e) => setDraftSettings({ ...draftSettings, directoryImportFormat: e.target.value as any })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs">
+                              <option value="csv">CSV</option>
+                              <option value="json">JSON</option>
+                            </select>
+                          </label>
+                          <label className="text-xs font-bold text-slate-600">Режим
+                            <select value={draftSettings.directoryImportMode || 'upsert'} onChange={(e) => setDraftSettings({ ...draftSettings, directoryImportMode: e.target.value as any })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs">
+                              <option value="upsert">Обновлять/добавлять</option>
+                              <option value="append">Только добавить</option>
+                              <option value="overwrite">Полностью заменить</option>
+                            </select>
+                          </label>
+                          <label className="text-xs font-bold text-slate-600">Период
+                            <select value={draftSettings.directoryImportSchedule || 'manual'} onChange={(e) => setDraftSettings({ ...draftSettings, directoryImportSchedule: e.target.value as any })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs">
+                              <option value="manual">Только вручную</option>
+                              <option value="hourly">Каждый час</option>
+                              <option value="daily">Каждый день</option>
+                              <option value="weekly">Раз в неделю</option>
+                            </select>
+                          </label>
+                          <label className="text-xs font-bold text-slate-600">Sync token для cron
+                            <input type="text" readOnly value={draftSettings.directorySyncToken || ''} className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-700 font-mono" />
+                          </label></div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {hasPermission('manage_directory_import') && (
+                          <button type="button" onClick={handleTestUrlImport} disabled={isTestingUrlImport} className="px-4 py-2 rounded-lg bg-white border border-slate-200 text-slate-800 text-xs font-bold hover:bg-slate-50 disabled:opacity-50">{isTestingUrlImport ? 'Проверка...' : 'Проверить ссылку'}</button>
+                          )}
+                          {hasPermission('manage_directory_import') && (
+                          <button type="button" onClick={handleSyncDirectoryUrl} disabled={isSyncingDirectoryUrl} className="px-4 py-2 rounded-lg bg-blue-600 text-white text-xs font-bold hover:bg-blue-700 disabled:opacity-50">{isSyncingDirectoryUrl ? 'Синхронизация...' : 'Синхронизировать сейчас'}</button>
+                          )}
+                        </div>
+                        <div className="mt-3 text-[11px] text-slate-500 font-mono bg-slate-50 border border-slate-200 rounded-lg p-2 overflow-x-auto">
+                          Cron: curl -s -X POST http://127.0.0.1:3000/api/directory/sync-url -H "X-Sync-Token: {draftSettings.directorySyncToken || 'TOKEN'}"
+                        </div>
+                        {urlImportTestResult && (
+                          <div className={`mt-3 p-3 rounded-lg border text-xs font-bold ${urlImportTestResult.success ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-blue-50 border-blue-200 text-blue-700'}`}>{urlImportTestResult.message}</div>
+                        )}
+                        {(draftSettings.directoryLastSyncAt || draftSettings.directoryLastSyncMessage) && (
+                          <div className="mt-3 text-xs text-slate-600">
+                            Последняя синхронизация: <b>{draftSettings.directoryLastSyncAt || '—'}</b><br />
+                            Статус: <b>{draftSettings.directoryLastSyncStatus || '—'}</b> — {draftSettings.directoryLastSyncMessage || '—'}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                        <h4 className="text-sm font-black text-slate-900 mb-3">Инструменты справочника</h4>
+                        <div className="flex flex-wrap gap-2">
+                          {hasPermission('manage_directory_import') && (
+                          <button type="button" onClick={() => setIsImportOpen(true)} className="px-4 py-2 rounded-lg bg-blue-600 text-white text-xs font-bold hover:bg-blue-700">Импорт контактов</button>
+                          )}
+                          {hasPermission('manage_directory_import') && (
+                          <button type="button" onClick={handleExportCSV} className="px-4 py-2 rounded-lg bg-gradient-to-br from-slate-50 via-blue-50/40 to-sky-50/50 text-slate-800 text-xs font-bold hover:bg-slate-200">Экспорт CSV</button>
+                          )}
+                          {hasPermission('manage_directory_import') && (
+                          <button type="button" onClick={handleNormalizeDirectoryDb} disabled={isNormalizingDb} className="px-4 py-2 rounded-lg bg-gradient-to-br from-slate-50 via-blue-50/40 to-sky-50/50 text-slate-800 text-xs font-bold hover:bg-slate-200 disabled:opacity-50">Нормализовать базу</button>
+                          )}
+                        </div>
+                        {normalizedCount !== null && <div className="mt-3 text-xs text-emerald-700 font-bold">Обновлено записей: {normalizedCount}</div>}
+                      </div></div>
+                  )}
+                  {settingsTab === 'access' && (
+                    <AccessUsersTab
+                      accessUsers={accessUsers}
+                      accessError={accessError}
+                      editingUserId={editingUserId}
+                      userForm={userForm}
+                      isSavingUser={isSavingUser}
+                      setUserForm={setUserForm}
+                      openEditUser={openEditUser}
+                      deleteAccessUser={deleteAccessUser}
+                      saveAccessUser={saveAccessUser}
+                      resetUserForm={resetUserForm}
+                      roles={roles}
+                    />
+                  )}
+                  
+                  {settingsTab === 'permissions' && session?.role === 'su' && draftSettings && (
+                    <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 p-4">
+                      <div className="text-sm font-black text-blue-800">Управление привилегиями SU</div>
+                      <p className="mt-1 text-xs text-blue-700">
+                        Эти параметры управляют тем, что администратор видит и может менять в матрице доступа.
+                      </p>
+
+                      <div className="mt-3 grid gap-2 text-xs font-bold text-blue-900">
+                        <label className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={draftSettings.showSuRoleToAdmin === true}
+                            onChange={(e) => setDraftSettings({ ...draftSettings, showSuRoleToAdmin: e.target.checked })}
+                            className="rounded border-blue-300 text-blue-600"
+                          />
+                          Показывать роль SU администраторам
+                        </label>
+
+                        <label className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={draftSettings.showSuPermissionsToAdmin === true}
+                            onChange={(e) => setDraftSettings({ ...draftSettings, showSuPermissionsToAdmin: e.target.checked })}
+                            className="rounded border-blue-300 text-blue-600"
+                          />
+                          Показывать служебные SU-права администраторам
+                        </label>
+
+                        <label className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={draftSettings.allowAdminEditSuPermissions === true}
+                            disabled={draftSettings.showSuPermissionsToAdmin !== true}
+                            onChange={(e) => setDraftSettings({ ...draftSettings, allowAdminEditSuPermissions: e.target.checked })}
+                            className="rounded border-blue-300 text-blue-600 disabled:opacity-40"
+                          />
+                          Разрешить администраторам изменять служебные SU-права
+                        </label></div>
+                    </div>
+                  )}
+
+{settingsTab === 'permissions' && (
+                    <PermissionsMatrixTab
+                      roles={roles}
+                      isLoadingRoles={isLoadingRoles}
+                      isSavingRoles={isSavingRoles}
+                      onRolesChange={setRoles}
+                      onSaveRoles={saveRoles}
+                      isSu={session?.role === 'su'}
+                      showSuPermissionsToAdmin={settings?.showSuPermissionsToAdmin === true}
+                      allowAdminEditSuPermissions={settings?.allowAdminEditSuPermissions === true}
+                    />
+                  )}
+                  {settingsTab === 'appearance' && (
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 space-y-4">
+                      <h4 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                        <Sliders className="h-4 w-4 text-blue-600" />
+                        Настройки интерфейса и темы
+                      </h4>
+                      <p className="text-xs text-slate-500">
+                        Настройте внешний вид панели управления звонками. Параметры сохраняются локально.
+                      </p>
+                      
+                      <div className="bg-white border border-slate-200 rounded-xl p-4 flex items-center justify-between">
+                        <div>
+                          <span className="text-xs font-bold text-slate-800 block">Тёмная тема</span>
+                          <span className="text-[11px] text-slate-500">Включить ночной режим во всей системе</span></div>
+                        <button
+                          type="button"
+                          onClick={() => setDarkMode(!darkMode)}
+                          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none cursor-pointer theme-toggle-switch ${
+                            darkMode ? 'active' : ''
+                          }`}
+                        >
+                          <span
+                            className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                              darkMode ? 'translate-x-6' : 'translate-x-1'
+                            }`}
+                          />
+                        </button>
+          </div>
+                    </div>
+                  )}
+                  {dbTestResult && (<div className={`p-3.5 border rounded-lg text-xs flex items-start gap-2 ${dbTestResult.success ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-blue-50 border-blue-200 text-blue-700'}`}><AlertCircle className={`h-4.5 w-4.5 shrink-0 mt-0.5 ${dbTestResult.success ? 'text-emerald-600' : 'text-blue-600'}`} /><span>{dbTestResult.message}</span></div>)}
+                </div>
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 p-6 pt-4 border-t border-slate-200 bg-slate-50 shrink-0">
+                  {isAdminRole(session?.role) ? (
+                    <>
+                      <div className="flex gap-2 justify-end">
+                        <button type="button" onClick={() => { setIsSettingsOpen(false); setDbTestResult(null); resetUserForm(); }} className="text-xs text-slate-600 hover:text-slate-900 bg-white hover:bg-slate-100 border border-slate-200 px-4 py-2 rounded-lg cursor-pointer transition-colors">
+                          Отмена
+                        </button>
+                        <button type="submit" disabled={isSavingSettings} className="bg-blue-600 hover:bg-blue-700 text-xs font-bold text-white px-4 py-2 rounded-lg cursor-pointer transition-colors disabled:opacity-50">
+                          Сохранить настройки
+                        </button>
+          </div>
+                    </>
+                  ) : (
+                    <div className="w-full flex justify-end">
+                      <button type="button" onClick={() => { setIsSettingsOpen(false); }} className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition-all cursor-pointer">
+                        Закрыть
+                      </button>
+          </div>
+                  )}
+                </div>
+              </form>
+            ) : (<div className="p-10 flex justify-center border-t border-slate-200"><Loader2 className="h-8 w-8 animate-spin text-slate-400" /></div>)}
+          </div>
+        </section>
+      )}
 
   </main>
 
       <footer className="border-t border-slate-200 bg-white py-3 text-center text-[11px] text-slate-500">
-        © 2026 Freepbx CDR-NEW. Все права защищены. Грунин К.В. ИНН 9102057404.
-        <a href="https://grunin.org" target="_blank" rel="noopener noreferrer" className="mx-1 text-slate-700 hover:text-red-600 underline">grunin.org</a>
-        Внедрение, разработка и поддержка VOIP-проектов.
-        <a href="tel:+79787437943" className="ml-1 text-slate-700 hover:text-red-600 underline">+7 (978) 743-79-43</a>
+        © 2026 PBXPULS. Все права защищены. Грунин К.В. ИНН 9102057404.
+        <a href="https://grunin.org" target="_blank" rel="noopener noreferrer" className="mx-1 text-slate-700 hover:text-blue-600 underline">grunin.org</a>
+        Внедрение, разработка и поддержка VOIP-проектов •
+        <a href="tel:+79787437943" className="ml-1 text-slate-700 hover:text-blue-600 underline">+7 (978) 743-79-43</a>
       </footer>
 
       {/* FOOTER RECORD PLAYER CONTROL SLIDE OVERLAY */}
       {playingRecording && (
-        <footer className="fixed top-20 left-1/2 -translate-x-1/2 z-[9999] w-[1100px] max-w-[calc(100vw-30px)] bg-white border border-red-200 rounded-2xl py-3.5 px-4 shadow-2xl">
+        <footer className="fixed top-20 left-1/2 -translate-x-1/2 z-[9999] w-[1100px] max-w-[calc(100vw-30px)] bg-white border border-blue-200 rounded-2xl py-3.5 px-4 shadow-2xl">
           <div className="max-w-[1800px] mx-auto flex flex-col md:flex-row items-center justify-between gap-3.5">
             <div className="flex items-center gap-2 w-full md:w-auto">
-              <div className="p-2 bg-red-50 rounded-lg border border-red-100 text-red-600 shadow-xs">
-                <Volume2 className="h-5 w-5" />
-              </div>
+              <div className="p-2 bg-blue-50 rounded-lg border border-blue-100 text-blue-600 shadow-xs">
+                <Volume2 className="h-5 w-5" /></div>
               <div className="min-w-0 flex-1 md:flex-none">
                 <div className="text-xs font-semibold text-slate-800 truncate max-w-md" title={playingRecording}>
                   {playingRecording}
                 </div>
                 <div className="text-[10px] text-slate-500 font-mono mt-0.5">
                   {hasPermission('listen_recordings') && (
-                    <a href={`/api/recordings/${encodeURIComponent(playingRecording)}`} download={playingRecording} className="text-[10px] text-red-600 hover:text-red-700 underline underline-offset-2">Скачать запись</a>
+                    <a href={`/api/recordings/${encodeURIComponent(playingRecording)}`} download={playingRecording} className="text-[10px] text-blue-600 hover:text-blue-700 underline underline-offset-2">Скачать запись</a>
                   )}
-                </div>
-              </div>
+                </div></div>
             </div>
 
             {/* Main playback knobs */}
@@ -4024,7 +4344,7 @@ export default function App() {
                     }
                   }
                 }}
-                className="p-2.5 bg-red-600 hover:bg-red-500 text-white rounded-full transition-transform active:scale-95 cursor-pointer flex items-center justify-center shrink-0 shadow"
+                className="p-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-full transition-transform active:scale-95 cursor-pointer flex items-center justify-center shrink-0 shadow"
               >
                 {isAudioPaused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
               </button>
@@ -4039,13 +4359,12 @@ export default function App() {
                 min={0}
                 max={audioDuration || 100}
                 onChange={handleSeek}
-                className="w-full h-1.5 bg-slate-100 border border-slate-200 rounded-lg appearance-none cursor-pointer accent-red-500"
+                className="w-full h-1.5 bg-gradient-to-br from-slate-50 via-blue-50/40 to-sky-50/50 border border-slate-200 rounded-lg appearance-none cursor-pointer accent-red-500"
               />
 
               <span className="text-[10px] text-slate-500 font-mono shrink-0 w-8">
                 {formatSeconds(Math.floor(audioDuration))}
-              </span>
-            </div>
+              </span></div>
 
             {/* Speed adjustments */}
             <div className="flex items-center gap-2 w-full md:w-auto justify-between md:justify-end">
@@ -4053,7 +4372,7 @@ export default function App() {
                 <button
                   onClick={() => changeSpeed(1)}
                   className={`px-2 py-1 rounded text-[10px] font-semibold transition-all cursor-pointer ${
-                    playbackSpeed === 1 ? 'bg-red-50 border border-red-200 text-red-600' : 'text-slate-500 hover:text-slate-800'
+                    playbackSpeed === 1 ? 'bg-blue-50 border border-blue-200 text-blue-600' : 'text-slate-500 hover:text-slate-800'
                   }`}
                 >
                   1.0x
@@ -4061,7 +4380,7 @@ export default function App() {
                 <button
                   onClick={() => changeSpeed(1.25)}
                   className={`px-2 py-1 rounded text-[10px] font-semibold transition-all cursor-pointer ${
-                    playbackSpeed === 1.25 ? 'bg-red-50 border border-red-200 text-red-600' : 'text-slate-500 hover:text-slate-800'
+                    playbackSpeed === 1.25 ? 'bg-blue-50 border border-blue-200 text-blue-600' : 'text-slate-500 hover:text-slate-800'
                   }`}
                 >
                   1.25x
@@ -4069,7 +4388,7 @@ export default function App() {
                 <button
                   onClick={() => changeSpeed(1.5)}
                   className={`px-2 py-1 rounded text-[10px] font-semibold transition-all cursor-pointer ${
-                    playbackSpeed === 1.5 ? 'bg-red-50 border border-red-200 text-red-600' : 'text-slate-500 hover:text-slate-800'
+                    playbackSpeed === 1.5 ? 'bg-blue-50 border border-blue-200 text-blue-600' : 'text-slate-500 hover:text-slate-800'
                   }`}
                 >
                   1.5x
@@ -4077,12 +4396,12 @@ export default function App() {
                 <button
                   onClick={() => changeSpeed(2)}
                   className={`px-2 py-1 rounded text-[10px] font-semibold transition-all cursor-pointer ${
-                    playbackSpeed === 2 ? 'bg-red-50 border border-red-200 text-red-600' : 'text-slate-500 hover:text-slate-800'
+                    playbackSpeed === 2 ? 'bg-blue-50 border border-blue-200 text-blue-600' : 'text-slate-500 hover:text-slate-800'
                   }`}
                 >
                   2x
                 </button>
-              </div>
+          </div>
 
               <div className="h-6 w-[1px] bg-slate-200" />
 
@@ -4095,9 +4414,8 @@ export default function App() {
                   max={1}
                   step={0.1}
                   onChange={changeVolume}
-                  className="w-16 h-1 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-lg appearance-none cursor-pointer accent-red-500"
-                />
-              </div>
+                  className="w-16 h-1 bg-gradient-to-br from-slate-50 via-blue-50/40 to-sky-50/50 hover:bg-slate-200 border border-slate-200 rounded-lg appearance-none cursor-pointer accent-red-500"
+                /></div>
 
               <div className="h-6 w-[1px] bg-slate-200" />
               
@@ -4107,15 +4425,15 @@ export default function App() {
                   setPlayingCallId(null);
                   if (audioRef.current) audioRef.current.pause();
                 }}
-                className="text-xs text-slate-500 hover:text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 px-2 py-1.5 rounded cursor-pointer"
+                className="text-xs text-slate-500 hover:text-slate-700 bg-gradient-to-br from-slate-50 via-blue-50/40 to-sky-50/50 hover:bg-slate-200 border border-slate-200 px-2 py-1.5 rounded cursor-pointer"
               >
                 Закрыть
               </button>
-            </div>
+          </div>
           </div>
 
           {audioError && (
-            <div className="max-w-[1800px] mx-auto mt-2 text-center text-red-500 text-xs px-4">
+            <div className="mt-auto border-t border-slate-200 bg-white py-3 text-center text-slate-400 text-[11px] px-4">
               ⚠ {audioError}
             </div>
           )}
@@ -4152,342 +4470,7 @@ export default function App() {
         formatSeconds={formatSeconds}
       />
 
-      {/* SYSTEM SETTINGS MODAL DIALOG (ADMINS ONLY) */}
-      {isSettingsOpen && (
-        <div className="fixed inset-0 bg-slate-950/40 flex items-center justify-center p-4 z-50">
-          <div className="w-full max-w-[1100px] bg-white border border-slate-200 rounded-2xl shadow-2xl relative max-h-[90vh] flex flex-col overflow-hidden font-sans">
-            <div className="flex items-center justify-between border-b border-slate-200 p-6 pb-4 shrink-0 bg-slate-50">
-              <div className="flex items-center gap-2">
-                <Settings className="h-6 w-6 text-red-600 animate-spin-slow" />
-                <h3 className="text-base font-black text-slate-905">Настройки системы</h3>
-              </div>
-              <button onClick={() => { setIsSettingsOpen(false); setDbTestResult(null); resetUserForm(); }} className="text-slate-400 hover:text-slate-900 p-1 rounded-md cursor-pointer">✕</button>
-            </div>
 
-            <div className="p-6 pb-2 border-b border-slate-200 bg-slate-50/50 shrink-0">
-              <div className="flex flex-wrap gap-1.5 p-1 bg-slate-100 rounded-xl">
-                {Object.entries({
-                  ...(isAdminRole(session?.role) ? {
-                    pbx: 'Настройки АТС',
-                    directory: 'Телефонный справочник',
-                    access: 'Доступ и пользователи',
-                    permissions: 'Права доступа',
-                  } : {}),
-                  appearance: 'Интерфейс'
-                }).map(([tab, label]) => (
-                  <button
-                    key={tab}
-                    type="button"
-                    onClick={() => setSettingsTab(tab as any)}
-                    className={`flex-1 py-1.5 text-center text-xs font-bold rounded-lg transition-all cursor-pointer ${
-                      settingsTab === tab
-                        ? 'bg-red-600 text-white shadow-md'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {draftSettings || !isAdminRole(session?.role) ? (
-              <form onSubmit={handleSaveSettings} className="flex-1 flex flex-col overflow-hidden">
-                <div className="flex-1 overflow-y-auto p-6 space-y-5 bg-white">
-                  {settingsTab === 'pbx' && (
-                    <div className="space-y-5">
-                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mb-3 border-b border-slate-200 pb-2">
-                          <h4 className="text-sm font-black text-slate-900 flex items-center gap-2">
-                            <Database className="h-4 w-4 text-red-600" />
-                            MariaDB / FreePBX CDR
-                          </h4>
-                          <button
-                            type="button"
-                            onClick={testDbConnection}
-                            disabled={isTestingDb}
-                            className="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 rounded-lg text-xs font-bold border border-slate-200 active:scale-95 transition-transform cursor-pointer flex items-center justify-center gap-1.5 shadow-sm"
-                          >
-                            {isTestingDb && <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-500" />}
-                            Проверить MariaDB
-                          </button>
-                        </div>
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                          <label className="md:col-span-2 text-xs font-bold text-slate-600">Хост MariaDB<input type="text" value={draftSettings.dbHost} onChange={(e) => setDraftSettings({ ...draftSettings, dbHost: e.target.value })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" required /></label>
-                          <label className="text-xs font-bold text-slate-600">Порт<input type="number" value={draftSettings.dbPort} onChange={(e) => setDraftSettings({ ...draftSettings, dbPort: parseInt(e.target.value, 10) || 3306 })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" required /></label>
-                          <label className="text-xs font-bold text-slate-600">База<input type="text" value={draftSettings.dbName} onChange={(e) => setDraftSettings({ ...draftSettings, dbName: e.target.value })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" required /></label>
-                          <label className="text-xs font-bold text-slate-600">Пользователь<input type="text" value={draftSettings.dbUser} onChange={(e) => setDraftSettings({ ...draftSettings, dbUser: e.target.value })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" required /></label>
-                          <label className="text-xs font-bold text-slate-600">Пар��ль<input type="password" value={draftSettings.dbPass} onChange={(e) => setDraftSettings({ ...draftSettings, dbPass: e.target.value })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" /></label>
-                        </div>
-                        {dbTestResult && (
-                          <div className={`mt-3 p-3.5 border rounded-lg text-xs flex items-start gap-2 ${dbTestResult.success ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-red-50 border-red-200 text-red-700'}`}>
-                            <AlertCircle className={`h-4.5 w-4.5 shrink-0 mt-0.5 ${dbTestResult.success ? 'text-emerald-600' : 'text-red-600'}`} />
-                            <span>{dbTestResult.message}</span>
-                          </div>
-                        )}
-                      </div>
-                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mb-3 border-b border-slate-200 pb-2">
-                          <h4 className="text-sm font-black text-slate-900 flex items-center gap-2">
-                            <Phone className="h-4 w-4 text-red-600" />
-                            AMI / Click2Call
-                          </h4>
-                          <button
-                            type="button"
-                            onClick={testAmiConnection}
-                            disabled={isTestingAmi}
-                            className="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 rounded-lg text-xs font-bold border border-slate-200 active:scale-95 transition-transform cursor-pointer flex items-center justify-center gap-1.5 shadow-sm"
-                          >
-                            {isTestingAmi && <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-500" />}
-                            Проверить AMI
-                          </button>
-                        </div>
-                        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-                          <label className="md:col-span-2 text-xs font-bold text-slate-600">Хост AMI<input type="text" value={draftSettings.amiHost || ''} onChange={(e) => setDraftSettings({ ...draftSettings, amiHost: e.target.value })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" /></label>
-                          <label className="text-xs font-bold text-slate-600">Порт<input type="number" value={draftSettings.amiPort ?? 5038} onChange={(e) => setDraftSettings({ ...draftSettings, amiPort: parseInt(e.target.value, 10) || 5038 })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" /></label>
-                          <label className="text-xs font-bold text-slate-600">Контекст<input type="text" value={draftSettings.amiContext || 'from-internal'} onChange={(e) => setDraftSettings({ ...draftSettings, amiContext: e.target.value })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" /></label>
-                          <label className="md:col-span-2 text-xs font-bold text-slate-600">AMI User<input type="text" value={draftSettings.amiUser || ''} onChange={(e) => setDraftSettings({ ...draftSettings, amiUser: e.target.value })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" /></label>
-                          <label className="md:col-span-2 text-xs font-bold text-slate-600">AMI Secret<input type="password" value={draftSettings.amiPass || ''} onChange={(e) => setDraftSettings({ ...draftSettings, amiPass: e.target.value })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" /></label>
-                        </div>
-                        {amiTestResult && (
-                          <div className={`mt-3 p-3.5 border rounded-lg text-xs flex items-start gap-2 ${amiTestResult.success ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-red-50 border-red-200 text-red-700'}`}>
-                            <AlertCircle className={`h-4.5 w-4.5 shrink-0 mt-0.5 ${amiTestResult.success ? 'text-emerald-600' : 'text-red-600'}`} />
-                            <span>{amiTestResult.message}</span>
-                          </div>
-                        )}
-                      </div>
-                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                        <h4 className="text-sm font-black text-slate-900 mb-3 flex items-center gap-2"><Clock className="h-4 w-4 text-red-600" />Записи и KPI</h4>
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                          <label className="md:col-span-2 text-xs font-bold text-slate-600">Путь к записям<input type="text" value={draftSettings.recordingsPath} onChange={(e) => setDraftSettings({ ...draftSettings, recordingsPath: e.target.value })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" required /></label>
-                          <label className="text-xs font-bold text-slate-600">SLA отзвона, мин<input type="number" min={1} max={1440} value={draftSettings.callbackKpiMinutes ?? 60} onChange={(e) => setDraftSettings({ ...draftSettings, callbackKpiMinutes: parseInt(e.target.value, 10) || 60 })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" /></label>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                  {settingsTab === 'directory' && (
-                    <div className="space-y-5">
-                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                        <h4 className="text-sm font-black text-slate-900 mb-3 flex items-center gap-2"><BookOpen className="h-4 w-4 text-red-600" />Настройки</h4>
-                        <div className="space-y-3 text-xs text-slate-700">
-                          <label className="flex items-center gap-2"><input type="checkbox" checked={draftSettings.normEnabled ?? true} onChange={(e) => setDraftSettings({ ...draftSettings, normEnabled: e.target.checked })} className="rounded border-slate-300 text-red-600" />Включить нормализацию</label>
-                          <label className="flex items-center gap-2"><input type="checkbox" checked={draftSettings.normStripSymbols ?? true} disabled={draftSettings.normDigitsOnly ?? false} onChange={(e) => setDraftSettings({ ...draftSettings, normStripSymbols: e.target.checked })} className="rounded border-slate-300 text-red-600" />Удалять спецсимволы</label>
-                          <label className="flex items-center gap-2"><input type="checkbox" checked={draftSettings.normReplace8With7 ?? true} onChange={(e) => setDraftSettings({ ...draftSettings, normReplace8With7: e.target.checked })} className="rounded border-slate-300 text-red-600" />Заменять 8 на 7</label>
-                          <label className="flex items-center gap-2"><input type="checkbox" checked={draftSettings.normDigitsOnly ?? false} onChange={(e) => setDraftSettings({ ...draftSettings, normDigitsOnly: e.target.checked, normStripSymbols: e.target.checked ? false : (draftSettings.normStripSymbols ?? true) })} className="rounded border-slate-300 text-red-600" />Только цифры</label>
-                          <label className="flex items-center gap-2">
-                            <input
-                              type="checkbox"
-                              checked={draftSettings.directorySyncAsteriskBlacklist ?? false}
-                              onChange={(e) => setDraftSettings({ ...draftSettings, directorySyncAsteriskBlacklist: e.target.checked })}
-                              className="rounded border-slate-300 text-red-600"
-                            />
-                            Синхронизировать ЧС с Asterisk AstDB blacklist
-                          </label>
-                        </div>
-                      </div>
-
-                      <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                        <h4 className="text-sm font-black text-slate-900 mb-3 flex items-center gap-2"><Globe className="h-4 w-4 text-red-600" />Импорт справочника по ссылке</h4>
-                        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-                          <label className="md:col-span-4 text-xs font-bold text-slate-600">URL файла CSV/JSON
-                            <input type="text" value={draftSettings.directoryImportUrl || ''} onChange={(e) => setDraftSettings({ ...draftSettings, directoryImportUrl: e.target.value })} placeholder="https://site.ru/contacts.csv" className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" />
-                          </label>
-                          <label className="text-xs font-bold text-slate-600">Формат
-                            <select value={draftSettings.directoryImportFormat || 'csv'} onChange={(e) => setDraftSettings({ ...draftSettings, directoryImportFormat: e.target.value as any })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs">
-                              <option value="csv">CSV</option>
-                              <option value="json">JSON</option>
-                            </select>
-                          </label>
-                          <label className="text-xs font-bold text-slate-600">Режим
-                            <select value={draftSettings.directoryImportMode || 'upsert'} onChange={(e) => setDraftSettings({ ...draftSettings, directoryImportMode: e.target.value as any })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs">
-                              <option value="upsert">Обновлять/добавлять</option>
-                              <option value="append">Только добавить</option>
-                              <option value="overwrite">Полностью заменить</option>
-                            </select>
-                          </label>
-                          <label className="text-xs font-bold text-slate-600">Период
-                            <select value={draftSettings.directoryImportSchedule || 'manual'} onChange={(e) => setDraftSettings({ ...draftSettings, directoryImportSchedule: e.target.value as any })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs">
-                              <option value="manual">Только вручную</option>
-                              <option value="hourly">Каждый час</option>
-                              <option value="daily">Каждый день</option>
-                              <option value="weekly">Раз в неделю</option>
-                            </select>
-                          </label>
-                          <label className="text-xs font-bold text-slate-600">Sync token для cron
-                            <input type="text" readOnly value={draftSettings.directorySyncToken || ''} className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-700 font-mono" />
-                          </label>
-                        </div>
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          {hasPermission('manage_directory_import') && (
-                          <button type="button" onClick={handleTestUrlImport} disabled={isTestingUrlImport} className="px-4 py-2 rounded-lg bg-white border border-slate-200 text-slate-800 text-xs font-bold hover:bg-slate-50 disabled:opacity-50">{isTestingUrlImport ? 'Проверка...' : 'Проверить ссылку'}</button>
-                          )}
-                          {hasPermission('manage_directory_import') && (
-                          <button type="button" onClick={handleSyncDirectoryUrl} disabled={isSyncingDirectoryUrl} className="px-4 py-2 rounded-lg bg-red-600 text-white text-xs font-bold hover:bg-red-700 disabled:opacity-50">{isSyncingDirectoryUrl ? 'Синхронизация...' : 'Синхронизировать сейчас'}</button>
-                          )}
-                        </div>
-                        <div className="mt-3 text-[11px] text-slate-500 font-mono bg-slate-50 border border-slate-200 rounded-lg p-2 overflow-x-auto">
-                          Cron: curl -s -X POST http://127.0.0.1:3000/api/directory/sync-url -H "X-Sync-Token: {draftSettings.directorySyncToken || 'TOKEN'}"
-                        </div>
-                        {urlImportTestResult && (
-                          <div className={`mt-3 p-3 rounded-lg border text-xs font-bold ${urlImportTestResult.success ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-red-50 border-red-200 text-red-700'}`}>{urlImportTestResult.message}</div>
-                        )}
-                        {(draftSettings.directoryLastSyncAt || draftSettings.directoryLastSyncMessage) && (
-                          <div className="mt-3 text-xs text-slate-600">
-                            Последняя синхронизация: <b>{draftSettings.directoryLastSyncAt || '—'}</b><br />
-                            Статус: <b>{draftSettings.directoryLastSyncStatus || '—'}</b> — {draftSettings.directoryLastSyncMessage || '—'}
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                        <h4 className="text-sm font-black text-slate-900 mb-3">Инструменты справочника</h4>
-                        <div className="flex flex-wrap gap-2">
-                          {hasPermission('manage_directory_import') && (
-                          <button type="button" onClick={() => setIsImportOpen(true)} className="px-4 py-2 rounded-lg bg-red-600 text-white text-xs font-bold hover:bg-red-700">Импорт контактов</button>
-                          )}
-                          {hasPermission('manage_directory_import') && (
-                          <button type="button" onClick={handleExportCSV} className="px-4 py-2 rounded-lg bg-slate-100 text-slate-800 text-xs font-bold hover:bg-slate-200">Экспорт CSV</button>
-                          )}
-                          {hasPermission('manage_directory_import') && (
-                          <button type="button" onClick={handleNormalizeDirectoryDb} disabled={isNormalizingDb} className="px-4 py-2 rounded-lg bg-slate-100 text-slate-800 text-xs font-bold hover:bg-slate-200 disabled:opacity-50">Нормализовать базу</button>
-                          )}
-                        </div>
-                        {normalizedCount !== null && <div className="mt-3 text-xs text-emerald-700 font-bold">Обновлено записей: {normalizedCount}</div>}
-                      </div>
-                    </div>
-                  )}
-                  {settingsTab === 'access' && (
-                    <AccessUsersTab
-                      accessUsers={accessUsers}
-                      accessError={accessError}
-                      editingUserId={editingUserId}
-                      userForm={userForm}
-                      isSavingUser={isSavingUser}
-                      setUserForm={setUserForm}
-                      openEditUser={openEditUser}
-                      deleteAccessUser={deleteAccessUser}
-                      saveAccessUser={saveAccessUser}
-                      resetUserForm={resetUserForm}
-                      roles={roles}
-                    />
-                  )}
-                  
-                  {settingsTab === 'permissions' && session?.role === 'su' && draftSettings && (
-                    <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4">
-                      <div className="text-sm font-black text-red-800">Управление привилегиями SU</div>
-                      <p className="mt-1 text-xs text-red-700">
-                        Эти параметры управляют тем, что администратор видит и может менять в матрице доступа.
-                      </p>
-
-                      <div className="mt-3 grid gap-2 text-xs font-bold text-red-900">
-                        <label className="flex items-center gap-2">
-                          <input
-                            type="checkbox"
-                            checked={draftSettings.showSuRoleToAdmin === true}
-                            onChange={(e) => setDraftSettings({ ...draftSettings, showSuRoleToAdmin: e.target.checked })}
-                            className="rounded border-red-300 text-red-600"
-                          />
-                          Показывать роль SU администраторам
-                        </label>
-
-                        <label className="flex items-center gap-2">
-                          <input
-                            type="checkbox"
-                            checked={draftSettings.showSuPermissionsToAdmin === true}
-                            onChange={(e) => setDraftSettings({ ...draftSettings, showSuPermissionsToAdmin: e.target.checked })}
-                            className="rounded border-red-300 text-red-600"
-                          />
-                          Показывать служебные SU-права администраторам
-                        </label>
-
-                        <label className="flex items-center gap-2">
-                          <input
-                            type="checkbox"
-                            checked={draftSettings.allowAdminEditSuPermissions === true}
-                            disabled={draftSettings.showSuPermissionsToAdmin !== true}
-                            onChange={(e) => setDraftSettings({ ...draftSettings, allowAdminEditSuPermissions: e.target.checked })}
-                            className="rounded border-red-300 text-red-600 disabled:opacity-40"
-                          />
-                          Разрешить администраторам изменять служебные SU-права
-                        </label>
-                      </div>
-                    </div>
-                  )}
-
-{settingsTab === 'permissions' && (
-                    <PermissionsMatrixTab
-                      roles={roles}
-                      isLoadingRoles={isLoadingRoles}
-                      isSavingRoles={isSavingRoles}
-                      onRolesChange={setRoles}
-                      onSaveRoles={saveRoles}
-                      isSu={session?.role === 'su'}
-                      showSuPermissionsToAdmin={settings?.showSuPermissionsToAdmin === true}
-                      allowAdminEditSuPermissions={settings?.allowAdminEditSuPermissions === true}
-                    />
-                  )}
-                  {settingsTab === 'appearance' && (
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 space-y-4">
-                      <h4 className="text-sm font-black text-slate-900 flex items-center gap-2">
-                        <Sliders className="h-4 w-4 text-red-600" />
-                        Настройки интерфейса и темы
-                      </h4>
-                      <p className="text-xs text-slate-500">
-                        Настройте внешний вид панели управления звонками. Параметры сохраняются локально.
-                      </p>
-                      
-                      <div className="bg-white border border-slate-200 rounded-xl p-4 flex items-center justify-between">
-                        <div>
-                          <span className="text-xs font-bold text-slate-800 block">Тёмная тема</span>
-                          <span className="text-[11px] text-slate-500">Включить ночной режим во всей системе</span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setDarkMode(!darkMode)}
-                          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none cursor-pointer theme-toggle-switch ${
-                            darkMode ? 'active' : ''
-                          }`}
-                        >
-                          <span
-                            className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                              darkMode ? 'translate-x-6' : 'translate-x-1'
-                            }`}
-                          />
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                  {dbTestResult && (<div className={`p-3.5 border rounded-lg text-xs flex items-start gap-2 ${dbTestResult.success ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-red-50 border-red-200 text-red-700'}`}><AlertCircle className={`h-4.5 w-4.5 shrink-0 mt-0.5 ${dbTestResult.success ? 'text-emerald-600' : 'text-red-600'}`} /><span>{dbTestResult.message}</span></div>)}
-                </div>
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 p-6 pt-4 border-t border-slate-200 bg-slate-50 shrink-0">
-                  {isAdminRole(session?.role) ? (
-                    <>
-                      <button type="button" onClick={testDbConnection} disabled={isTestingDb} className="px-3.5 py-2 bg-white hover:bg-slate-100 text-slate-700 rounded-lg text-xs font-bold border border-slate-200 active:scale-95 transition-transform cursor-pointer flex items-center justify-center gap-1">
-                        {isTestingDb && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                        Проверить связь
-                      </button>
-                      <div className="flex gap-2 justify-end">
-                        <button type="button" onClick={() => { setIsSettingsOpen(false); setDbTestResult(null); resetUserForm(); }} className="text-xs text-slate-600 hover:text-slate-900 bg-white hover:bg-slate-100 border border-slate-200 px-4 py-2 rounded-lg cursor-pointer transition-colors">
-                          Отмена
-                        </button>
-                        <button type="submit" disabled={isSavingSettings} className="bg-red-600 hover:bg-red-700 text-xs font-bold text-white px-4 py-2 rounded-lg cursor-pointer transition-colors disabled:opacity-50">
-                          Сохранить настройки
-                        </button>
-                      </div>
-                    </>
-                  ) : (
-                    <div className="w-full flex justify-end">
-                      <button type="button" onClick={() => { setIsSettingsOpen(false); }} className="px-5 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-bold transition-all cursor-pointer">
-                        Закрыть
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </form>
-            ) : (<div className="p-10 flex justify-center border-t border-slate-200"><Loader2 className="h-8 w-8 animate-spin text-slate-400" /></div>)}
-          </div>
-        </div>
-      )}
 
       {/* MASS DIRECTORY IMPORT DIALOG (ADMINS ONLY) */}
       {isImportOpen && (
@@ -4496,13 +4479,12 @@ export default function App() {
             <div className="flex items-start justify-between border-b border-slate-100 pb-3 mb-4 shrink-0">
               <div>
                 <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                  <Upload className="h-5 w-5 text-red-600" />
+                  <Upload className="h-5 w-5 text-blue-600" />
                   Пакетный импорт телефонного справочника
                 </h3>
                 <p className="text-xs text-slate-500 font-light mt-0.5">
                   Загрузите CSV/TXT-файлы или скопируйте контакты напрямую в поле ввода.
-                </p>
-              </div>
+                </p></div>
               <button
                 onClick={() => {
                   setIsImportOpen(false);
@@ -4514,14 +4496,13 @@ export default function App() {
               >
                 ✕
               </button>
-            </div>
+          </div>
 
             <div className="flex-1 overflow-y-auto pr-1 space-y-4 text-xs">
               {importFileError && (
-                <div className="p-3 bg-red-50 border border-red-200 text-red-600 rounded-lg flex items-center gap-2">
+                <div className="p-3 bg-blue-50 border border-blue-200 text-blue-600 rounded-lg flex items-center gap-2">
                   <AlertCircle className="h-4.5 w-4.5 shrink-0" />
-                  <span>{importFileError}</span>
-                </div>
+                  <span>{importFileError}</span></div>
               )}
 
               {importSuccessCount !== null && (
@@ -4529,8 +4510,7 @@ export default function App() {
                   <CheckCircle className="h-5 w-5 shrink-0 text-emerald-600" />
                   <div>
                     <h4 className="font-bold font-sans">Импорт выполнен успешно!</h4>
-                    <p className="mt-0.5">В телефонный справочник добавлено: <strong>{importSuccessCount}</strong> контактов.</p>
-                  </div>
+                    <p className="mt-0.5">В телефонный справочник добавлено: <strong>{importSuccessCount}</strong> контактов.</p></div>
                 </div>
               )}
 
@@ -4547,8 +4527,7 @@ export default function App() {
                       />
                       <Upload className="h-6 w-6 text-slate-400 mx-auto mb-1.5" />
                       <span className="text-slate-700 font-medium block">Выберите или перетащите файл</span>
-                      <span className="text-[10px] text-slate-455 block mt-0.5">Форматы: .csv, .txt (Разделитель: запятая или точка с запятой)</span>
-                    </div>
+                      <span className="text-[10px] text-slate-455 block mt-0.5">Форматы: .csv, .txt (Разделитель: запятая или точка с запятой)</span></div>
                   </div>
 
                   <div>
@@ -4561,9 +4540,8 @@ export default function App() {
                       }}
                       rows={6}
                       placeholder="Формат: Имя,Номер,Тип(internal/client),Комментарий&#10;Пример:&#10;Иван Петров,79991234567,client,Директор компании&#15;&#10;Бухгалтерия,102,internal,Офисный номер"
-                      className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 font-mono text-[11px] text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-red-500 focus:border-red-500 transition-all focus:bg-white resize-none"
-                    ></textarea>
-                  </div>
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 font-mono text-[11px] text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all focus:bg-white resize-none"
+                    ></textarea></div>
 
                   <div className="p-3 bg-amber-50/70 border border-amber-200 text-amber-900 rounded-xl space-y-1 bg-amber-50">
                     <h5 className="font-bold flex items-center gap-1">Важное примечание:</h5>
@@ -4571,15 +4549,13 @@ export default function App() {
                       <li>Первая колонка — ФИО / Название, вторая — Номер телефона.</li>
                       <li>Если номер телефона ≤ 4 символов, тип автоматически выставится как "Внутренний".</li>
                       <li>Телефонные номера автоматически очистятся и нормализуются при импорте в соответствии с вашими настройками.</li>
-                    </ul>
-                  </div>
+                    </ul></div>
                 </div>
 
                 <div className="flex flex-col h-full bg-slate-50 border border-slate-200 rounded-xl p-3">
                   <div className="flex items-center justify-between border-b border-slate-200 pb-1.5 mb-2 shrink-0">
                     <span className="font-bold text-slate-700">Предпросмотр ({parsedImportEntries.length}):</span>
-                    <span className="text-[10px] text-slate-450 uppercase tracking-widest font-bold">Данные к загрузке</span>
-                  </div>
+                    <span className="text-[10px] text-slate-450 uppercase tracking-widest font-bold">Данные к загрузке</span></div>
 
                   <div className="flex-1 overflow-y-auto max-h-[280px] space-y-1.5 pr-1">
                     {parsedImportEntries.length === 0 ? (
@@ -4591,18 +4567,16 @@ export default function App() {
                         <div key={idx} className="bg-white border border-slate-150 rounded-lg p-2 flex items-center justify-between shadow-xs">
                           <div>
                             <div className="font-bold text-slate-800 truncate max-w-[155px]">{item.name}</div>
-                            <div className="text-[10px] text-slate-500 truncate max-w-[155px]">{item.comment}</div>
-                          </div>
+                            <div className="text-[10px] text-slate-500 truncate max-w-[155px]">{item.comment}</div></div>
                           <div className="text-right">
-                            <div className="font-mono text-red-800 dark:text-rose-200 font-bold">{item.number}</div>
+                            <div className="font-mono text-blue-800 dark:text-rose-200 font-bold">{item.number}</div>
                             <span className={`text-[9px] font-semibold px-2 py-0.2 rounded-full border ${
                               item.type === 'internal'
-                                ? 'bg-slate-100 text-slate-600 border-slate-200'
-                                : 'bg-red-50 text-red-600 border-red-150'
+                                ? 'bg-gradient-to-br from-slate-50 via-blue-50/40 to-sky-50/50 text-slate-600 border-slate-200'
+                                : 'bg-blue-50 text-blue-600 border-red-150'
                             }`}>
                               {item.type === 'internal' ? 'Внутр.' : 'Клиент'}
-                            </span>
-                          </div>
+                            </span></div>
                         </div>
                       ))
                     )}
@@ -4617,11 +4591,11 @@ export default function App() {
                           name="importMode"
                           checked={!importOverwriteMode}
                           onChange={() => setImportOverwriteMode(false)}
-                          className="text-red-600 focus:ring-red-500 h-3.5 w-3.5 cursor-pointer"
+                          className="text-blue-600 focus:ring-blue-500 h-3.5 w-3.5 cursor-pointer"
                         />
                         <span>Прибавить новые к существующим (Дописать)</span>
                       </label>
-                      <label className="flex items-center gap-2 cursor-pointer font-medium text-slate-700 text-red-700">
+                      <label className="flex items-center gap-2 cursor-pointer font-medium text-slate-700 text-blue-700">
                         <input
                           type="radio"
                           name="importMode"
@@ -4631,15 +4605,12 @@ export default function App() {
                               setImportOverwriteMode(true);
                             }
                           }}
-                          className="text-red-500 focus:ring-red-500 h-3.5 w-3.5 cursor-pointer"
+                          className="text-red-500 focus:ring-blue-500 h-3.5 w-3.5 cursor-pointer"
                         />
-                        <span className="font-bold text-red-600 hover:text-red-700">Очистить справочник и записать заново!</span>
-                      </label>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
+                        <span className="font-bold text-blue-600 hover:text-blue-700">Очистить справочник и записать заново!</span>
+                      </label></div>
+                  </div></div>
+              </div></div>
 
             <div className="flex items-center justify-end gap-2.5 pt-4 border-t border-slate-100 mt-4 shrink-0">
               <button
@@ -4650,7 +4621,7 @@ export default function App() {
                   setParsedImportEntries([]);
                   setImportFileError('');
                 }}
-                className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-650 rounded-lg text-xs font-semibold cursor-pointer transition-all active:scale-95 select-none"
+                className="px-3.5 py-1.5 bg-gradient-to-br from-slate-50 via-blue-50/40 to-sky-50/50 hover:bg-slate-200 text-slate-650 rounded-lg text-xs font-semibold cursor-pointer transition-all active:scale-95 select-none"
               >
                 Отмена
               </button>
@@ -4663,9 +4634,8 @@ export default function App() {
                 {isImporting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                 Выполнить загрузку в базу ({parsedImportEntries.length})
               </button>
-            </div>
           </div>
-        </div>
+          </div></div>
       )}
 
       {/* DIRECTORY ADD / EDIT DIALOG */}
@@ -4675,27 +4645,25 @@ export default function App() {
             <div className="flex items-start justify-between border-b border-slate-100 pb-3 mb-4">
               <div>
                 <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                  <BookOpen className="h-5 w-5 text-red-600" />
+                  <BookOpen className="h-5 w-5 text-blue-600" />
                   {editingDirEntry ? 'Редактировать контакт' : 'Новый контакт'}
                 </h3>
                 <p className="text-xs text-slate-500 font-light mt-0.5">
                   Несколько телефонов, компания, должность, теги, СПАМ и черный список.
-                </p>
-              </div>
+                </p></div>
               <button
                 onClick={() => setIsDirFormOpen(false)}
                 className="text-slate-400 hover:text-slate-650 p-1 rounded-md"
               >
                 ✕
               </button>
-            </div>
+          </div>
 
             <form onSubmit={handleSaveDirEntry} className="space-y-4">
               {dirError && (
-                <div className="p-3 bg-red-50 border border-red-200 text-red-600 rounded-lg text-xs flex items-center gap-2">
+                <div className="p-3 bg-blue-50 border border-blue-200 text-blue-600 rounded-lg text-xs flex items-center gap-2">
                   <AlertCircle className="h-4.5 w-4.5 shrink-0" />
-                  <span>{dirError}</span>
-                </div>
+                  <span>{dirError}</span></div>
               )}
 
               <div className="space-y-4">
@@ -4718,75 +4686,62 @@ export default function App() {
                       <input type="checkbox" checked={dirIsSpam} onChange={(e) => setDirIsSpam(e.target.checked)} className="rounded border-amber-300 text-amber-600" />
                       СПАМ
                     </label>
-                    <label className="flex items-center justify-center gap-2 py-2 px-3 rounded-lg border border-red-200 bg-red-50 text-xs text-red-700 font-bold cursor-pointer">
-                      <input type="checkbox" checked={dirIsBlacklisted} onChange={(e) => setDirIsBlacklisted(e.target.checked)} className="rounded border-red-300 text-red-600" />
+                    <label className="flex items-center justify-center gap-2 py-2 px-3 rounded-lg border border-blue-200 bg-blue-50 text-xs text-blue-700 font-bold cursor-pointer">
+                      <input type="checkbox" checked={dirIsBlacklisted} onChange={(e) => setDirIsBlacklisted(e.target.checked)} className="rounded border-blue-300 text-blue-600" />
                       ЧС
-                    </label>
-                  </div>
+                    </label></div>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   <div className="space-y-1">
                     <label className="text-slate-650 text-xs font-semibold">ФИО *</label>
-                    <input type="text" required value={dirName} onChange={(e) => setDirName(e.target.value)} placeholder="Иван Смирнов" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-red-500" />
-                  </div>
+                    <input type="text" required value={dirName} onChange={(e) => setDirName(e.target.value)} placeholder="Иван Смирнов" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500" /></div>
 
                   <div className="space-y-1">
                     <label className="text-slate-650 text-xs font-semibold">Основной телефон / SIP *</label>
-                    <input type="text" required value={dirNumber} onChange={(e) => setDirNumber(e.target.value)} placeholder="100 или 79781234567" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 font-mono focus:outline-none focus:ring-1 focus:ring-red-500" />
-                  </div>
+                    <input type="text" required value={dirNumber} onChange={(e) => setDirNumber(e.target.value)} placeholder="100 или 79781234567" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 font-mono focus:outline-none focus:ring-1 focus:ring-blue-500" /></div>
 
                   <div className="space-y-1">
                     <label className="text-slate-650 text-xs font-semibold">Компания</label>
-                    <input type="text" value={dirCompany} onChange={(e) => setDirCompany(e.target.value)} placeholder="ООО Компания" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-red-500" />
-                  </div>
+                    <input type="text" value={dirCompany} onChange={(e) => setDirCompany(e.target.value)} placeholder="ООО Компания" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500" /></div>
 
                   <div className="space-y-1">
                     <label className="text-slate-650 text-xs font-semibold">Должность</label>
-                    <input type="text" value={dirPosition} onChange={(e) => setDirPosition(e.target.value)} placeholder="Директор / менеджер" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-red-500" />
-                  </div>
+                    <input type="text" value={dirPosition} onChange={(e) => setDirPosition(e.target.value)} placeholder="Директор / менеджер" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500" /></div>
 
                   <div className="space-y-1">
                     <label className="text-slate-650 text-xs font-semibold">Отдел</label>
-                    <input type="text" value={dirDepartment} onChange={(e) => setDirDepartment(e.target.value)} placeholder="Продажи, IT, Бухгалтерия" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-red-500" />
-                  </div>
+                    <input type="text" value={dirDepartment} onChange={(e) => setDirDepartment(e.target.value)} placeholder="Продажи, IT, Бухгалтерия" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500" /></div>
 
                   <div className="space-y-1">
                     <label className="text-slate-650 text-xs font-semibold">Теги</label>
-                    <input type="text" value={dirTagsText} onChange={(e) => setDirTagsText(e.target.value)} placeholder="VIP; Клиент; СПАМ" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-red-500" />
-                  </div>
+                    <input type="text" value={dirTagsText} onChange={(e) => setDirTagsText(e.target.value)} placeholder="VIP; Клиент; СПАМ" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500" /></div>
 
                   <div className="space-y-1 md:col-span-2">
                     <label className="text-slate-650 text-xs font-semibold">Дополнительные телефоны</label>
-                    <textarea value={dirPhonesText} onChange={(e) => setDirPhonesText(e.target.value)} rows={3} placeholder="Каждый номер с новой строки или через запятую" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 font-mono focus:outline-none focus:ring-1 focus:ring-red-500" />
-                  </div>
+                    <textarea value={dirPhonesText} onChange={(e) => setDirPhonesText(e.target.value)} rows={3} placeholder="Каждый номер с новой строки или через запятую" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 font-mono focus:outline-none focus:ring-1 focus:ring-blue-500" /></div>
 
                   <div className="space-y-1 md:col-span-2">
                     <label className="text-slate-650 text-xs font-semibold">Комментарий</label>
-                    <input type="text" value={dirComment} onChange={(e) => setDirComment(e.target.value)} placeholder="Комментарий, примечание, источник" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-red-500" />
-                  </div>
+                    <input type="text" value={dirComment} onChange={(e) => setDirComment(e.target.value)} placeholder="Комментарий, примечание, источник" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500" /></div>
 
                   <div className="space-y-1">
                     <label className="text-slate-650 text-xs font-semibold">Email</label>
-                    <input type="email" value={dirEmail} onChange={(e) => setDirEmail(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-red-500" />
-                  </div>
+                    <input type="email" value={dirEmail} onChange={(e) => setDirEmail(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500" /></div>
 
                   <div className="space-y-1">
                     <label className="text-slate-650 text-xs font-semibold">Сайт</label>
-                    <input type="text" value={dirWebsite} onChange={(e) => setDirWebsite(e.target.value)} placeholder="site.ru" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-red-500" />
-                  </div>
-                </div>
-              </div>
+                    <input type="text" value={dirWebsite} onChange={(e) => setDirWebsite(e.target.value)} placeholder="site.ru" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500" /></div>
+                </div></div>
 
               <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
                 <button type="button" onClick={() => setIsDirFormOpen(false)} className="px-4 py-2 border border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-slate-800 rounded-lg text-xs font-medium cursor-pointer">Отмена</button>
-                <button type="submit" disabled={isSavingDir} className="bg-red-600 hover:bg-red-700 text-xs font-semibold text-white px-4 py-2 rounded-lg cursor-pointer flex items-center justify-center gap-1 min-w-[90px]">
+                <button type="submit" disabled={isSavingDir} className="bg-blue-600 hover:bg-blue-700 text-xs font-semibold text-white px-4 py-2 rounded-lg cursor-pointer flex items-center justify-center gap-1 min-w-[90px]">
                   {isSavingDir && <Loader2 className="h-3 w-3 animate-spin" />}
                   <span>Сохранить</span>
                 </button>
-              </div>
-            </form>
           </div>
+            </form></div>
         </div>
       )}
 
@@ -4797,14 +4752,12 @@ export default function App() {
             <div className="flex items-start justify-between border-b border-slate-800 pb-3 mb-4">
               <div className="flex items-center gap-2.5">
                 <div className="p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
-                  <PhoneCall className={`h-5 w-5 ${isC2CLoading ? 'animate-bounce' : ''}`} />
-                </div>
+                  <PhoneCall className={`h-5 w-5 ${isC2CLoading ? 'animate-bounce' : ''}`} /></div>
                 <div>
                   <h3 className="text-sm font-bold text-slate-100 uppercase tracking-wider">Инициация звонка (Click-to-Call)</h3>
                   <p className="text-[11px] text-slate-400 mt-0.5 font-sans">
                     Дозвон: <span className="font-semibold text-emerald-400 font-mono">{callingTarget}</span>
-                  </p>
-                </div>
+                  </p></div>
               </div>
               <button
                 onClick={() => setIsCallingModalOpen(false)}
@@ -4813,7 +4766,7 @@ export default function App() {
               >
                 ✕
               </button>
-            </div>
+          </div>
 
             {/* Terminal View style console */}
             <div className="bg-slate-950 border border-slate-850 rounded-xl p-4 h-60 overflow-y-auto font-mono text-[10.5px] text-slate-350 space-y-1.5 scrollbar-thin">
@@ -4833,8 +4786,7 @@ export default function App() {
               {isC2CLoading && (
                 <div className="flex items-center gap-2 text-emerald-400 animate-pulse pt-1">
                   <Loader2 className="h-3 w-3 animate-spin" />
-                  <span>Ожидание ответа от Asterisk Call Manager порт 5038...</span>
-                </div>
+                  <span>Ожидание ответа от Asterisk Call Manager порт 5038...</span></div>
               )}
             </div>
 
@@ -4846,11 +4798,9 @@ export default function App() {
               >
                 Закрыть окно
               </button>
-            </div>
           </div>
-        </div>
+          </div></div>
       )}
-      </div>
-    </div>
+      </div></div>
   );
 }

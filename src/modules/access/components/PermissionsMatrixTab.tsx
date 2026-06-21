@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { ChevronDown, ChevronRight, Plus, Trash2, ShieldCheck, Crown, UserCog, UserRound, BookUser, UsersRound } from 'lucide-react';
 import { AccessRole } from '../types';
 import { PermissionKey } from '../permissions';
 
@@ -23,37 +23,142 @@ interface PermissionRow {
   hint: string;
 }
 
-const PERMISSION_ROWS: PermissionRow[] = [
-  { key: 'view_calls', label: 'Звонки', kind: 'tab', hint: 'Открывает вкладку звонков' },
-  { key: 'view_directory', label: 'Справочник', kind: 'tab', hint: 'Открывает вкладку справочника' },
-  { key: 'view_reports', label: 'Отчеты', kind: 'tab', hint: 'Открывает вкладку отчетов' },
-  { key: 'view_monitoring', label: 'Мониторинг', kind: 'tab', hint: 'Открывает раздел мониторинга' },
-  { key: 'view_active_calls', label: 'Активные', kind: 'tab', hint: 'Открывает активные звонки' },
-  { key: 'view_tcpdump', label: 'Tcpdump', kind: 'tab', hint: 'Открывает TCPDUMP' },
-  { key: 'view_sngrep', label: 'Sngrep', kind: 'tab', hint: 'Открывает SNGREP' },
-  { key: 'view_cli', label: 'CLI/DB', kind: 'tab', hint: 'Открывает CLI, FreePBX CLI и DB Explorer' },
-  { key: 'view_settings', label: 'Настройки', kind: 'tab', hint: 'Открывает настройки' },
-  { key: 'view_management', label: 'Управление', kind: 'tab', hint: 'Открывает управленческий раздел' },
-  { key: 'view_balance', label: 'Баланс', kind: 'tab', hint: 'Открывает баланс' },
+interface PermissionGroup {
+  id: string;
+  title: string;
+  description: string;
+  color: 'blue' | 'emerald' | 'sky' | 'slate' | 'red';
+  rows: PermissionRow[];
+}
 
-  { key: 'process_calls', label: 'Обработка', kind: 'feature', hint: 'Обработка звонков внутри журнала' },
-  { key: 'edit_directory', label: 'Ред. справочник', kind: 'feature', hint: 'Создание, изменение и удаление записей справочника' },
-  { key: 'manage_directory_import', label: 'Импорт справ.', kind: 'feature', hint: 'Импорт, экспорт, нормализация и синхронизация справочника' },
-  { key: 'manage_blacklist', label: 'Черный список', kind: 'feature', hint: 'Управление черным списком' },
-  { key: 'export_excel', label: 'Excel', kind: 'feature', hint: 'Экспорт отчетов и таблиц' },
-  { key: 'listen_recordings', label: 'Записи', kind: 'feature', hint: 'Прослушивание записей звонков' },
-  { key: 'delete_records', label: 'Удаление', kind: 'feature', hint: 'Удаление записей' },
-  { key: 'make_calls', label: 'Click2Call', kind: 'feature', hint: 'Совершение звонков из интерфейса' },
-
-  { key: 'manage_users', label: 'Пользователи', kind: 'su', hint: 'Служебное право управления пользователями' },
-  { key: 'manage_roles', label: 'Роли', kind: 'su', hint: 'Служебное право управления ролями' },
-  { key: 'dangerous_pbx_write', label: 'Опасные изменения АТС', kind: 'su', hint: 'Опасные изменения FreePBX/Asterisk' },
-  { key: 'bulk_extensions', label: 'Массовые EXT', kind: 'su', hint: 'Массовые операции с внутренними номерами' },
-  { key: 'manage_trunks', label: 'Транки', kind: 'su', hint: 'Управление транками' },
-  { key: 'manage_outbound_routes', label: 'Исходящие правила', kind: 'su', hint: 'Управление исходящими маршрутами' },
-  { key: 'manage_numbering_capacity', label: 'Номерная емкость', kind: 'su', hint: 'Управление номерной емкостью' },
-  { key: 'manage_balance_providers', label: 'Провайдеры баланса', kind: 'su', hint: 'Управление провайдерами баланса' }
+const GROUPS: PermissionGroup[] = [
+  {
+    id: 'calls',
+    title: 'Звонки',
+    description: 'Реестр звонков, обработка, записи и Click2Call.',
+    color: 'blue',
+    rows: [
+      { key: 'view_calls', label: 'Открыть вкладку звонков', kind: 'tab', hint: 'Показывает раздел Реестр звонков' },
+      { key: 'process_calls', label: 'Обработка звонков', kind: 'feature', hint: 'Разрешает менять статус/обработку звонка' },
+      { key: 'listen_recordings', label: 'Прослушивание записей', kind: 'feature', hint: 'Разрешает слушать записи разговоров' },
+      { key: 'make_calls', label: 'Click2Call', kind: 'feature', hint: 'Разрешает звонить из интерфейса' }
+    ]
+  },
+  {
+    id: 'directory',
+    title: 'Справочник',
+    description: 'Телефонный справочник, импорт и черный список.',
+    color: 'blue',
+    rows: [
+      { key: 'view_directory', label: 'Открыть вкладку справочника', kind: 'tab', hint: 'Показывает телефонный справочник' },
+      { key: 'edit_directory', label: 'Редактирование справочника', kind: 'feature', hint: 'Создание, изменение и удаление контактов' },
+      { key: 'manage_directory_import', label: 'Импорт и синхронизация', kind: 'feature', hint: 'Импорт CSV/JSON, экспорт, нормализация и sync-url' },
+      { key: 'manage_blacklist', label: 'Черный список', kind: 'feature', hint: 'Разрешает добавлять и удалять номера из ЧС' }
+    ]
+  },
+  {
+    id: 'reports',
+    title: 'Отчеты',
+    description: 'Отчеты, аналитика и выгрузки.',
+    color: 'blue',
+    rows: [
+      { key: 'view_reports', label: 'Открыть вкладку отчетов', kind: 'tab', hint: 'Показывает отчеты и аналитику' },
+      { key: 'export_excel', label: 'Экспорт Excel', kind: 'feature', hint: 'Разрешает выгрузку таблиц и отчетов' }
+    ]
+  },
+  {
+    id: 'monitoring',
+    title: 'Мониторинг',
+    description: 'Активные звонки, tcpdump, sngrep, CLI и DB Explorer.',
+    color: 'blue',
+    rows: [
+      { key: 'view_monitoring', label: 'Открыть раздел мониторинга', kind: 'tab', hint: 'Показывает общий раздел мониторинга' },
+      { key: 'view_active_calls', label: 'Активные звонки', kind: 'tab', hint: 'Показывает live-сессии Asterisk' },
+      { key: 'view_tcpdump', label: 'TCPDUMP / SIP-RTP', kind: 'tab', hint: 'Показывает tcpdump и SIP/RTP диагностику' },
+      { key: 'view_sngrep', label: 'SNGREP', kind: 'tab', hint: 'Показывает SIP flow' },
+      { key: 'view_cli', label: 'CLI / DB Explorer', kind: 'tab', hint: 'Asterisk CLI, FreePBX CLI и DB Explorer' }
+    ]
+  },
+  {
+    id: 'management',
+    title: 'Управление АТС',
+    description: 'Управленческие функции PBX и номерная емкость.',
+    color: 'blue',
+    rows: [
+      { key: 'view_management', label: 'Открыть вкладку управления', kind: 'tab', hint: 'Показывает раздел Управление АТС' },
+      { key: 'bulk_extensions', label: 'Массовые EXT', kind: 'su', hint: 'Массовые операции с внутренними номерами' },
+      { key: 'manage_trunks', label: 'Транки', kind: 'su', hint: 'Управление SIP-транками' },
+      { key: 'manage_outbound_routes', label: 'Исходящие правила', kind: 'su', hint: 'Управление исходящими маршрутами' },
+      { key: 'manage_numbering_capacity', label: 'Номерная емкость', kind: 'su', hint: 'Управление номерной емкостью' }
+    ]
+  },
+  {
+    id: 'balance',
+    title: 'Баланс',
+    description: 'Баланс операторов и провайдеры проверки.',
+    color: 'blue',
+    rows: [
+      { key: 'view_balance', label: 'Открыть вкладку баланса', kind: 'tab', hint: 'Показывает раздел Баланс операторов' },
+      { key: 'manage_balance_providers', label: 'Провайдеры баланса', kind: 'su', hint: 'Управление провайдерами проверки баланса' }
+    ]
+  },
+  {
+    id: 'settings',
+    title: 'Настройки',
+    description: 'Доступ к системным настройкам.',
+    color: 'blue',
+    rows: [
+      { key: 'view_settings', label: 'Открыть настройки', kind: 'tab', hint: 'Показывает страницу Настройки системы' }
+    ]
+  },
+  {
+    id: 'users_roles',
+    title: 'Пользователи и роли',
+    description: 'Управление пользователями и матрицей ролей.',
+    color: 'blue',
+    rows: [
+      { key: 'manage_users', label: 'Пользователи', kind: 'su', hint: 'Создание, редактирование и отключение пользователей' },
+      { key: 'manage_roles', label: 'Роли', kind: 'su', hint: 'Редактирование матрицы прав доступа' }
+    ]
+  },
+  {
+    id: 'system',
+    title: 'SU / системные права',
+    description: 'Опасные системные действия. По умолчанию видит только SU.',
+    color: 'red',
+    rows: [
+      { key: 'dangerous_pbx_write', label: 'Опасные изменения АТС', kind: 'su', hint: 'Разрешает потенциально опасные изменения FreePBX/Asterisk' }
+    ]
+  }
 ];
+
+const colorClasses = {
+  blue: {
+    header: 'bg-blue-50 border-blue-200 text-blue-900',
+    badge: 'bg-blue-100 text-blue-700 border-blue-200',
+    accent: 'border-l-blue-300'
+  },
+  sky: {
+    header: 'bg-sky-50 border-sky-200 text-sky-900',
+    badge: 'bg-sky-100 text-sky-700 border-sky-200',
+    accent: 'border-l-sky-300'
+  },
+  emerald: {
+    header: 'bg-emerald-50 border-emerald-200 text-emerald-900',
+    badge: 'bg-emerald-100 text-emerald-700 border-emerald-200',
+    accent: 'border-l-emerald-300'
+  },
+  slate: {
+    header: 'bg-slate-50 border-slate-200 text-slate-900',
+    badge: 'bg-slate-100 text-slate-700 border-slate-200',
+    accent: 'border-l-slate-300'
+  },
+  red: {
+    header: 'bg-red-50 border-red-200 text-red-900',
+    badge: 'bg-red-100 text-red-700 border-red-200',
+    accent: 'border-l-red-300'
+  }
+};
 
 const getPermissionBadgeClass = (kind: PermissionKind) => {
   if (kind === 'tab') return 'bg-blue-50 text-blue-700 border-blue-200';
@@ -67,6 +172,18 @@ const getPermissionKindLabel = (kind: PermissionKind) => {
   return 'SU';
 };
 
+const getRoleIcon = (roleId: string, system?: boolean, active = false) => {
+  const color = active ? 'text-white' : (system ? 'text-blue-600' : 'text-sky-600');
+
+  if (roleId === 'su') return <ShieldCheck className={`h-4 w-4 ${color}`} />;
+  if (roleId === 'admin') return <Crown className={`h-4 w-4 ${color}`} />;
+  if (roleId === 'manager') return <UserCog className={`h-4 w-4 ${color}`} />;
+  if (roleId === 'operator') return <UserRound className={`h-4 w-4 ${color}`} />;
+  if (roleId === 'directory_only') return <BookUser className={`h-4 w-4 ${color}`} />;
+
+  return <UsersRound className={`h-4 w-4 ${color}`} />;
+};
+
 export default function PermissionsMatrixTab({
   roles,
   isLoadingRoles,
@@ -78,18 +195,53 @@ export default function PermissionsMatrixTab({
   allowAdminEditSuPermissions = false
 }: PermissionsMatrixTabProps) {
   const [newRoleName, setNewRoleName] = useState('');
+  const [selectedRoleId, setSelectedRoleId] = useState<string>('');
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
+    calls: true,
+    directory: true,
+    reports: true,
+    monitoring: true,
+    management: true,
+    balance: true,
+    settings: true,
+    users_roles: true,
+    system: isSu || showSuPermissionsToAdmin
+  });
 
-  const visiblePermissionRows = isSu || showSuPermissionsToAdmin
-    ? PERMISSION_ROWS
-    : PERMISSION_ROWS.filter(permission => permission.kind !== 'su');
+  const selectedRole = useMemo(() => {
+    if (!roles.length) return null;
+    return roles.find(role => role.id === selectedRoleId) || roles[0];
+  }, [roles, selectedRoleId]);
+
+  const visibleGroups = GROUPS
+    .map(group => ({
+      ...group,
+      rows: group.rows.filter(row => row.kind !== 'su' || isSu || showSuPermissionsToAdmin)
+    }))
+    .filter(group => group.rows.length > 0);
+
+  const allGroupsOpen = visibleGroups.length > 0 && visibleGroups.every(group => openGroups[group.id] !== false);
+
+  const toggleAllGroups = () => {
+    const nextOpen = !allGroupsOpen;
+    const nextState: Record<string, boolean> = {};
+    for (const group of visibleGroups) {
+      nextState[group.id] = nextOpen;
+    }
+    setOpenGroups(prev => ({ ...prev, ...nextState }));
+  };
 
   const canEditPermission = (permission: PermissionRow) => {
     if (permission.kind !== 'su') return true;
     return isSu || allowAdminEditSuPermissions;
   };
 
+  const toggleGroup = (groupId: string) => {
+    setOpenGroups(prev => ({ ...prev, [groupId]: !prev[groupId] }));
+  };
+
   const updateRolePermission = (roleId: string, key: PermissionKey, checked: boolean) => {
-    const permission = PERMISSION_ROWS.find(item => item.key === key);
+    const permission = GROUPS.flatMap(group => group.rows).find(item => item.key === key);
     if (permission && !canEditPermission(permission)) return;
 
     onRolesChange(
@@ -131,16 +283,15 @@ export default function PermissionsMatrixTab({
       id = `${id}_${Date.now()}`;
     }
 
-    onRolesChange([
-      ...roles,
-      {
-        id,
-        name: cleanName,
-        system: false,
-        permissions: {}
-      }
-    ]);
+    const newRole = {
+      id,
+      name: cleanName,
+      system: false,
+      permissions: {}
+    };
 
+    onRolesChange([...roles, newRole]);
+    setSelectedRoleId(id);
     setNewRoleName('');
   };
 
@@ -149,8 +300,26 @@ export default function PermissionsMatrixTab({
     if (!role || role.system) return;
     if (!window.confirm(`Удалить роль "${role.name}"?`)) return;
 
-    onRolesChange(roles.filter(item => item.id !== roleId));
+    const nextRoles = roles.filter(item => item.id !== roleId);
+    onRolesChange(nextRoles);
+
+    if (selectedRoleId === roleId) {
+      setSelectedRoleId(nextRoles[0]?.id || '');
+    }
   };
+
+  const groupEnabledCount = (group: PermissionGroup) => {
+    if (!selectedRole) return 0;
+    return group.rows.filter(row => selectedRole.permissions?.[row.key] === true).length;
+  };
+
+  if (isLoadingRoles) {
+    return (
+      <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
+        <div className="p-8 text-center text-sm text-slate-500">Загрузка ролей...</div>
+      </div>
+    );
+  }
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
@@ -158,125 +327,180 @@ export default function PermissionsMatrixTab({
         <div>
           <h4 className="text-sm font-black text-slate-900">Матрица доступа</h4>
           <p className="text-xs text-slate-500 mt-1">
-            Синие права открывают вкладки, зеленые включают функции внутри вкладок, красные являются служебными.
+            Выберите роль и настройте права по разделам. Синие права открывают вкладки, зеленые включают функции, красные являются служебными.
           </p>
         </div>
 
-        <div className="flex flex-wrap gap-2 text-[11px] font-black">
+        <div className="flex flex-wrap items-center gap-2 text-[11px] font-black">
           <span className="rounded-full border px-2 py-1 bg-blue-50 text-blue-700 border-blue-200">Вкладка</span>
           <span className="rounded-full border px-2 py-1 bg-emerald-50 text-emerald-700 border-emerald-200">Функция</span>
           {(isSu || showSuPermissionsToAdmin) && (
             <span className="rounded-full border px-2 py-1 bg-red-50 text-red-700 border-red-200">SU</span>
           )}
+
         </div>
       </div>
 
-      <div className="p-4 border-b border-slate-100 bg-white flex flex-col gap-2 lg:flex-row">
-        <input
-          type="text"
-          value={newRoleName}
-          onChange={(e) => setNewRoleName(e.target.value)}
-          placeholder="Название новой роли"
-          className="flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs"
-        />
-        <button
-          type="button"
-          onClick={addRole}
-          className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-100"
-        >
-          <Plus className="h-4 w-4" />
-          Добавить роль
-        </button>
+      <div className="p-4 border-b border-slate-100 bg-white">
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-wrap gap-2">
+            {roles.map(role => {
+              const active = selectedRole?.id === role.id;
+              return (
+                <button
+                  key={role.id}
+                  type="button"
+                  onClick={() => setSelectedRoleId(role.id)}
+                  className={
+                    active
+                      ? 'px-4 py-2 rounded-xl bg-blue-600 text-white text-xs font-black shadow-sm'
+                      : 'px-4 py-2 rounded-xl bg-slate-50 text-slate-700 border border-slate-200 text-xs font-bold hover:bg-blue-50 hover:text-blue-700'
+                  }
+                >
+                  <span className="inline-flex items-center gap-2">
+                    {getRoleIcon(role.id, role.system, active)}
+                    <span>{role.name}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="flex flex-col gap-2 lg:flex-row">
+            <input
+              type="text"
+              value={newRoleName}
+              onChange={(e) => setNewRoleName(e.target.value)}
+              placeholder="Название новой роли"
+              className="flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs"
+            />
+            <button
+              type="button"
+              onClick={addRole}
+              className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-100"
+            >
+              <Plus className="h-4 w-4" />
+              Добавить роль
+            </button>
+          </div>
+        </div>
       </div>
 
-      {isLoadingRoles ? (
-        <div className="p-8 text-center text-sm text-slate-500">Загрузка ролей...</div>
+      {!selectedRole ? (
+        <div className="p-8 text-center text-sm text-slate-500">Роли пока не загружены.</div>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[1800px] text-xs">
-            <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider">
-              <tr>
-                <th className="p-3 text-left">Роль</th>
-                {visiblePermissionRows.map(permission => (
-                  <th key={permission.key} className="p-3 text-center align-top">
-                    <div className="flex flex-col items-center gap-1" title={permission.hint}>
-                      <span>{permission.label}</span>
-                      <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-black normal-case tracking-normal ${getPermissionBadgeClass(permission.kind)}`}>
-                        {getPermissionKindLabel(permission.kind)}
+        <div className="p-4 space-y-3">
+          <div className="rounded-xl border border-blue-200 bg-blue-50 p-3">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-center gap-2 text-sm font-black text-blue-900">
+                {getRoleIcon(selectedRole.id, selectedRole.system)}
+                <span>Выбрана роль: {selectedRole.name}</span>
+              </div>
+
+              <button
+                type="button"
+                onClick={toggleAllGroups}
+                className="inline-flex items-center justify-center gap-1 rounded-lg border border-blue-200 bg-white px-3 py-1.5 text-[11px] font-black text-blue-700 hover:bg-blue-50"
+              >
+                {allGroupsOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                {allGroupsOpen ? 'Свернуть всё' : 'Развернуть всё'}
+              </button>
+            </div>
+
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              {selectedRole.system ? null : (
+                <>
+                  <input
+                    type="text"
+                    value={selectedRole.name}
+                    onChange={(e) => updateRoleName(selectedRole.id, e.target.value)}
+                    className="min-w-[260px] rounded-lg border border-blue-200 bg-white px-3 py-2 text-xs font-bold text-slate-800"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => deleteRole(selectedRole.id)}
+                    className="inline-flex items-center justify-center gap-2 rounded-lg bg-red-50 px-3 py-2 text-xs font-bold text-red-600 hover:bg-red-100"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    Удалить роль
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+
+          {visibleGroups.map(group => {
+            const colors = colorClasses[group.color];
+            const isOpen = openGroups[group.id] !== false;
+            const enabledCount = groupEnabledCount(group);
+
+            return (
+              <section key={group.id} className={`rounded-xl border overflow-hidden border-l-4 ${colors.accent}`}>
+                <button
+                  type="button"
+                  onClick={() => toggleGroup(group.id)}
+                  className={`w-full flex items-center justify-between gap-3 p-3 border-b text-left ${colors.header}`}
+                >
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      {isOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                      <span className="font-black text-sm">{group.title}</span>
+                      <span className={`rounded-full border px-2 py-0.5 text-[10px] font-black ${colors.badge}`}>
+                        {enabledCount}/{group.rows.length}
                       </span>
                     </div>
-                  </th>
-                ))}
-                <th className="p-3 text-center">Удалить</th>
-              </tr>
-            </thead>
+                    <div className="mt-1 text-xs opacity-80">{group.description}</div>
+                  </div>
+                </button>
 
-            <tbody className="divide-y divide-slate-100">
-              {roles.map(role => (
-                <tr key={role.id} className="hover:bg-slate-50">
-                  <td className="p-3">
-                    {role.system ? (
-                      <div>
-                        <div className="font-black text-slate-800">{role.name}</div>
-                        <div className="text-[11px] text-slate-400">системная роль</div>
-                      </div>
-                    ) : (
-                      <input
-                        type="text"
-                        value={role.name}
-                        onChange={(e) => updateRoleName(role.id, e.target.value)}
-                        className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-bold text-slate-800"
-                      />
-                    )}
-                  </td>
+                {isOpen && (
+                  <div className="bg-white divide-y divide-slate-100">
+                    {group.rows.map(permission => {
+                      const editable = canEditPermission(permission);
+                      const checked = selectedRole.permissions?.[permission.key] === true;
 
-                  {visiblePermissionRows.map(permission => {
-                    const editable = canEditPermission(permission);
-                    return (
-                      <td key={permission.key} className="p-3 text-center">
-                        <input
-                          type="checkbox"
-                          checked={role.permissions?.[permission.key] === true}
-                          disabled={!editable}
-                          title={!editable ? 'Изменять это служебное право может только SU' : permission.hint}
-                          onChange={(e) => updateRolePermission(role.id, permission.key, e.target.checked)}
+                      return (
+                        <label
+                          key={permission.key}
                           className={
-                            permission.kind === 'tab'
-                              ? 'rounded border-blue-300 text-blue-600'
-                              : permission.kind === 'feature'
-                                ? 'rounded border-emerald-300 text-emerald-600'
-                                : editable
-                                  ? 'rounded border-red-300 text-red-600'
-                                  : 'rounded border-red-200 text-red-300 opacity-40 cursor-not-allowed'
+                            'flex items-center justify-between gap-4 p-3 hover:bg-slate-50 '
+                            + (!editable ? 'opacity-70 ' : 'cursor-pointer ')
                           }
-                        />
-                      </td>
-                    );
-                  })}
+                        >
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-xs font-black text-slate-800">{permission.label}</span>
+                              <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-black ${getPermissionBadgeClass(permission.kind)}`}>
+                                {getPermissionKindLabel(permission.kind)}
+                              </span>
+                            </div>
+                            <div className="mt-1 text-[11px] text-slate-400">{permission.hint}</div>
+                          </div>
 
-                  <td className="p-3 text-center">
-                    {!role.system && (
-                      <button
-                        type="button"
-                        onClick={() => deleteRole(role.id)}
-                        className="inline-flex items-center justify-center rounded-lg bg-red-50 p-2 text-red-600 hover:bg-red-100"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-
-              {roles.length === 0 && (
-                <tr>
-                  <td colSpan={visiblePermissionRows.length + 2} className="p-8 text-center text-sm text-slate-500">
-                    Роли пока не загружены.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            disabled={!editable}
+                            title={!editable ? 'Изменять это служебное право может только SU' : permission.hint}
+                            onChange={(e) => updateRolePermission(selectedRole.id, permission.key, e.target.checked)}
+                            className={
+                              permission.kind === 'tab'
+                                ? 'rounded border-blue-300 text-blue-600'
+                                : permission.kind === 'feature'
+                                  ? 'rounded border-emerald-300 text-emerald-600'
+                                  : editable
+                                    ? 'rounded border-red-300 text-red-600'
+                                    : 'rounded border-red-200 text-red-300 opacity-40 cursor-not-allowed'
+                            }
+                          />
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+            );
+          })}
         </div>
       )}
 
