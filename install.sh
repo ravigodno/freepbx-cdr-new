@@ -10,9 +10,15 @@ cd "$APP_DIR"
 echo "[PBXPULS] configure AMI user"
 AMI_USER="pbxpuls"
 AMI_PASS="$(openssl rand -hex 16)"
+AMI_CONF="/etc/asterisk/manager_custom.conf"
 
-if [ -f /etc/asterisk/manager_custom.conf ]; then
-cat >> /etc/asterisk/manager_custom.conf <<EOFAMI
+if [ -f "$AMI_CONF" ]; then
+  cp "$AMI_CONF" "$AMI_CONF.bak.pbxpuls.$(date +%Y%m%d%H%M%S)"
+
+  # Remove all old [pbxpuls] blocks
+  perl -0pi -e 's/\n?\[pbxpuls\]\n(?:[^\[]|\[(?!pbxpuls\]))*//g' "$AMI_CONF"
+
+  cat >> "$AMI_CONF" <<EOFAMI
 
 [pbxpuls]
 secret=$AMI_PASS
@@ -23,7 +29,7 @@ write=system,call,log,verbose,command,agent,user,config,dtmf,reporting,cdr,dialp
 writetimeout=5000
 EOFAMI
 
-asterisk -rx "manager reload" || true
+  asterisk -rx "manager reload" || true
 fi
 
 echo "[PBXPULS] configure MariaDB CDR user"
@@ -33,9 +39,8 @@ DB_PASS="$(openssl rand -hex 16)"
 mysql -uroot <<EOFSQL || true
 DELETE FROM mysql.user WHERE User='$DB_USER' AND Host='localhost';
 FLUSH PRIVILEGES;
-CREATE USER '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS';
-GRANT SELECT ON asteriskcdrdb.* TO '$DB_USER'@'localhost';
-GRANT SELECT ON asterisk.* TO '$DB_USER'@'localhost';
+GRANT SELECT ON asteriskcdrdb.* TO '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS';
+GRANT SELECT ON asterisk.* TO '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS';
 FLUSH PRIVILEGES;
 EOFSQL
 
