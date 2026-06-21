@@ -918,9 +918,11 @@ function getDefaultAccessRoles() {
 // Ensure standard database schema is initialized
 function bootstrapDatabase() {
   if (!fs.existsSync(DB_FILE)) {
+    const suSalt = bcrypt.genSaltSync(10);
     const adminSalt = bcrypt.genSaltSync(10);
     const operatorSalt = bcrypt.genSaltSync(10);
     
+    const suPasswordHash = bcrypt.hashSync(process.env.SU_PASSWORD || 'su123456', suSalt);
     const adminPasswordHash = bcrypt.hashSync(process.env.ADMIN_PASSWORD || 'admin', adminSalt);
     const operatorPasswordHash = bcrypt.hashSync(process.env.OPERATOR_PASSWORD || 'operator', operatorSalt);
 
