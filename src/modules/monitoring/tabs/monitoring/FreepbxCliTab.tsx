@@ -61,7 +61,7 @@ const commandGroups: { title: string; commands: CmdItem[] }[] = [
 
 const quickCommands = commandGroups.flatMap(g => g.commands);
 
-export default function FreepbxCliTab() {
+export default function FreepbxCliTab({ token }: { token: string }) {
   const [command, setCommand] = useState('fwconsole --version');
   const [output, setOutput] = useState('');
   const [executedAt, setExecutedAt] = useState('');
@@ -91,7 +91,10 @@ export default function FreepbxCliTab() {
     try {
       const res = await fetch('/api/freepbx/fwconsole', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
         body: JSON.stringify({ command: cmd.trim() })
       });
 

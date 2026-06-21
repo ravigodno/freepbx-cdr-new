@@ -31,7 +31,7 @@ function toCsv(rows: Row[]) {
   return [cols.join(','), ...rows.map(r => cols.map(c => esc(r[c])).join(','))].join('\n');
 }
 
-export default function DbExplorerTab() {
+export default function DbExplorerTab({ token }: { token: string }) {
 
   const formatTime = (d) => {
     const hh = String(d.getHours()).padStart(2, '0');
@@ -124,7 +124,9 @@ export default function DbExplorerTab() {
 
   const searchByUid = async () => {
     if (!uid.trim()) return setMessage('Укажи uniqueid или linkedid');
-    const res = await fetch('/api/db-explorer/cdr/by-uid/' + encodeURIComponent(uid.trim()));
+    const res = await fetch('/api/db-explorer/cdr/by-uid/' + encodeURIComponent(uid.trim()), {
+      headers: { Authorization: `Bearer ${token}` }
+    });
     setResult(await res.json());
   };
 
@@ -135,14 +137,19 @@ export default function DbExplorerTab() {
     if (number) p.set('number', number);
     if (disposition) p.set('disposition', disposition);
 
-    const res = await fetch('/api/db-explorer/cdr/search?' + p.toString());
+    const res = await fetch('/api/db-explorer/cdr/search?' + p.toString(), {
+      headers: { Authorization: `Bearer ${token}` }
+    });
     setResult(await res.json());
   };
 
   const runSql = async () => {
     const res = await fetch('/api/db-explorer/query', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`
+      },
       body: JSON.stringify({ sql, limit: 300 })
     });
     setResult(await res.json());

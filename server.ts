@@ -1546,7 +1546,12 @@ app.post('/api/auth/login', async (req, res) => {
 
 
 // --- ACCESS ROLES MANAGEMENT ENDPOINTS ---
-app.get('/api/roles', requireAuth('admin'), async (req, res) => {
+app.get('/api/roles', requireAuth(), async (req, res) => {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.manage_roles !== true) {
+    return res.status(403).json({ error: 'Access denied: manage_roles permission required' });
+  }
+
   try {
     const localDb = await readLocalDb();
     const currentUser = (req as any).user;
@@ -1561,7 +1566,12 @@ app.get('/api/roles', requireAuth('admin'), async (req, res) => {
   }
 });
 
-app.put('/api/roles', requireAuth('admin'), async (req, res) => {
+app.put('/api/roles', requireAuth(), async (req, res) => {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.manage_roles !== true) {
+    return res.status(403).json({ error: 'Access denied: manage_roles permission required' });
+  }
+
   try {
     const incomingRoles = Array.isArray(req.body?.roles) ? req.body.roles : null;
     if (!incomingRoles) {
@@ -1610,7 +1620,12 @@ app.put('/api/roles', requireAuth('admin'), async (req, res) => {
 
 
 // --- USER ACCESS MANAGEMENT ENDPOINTS ---
-app.get('/api/users', requireAuth('admin'), async (req, res) => {
+app.get('/api/users', requireAuth(), async (req, res) => {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.manage_users !== true) {
+    return res.status(403).json({ error: 'Access denied: manage_users permission required' });
+  }
+
   try {
     const localDb = await readLocalDb();
     res.json((localDb.users || []).map(sanitizeUser));
@@ -1619,7 +1634,12 @@ app.get('/api/users', requireAuth('admin'), async (req, res) => {
   }
 });
 
-app.post('/api/users', requireAuth('admin'), async (req, res) => {
+app.post('/api/users', requireAuth(), async (req, res) => {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.manage_users !== true) {
+    return res.status(403).json({ error: 'Access denied: manage_users permission required' });
+  }
+
   try {
     const { username, password, role, extension, disabled, permissions } = req.body;
     const cleanUsername = String(username || '').trim();
@@ -1658,7 +1678,12 @@ app.post('/api/users', requireAuth('admin'), async (req, res) => {
   }
 });
 
-app.put('/api/users/:id', requireAuth('admin'), async (req, res) => {
+app.put('/api/users/:id', requireAuth(), async (req, res) => {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.manage_users !== true) {
+    return res.status(403).json({ error: 'Access denied: manage_users permission required' });
+  }
+
   try {
     const { id } = req.params;
     const { username, password, role, extension, disabled, permissions } = req.body;
@@ -1706,7 +1731,12 @@ app.put('/api/users/:id', requireAuth('admin'), async (req, res) => {
   }
 });
 
-app.delete('/api/users/:id', requireAuth('admin'), async (req, res) => {
+app.delete('/api/users/:id', requireAuth(), async (req, res) => {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.manage_users !== true) {
+    return res.status(403).json({ error: 'Access denied: manage_users permission required' });
+  }
+
   try {
     const { id } = req.params;
     const localDb = await readLocalDb();
@@ -1845,7 +1875,7 @@ app.get('/api/directory', requireAuth(), async (req, res) => {
 app.post('/api/directory', requireAuth(), async (req, res) => {
   try {
     const authUser = (req as any).user;
-    if (authUser?.role !== 'su' && authUser?.permissions?.edit_directory !== true) {
+    if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.edit_directory !== true) {
       res.status(403).json({ error: 'Нет прав на создание записей справочника' });
       return;
     }
@@ -1872,7 +1902,7 @@ app.post('/api/directory', requireAuth(), async (req, res) => {
 app.put('/api/directory/:id', requireAuth(), async (req, res) => {
   try {
     const authUser = (req as any).user;
-    if (authUser?.role !== 'su' && authUser?.permissions?.edit_directory !== true) {
+    if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.edit_directory !== true) {
       res.status(403).json({ error: 'Нет прав на редактирование справочника' });
       return;
     }
@@ -1915,7 +1945,7 @@ app.put('/api/directory/:id', requireAuth(), async (req, res) => {
 app.post('/api/directory/normalize', requireAuth(), async (req, res) => {
   try {
     const authUser = (req as any).user;
-    if (authUser?.role !== 'su' && authUser?.permissions?.manage_directory_import !== true) {
+    if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.manage_directory_import !== true) {
       res.status(403).json({ error: 'Нет прав на импорт справочника' });
       return;
     }
@@ -1945,7 +1975,7 @@ app.post('/api/directory/normalize', requireAuth(), async (req, res) => {
 app.post('/api/directory/import', requireAuth(), async (req, res) => {
   try {
     const authUser = (req as any).user;
-    if (authUser?.role !== 'su' && authUser?.permissions?.manage_directory_import !== true) {
+    if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.manage_directory_import !== true) {
       res.status(403).json({ error: 'Нет прав на импорт справочника' });
       return;
     }
@@ -1978,7 +2008,7 @@ app.post('/api/directory/import', requireAuth(), async (req, res) => {
 app.post('/api/directory/import-url/test', requireAuth(), async (req, res) => {
   try {
     const authUser = (req as any).user;
-    if (authUser?.role !== 'su' && authUser?.permissions?.manage_directory_import !== true) {
+    if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.manage_directory_import !== true) {
       res.status(403).json({ error: 'Нет прав на импорт справочника' });
       return;
     }
@@ -2005,7 +2035,7 @@ app.post('/api/directory/sync-url', async (req, res) => {
     const token = String(req.headers['x-sync-token'] || req.query.token || '');
     const user = getLoggedInUser(req);
     const isAdmin = user?.role === 'admin' || user?.role === 'su';
-    const canManageImport = user?.role === 'su' || user?.permissions?.manage_directory_import === true;
+    const canManageImport = user?.role === 'su' || user?.role === 'admin' || user?.permissions?.manage_directory_import === true;
     const tokenOk = token && token === String(localDb.settings.directorySyncToken || '');
 
     if ((!isAdmin || !canManageImport) && !tokenOk) {
@@ -2062,7 +2092,7 @@ app.post('/api/directory/:id/blacklist', requireAuth(), async (req, res) => {
   try {
     const authUser = (req as any).user;
 
-    if (authUser?.role !== 'su' && authUser?.permissions?.manage_blacklist !== true) {
+    if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.manage_blacklist !== true) {
       res.status(403).json({ error: 'Нет прав на управление черным списком' });
       return;
     }
@@ -2103,7 +2133,7 @@ app.post('/api/directory/:id/blacklist', requireAuth(), async (req, res) => {
 app.delete('/api/directory/:id', requireAuth(), async (req, res) => {
   try {
     const authUser = (req as any).user;
-    if (authUser?.role !== 'su' && authUser?.permissions?.edit_directory !== true) {
+    if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.edit_directory !== true) {
       res.status(403).json({ error: 'Нет прав на удаление записей справочника' });
       return;
     }
@@ -2592,7 +2622,7 @@ app.post('/api/click-to-call', requireAuth(), async (req, res) => {
   try {
     const authUser = (req as any).user;
 
-    if (authUser?.role !== 'su' && authUser?.permissions?.make_calls !== true) {
+    if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.make_calls !== true) {
       res.status(403).json({ error: 'Нет прав на совершение звонков' });
       return;
     }
@@ -2621,7 +2651,7 @@ app.post('/api/click-to-call', requireAuth(), async (req, res) => {
 app.post('/api/calls/:uniqueid/process', requireAuth(), async (req, res) => {
   const authUser = (req as any).user;
 
-  if (authUser?.role !== 'su' && authUser?.permissions?.process_calls !== true) {
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.process_calls !== true) {
     res.status(403).json({ error: 'Нет прав на обработку звонков' });
     return;
   }
@@ -4495,7 +4525,7 @@ app.get('/api/recordings/:filename', requireAuth(), async (req, res) => {
   const { filename } = req.params;
   const authUser = (req as any).user;
 
-  if (authUser?.role !== 'su' && authUser?.permissions?.listen_recordings !== true) {
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.listen_recordings !== true) {
     res.status(403).json({ error: 'Нет прав на прослушивание записей' });
     return;
   }
@@ -4614,7 +4644,7 @@ function parseCoreShowChannelsConcise(raw: string): any[] {
 app.get('/api/live-sessions', requireAuth(), async (req, res) => {
   try {
   const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.permissions?.view_active_calls !== true) {
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_active_calls !== true) {
     res.status(403).json({ error: 'Нет прав на активные звонки' });
     return;
   }
@@ -4671,7 +4701,7 @@ app.get('/api/live-sessions', requireAuth(), async (req, res) => {
 app.post('/api/live-sessions/save-log', requireAuth(), async (req, res) => {
   try {
   const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.permissions?.view_active_calls !== true) {
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_active_calls !== true) {
     res.status(403).json({ error: 'Нет прав на активные звонки' });
     return;
   }
@@ -4747,7 +4777,7 @@ function parseLiveConciseOutput(raw: string): any[] {
 app.get('/api/live-sessions-test', requireAuth(), async (req, res) => {
   try {
   const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.permissions?.view_active_calls !== true) {
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_active_calls !== true) {
     res.status(403).json({ error: 'Нет прав на активные звонки' });
     return;
   }
@@ -4791,7 +4821,7 @@ app.get('/api/live-sessions-test', requireAuth(), async (req, res) => {
 app.post('/api/live-sessions/snapshot', requireAuth(), async (req, res) => {
   try {
   const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.permissions?.view_active_calls !== true) {
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_active_calls !== true) {
     res.status(403).json({ error: 'Нет прав на активные звонки' });
     return;
   }
@@ -4839,7 +4869,7 @@ let tcpdumpStartedAt = '';
 
 app.get('/api/diagnostics/tcpdump/status', requireAuth(), async (req, res) => {
   const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.permissions?.view_tcpdump !== true) {
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_tcpdump !== true) {
     res.status(403).json({ error: 'Нет прав на TCPDUMP' });
     return;
   }
@@ -4855,7 +4885,7 @@ app.get('/api/diagnostics/tcpdump/status', requireAuth(), async (req, res) => {
 app.post('/api/diagnostics/tcpdump/start', requireAuth(), async (req, res) => {
   try {
   const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.permissions?.view_tcpdump !== true) {
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_tcpdump !== true) {
     res.status(403).json({ error: 'Нет прав на TCPDUMP' });
     return;
   }
@@ -4931,7 +4961,7 @@ app.post('/api/diagnostics/tcpdump/start', requireAuth(), async (req, res) => {
 app.post('/api/diagnostics/tcpdump/stop', requireAuth(), async (req, res) => {
   try {
   const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.permissions?.view_tcpdump !== true) {
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_tcpdump !== true) {
     res.status(403).json({ error: 'Нет прав на TCPDUMP' });
     return;
   }
@@ -4965,7 +4995,7 @@ app.post('/api/diagnostics/tcpdump/stop', requireAuth(), async (req, res) => {
 app.get('/api/diagnostics/tcpdump/files', requireAuth(), async (req, res) => {
   try {
   const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.permissions?.view_tcpdump !== true) {
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_tcpdump !== true) {
     res.status(403).json({ error: 'Нет прав на TCPDUMP' });
     return;
   }
@@ -4996,7 +5026,7 @@ app.get('/api/diagnostics/tcpdump/files', requireAuth(), async (req, res) => {
 app.get('/api/diagnostics/tcpdump/download/:filename', requireAuth(), async (req, res) => {
   try {
   const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.permissions?.view_tcpdump !== true) {
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_tcpdump !== true) {
     res.status(403).json({ error: 'Нет прав на TCPDUMP' });
     return;
   }
@@ -5019,7 +5049,7 @@ app.get('/api/diagnostics/tcpdump/download/:filename', requireAuth(), async (req
 app.get('/api/diagnostics/tcpdump/output', requireAuth(), async (req, res) => {
   try {
   const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.permissions?.view_tcpdump !== true) {
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_tcpdump !== true) {
     res.status(403).json({ error: 'Нет прав на TCPDUMP' });
     return;
   }
@@ -5131,7 +5161,7 @@ const allowedAsteriskCliCommands = [
 app.post('/api/asterisk/cli', requireAuth(), async (req, res) => {
   try {
   const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.permissions?.view_cli !== true) {
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_cli !== true) {
     res.status(403).json({ error: 'Нет прав на CLI / DB Explorer' });
     return;
   }
@@ -5172,7 +5202,7 @@ app.post('/api/asterisk/cli', requireAuth(), async (req, res) => {
 
 app.get('/api/asterisk/cli/commands', requireAuth(), async (req, res) => {
   const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.permissions?.view_cli !== true) {
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_cli !== true) {
     res.status(403).json({ error: 'Нет прав на CLI / DB Explorer' });
     return;
   }
@@ -5223,7 +5253,7 @@ const dangerousFwconsoleCommands = [
 app.post('/api/freepbx/fwconsole', requireAuth(), async (req, res) => {
   try {
   const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.permissions?.view_cli !== true) {
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_cli !== true) {
     res.status(403).json({ error: 'Нет прав на CLI / DB Explorer' });
     return;
   }
@@ -5283,7 +5313,7 @@ app.post('/api/freepbx/fwconsole', requireAuth(), async (req, res) => {
 
 app.get('/api/freepbx/fwconsole/commands', requireAuth(), async (req, res) => {
   const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.permissions?.view_cli !== true) {
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_cli !== true) {
     res.status(403).json({ error: 'Нет прав на CLI / DB Explorer' });
     return;
   }
@@ -5329,7 +5359,7 @@ function isSafeSelectSql(sql) {
 app.get('/api/db-explorer/tables', requireAuth(), async (req, res) => {
   try {
   const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.permissions?.view_cli !== true) {
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_cli !== true) {
     res.status(403).json({ error: 'Нет прав на CLI / DB Explorer' });
     return;
   }
@@ -5359,7 +5389,7 @@ app.get('/api/db-explorer/tables', requireAuth(), async (req, res) => {
 app.get('/api/db-explorer/columns', requireAuth(), async (req, res) => {
   try {
   const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.permissions?.view_cli !== true) {
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_cli !== true) {
     res.status(403).json({ error: 'Нет прав на CLI / DB Explorer' });
     return;
   }
@@ -5392,7 +5422,7 @@ app.get('/api/db-explorer/columns', requireAuth(), async (req, res) => {
 app.post('/api/db-explorer/query', requireAuth(), async (req, res) => {
   try {
   const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.permissions?.view_cli !== true) {
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_cli !== true) {
     res.status(403).json({ error: 'Нет прав на CLI / DB Explorer' });
     return;
   }
@@ -5429,7 +5459,7 @@ app.post('/api/db-explorer/query', requireAuth(), async (req, res) => {
 app.get('/api/db-explorer/cdr/by-uid/:uid', requireAuth(), async (req, res) => {
   try {
   const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.permissions?.view_cli !== true) {
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_cli !== true) {
     res.status(403).json({ error: 'Нет прав на CLI / DB Explorer' });
     return;
   }
@@ -5454,7 +5484,7 @@ app.get('/api/db-explorer/cdr/by-uid/:uid', requireAuth(), async (req, res) => {
 app.get('/api/db-explorer/cdr/search', requireAuth(), async (req, res) => {
   try {
   const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.permissions?.view_cli !== true) {
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_cli !== true) {
     res.status(403).json({ error: 'Нет прав на CLI / DB Explorer' });
     return;
   }

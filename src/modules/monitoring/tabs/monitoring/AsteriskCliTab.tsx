@@ -97,7 +97,7 @@ const commandGroups: { title: string; commands: CmdItem[] }[] = [
 
 const quickCommands = commandGroups.flatMap(g => g.commands);
 
-export default function AsteriskCliTab() {
+export default function AsteriskCliTab({ token }: { token: string }) {
   const [command, setCommand] = useState('core show channels');
   const [output, setOutput] = useState('');
   const [executedAt, setExecutedAt] = useState('');
@@ -127,7 +127,10 @@ export default function AsteriskCliTab() {
     try {
       const res = await fetch('/api/asterisk/cli', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
         body: JSON.stringify({ command: cmd.trim() })
       });
 

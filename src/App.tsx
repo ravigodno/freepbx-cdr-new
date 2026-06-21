@@ -1955,7 +1955,9 @@ export default function App() {
     setLiveSessionsError('');
 
     try {
-      const response = await fetch('/api/live-sessions-test');
+      const response = await fetch('/api/live-sessions-test', {
+        headers: { Authorization: `Bearer ${session?.token || ''}` }
+      });
       const data = await response.json();
 
       if (!response.ok || !data.success) {
@@ -2035,7 +2037,9 @@ export default function App() {
 
   const loadTcpdumpStatus = async () => {
     try {
-      const res = await fetch('/api/diagnostics/tcpdump/status');
+      const res = await fetch('/api/diagnostics/tcpdump/status', {
+        headers: { Authorization: `Bearer ${session?.token || ''}` }
+      });
       const data = await res.json();
       setTcpdumpStatus(data);
     } catch {}
@@ -2043,7 +2047,9 @@ export default function App() {
 
   const loadTcpdumpFiles = async () => {
     try {
-      const res = await fetch('/api/diagnostics/tcpdump/files');
+      const res = await fetch('/api/diagnostics/tcpdump/files', {
+        headers: { Authorization: `Bearer ${session?.token || ''}` }
+      });
       const data = await res.json();
       if (data.success) setTcpdumpFiles(data.files || []);
     } catch {}
@@ -2052,7 +2058,10 @@ export default function App() {
   const startTcpdump = async (mode: string) => {
     setTcpdumpMessage('Запускаю tcpdump...');
     try {
-      const res = await fetch('/api/diagnostics/tcpdump/start?mode=' + encodeURIComponent(mode) + '&iface=any', { method: 'POST' });
+      const res = await fetch('/api/diagnostics/tcpdump/start?mode=' + encodeURIComponent(mode) + '&iface=any', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session?.token || ''}` }
+      });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'Ошибка запуска tcpdump');
       setTcpdumpMessage('tcpdump запущен: ' + mode);
@@ -2067,7 +2076,10 @@ export default function App() {
   const stopTcpdump = async () => {
     setTcpdumpMessage('Останавливаю tcpdump...');
     try {
-      const res = await fetch('/api/diagnostics/tcpdump/stop', { method: 'POST' });
+      const res = await fetch('/api/diagnostics/tcpdump/stop', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session?.token || ''}` }
+      });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'Ошибка остановки tcpdump');
       setTcpdumpMessage('tcpdump остановлен');
@@ -2088,7 +2100,9 @@ export default function App() {
 
   const loadTcpdumpOutput = async () => {
     try {
-      const res = await fetch('/api/diagnostics/tcpdump/output');
+      const res = await fetch('/api/diagnostics/tcpdump/output', {
+        headers: { Authorization: `Bearer ${session?.token || ''}` }
+      });
       const data = await res.json();
       if (data.success) setTcpdumpOutput(data.output || '');
     } catch {}
@@ -2488,26 +2502,27 @@ export default function App() {
           </div>
 
           {monitorMode === 'tcpdump' && hasPermission('view_tcpdump') && (
-            <TcpdumpTab />
+            <TcpdumpTab token={session?.token || ''} />
           )}
 
           {monitorMode === 'sngrep' && hasPermission('view_sngrep') && (
             <SngrepTab
               tcpdumpOutput={tcpdumpOutput}
               loadTcpdumpOutput={loadTcpdumpOutput}
+              token={session?.token || ''}
             />
           )}
 
           {monitorMode === 'cli' && hasPermission('view_cli') && (
-            <AsteriskCliTab />
+            <AsteriskCliTab token={session?.token || ''} />
           )}
 
           {monitorMode === 'freepbx' && hasPermission('view_cli') && (
-            <FreepbxCliTab />
+            <FreepbxCliTab token={session?.token || ''} />
           )}
 
           {monitorMode === 'db' && hasPermission('view_cli') && (
-            <DbExplorerTab />
+            <DbExplorerTab token={session?.token || ''} />
           )}
 
           {snapshotStatus && (

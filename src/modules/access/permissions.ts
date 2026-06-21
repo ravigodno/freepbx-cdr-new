@@ -65,7 +65,7 @@ export function hasUserPermission(
 ): boolean {
   if (!session) return false;
 
-  if (session.role === 'su') return true;
+  if (session.role === 'su' || session.role === 'admin') return true;
 
   if (session.permissions && Object.prototype.hasOwnProperty.call(session.permissions, perm)) {
     return session.permissions[perm] === true;

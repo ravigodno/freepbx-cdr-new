@@ -13,7 +13,7 @@ function formatBytes(bytes: any) {
   return (n / 1024 / 1024).toFixed(2) + ' MB';
 }
 
-export default function TcpdumpTab() {
+export default function TcpdumpTab({ token }: { token: string }) {
   const [iface, setIface] = useState('any');
   const [mode, setMode] = useState('sip');
   const [sipPorts, setSipPorts] = useState('5060,5061,5160');
@@ -75,19 +75,19 @@ export default function TcpdumpTab() {
   const commandPreview = `tcpdump -i ${iface} -s 0 -U -w <file.pcap> ${bpfFilter}`;
 
   const loadStatus = async () => {
-    const res = await fetch('/api/diagnostics/tcpdump/status');
+    const res = await fetch('/api/diagnostics/tcpdump/status', { headers: { Authorization: `Bearer ${token}` } });
     const data = await res.json();
     setStatus(data);
   };
 
   const loadFiles = async () => {
-    const res = await fetch('/api/diagnostics/tcpdump/files');
+    const res = await fetch('/api/diagnostics/tcpdump/files', { headers: { Authorization: `Bearer ${token}` } });
     const data = await res.json();
     if (data.success) setFiles(data.files || []);
   };
 
   const loadOutput = async () => {
-    const res = await fetch('/api/diagnostics/tcpdump/output');
+    const res = await fetch('/api/diagnostics/tcpdump/output', { headers: { Authorization: `Bearer ${token}` } });
     const data = await res.json();
     if (data.success) setOutput(data.output || '');
   };
@@ -113,7 +113,7 @@ export default function TcpdumpTab() {
       + '&iface=' + encodeURIComponent(iface)
       + '&filter=' + encodeURIComponent(bpfFilter);
 
-    const res = await fetch(url, { method: 'POST' });
+    const res = await fetch(url, { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
     const data = await res.json();
 
     setMessage(data.success ? 'Захват запущен' : 'Ошибка: ' + (data.error || 'tcpdump'));
@@ -124,7 +124,7 @@ export default function TcpdumpTab() {
 
   const stopCapture = async () => {
     setMessage('Останавливаю tcpdump...');
-    const res = await fetch('/api/diagnostics/tcpdump/stop', { method: 'POST' });
+    const res = await fetch('/api/diagnostics/tcpdump/stop', { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
     const data = await res.json();
 
     setMessage(data.success ? 'Захват остановлен' : 'Ошибка остановки');
@@ -162,14 +162,14 @@ export default function TcpdumpTab() {
       + '&host=' + encodeURIComponent(wiresharkIp)
       + '&port=' + encodeURIComponent(wiresharkPort);
 
-    const res = await fetch(url, { method: 'POST' });
+    const res = await fetch(url, { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
     const data = await res.json();
 
     setMessage(data.success ? 'Трансляция запущена на ' + wiresharkIp + ':' + wiresharkPort : 'Ошибка: ' + (data.error || 'stream'));
   };
 
   const stopStream = async () => {
-    const res = await fetch('/api/diagnostics/tcpdump/stream/stop', { method: 'POST' });
+    const res = await fetch('/api/diagnostics/tcpdump/stream/stop', { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
     const data = await res.json();
     setMessage(data.success ? 'Трансляция остановлена' : 'Ошибка остановки трансляции');
   };
