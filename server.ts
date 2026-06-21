@@ -40,7 +40,7 @@ const __filename = myFilename;
 const __dirname = myDirname;
 
 const PORT = process.env.PORT || '3000';
-const NODE_ENV = process.env.NODE_ENV || 'development';
+const NODE_ENV = process.env.NODE_ENV || 'production';
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
 const DTMF_EVENTS_FILE = path.join(DATA_DIR, 'dtmfEvents.json');
@@ -917,75 +917,32 @@ function getDefaultAccessRoles() {
 
 // Ensure standard database schema is initialized
 function bootstrapDatabase() {
-  if (!fs.existsSync(DB_FILE)) {
-    const suSalt = bcrypt.genSaltSync(10);
-    const adminSalt = bcrypt.genSaltSync(10);
-    const operatorSalt = bcrypt.genSaltSync(10);
-    
-    const suPasswordHash = bcrypt.hashSync(process.env.SU_PASSWORD || 'su123456', suSalt);
-    const adminPasswordHash = bcrypt.hashSync(process.env.ADMIN_PASSWORD || 'admin', adminSalt);
-    const operatorPasswordHash = bcrypt.hashSync(process.env.OPERATOR_PASSWORD || 'operator', operatorSalt);
+  let current: any = null;
 
-    const defaultDb = {
-      users: [
-        {
-          id: 'u0',
-          username: process.env.SU_USERNAME || 'su',
-          passwordHash: suPasswordHash,
-          role: 'su' as UserRole,
-          extension: '',
-          disabled: false,
-          createdAt: new Date().toISOString()
-        },
-        {
-          id: 'u1',
-          username: process.env.ADMIN_USERNAME || 'admin',
-          passwordHash: adminPasswordHash,
-          role: 'admin' as UserRole,
-          extension: '',
-          disabled: false,
-          createdAt: new Date().toISOString()
-        },
-        {
-          id: 'u2',
-          username: process.env.OPERATOR_USERNAME || 'operator',
-          passwordHash: operatorPasswordHash,
-          role: 'operator' as UserRole,
-          extension: process.env.OPERATOR_EXTENSION || '101',
-          disabled: false,
-          createdAt: new Date().toISOString()
-        }
-      ],
-      missedCallStatuses: [] as MissedCallStatus[],
-      roles: getDefaultAccessRoles(),
-      settings: {
-        recordingsPath: process.env.RECORDINGS_PATH || '/var/spool/asterisk/monitor',
-        recordingsUrlPrefix: process.env.RECORDINGS_URL_PREFIX || '',
-        dbHost: process.env.FREEPBX_DB_HOST || 'localhost',
-        dbPort: parseInt(process.env.FREEPBX_DB_PORT || '3306', 10),
-        dbName: process.env.FREEPBX_DB_NAME || 'asteriskcdrdb',
-        dbUser: process.env.FREEPBX_DB_USER || 'asterisk_cdr_ro',
-        dbPass: process.env.FREEPBX_DB_PASSWORD || '',
-        
-        // Default Asterisk AMI settings
-        amiHost: process.env.ASTERISK_AMI_HOST || 'localhost',
-        amiPort: parseInt(process.env.ASTERISK_AMI_PORT || '5038', 10),
-        amiUser: process.env.ASTERISK_AMI_USER || 'clicktocall',
-        amiPass: process.env.ASTERISK_AMI_PASSWORD || '',
-        amiContext: process.env.ASTERISK_AMI_CONTEXT || 'from-internal',
-        
-        // Auto-Resolution Settings (KPI Callback timeframe in minutes)
-        callbackKpiMinutes: parseInt(process.env.CALLBACK_KPI_MINUTES || '60', 10),
+  try {
+    if (fs.existsSync(DB_FILE)) {
+      current = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    }
+  } catch (e: any) {
+    console.error('[BOOTSTRAP] db.json read/parse failed:', e.message);
+  }
 
-        // Default Normalization settings
-        normEnabled: true,
-        normReplace8With7: true,
-        normStripSymbols: true,
-        normDigitsOnly: false
-      } as AppSettings
-    };
+  const normalized = normalizeLocalDbSchema(current);
 
-    fs.writeFileSync(DB_FILE, JSON.stringify(defaultDb, null, 2), 'utf8');
+  const needsWrite =
+    !current ||
+    !Array.isArray(current.users) ||
+    !current.users.length ||
+    !Array.isArray(current.roles) ||
+    !current.roles.length ||
+    !current.settings ||
+    !current.settings.dbHost ||
+    !current.settings.recordingsPath;
+
+  if (needsWrite) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(DB_FILE, JSON.stringify(normalized, null, 2));
+    console.log('[BOOTSTRAP] Local database created/repaired:', DB_FILE);
   }
 }
 
@@ -1015,6 +972,99 @@ const dbLock = {
     this.isLocked = false;
   }
 };
+
+
+function normalizeLocalDbSchema(db: any): any {
+  const defaults = getDefaultLocalDb();
+
+  const next = {
+    ...defaults,
+    ...(db || {}),
+    users: Array.isArray(db?.users) && db.users.length ? db.users : defaults.users,
+    roles: Array.isArray(db?.roles) && db.roles.length ? db.roles : defaults.roles,
+    settings: {
+      ...defaults.settings,
+      ...(db?.settings || {})
+    },
+    missedCallStatuses: Array.isArray(db?.missedCallStatuses) ? db.missedCallStatuses : [],
+    directory: Array.isArray(db?.directory) ? db.directory : [],
+    blacklist: Array.isArray(db?.blacklist) ? db.blacklist : []
+  };
+
+  return next;
+}
+
+function getDefaultLocalDb(): any {
+  const suSalt = bcrypt.genSaltSync(10);
+  const adminSalt = bcrypt.genSaltSync(10);
+  const operatorSalt = bcrypt.genSaltSync(10);
+
+  return {
+    users: [
+      {
+        id: 'u0',
+        username: process.env.SU_USERNAME || 'su',
+        passwordHash: bcrypt.hashSync(process.env.SU_PASSWORD || 'su123456', suSalt),
+        role: 'su' as UserRole,
+        extension: '',
+        disabled: false,
+        createdAt: new Date().toISOString(),
+        permissions: {}
+      },
+      {
+        id: 'u1',
+        username: process.env.ADMIN_USERNAME || 'admin',
+        passwordHash: bcrypt.hashSync(process.env.ADMIN_PASSWORD || 'admin', adminSalt),
+        role: 'admin' as UserRole,
+        extension: '',
+        disabled: false,
+        createdAt: new Date().toISOString(),
+        permissions: {}
+      },
+      {
+        id: 'u2',
+        username: process.env.OPERATOR_USERNAME || 'operator',
+        passwordHash: bcrypt.hashSync(process.env.OPERATOR_PASSWORD || 'operator', operatorSalt),
+        role: 'operator' as UserRole,
+        extension: process.env.OPERATOR_EXTENSION || '101',
+        disabled: false,
+        createdAt: new Date().toISOString(),
+        permissions: {}
+      }
+    ],
+    missedCallStatuses: [],
+    directory: [],
+    blacklist: [],
+    roles: getDefaultAccessRoles(),
+    settings: {
+      dbHost: process.env.DB_HOST || 'localhost',
+      dbPort: parseInt(process.env.DB_PORT || '3306', 10),
+      dbName: process.env.DB_NAME || 'asteriskcdrdb',
+      dbUser: process.env.DB_USER || 'freepbxuser',
+      dbPass: process.env.DB_PASS || '',
+      recordingsPath: process.env.RECORDINGS_PATH || '/var/spool/asterisk/monitor',
+      amiHost: process.env.AMI_HOST || 'localhost',
+      amiPort: parseInt(process.env.AMI_PORT || '5038', 10),
+      amiUser: process.env.AMI_USER || 'clicktocall',
+      amiPass: process.env.AMI_PASS || '',
+      amiContext: process.env.AMI_CONTEXT || 'from-internal',
+      callbackKpiMinutes: 60,
+      normEnabled: true,
+      normReplace8With7: true,
+      normStripSymbols: true,
+      normDigitsOnly: false,
+      directoryImportUrl: '',
+      directoryImportFormat: 'csv',
+      directoryImportMode: 'upsert',
+      directoryImportSchedule: 'manual',
+      directorySyncToken: crypto.randomBytes(24).toString('hex'),
+      directorySyncAsteriskBlacklist: false,
+      showSuRoleToAdmin: false,
+      showSuPermissionsToAdmin: false,
+      allowAdminEditSuPermissions: false
+    }
+  };
+}
 
 async function readLocalDb(): Promise<{
   users: WebUser[];
