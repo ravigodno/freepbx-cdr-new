@@ -3,10 +3,12 @@ import { roleHasPermission } from './roleMatrix';
 
 export type PermissionKey =
   | 'view_calls'
+  | 'own_calls_only'
   | 'view_directory'
   | 'view_reports'
   | 'listen_recordings'
   | 'make_calls'
+  | 'show_call_modal'
   | 'edit_directory'
   | 'export_excel'
   | 'view_monitoring'

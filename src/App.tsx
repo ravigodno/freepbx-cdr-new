@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Phone,
   PhoneIncoming,
@@ -881,6 +881,18 @@ export default function App() {
     return localStorage.getItem('operator_asterisk_ext') || '101';
   });
   const [liveCallBanner, setLiveCallBanner] = useState<LiveCallBanner | null>(null);
+  const [liveCallBannerPos, setLiveCallBannerPos] = useState(() => {
+    try {
+      const saved = localStorage.getItem('pbxpuls_live_call_banner_pos');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (typeof parsed?.x === 'number' && typeof parsed?.y === 'number') {
+          return parsed;
+        }
+      }
+    } catch {}
+    return { x: 16, y: 74 };
+  });
   const [isCallingModalOpen, setIsCallingModalOpen] = useState(false);
   const [callingLog, setCallingLog] = useState<string[]>([]);
   const [callingTarget, setCallingTarget] = useState('');
@@ -923,7 +935,8 @@ export default function App() {
       return;
     }
     
-    const fromExt = session?.role === 'operator' ? (session.extension || myExt) : myExt;
+    const forceOwnCallsByPermission = session?.permissions?.own_calls_only === true;
+  const fromExt = (session?.role === 'operator' || forceOwnCallsByPermission) ? (session.extension || myExt) : myExt;
     setCallingTarget(targetName ? `${targetName} (${cleaned})` : cleaned);
     if (session?.role !== 'operator') {
       setCallingLog([
@@ -932,7 +945,7 @@ export default function App() {
         `[Система] Назначение связи: ${cleaned}`,
         `[Система] Отправка запроса на Asterisk AMI сервер...`
       ]);
-      setIsCallingModalOpen(true);
+      if (session?.permissions?.show_call_modal === true) setIsCallingModalOpen(true);
     }
     setIsC2CLoading(true);
     
@@ -944,7 +957,7 @@ export default function App() {
           'Authorization': `Bearer ${session?.token}`
         },
         body: JSON.stringify({
-          fromExtension: (session?.role === 'operator' ? (session.extension || myExt) : myExt).trim(),
+          fromExtension: ((session?.role === 'operator' || session?.permissions?.own_calls_only === true) ? (session.extension || myExt) : myExt).trim(),
           toPhoneNumber: cleaned
         })
       });
@@ -1786,6 +1799,56 @@ export default function App() {
       loadAdminSettings();
     }
   }, [session, startDate, endDate, startTime, endTime, statusFilter, isDemoModeActive, onlyMyCalls, myExt]);
+
+
+  const getFirstAllowedActiveView = useCallback((): typeof activeView => {
+    if (!session) return 'reports';
+
+    if (hasPermission('view_calls')) return 'calls';
+    if (hasPermission('view_directory')) return 'directory';
+    if (hasPermission('view_reports')) return 'reports';
+    if (hasPermission('view_monitoring')) return 'monitoring';
+    if (hasPermission('view_management')) return 'management';
+    if (hasPermission('view_balance')) return 'balance';
+    if (hasPermission('view_settings') || hasPermission('manage_users') || hasPermission('manage_roles')) return 'settings';
+
+    return 'reports';
+  }, [session, settings]);
+
+  const isActiveViewAllowed = useCallback((view: typeof activeView): boolean => {
+    if (!session) return false;
+
+    if (view === 'calls') return hasPermission('view_calls');
+    if (view === 'directory') return hasPermission('view_directory');
+    if (view === 'reports') return hasPermission('view_reports');
+    if (view === 'monitoring') return hasPermission('view_monitoring');
+    if (view === 'management') return hasPermission('view_management');
+    if (view === 'balance') return hasPermission('view_balance');
+    if (view === 'settings') return hasPermission('view_settings') || hasPermission('manage_users') || hasPermission('manage_roles');
+
+    return false;
+  }, [session, settings]);
+
+  useEffect(() => {
+    if (!session) return;
+
+    if (!isActiveViewAllowed(activeView)) {
+      const nextView = getFirstAllowedActiveView();
+      setActiveView(nextView);
+      return;
+    }
+
+    if (activeView === 'settings' && !isAdminRole(session.role)) {
+      if (hasPermission('manage_users')) {
+        setSettingsTab('access');
+      } else if (hasPermission('manage_roles')) {
+        setSettingsTab('permissions');
+      } else {
+        setSettingsTab('appearance');
+      }
+    }
+  }, [session, activeView, settings, isActiveViewAllowed, getFirstAllowedActiveView]);
+
 
   // Adjust active view based on permissions
   useEffect(() => {
@@ -2986,7 +3049,7 @@ export default function App() {
                 </span>
                 <input
                   type="text"
-                  value={session.role === 'operator' ? (session.extension || '') : myExt}
+                  value={(session.role === 'operator' || session.permissions?.own_calls_only === true) ? (session.extension || '') : myExt}
                   onChange={(e) => setMyExt(e.target.value.replace(/[^\d]/g, ''))}
                   placeholder="101"
                   maxLength={6}
@@ -2998,7 +3061,7 @@ export default function App() {
               <label className="flex items-center gap-1.5 cursor-pointer select-none">
                 <input
                   type="checkbox"
-                  checked={session.role === 'operator' ? true : onlyMyCalls}
+                  checked={(session.role === 'operator' || session.permissions?.own_calls_only === true) ? true : onlyMyCalls}
                   disabled={session.role === 'operator'}
                   onChange={(e) => {
                     setOnlyMyCalls(e.target.checked);
@@ -3053,6 +3116,52 @@ export default function App() {
       </header>
 
       {liveCallBanner?.active && (() => {
+        const handleLiveCallBannerDragStart = (event: React.MouseEvent<HTMLDivElement>) => {
+          if (event.button !== 0) return;
+
+          const target = event.target as HTMLElement | null;
+          if (target?.closest('button,a,input,textarea,select')) return;
+
+          event.preventDefault();
+
+          const padding = 12;
+          const bannerWidth = Math.min(window.innerWidth - padding * 2, 1280);
+          const bannerHeight = 130;
+          const startClientX = event.clientX;
+          const startClientY = event.clientY;
+          const startX = liveCallBannerPos.x;
+          const startY = liveCallBannerPos.y;
+
+          const clamp = (x: number, y: number) => ({
+            x: Math.max(padding, Math.min(x, window.innerWidth - bannerWidth - padding)),
+            y: Math.max(padding, Math.min(y, window.innerHeight - bannerHeight - padding)),
+          });
+
+          const handleMouseMove = (moveEvent: MouseEvent) => {
+            moveEvent.preventDefault();
+
+            const next = clamp(
+              startX + moveEvent.clientX - startClientX,
+              startY + moveEvent.clientY - startClientY
+            );
+
+            setLiveCallBannerPos(next);
+            localStorage.setItem('pbxpuls_live_call_banner_pos', JSON.stringify(next));
+          };
+
+          const handleMouseUp = () => {
+            document.removeEventListener('mousemove', handleMouseMove);
+            document.removeEventListener('mouseup', handleMouseUp);
+            document.body.style.userSelect = '';
+            document.body.style.cursor = '';
+          };
+
+          document.body.style.userSelect = 'none';
+          document.body.style.cursor = 'grabbing';
+          document.addEventListener('mousemove', handleMouseMove);
+          document.addEventListener('mouseup', handleMouseUp);
+        };
+
         const isIncomingLive = liveCallBanner.direction === 'incoming';
         const isOutgoingLive = liveCallBanner.direction === 'outgoing';
         const isInternalLive = liveCallBanner.direction === 'internal';
@@ -3068,8 +3177,19 @@ export default function App() {
         const durationText = liveCallBanner.durationText || `${Math.floor((liveCallBanner.durationSec || 0) / 60)}:${String((liveCallBanner.durationSec || 0) % 60).padStart(2, '0')}`;
 
         return (
-          <div className="fixed top-[74px] left-1/2 -translate-x-1/2 z-50 w-[calc(100%-32px)] max-w-[1720px] pointer-events-none">
-            <div className="pointer-events-auto relative overflow-hidden rounded-2xl border border-blue-200 bg-white shadow-2xl shadow-slate-900/12  animate-fade-in">
+          <div
+            className="fixed z-50 pointer-events-none"
+            style={{
+              left: liveCallBannerPos.x,
+              top: liveCallBannerPos.y,
+              width: 'min(calc(100vw - 32px), 1280px)',
+            }}
+          >
+            <div
+              onMouseDown={handleLiveCallBannerDragStart}
+              className="pointer-events-auto relative overflow-hidden rounded-2xl border border-blue-200 bg-white shadow-2xl shadow-slate-900/12 animate-fade-in select-none cursor-grab active:cursor-grabbing"
+              title="Перетащить окно звонка"
+            >
               <div className="absolute inset-y-0 left-0 w-2 bg-gradient-to-b from-red-500 to-rose-600" />
               <div className="flex items-stretch min-h-[104px]">
                 <div className="flex items-center gap-4 px-6 py-4 min-w-[420px] max-w-[520px] border-r border-slate-200">
@@ -3314,7 +3434,7 @@ export default function App() {
                 </span>
                 <input
                   type="text"
-                  value={session.role === 'operator' ? (session.extension || '') : myExt}
+                  value={(session.role === 'operator' || session.permissions?.own_calls_only === true) ? (session.extension || '') : myExt}
                   onChange={(e) => setMyExt(e.target.value.replace(/[^\d]/g, ''))}
                   placeholder="101"
                   maxLength={6}
@@ -3326,7 +3446,7 @@ export default function App() {
                 <label className="flex items-center gap-1.5 cursor-pointer">
                   <input
                     type="checkbox"
-                    checked={session.role === 'operator' ? true : onlyMyCalls}
+                    checked={(session.role === 'operator' || session.permissions?.own_calls_only === true) ? true : onlyMyCalls}
                     disabled={session.role === 'operator'}
                     onChange={(e) => {
                       setOnlyMyCalls(e.target.checked);
