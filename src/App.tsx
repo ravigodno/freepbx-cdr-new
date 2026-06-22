@@ -881,6 +881,18 @@ export default function App() {
     return localStorage.getItem('operator_asterisk_ext') || '101';
   });
   const [liveCallBanner, setLiveCallBanner] = useState<LiveCallBanner | null>(null);
+  const [liveCallBannerPos, setLiveCallBannerPos] = useState(() => {
+    try {
+      const saved = localStorage.getItem('pbxpuls_live_call_banner_pos');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (typeof parsed?.x === 'number' && typeof parsed?.y === 'number') {
+          return parsed;
+        }
+      }
+    } catch {}
+    return { x: 16, y: 74 };
+  });
   const [isCallingModalOpen, setIsCallingModalOpen] = useState(false);
   const [callingLog, setCallingLog] = useState<string[]>([]);
   const [callingTarget, setCallingTarget] = useState('');
@@ -3104,6 +3116,52 @@ export default function App() {
       </header>
 
       {liveCallBanner?.active && (() => {
+        const handleLiveCallBannerDragStart = (event: React.MouseEvent<HTMLDivElement>) => {
+          if (event.button !== 0) return;
+
+          const target = event.target as HTMLElement | null;
+          if (target?.closest('button,a,input,textarea,select')) return;
+
+          event.preventDefault();
+
+          const padding = 12;
+          const bannerWidth = Math.min(window.innerWidth - padding * 2, 1280);
+          const bannerHeight = 130;
+          const startClientX = event.clientX;
+          const startClientY = event.clientY;
+          const startX = liveCallBannerPos.x;
+          const startY = liveCallBannerPos.y;
+
+          const clamp = (x: number, y: number) => ({
+            x: Math.max(padding, Math.min(x, window.innerWidth - bannerWidth - padding)),
+            y: Math.max(padding, Math.min(y, window.innerHeight - bannerHeight - padding)),
+          });
+
+          const handleMouseMove = (moveEvent: MouseEvent) => {
+            moveEvent.preventDefault();
+
+            const next = clamp(
+              startX + moveEvent.clientX - startClientX,
+              startY + moveEvent.clientY - startClientY
+            );
+
+            setLiveCallBannerPos(next);
+            localStorage.setItem('pbxpuls_live_call_banner_pos', JSON.stringify(next));
+          };
+
+          const handleMouseUp = () => {
+            document.removeEventListener('mousemove', handleMouseMove);
+            document.removeEventListener('mouseup', handleMouseUp);
+            document.body.style.userSelect = '';
+            document.body.style.cursor = '';
+          };
+
+          document.body.style.userSelect = 'none';
+          document.body.style.cursor = 'grabbing';
+          document.addEventListener('mousemove', handleMouseMove);
+          document.addEventListener('mouseup', handleMouseUp);
+        };
+
         const isIncomingLive = liveCallBanner.direction === 'incoming';
         const isOutgoingLive = liveCallBanner.direction === 'outgoing';
         const isInternalLive = liveCallBanner.direction === 'internal';
@@ -3119,8 +3177,19 @@ export default function App() {
         const durationText = liveCallBanner.durationText || `${Math.floor((liveCallBanner.durationSec || 0) / 60)}:${String((liveCallBanner.durationSec || 0) % 60).padStart(2, '0')}`;
 
         return (
-          <div className="fixed top-[74px] left-1/2 -translate-x-1/2 z-50 w-[calc(100%-32px)] max-w-[1720px] pointer-events-none">
-            <div className="pointer-events-auto relative overflow-hidden rounded-2xl border border-blue-200 bg-white shadow-2xl shadow-slate-900/12  animate-fade-in">
+          <div
+            className="fixed z-50 pointer-events-none"
+            style={{
+              left: liveCallBannerPos.x,
+              top: liveCallBannerPos.y,
+              width: 'min(calc(100vw - 32px), 1280px)',
+            }}
+          >
+            <div
+              onMouseDown={handleLiveCallBannerDragStart}
+              className="pointer-events-auto relative overflow-hidden rounded-2xl border border-blue-200 bg-white shadow-2xl shadow-slate-900/12 animate-fade-in select-none cursor-grab active:cursor-grabbing"
+              title="Перетащить окно звонка"
+            >
               <div className="absolute inset-y-0 left-0 w-2 bg-gradient-to-b from-red-500 to-rose-600" />
               <div className="flex items-stretch min-h-[104px]">
                 <div className="flex items-center gap-4 px-6 py-4 min-w-[420px] max-w-[520px] border-r border-slate-200">
