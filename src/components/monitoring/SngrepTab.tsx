@@ -3,7 +3,6 @@ import React, { useEffect, useMemo, useState } from 'react';
 interface Props {
   tcpdumpOutput: string;
   loadTcpdumpOutput: () => void;
-  token?: string;
 }
 
 type SipMsg = {
@@ -97,7 +96,7 @@ function badgeClass(method: string) {
   return 'bg-slate-50 text-slate-700 border-slate-200';
 }
 
-export default function SngrepTab({ tcpdumpOutput, loadTcpdumpOutput, token }: Props) {
+export default function SngrepTab({ tcpdumpOutput, loadTcpdumpOutput }: Props) {
   const [selected, setSelected] = useState<string>('');
   const [msg, setMsg] = useState('');
 
@@ -109,14 +108,14 @@ export default function SngrepTab({ tcpdumpOutput, loadTcpdumpOutput, token }: P
 
   const start = async (mode: string) => {
     setMsg('Запускаю захват...');
-    const r = await fetch('/api/diagnostics/tcpdump/start?mode=' + mode + '&iface=any', { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
+    const r = await fetch('/api/diagnostics/tcpdump/start?mode=' + mode + '&iface=any', { method: 'POST' });
     const d = await r.json();
     setMsg(d.success ? 'Захват запущен' : 'Ошибка: ' + (d.error || 'tcpdump'));
     setTimeout(loadTcpdumpOutput, 1000);
   };
 
   const stop = async () => {
-    await fetch('/api/diagnostics/tcpdump/stop', { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
+    await fetch('/api/diagnostics/tcpdump/stop', { method: 'POST' });
     setMsg('Захват остановлен');
     setTimeout(loadTcpdumpOutput, 1000);
   };

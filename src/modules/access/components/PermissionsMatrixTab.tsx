@@ -39,9 +39,11 @@ const GROUPS: PermissionGroup[] = [
     color: 'blue',
     rows: [
       { key: 'view_calls', label: 'Открыть вкладку звонков', kind: 'tab', hint: 'Показывает раздел Реестр звонков' },
+      { key: 'own_calls_only', label: 'Только мои звонки', kind: 'feature', hint: 'Ограничивает журнал и отчеты добавочным номером пользователя' },
       { key: 'process_calls', label: 'Обработка звонков', kind: 'feature', hint: 'Разрешает менять статус/обработку звонка' },
       { key: 'listen_recordings', label: 'Прослушивание записей', kind: 'feature', hint: 'Разрешает слушать записи разговоров' },
-      { key: 'make_calls', label: 'Click2Call', kind: 'feature', hint: 'Разрешает звонить из интерфейса' }
+      { key: 'make_calls', label: 'Click2Call', kind: 'feature', hint: 'Разрешает звонить из интерфейса' },
+      { key: 'show_call_modal', label: 'Окно Click2Call', kind: 'feature', hint: 'Показывает модальное окно с логом инициации звонка' }
     ]
   },
   {

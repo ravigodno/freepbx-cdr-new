@@ -1,6 +1,7 @@
 import React from 'react';
 import RouteStepCard from './RouteStepCard';
 import RouteResultCard from './RouteResultCard';
+import { RouteStep } from '../../types/callRoute';
 
 interface Props {
   routeSteps: RouteStep[];

@@ -2,10 +2,14 @@ import React from 'react';
 
 interface CDRCommentCellProps {
   comment?: string;
+  processedBy?: string;
+  processedAt?: string;
 }
 
 export function CDRCommentCell({
   comment,
+  processedBy,
+  processedAt,
 }: CDRCommentCellProps) {
   return (
     <td className="py-4 px-4 max-w-xs">
@@ -14,6 +18,12 @@ export function CDRCommentCell({
           <p className="text-slate-700 dark:text-slate-350 bg-slate-50 dark:bg-slate-900/30 rounded-lg p-2.5 border border-slate-200/60 dark:border-slate-800/40 text-[11.5px] font-normal select-all shadow-3xs">
             "{comment}"
           </p>
+          {(processedBy || processedAt) && (
+            <span className="text-[9.5px] text-slate-400 font-mono pl-1">
+              {processedBy ? `${processedBy}` : ''}
+              {processedAt ? ` • ${processedAt}` : ''}
+            </span>
+          )}
         </div>
       ) : (
         <span className="text-slate-400 italic text-xs select-none font-light">Нет комментариев</span>

@@ -2,6 +2,7 @@ import { buildFollowMeStep } from '../tracers/followMeTracer';
 import { buildAnnouncementStep } from '../tracers/announcementTracer';
 import { buildTimeConditionStep } from '../tracers/timeConditionTracer';
 import { buildQueueStep } from '../tracers/queueTracer';
+import { RouteView } from '../types/callRoute';
 function getExtFromChannel(value: any): string {
   const m = String(value || '').match(/\/(\d{2,6})-/);
   return m?.[1] || '';

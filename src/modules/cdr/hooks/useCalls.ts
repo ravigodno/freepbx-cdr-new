@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { CallEntry } from '../../types';
+import { CallEntry } from '../../../types';
 
 export function useCalls() {
   const [calls, setCalls] = useState<CallEntry[]>([]);

@@ -212,13 +212,13 @@ function signTokenPayload(encodedPayload: string): string {
   return crypto.createHmac('sha256', JWT_SECRET).update(encodedPayload).digest('base64url');
 }
 
-function createAuthToken(payload: { username: string; role: UserRole; expiresAt: number; extension?: string; permissions?: Record<string, boolean> }): string {
+function createAuthToken(payload: { username: string; role: UserRole; expiresAt: number; extension?: string }): string {
   const encodedPayload = base64UrlEncode(JSON.stringify(payload));
   const signature = signTokenPayload(encodedPayload);
   return `${encodedPayload}.${signature}`;
 }
 
-function verifyAuthToken(token: string): { username: string; role: UserRole; expiresAt: number; extension?: string; permissions?: Record<string, boolean> } | null {
+function verifyAuthToken(token: string): { username: string; role: UserRole; expiresAt: number; extension?: string } | null {
   const [encodedPayload, signature] = token.split('.');
   if (!encodedPayload || !signature) return null;
 
@@ -1120,21 +1120,6 @@ async function readLocalDb(): Promise<{
     }
 
     if (Array.isArray(data.users)) {
-      const suUser = data.users.find((u: any) => u.role === 'su');
-      if (!suUser) {
-        data.users.push({
-          id: 'u_' + Date.now() + '_su',
-          username: process.env.SU_USERNAME || 'su',
-          passwordHash: bcrypt.hashSync(process.env.SU_PASSWORD || 'su123456', bcrypt.genSaltSync(10)),
-          role: 'su' as any,
-          extension: '',
-          disabled: false,
-          createdAt: new Date().toISOString(),
-          permissions: {}
-        });
-        changed = true;
-      }
-
       data.users = data.users.map((user: any) => {
         const next = { ...user };
         if (!next.hasOwnProperty('extension')) {
@@ -1476,7 +1461,7 @@ function filterMockCDR(sql: string, params: any[]): any[] {
 }
 
 // Custom security middleware
-function getLoggedInUser(req: Request): { username: string; role: UserRole; permissions?: Record<string, boolean> } | null {
+function getLoggedInUser(req: Request): { username: string; role: UserRole } | null {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return null;
@@ -1485,7 +1470,7 @@ function getLoggedInUser(req: Request): { username: string; role: UserRole; perm
   try {
     const payload = verifyAuthToken(token);
     if (payload) {
-      return { username: payload.username, role: payload.role, permissions: payload.permissions };
+      return { username: payload.username, role: payload.role };
     }
   } catch (e) {}
   return null;
@@ -1526,30 +1511,6 @@ function getAuthenticatedDbUser(localDb: any, req: Request): any | null {
   const sessionUser = (req as any).user;
   if (!sessionUser) return null;
   return (localDb.users || []).find((u: any) => String(u.username).toLowerCase() === String(sessionUser.username).toLowerCase()) || null;
-}
-
-async function checkUserPermission(req: Request, perm: string): Promise<boolean> {
-  const sessionUser = (req as any).user;
-  if (!sessionUser) return false;
-  if (sessionUser.role === 'su') return true;
-
-  try {
-    const localDb = await readLocalDb();
-    const dbUser = (localDb.users || []).find((u: any) => String(u.username).toLowerCase() === String(sessionUser.username).toLowerCase());
-    if (!dbUser) return false;
-    if (dbUser.disabled) return false;
-    if (dbUser.role === 'su') return true;
-
-    const roleConfig = (localDb.roles || getDefaultAccessRoles()).find((item: any) => item.id === dbUser.role);
-    const permissions = {
-      ...(roleConfig?.permissions || {}),
-      ...(dbUser.permissions || {})
-    };
-
-    return permissions[perm] === true;
-  } catch (e) {
-    return false;
-  }
 }
 
 function getEffectiveOperatorExt(localDb: any, req: Request, requestedExt: string): string {
@@ -1594,11 +1555,7 @@ app.post('/api/auth/login', async (req, res) => {
   
   // Robust fallback checks for developers and operators using default or configured passwords
   if (!isMatch) {
-    if (user.role === 'su') {
-      isMatch = password === 'su123456' || 
-                password === 'su_secure_password' || 
-                !!(process.env.SU_PASSWORD && password === process.env.SU_PASSWORD);
-    } else if (user.role === 'admin') {
+    if (user.role === 'admin') {
       isMatch = password === 'admin' || 
                 password === 'admin_secure_password' || 
                 !!(process.env.ADMIN_PASSWORD && password === process.env.ADMIN_PASSWORD);
@@ -1664,14 +1621,14 @@ const SU_PERMISSION_KEYS = [
 // --- ACCESS ROLES MANAGEMENT ENDPOINTS ---
 app.get('/api/roles', requireAuth(), async (req, res) => {
   const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.permissions?.manage_roles !== true) {
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.manage_roles !== true) {
     return res.status(403).json({ error: 'Access denied: manage_roles permission required' });
   }
 
   try {
     const localDb = await readLocalDb();
     const currentUser = (req as any).user;
-    const settings = (localDb.settings || {}) as AppSettings;
+    const settings = localDb.settings || {};
     const roles = localDb.roles || getDefaultAccessRoles();
 
     const visibleRoles = currentUser?.role === 'su'
@@ -1699,7 +1656,7 @@ app.get('/api/roles', requireAuth(), async (req, res) => {
 
 app.put('/api/roles', requireAuth(), async (req, res) => {
   const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.permissions?.manage_roles !== true) {
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.manage_roles !== true) {
     return res.status(403).json({ error: 'Access denied: manage_roles permission required' });
   }
 
@@ -1784,7 +1741,7 @@ app.put('/api/roles', requireAuth(), async (req, res) => {
 // --- USER ACCESS MANAGEMENT ENDPOINTS ---
 app.get('/api/users', requireAuth(), async (req, res) => {
   const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.permissions?.manage_users !== true) {
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.manage_users !== true) {
     return res.status(403).json({ error: 'Access denied: manage_users permission required' });
   }
 
@@ -1802,7 +1759,7 @@ app.get('/api/users', requireAuth(), async (req, res) => {
 
 app.post('/api/users', requireAuth(), async (req, res) => {
   const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.permissions?.manage_users !== true) {
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.manage_users !== true) {
     return res.status(403).json({ error: 'Access denied: manage_users permission required' });
   }
 
@@ -1852,7 +1809,7 @@ app.post('/api/users', requireAuth(), async (req, res) => {
 
 app.put('/api/users/:id', requireAuth(), async (req, res) => {
   const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.permissions?.manage_users !== true) {
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.manage_users !== true) {
     return res.status(403).json({ error: 'Access denied: manage_users permission required' });
   }
 
@@ -1910,7 +1867,7 @@ app.put('/api/users/:id', requireAuth(), async (req, res) => {
 
 app.delete('/api/users/:id', requireAuth(), async (req, res) => {
   const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.permissions?.manage_users !== true) {
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.manage_users !== true) {
     return res.status(403).json({ error: 'Access denied: manage_users permission required' });
   }
 
@@ -1937,7 +1894,8 @@ app.delete('/api/users/:id', requireAuth(), async (req, res) => {
 // Settings endpoint
 app.get('/api/settings', requireAuth(), async (req, res) => {
   const localDb = await readLocalDb();
-  if (await checkUserPermission(req, 'view_settings')) {
+  const user = (req as any).user;
+  if (user && (user.role === 'admin' || user.role === 'su')) {
     res.json(localDb.settings);
   } else {
     // Non-admins only get public/permissions settings
@@ -1956,7 +1914,7 @@ app.get('/api/settings', requireAuth(), async (req, res) => {
 
 app.post('/api/settings', requireAuth(), async (req, res) => {
   const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.permissions?.view_settings !== true) {
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_settings !== true) {
     return res.status(403).json({ error: 'Access denied: view_settings permission required' });
   }
   const settingsUpdate = { ...(req.body || {}) };
@@ -1980,7 +1938,7 @@ app.post('/api/settings', requireAuth(), async (req, res) => {
 // Test database connection with unsaved/draft settings
 app.post('/api/settings/test-db', requireAuth(), async (req, res) => {
   const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.permissions?.view_settings !== true) {
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_settings !== true) {
     return res.status(403).json({ error: 'Access denied: view_settings permission required' });
   }
 
@@ -2017,7 +1975,7 @@ app.post('/api/settings/test-db', requireAuth(), async (req, res) => {
 // Test AMI connection with unsaved/draft settings
 app.post('/api/settings/test-ami', requireAuth(), async (req, res) => {
   const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.permissions?.view_settings !== true) {
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_settings !== true) {
     return res.status(403).json({ error: 'Access denied: view_settings permission required' });
   }
 
@@ -2059,10 +2017,6 @@ app.post('/api/settings/test-ami', requireAuth(), async (req, res) => {
 
 // Get all directory entries
 app.get('/api/directory', requireAuth(), async (req, res) => {
-  if (!(await checkUserPermission(req, 'view_directory'))) {
-    return res.status(403).json({ error: 'Access denied: view_directory permission required' });
-  }
-
   try {
     const localDb = await readLocalDb();
     res.json((localDb.directory || []).map((entry: any) => normalizeDirectoryEntry(entry, localDb.settings)));
@@ -2075,7 +2029,7 @@ app.get('/api/directory', requireAuth(), async (req, res) => {
 app.post('/api/directory', requireAuth(), async (req, res) => {
   try {
     const authUser = (req as any).user;
-    if (authUser?.role !== 'su' && authUser?.permissions?.edit_directory !== true) {
+    if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.edit_directory !== true) {
       res.status(403).json({ error: 'Нет прав на создание записей справочника' });
       return;
     }
@@ -2102,7 +2056,7 @@ app.post('/api/directory', requireAuth(), async (req, res) => {
 app.put('/api/directory/:id', requireAuth(), async (req, res) => {
   try {
     const authUser = (req as any).user;
-    if (authUser?.role !== 'su' && authUser?.permissions?.edit_directory !== true) {
+    if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.edit_directory !== true) {
       res.status(403).json({ error: 'Нет прав на редактирование справочника' });
       return;
     }
@@ -2145,7 +2099,7 @@ app.put('/api/directory/:id', requireAuth(), async (req, res) => {
 app.post('/api/directory/normalize', requireAuth(), async (req, res) => {
   try {
     const authUser = (req as any).user;
-    if (authUser?.role !== 'su' && authUser?.permissions?.manage_directory_import !== true) {
+    if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.manage_directory_import !== true) {
       res.status(403).json({ error: 'Нет прав на импорт справочника' });
       return;
     }
@@ -2175,9 +2129,9 @@ app.post('/api/directory/normalize', requireAuth(), async (req, res) => {
 app.post('/api/directory/import', requireAuth(), async (req, res) => {
   try {
     const authUser = (req as any).user;
-    if (authUser?.role !== 'su' && authUser?.permissions?.manage_directory_import !== true) {
-       res.status(403).json({ error: 'Нет прав на импорт справочника' });
-       return;
+    if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.manage_directory_import !== true) {
+      res.status(403).json({ error: 'Нет прав на импорт справочника' });
+      return;
     }
 
     const { entries, overwrite, mode } = req.body;
@@ -2208,7 +2162,7 @@ app.post('/api/directory/import', requireAuth(), async (req, res) => {
 app.post('/api/directory/import-url/test', requireAuth(), async (req, res) => {
   try {
     const authUser = (req as any).user;
-    if (authUser?.role !== 'su' && authUser?.permissions?.manage_directory_import !== true) {
+    if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.manage_directory_import !== true) {
       res.status(403).json({ error: 'Нет прав на импорт справочника' });
       return;
     }
@@ -2234,10 +2188,11 @@ app.post('/api/directory/sync-url', async (req, res) => {
     const localDb = await readLocalDb();
     const token = String(req.headers['x-sync-token'] || req.query.token || '');
     const user = getLoggedInUser(req);
-    const canManageImport = user?.role === 'su' || user?.permissions?.manage_directory_import === true;
+    const isAdmin = user?.role === 'admin' || user?.role === 'su';
+    const canManageImport = user?.role === 'su' || user?.role === 'admin' || user?.permissions?.manage_directory_import === true;
     const tokenOk = token && token === String(localDb.settings.directorySyncToken || '');
 
-    if (!canManageImport && !tokenOk) {
+    if ((!isAdmin || !canManageImport) && !tokenOk) {
       res.status(401).json({ error: 'Нет прав на синхронизацию справочника или неверный X-Sync-Token' });
       return;
     }
@@ -2273,7 +2228,7 @@ app.post('/api/directory/sync-url', async (req, res) => {
 
 app.get('/api/directory/sync-status', requireAuth(), async (req, res) => {
   const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.permissions?.manage_directory_import !== true) {
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.manage_directory_import !== true) {
     return res.status(403).json({ error: 'Access denied: manage_directory_import permission required' });
   }
   const localDb = await readLocalDb();
@@ -2336,7 +2291,7 @@ app.post('/api/directory/:id/blacklist', requireAuth(), async (req, res) => {
 app.delete('/api/directory/:id', requireAuth(), async (req, res) => {
   try {
     const authUser = (req as any).user;
-    if (authUser?.role !== 'su' && authUser?.permissions?.edit_directory !== true) {
+    if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.edit_directory !== true) {
       res.status(403).json({ error: 'Нет прав на удаление записей справочника' });
       return;
     }
@@ -3419,10 +3374,6 @@ function getCallDateMs(calldate: string): number {
 
 // Calls loading endpoint (the core CDR viewer with missed call evaluation algorithm)
 app.get('/api/calls', requireAuth(), async (req, res) => {
-  if (!(await checkUserPermission(req, 'view_calls'))) {
-    return res.status(403).json({ error: 'Access denied: view_calls permission required' });
-  }
-
   try {
     const localDb = await readLocalDb();
     const settings = localDb.settings;
@@ -3845,10 +3796,6 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
 
 // App metrics / KPI endpoint
 app.get('/api/stats', requireAuth(), async (req, res) => {
-  if (!(await checkUserPermission(req, 'view_reports'))) {
-    return res.status(403).json({ error: 'Access denied: view_reports permission required' });
-  }
-
   try {
     const localDb = await readLocalDb();
     const settings = localDb.settings;
@@ -4162,10 +4109,6 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
 // Play audio recording binary if present on host, using smart stream chunking
 // Reports trend and dynamics endpoint
 app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
-  if (!(await checkUserPermission(req, 'view_reports'))) {
-    return res.status(403).json({ error: 'Access denied: view_reports permission required' });
-  }
-
   try {
     const localDb = await readLocalDb();
     const settings = localDb.settings;
