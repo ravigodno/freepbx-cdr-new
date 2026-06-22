@@ -1004,11 +1004,8 @@ export default function App() {
     try {
       const data = await fetchDirectory(session.token);
       setDirectory(data);
-    } catch (e: any) {
+    } catch (e) {
       console.error('Error loading directory:', e);
-      if (e && (e.message === 'UNAUTHORIZED' || e.message === 'Failed to fetch')) {
-        handleAuthError();
-      }
     } finally {
       setIsLoadingDirectory(false);
     }
@@ -1178,11 +1175,8 @@ export default function App() {
       if (data.demoModeActive !== undefined) {
         setIsDemoModeActive(data.demoModeActive);
       }
-    } catch (e: any) {
+    } catch (e) {
       console.error('Error fetching dashboard statistics:', e);
-      if (e && (e.message === 'UNAUTHORIZED' || e.message === 'Failed to fetch')) {
-        handleAuthError();
-      }
     } finally {
       setIsLoadingStats(false);
     }
@@ -1227,9 +1221,6 @@ export default function App() {
     } catch (e: any) {
       console.error('Network failure loading records:', e);
       setCallsError(e.message || 'Сбой сети при загрузке реестра вызовов');
-      if (e && (e.message === 'UNAUTHORIZED' || e.message === 'Failed to fetch')) {
-        handleAuthError();
-      }
     } finally {
       setIsLoadingCalls(false);
     }
@@ -1415,20 +1406,6 @@ export default function App() {
     try {
       const savedRoles = await saveAccessRoles(session.token, roles);
       setRoles(savedRoles);
-
-      // Dynamically update the current user's active session permissions on save
-      const myRole = savedRoles.find((r: any) => r.id === session.role);
-      if (myRole) {
-        const nextSession = {
-          ...session,
-          permissions: {
-            ...(myRole.permissions || {}),
-            ...(session.permissions || {})
-          }
-        };
-        setSession(nextSession);
-        localStorage.setItem('asterisk_cdr_session', JSON.stringify(nextSession));
-      }
     } catch (e: any) {
       alert(e.message || 'Не удалось сохранить роли.');
     } finally {
@@ -1444,7 +1421,7 @@ export default function App() {
 
   const openEditUser = (user: AccessUser) => {
     setEditingUserId(user.id);
-    setUserForm({ username: user.username, password: '', role: user.role as UserRole, extension: user.extension || '', disabled: !!user.disabled, permissions: user.permissions || {} });
+    setUserForm({ username: user.username, password: '', role: user.role, extension: user.extension || '', disabled: !!user.disabled, permissions: user.permissions || {} });
     setAccessError('');
     setSettingsTab('access');
   };
@@ -1872,6 +1849,135 @@ export default function App() {
     setEndTime('23:59');
     setPage(1);
   };
+
+  if (!session) {
+    return (
+      <div id="login-container" className="min-h-screen relative overflow-hidden bg-gradient-to-br from-slate-50 via-blue-50/30 to-sky-50/40">
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.98),rgba(239,246,255,0.82))]" />
+
+        <div className="absolute inset-x-0 bottom-0 h-[66vh] pointer-events-none overflow-hidden">
+          <svg
+            className="absolute inset-x-0 bottom-0 h-full w-full"
+            viewBox="0 0 1440 520"
+            preserveAspectRatio="none"
+            aria-hidden="true"
+          >
+            <path
+              d="M0,185 C160,135 295,120 440,160 C590,202 690,250 835,214 C1010,170 1138,132 1440,158 L1440,520 L0,520 Z"
+              fill="rgba(191, 219, 254, 0.55)"
+            />
+            <path
+              d="M0,250 C175,205 295,208 455,252 C640,304 745,295 910,248 C1090,198 1245,198 1440,232 L1440,520 L0,520 Z"
+              fill="rgba(186, 230, 253, 0.52)"
+            />
+            <path
+              d="M0,330 C180,282 345,300 505,332 C690,370 835,355 1025,306 C1200,260 1320,272 1440,315 L1440,520 L0,520 Z"
+              fill="rgba(147, 197, 253, 0.42)"
+            />
+            <path
+              d="M0,400 C195,360 360,375 560,410 C755,444 955,430 1140,382 C1280,346 1368,358 1440,382 L1440,520 L0,520 Z"
+              fill="rgba(125, 211, 252, 0.34)"
+            />
+            <path
+              d="M0,305 C190,270 360,278 550,318 C760,362 940,348 1130,300 C1265,266 1360,270 1440,288"
+              fill="none"
+              stroke="rgba(255, 255, 255, 0.70)"
+              strokeWidth="2"
+            />
+            <path
+              d="M0,385 C220,350 410,365 610,396 C815,428 980,412 1160,368 C1290,337 1370,340 1440,360"
+              fill="none"
+              stroke="rgba(255, 255, 255, 0.55)"
+              strokeWidth="2"
+            />
+          </svg>
+        </div>
+
+        <div className="relative z-10 min-h-screen flex flex-col px-6 py-8">
+          <header className="flex flex-col items-center text-center pt-14">
+            <div className="flex items-center justify-center gap-4">
+              <Logo3D className="h-8 w-8" />
+              <div className="text-3xl font-black tracking-tight text-blue-600 leading-none">PBXPULS</div>
+            </div>
+            <div className="mt-2 text-sm font-semibold text-slate-600">
+              Мониторинг, аналитика и управление телефонией
+            </div>
+          </header>
+
+          <main className="flex-1 flex items-center justify-center px-4 -mt-6">
+            <div className="w-full max-w-md rounded-3xl border border-slate-200 bg-white/95 p-7 shadow-xl shadow-slate-300/35">
+              {loginError && (
+                <div className="mb-5 rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800 flex items-start gap-2.5">
+                  <AlertCircle className="h-5 w-5 text-blue-600 shrink-0 mt-0.5" />
+                  <span>{loginError}</span>
+                </div>
+              )}
+
+              <form onSubmit={handleLogin} className="space-y-6">
+                <div>
+                  <label className="mb-2.5 block text-sm font-black uppercase tracking-wide text-slate-800">
+                    Имя пользователя
+                  </label>
+                  <input
+                    type="text"
+                    value={loginUsername}
+                    onChange={(e) => setLoginUsername(e.target.value)}
+                    placeholder="Например, admin..."
+                    className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3.5 text-base text-slate-900 placeholder-slate-400 transition-all focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-2.5 block text-sm font-black uppercase tracking-wide text-slate-800">
+                    Пароль входа
+                  </label>
+                  <input
+                    type="password"
+                    value={loginPassword}
+                    onChange={(e) => setLoginPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3.5 text-base text-slate-900 placeholder-slate-400 transition-all focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    required
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isLoggingIn}
+                  className="w-full rounded-xl bg-gradient-to-r from-blue-600 to-sky-500 px-5 py-3.5 text-base font-black text-white shadow-lg shadow-blue-500/20 transition-all hover:from-blue-700 hover:to-sky-600 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isLoggingIn ? (
+                    <span className="inline-flex items-center justify-center gap-2">
+                      <Loader2 className="h-5 w-5 animate-spin" />
+                      Авторизация...
+                    </span>
+                  ) : (
+                    'Войти в консоль'
+                  )}
+                </button>
+              </form>
+            </div>
+          </main>
+
+          <footer className="pb-3 text-center text-sm text-slate-500">
+            <div>© 2026 PBXPULS. Все права защищены. Грунин К.В. ИНН 9102057404</div>
+            <div className="mt-2">
+              Внедрение, разработка и поддержка VOIP-проектов
+              <span className="mx-2">•</span>
+              <a href="tel:+79787437943" className="font-semibold text-slate-600 hover:text-blue-600">
+                +7 (978) 743-79-43
+              </a>
+              <span className="mx-2">•</span>
+              <a href="https://grunin.org" target="_blank" rel="noopener noreferrer" className="font-semibold text-blue-600 hover:text-blue-700">
+                grunin.org
+              </a>
+            </div>
+          </footer>
+        </div>
+      </div>
+    );
+  }
 
   const renderReportsView = () => {
     return (
@@ -2551,135 +2657,6 @@ export default function App() {
     );
   };
 
-
-  if (!session) {
-    return (
-      <div id="login-container" className="min-h-screen relative overflow-hidden bg-gradient-to-br from-slate-50 via-blue-50/30 to-sky-50/40">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.98),rgba(239,246,255,0.82))]" />
-
-        <div className="absolute inset-x-0 bottom-0 h-[66vh] pointer-events-none overflow-hidden">
-          <svg
-            className="absolute inset-x-0 bottom-0 h-full w-full"
-            viewBox="0 0 1440 520"
-            preserveAspectRatio="none"
-            aria-hidden="true"
-          >
-            <path
-              d="M0,185 C160,135 295,120 440,160 C590,202 690,250 835,214 C1010,170 1138,132 1440,158 L1440,520 L0,520 Z"
-              fill="rgba(191, 219, 254, 0.55)"
-            />
-            <path
-              d="M0,250 C175,205 295,208 455,252 C640,304 745,295 910,248 C1090,198 1245,198 1440,232 L1440,520 L0,520 Z"
-              fill="rgba(186, 230, 253, 0.52)"
-            />
-            <path
-              d="M0,330 C180,282 345,300 505,332 C690,370 835,355 1025,306 C1200,260 1320,272 1440,315 L1440,520 L0,520 Z"
-              fill="rgba(147, 197, 253, 0.42)"
-            />
-            <path
-              d="M0,400 C195,360 360,375 560,410 C755,444 955,430 1140,382 C1280,346 1368,358 1440,382 L1440,520 L0,520 Z"
-              fill="rgba(125, 211, 252, 0.34)"
-            />
-            <path
-              d="M0,305 C190,270 360,278 550,318 C760,362 940,348 1130,300 C1265,266 1360,270 1440,288"
-              fill="none"
-              stroke="rgba(255, 255, 255, 0.70)"
-              strokeWidth="2"
-            />
-            <path
-              d="M0,385 C220,350 410,365 610,396 C815,428 980,412 1160,368 C1290,337 1370,340 1440,360"
-              fill="none"
-              stroke="rgba(255, 255, 255, 0.55)"
-              strokeWidth="2"
-            />
-          </svg>
-        </div>
-
-        <div className="relative z-10 min-h-screen flex flex-col px-6 py-8">
-          <header className="flex flex-col items-center text-center pt-14">
-            <div className="flex items-center justify-center gap-4">
-              <Logo3D className="h-8 w-8" />
-              <div className="text-3xl font-black tracking-tight text-blue-600 leading-none">PBXPULS</div>
-            </div>
-            <div className="mt-2 text-sm font-semibold text-slate-600">
-              Мониторинг, аналитика и управление телефонией
-            </div>
-          </header>
-
-          <main className="flex-1 flex items-center justify-center px-4 -mt-6">
-            <div className="w-full max-w-md rounded-3xl border border-slate-200 bg-white/95 p-7 shadow-xl shadow-slate-300/35">
-              {loginError && (
-                <div className="mb-5 rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800 flex items-start gap-2.5">
-                  <AlertCircle className="h-5 w-5 text-blue-600 shrink-0 mt-0.5" />
-                  <span>{loginError}</span>
-                </div>
-              )}
-
-              <form onSubmit={handleLogin} className="space-y-6">
-                <div>
-                  <label className="mb-2.5 block text-sm font-black uppercase tracking-wide text-slate-800">
-                    Имя пользователя
-                  </label>
-                  <input
-                    type="text"
-                    value={loginUsername}
-                    onChange={(e) => setLoginUsername(e.target.value)}
-                    placeholder="Например, admin..."
-                    className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3.5 text-base text-slate-900 placeholder-slate-400 transition-all focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="mb-2.5 block text-sm font-black uppercase tracking-wide text-slate-800">
-                    Пароль входа
-                  </label>
-                  <input
-                    type="password"
-                    value={loginPassword}
-                    onChange={(e) => setLoginPassword(e.target.value)}
-                    placeholder="••••••••"
-                    className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3.5 text-base text-slate-900 placeholder-slate-400 transition-all focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    required
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={isLoggingIn}
-                  className="w-full rounded-xl bg-gradient-to-r from-blue-600 to-sky-500 px-5 py-3.5 text-base font-black text-white shadow-lg shadow-blue-500/20 transition-all hover:from-blue-700 hover:to-sky-600 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {isLoggingIn ? (
-                    <span className="inline-flex items-center justify-center gap-2">
-                      <Loader2 className="h-5 w-5 animate-spin" />
-                      Авторизация...
-                    </span>
-                  ) : (
-                    'Войти в консоль'
-                  )}
-                </button>
-              </form>
-            </div>
-          </main>
-
-          <footer className="pb-3 text-center text-sm text-slate-500">
-            <div>© 2026 PBXPULS. Все права защищены. Грунин К.В. ИНН 9102057404</div>
-            <div className="mt-2">
-              Внедрение, разработка и поддержка VOIP-проектов
-              <span className="mx-2">•</span>
-              <a href="tel:+79787437943" className="font-semibold text-slate-600 hover:text-blue-600">
-                +7 (978) 743-79-43
-              </a>
-              <span className="mx-2">•</span>
-              <a href="https://grunin.org" target="_blank" rel="noopener noreferrer" className="font-semibold text-blue-600 hover:text-blue-700">
-                grunin.org
-              </a>
-            </div>
-          </footer>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-[#0f172a] text-slate-800 dark:text-[#f1f5f9] flex font-sans">
@@ -4046,7 +4023,7 @@ export default function App() {
             {draftSettings || !isAdminRole(session?.role) ? (
               <form onSubmit={handleSaveSettings} className="flex-1 flex flex-col min-h-0">
                 <div className="flex-1 p-6 space-y-5 bg-white">
-                  {settingsTab === 'pbx' && draftSettings && (
+                  {settingsTab === 'pbx' && (
                     <div className="space-y-5">
                       <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                         <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mb-3 border-b border-slate-200 pb-2">
@@ -4111,7 +4088,7 @@ export default function App() {
                           <label className="text-xs font-bold text-slate-600">SLA отзвона, мин<input type="number" min={1} max={1440} value={draftSettings.callbackKpiMinutes ?? 60} onChange={(e) => setDraftSettings({ ...draftSettings, callbackKpiMinutes: parseInt(e.target.value, 10) || 60 })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" /></label></div>
                       </div></div>
                   )}
-                  {settingsTab === 'directory' && draftSettings && (
+                  {settingsTab === 'directory' && (
                     <div className="space-y-5">
                       <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                         <h4 className="text-sm font-black text-slate-900 mb-3 flex items-center gap-2"><BookOpen className="h-4 w-4 text-blue-600" />Настройки</h4>

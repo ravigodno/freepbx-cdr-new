@@ -1,4 +1,4 @@
-export type UserRole = 'su' | 'admin' | 'manager' | 'operator' | 'directory_only' | 'custom';
+export type UserRole = 'admin' | 'manager' | 'operator' | 'directory_only' | 'custom';
 
 export interface User {
   id: string;
@@ -6,7 +6,6 @@ export interface User {
   role: UserRole;
   extension?: string;
   disabled?: boolean;
-  permissions?: Record<string, boolean>;
   createdAt?: string;
   updatedAt?: string;
 }

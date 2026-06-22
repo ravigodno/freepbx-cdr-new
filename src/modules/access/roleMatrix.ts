@@ -1,7 +1,8 @@
 import { UserRole } from '../../types';
 import { PermissionKey } from './permissions';
 
-export const ROLE_PERMISSIONS: Record<UserRole, PermissionKey[]> = {
+export const ROLE_PERMISSIONS: Partial<Record<UserRole, PermissionKey[]>> = {
+  su: [],
   admin: [
     'view_calls',
     'view_directory',

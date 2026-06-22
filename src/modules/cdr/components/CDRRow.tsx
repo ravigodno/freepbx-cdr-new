@@ -58,9 +58,21 @@ export function CDRRow({
 
       <CDRCompanyCell company={call.company} />
 
-      <CDRStatusCell status={call.disposition} />
+      <CDRStatusCell
+        isMissed={call.disposition !== 'ANSWERED'}
+        callDisp={call.disposition}
+        processed={call.processed}
+        wasCallbacked={call.wasCallbacked}
+        wasKpiResolved={call.wasKpiResolved}
+        callbackTime={call.callbackTime}
+        index={index}
+      />
 
-      <CDRDurationCell duration={call.duration} />
+      <CDRDurationCell
+        duration={call.duration}
+        billsec={call.billsec || 0}
+        formatSeconds={formatSeconds}
+      />
 
       {/* ===== ACTIONS ===== */}
       <td className="py-3 px-2 text-xs">

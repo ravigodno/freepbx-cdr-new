@@ -1,4 +1,5 @@
 import React from 'react';
+import { RouteStep } from '../../types/callRoute';
 
 interface Props {
   step: RouteStep;
