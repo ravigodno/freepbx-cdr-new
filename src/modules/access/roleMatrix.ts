@@ -9,7 +9,13 @@ export const ROLE_PERMISSIONS: Partial<Record<UserRole, PermissionKey[]>> = {
     'view_reports',
     'listen_recordings',
     'make_calls',
-    'edit_directory'
+    'edit_directory',
+    'view_monitoring',
+    'view_active_calls',
+    'view_tcpdump',
+    'view_sngrep',
+    'view_cli',
+    'view_sip_devices_map'
   ],
   manager: [
     'view_calls',
@@ -17,7 +23,10 @@ export const ROLE_PERMISSIONS: Partial<Record<UserRole, PermissionKey[]>> = {
     'view_reports',
     'listen_recordings',
     'make_calls',
-    'edit_directory'
+    'edit_directory',
+    'view_monitoring',
+    'view_active_calls',
+    'view_sip_devices_map'
   ],
   operator: [
     'view_calls',

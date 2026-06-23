@@ -16,6 +16,7 @@ export type PermissionKey =
   | 'view_tcpdump'
   | 'view_sngrep'
   | 'view_cli'
+  | 'view_sip_devices_map'
   | 'view_settings'
   | 'manage_users'
   | 'manage_roles'

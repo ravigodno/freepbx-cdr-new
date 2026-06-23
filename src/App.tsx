@@ -432,8 +432,8 @@ export default function App() {
   const [tcpdumpFiles, setTcpdumpFiles] = useState<any[]>([]);
   const [tcpdumpMessage, setTcpdumpMessage] = useState('');
   const [tcpdumpOutput, setTcpdumpOutput] = useState('');
-  const [monitorMode, setMonitorMode] = useState<'calls' | 'tcpdump' | 'sngrep' | 'cli' | 'freepbx' | 'db'>(() => {
-    const saved = localStorage.getItem('asterisk_cdr_monitor_mode') as 'calls' | 'tcpdump' | 'sngrep' | 'cli' | 'freepbx' | 'db' | null;
+  const [monitorMode, setMonitorMode] = useState<'calls' | 'tcpdump' | 'sngrep' | 'cli' | 'freepbx' | 'db' | 'devices'>(() => {
+    const saved = localStorage.getItem('asterisk_cdr_monitor_mode') as 'calls' | 'tcpdump' | 'sngrep' | 'cli' | 'freepbx' | 'db' | 'devices' | null;
     return saved || 'calls';
   });
 
@@ -2131,6 +2131,7 @@ export default function App() {
       monitorMode === 'cli' ? 'Asterisk CLI' :
       monitorMode === 'freepbx' ? 'FreePBX CLI' :
       monitorMode === 'db' ? 'DB Explorer' :
+      monitorMode === 'devices' ? 'Карта IP / SIP устройств' :
       'Мониторинг';
 
     const monitoringSubtitle =
@@ -2140,6 +2141,7 @@ export default function App() {
       monitorMode === 'cli' ? 'Безопасные команды Asterisk CLI через AMI' :
       monitorMode === 'freepbx' ? 'Команды FreePBX fwconsole' :
       monitorMode === 'db' ? 'Просмотр CDR/CEL и таблиц FreePBX/Asterisk' :
+      monitorMode === 'devices' ? 'Карта регистраций SIP/PJSIP, IP-адресов и конфликтующих устройств' :
       '';
     const sessions = liveSessionsData?.sessions || [];
     const q = liveSearch.trim().toLowerCase();
@@ -2382,10 +2384,10 @@ export default function App() {
 
     return (
       <section className="space-y-4 animate-fade-in">
-        <div className="bg-white dark:bg-[#1e293b] border border-slate-200 dark:border-[#334155] rounded-xl shadow-xs overflow-hidden">
-          <div className="p-4 border-b border-slate-200 dark:border-[#334155] flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
-            <div>
-              <div className="mb-3 flex flex-wrap gap-2">
+        <div className="bg-white dark:bg-[#1e293b] border border-slate-200 dark:border-[#334155] rounded-xl shadow-xs p-3">
+          <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
+            <div className="flex flex-wrap gap-2">
+<div className="mb-3 flex flex-wrap gap-2">
               {hasPermission('view_active_calls') && (
               <button
                 onClick={() => setMonitorMode('calls')}
@@ -2451,13 +2453,39 @@ export default function App() {
                 DB Explorer
               </button>
               )}
-              </div>
 
+              {hasPermission('view_sip_devices_map') && (
+              <button
+                onClick={() => setMonitorMode('devices')}
+                className={`px-3 py-2 rounded-lg text-xs font-bold border ${monitorMode === 'devices'
+                  ? 'bg-rose-50 text-rose-700 border-rose-200'
+                  : 'bg-white text-slate-600 border-slate-200'}`}
+              >
+                Карта IP / SIP устройств
+              </button>
+              )}
+              </div>
+            </div>
+
+            <div className="min-w-0">
+              <div className="text-sm font-black text-slate-900 dark:text-white text-left xl:text-right">
+                {monitoringTitle}
+              </div>
+              <div className="mt-1 text-xs text-slate-500 dark:text-slate-400 text-left xl:text-right">
+                {monitoringSubtitle}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white dark:bg-[#1e293b] border border-slate-200 dark:border-[#334155] rounded-xl shadow-xs overflow-hidden">
+          <div className="p-4 border-b border-slate-200 dark:border-[#334155] flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+            <div>
               {monitorMode === 'calls' && (
-                <h2 className="text-sm font-black text-slate-900 dark:text-white">{monitoringTitle}</h2>
+                <h2 className="text-sm font-black text-slate-900 dark:text-white">CellTrace — активные звонки</h2>
               )}
               {monitorMode === 'calls' && (
-                <p className="text-xs text-slate-500 mt-1">{monitoringSubtitle}</p>
+                <p className="text-xs text-slate-500 mt-1">Группировка каналов одного вызова. Клик по ячейке применяет фильтр.</p>
               )}
             </div>
 
