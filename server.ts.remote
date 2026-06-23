@@ -2326,7 +2326,7 @@ function runAMICallSimulate(log: string[], fromExtension: string, toPhoneNumber:
   log.push(`[AMI-SIMULATOR] Имитируем: подключение к Asterisk AMI...`);
   log.push(`[AMI-SIMULATOR] Asterisk приветствие: "Asterisk Call Manager/5.0.3"`);
   log.push(`[AMI-SIMULATOR] Команда: Login (Username: clicktocall, Secret: ••••••) отправлена`);
-  log.push(`[AMI-SIMULATOR] По��учен ответ: Response: Success (Message: Authentication accepted)`);
+  log.push(`[AMI-SIMULATOR] По����учен ответ: Response: Success (Message: Authentication accepted)`);
   log.push(`[AMI-SIMULATOR] Формируем Origin Channel: "${origChannel}"`);
   log.push(`[AMI-SIMULATOR] Команда: Originate (Channel: ${origChannel}, Exten: ${toPhoneNumber}, Context: ${clickToCallContext}, CallerID: "${fromExtension}" <${fromExtension}>) отправлена`);
   log.push(`[AMI-SIMULATOR] Получен ответ: Response: Success (Message: Originate successfully queued)`);
@@ -4317,7 +4317,7 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
         const dayIndex = d.getDay(); // 0 is Sun, 1 is Mon, ... 6 is Sat
         const daySortKey = dayIndex === 0 ? 7 : dayIndex; // Mon=1, Tue=2, ... Sun=7
         const ruWeekdays = [
-          'Воскресенье', 'Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пят��ица', 'Суббота'
+          'Воскресенье', 'Понедельник', 'Вторник', 'Среда', 'Четверг', 'П��т��ица', 'Суббота'
         ];
         return { key: ruWeekdays[dayIndex], sortKey: daySortKey };
       }

@@ -1,7 +1,7 @@
 {
   "name": "freepbx-cdr-new",
   "private": true,
-  "version": "3.3.0",
+  "version": "5.0.0",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
@@ -20,7 +20,9 @@
     "mysql2": "^3.12.0",
     "react": "^19.0.1",
     "react-datepicker": "^9.1.0",
-    "react-dom": "^19.0.1"
+    "react-dom": "^19.0.1",
+    "recharts": "^3.8.1",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",

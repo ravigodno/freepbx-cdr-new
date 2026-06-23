@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react';
 import {
   Phone,
   PhoneIncoming,
@@ -62,9 +62,10 @@ import SngrepTab from './modules/monitoring/tabs/monitoring/SngrepTab';
 import TcpdumpTab from './modules/monitoring/tabs/monitoring/TcpdumpTab';
 import ReportsTab from './components/reports/ReportsTab';
 import ActiveCallsTab from './modules/monitoring/tabs/monitoring/ActiveCallsTab';
-import AsteriskCliTab from './modules/monitoring/tabs/monitoring/AsteriskCliTab';
-import FreepbxCliTab from './modules/monitoring/tabs/monitoring/FreepbxCliTab';
-import DbExplorerTab from './modules/monitoring/tabs/monitoring/DbExplorerTab';
+import CommandCenterTab from './modules/monitoring/tabs/monitoring/CommandCenterTab';
+const DbExplorerTab = lazy(() => import('./modules/monitoring/tabs/monitoring/DbExplorerTab'));
+import QualityTab from './modules/monitoring/tabs/monitoring/QualityTab';
+import DevicesMapTab from './modules/monitoring/tabs/monitoring/DevicesMapTab';
 import { DirectoryStatusIcon } from './modules/directory/components/DirectoryStatusIcon';
 import { fetchDirectory, saveDirectoryEntry, deleteDirectoryEntry, toggleDirectoryBlacklist } from './modules/directory/services/directoryApi';
 import { resetDirFormFieldsHelper, openEditDirEntryHelper, openCreateDirEntryHelper, openAddFromCallHelper } from './modules/directory/utils/directoryFormHelpers';
@@ -94,6 +95,8 @@ import {
 } from './modules/access/services/rolesApi';
 import { fetchCdrStats, fetchCdrCalls } from './modules/cdr/services/cdrApi';
 import { processCallSubmit } from './modules/cdr/utils/processCallSubmit';
+import ProvisioningCenter from './modules/management/ProvisioningCenter';
+const BalanceCenter = lazy(() => import('./modules/management/BalanceCenter'));
 
 
 
@@ -432,8 +435,8 @@ export default function App() {
   const [tcpdumpFiles, setTcpdumpFiles] = useState<any[]>([]);
   const [tcpdumpMessage, setTcpdumpMessage] = useState('');
   const [tcpdumpOutput, setTcpdumpOutput] = useState('');
-  const [monitorMode, setMonitorMode] = useState<'calls' | 'tcpdump' | 'sngrep' | 'cli' | 'freepbx' | 'db' | 'devices'>(() => {
-    const saved = localStorage.getItem('asterisk_cdr_monitor_mode') as 'calls' | 'tcpdump' | 'sngrep' | 'cli' | 'freepbx' | 'db' | 'devices' | null;
+  const [monitorMode, setMonitorMode] = useState<'calls' | 'tcpdump' | 'sngrep' | 'cli' | 'freepbx' | 'db' | 'devices' | 'quality'>(() => {
+    const saved = localStorage.getItem('asterisk_cdr_monitor_mode') as 'calls' | 'tcpdump' | 'sngrep' | 'cli' | 'freepbx' | 'db' | 'devices' | 'quality' | null;
     return saved || 'calls';
   });
 
@@ -1343,7 +1346,7 @@ export default function App() {
     e.preventDefault();
 
     if (!hasPermission('process_calls')) {
-      alert('Нет прав на обработку звонков.');
+      alert('Нет ��рав на обработку звонков.');
       return;
     }
 
@@ -2128,20 +2131,20 @@ export default function App() {
       monitorMode === 'calls' ? 'Активные звонки' :
       monitorMode === 'tcpdump' ? 'TCPDUMP / SIP-RTP' :
       monitorMode === 'sngrep' ? 'SNGREP' :
-      monitorMode === 'cli' ? 'Asterisk CLI' :
-      monitorMode === 'freepbx' ? 'FreePBX CLI' :
+      monitorMode === 'cli' ? 'Командный центр' :
       monitorMode === 'db' ? 'DB Explorer' :
       monitorMode === 'devices' ? 'Карта IP / SIP устройств' :
+      monitorMode === 'quality' ? 'Качество связи' :
       'Мониторинг';
 
     const monitoringSubtitle =
       monitorMode === 'calls' ? 'Источник: AMI → core show channels concise / verbose / queue show' :
       monitorMode === 'tcpdump' ? 'Захват и анализ сетевого трафика SIP/RTP через tcpdump' :
       monitorMode === 'sngrep' ? 'Анализ SIP-диалогов и событий сигнализации' :
-      monitorMode === 'cli' ? 'Безопасные команды Asterisk CLI через AMI' :
-      monitorMode === 'freepbx' ? 'Команды FreePBX fwconsole' :
+      monitorMode === 'cli' ? 'Единое пространство диагностики, администрирования и справочной информации Asterisk & FreePBX' :
       monitorMode === 'db' ? 'Просмотр CDR/CEL и таблиц FreePBX/Asterisk' :
       monitorMode === 'devices' ? 'Карта регистраций SIP/PJSIP, IP-адресов и конфликтующих устройств' :
+      monitorMode === 'quality' ? 'Интегрированная IP/RTP-телеметрия качества связи Asterisk, диагностика джиттера, RTT, потерь пакетов и MOS' :
       '';
     const sessions = liveSessionsData?.sessions || [];
     const q = liveSearch.trim().toLowerCase();
@@ -2425,21 +2428,10 @@ export default function App() {
               <button
                 onClick={() => setMonitorMode('cli')}
                 className={`px-3 py-2 rounded-lg text-xs font-bold border ${monitorMode === 'cli'
-                  ? 'bg-slate-900 text-white border-slate-900'
+                  ? 'bg-slate-900 dark:bg-slate-700 text-white border-slate-900'
                   : 'bg-white text-slate-600 border-slate-200'}`}
               >
-                Asterisk CLI
-              </button>
-              )}
-
-              {hasPermission('view_cli') && (
-              <button
-                onClick={() => setMonitorMode('freepbx')}
-                className={`px-3 py-2 rounded-lg text-xs font-bold border ${monitorMode === 'freepbx'
-                  ? 'bg-purple-50 text-purple-700 border-purple-200'
-                  : 'bg-white text-slate-600 border-slate-200'}`}
-              >
-                FreePBX CLI
+                Командный центр
               </button>
               )}
 
@@ -2464,6 +2456,17 @@ export default function App() {
                 Карта IP / SIP устройств
               </button>
               )}
+
+              {hasPermission('view_active_calls') && (
+              <button
+                onClick={() => setMonitorMode('quality')}
+                className={`px-3 py-2 rounded-lg text-xs font-bold border ${monitorMode === 'quality'
+                  ? 'bg-[#ffe4e6] text-[#9f1239] border-[#fecdd3] dark:bg-rose-950/40 dark:text-rose-400'
+                  : 'bg-white text-slate-600 border-slate-200'}`}
+              >
+                Качество связи
+              </button>
+              )}
               </div>
             </div>
 
@@ -2479,63 +2482,10 @@ export default function App() {
         </div>
 
         <div className="bg-white dark:bg-[#1e293b] border border-slate-200 dark:border-[#334155] rounded-xl shadow-xs overflow-hidden">
-          <div className="p-4 border-b border-slate-200 dark:border-[#334155] flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
-            <div>
-              {monitorMode === 'calls' && (
-                <h2 className="text-sm font-black text-slate-900 dark:text-white">CellTrace — активные звонки</h2>
-              )}
-              {monitorMode === 'calls' && (
-                <p className="text-xs text-slate-500 mt-1">Группировка каналов одного вызова. Клик по ячейке применяет фильтр.</p>
-              )}
-            </div>
 
-            {monitorMode === 'calls' && (
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
-                <input
-                  value={liveSearch}
-                  onChange={(e) => setLiveSearch(e.target.value)}
-                  placeholder="Поиск по любым данным..."
-                  className="pl-8 pr-3 py-2 w-72 rounded-lg border border-slate-200 bg-white text-xs font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
-                /></div>
-
-              <button
-                onClick={saveLiveSnapshot}
-                className="px-3 py-2 bg-emerald-50 text-emerald-700 border border-emerald-100 rounded-lg text-xs font-bold flex items-center gap-2 cursor-pointer"
-              >
-                Снимок в файл
-              </button>
-
-              <button
-                onClick={() => setIsLiveMonitoringPaused(!isLiveMonitoringPaused)}
-                className={`px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-2 cursor-pointer border ${
-                  isLiveMonitoringPaused
-                    ? 'bg-amber-50 text-amber-700 border-amber-200'
-                    : 'bg-slate-50 text-slate-700 border-slate-200'
-                }`}
-              >
-                {isLiveMonitoringPaused ? 'Продолжить' : 'Зафиксировать'}
-              </button>
-
-              <button
-                onClick={loadLiveSessions}
-                disabled={isLiveMonitoringPaused}
-                className={`px-3 py-2 border rounded-lg text-xs font-bold flex items-center gap-2 cursor-pointer ${
-                  isLiveMonitoringPaused
-                    ? 'bg-gradient-to-br from-slate-50 via-blue-50/40 to-sky-50/50 text-slate-400 border-slate-200 cursor-not-allowed'
-                    : 'bg-blue-50 text-blue-700 border-blue-100'
-                }`}
-              >
-                <RefreshCw className={`h-3.5 w-3.5 ${isLoadingLiveSessions ? 'animate-spin' : ''}`} />
-                Обновить
-              </button>
-          </div>
-            )}
-          </div>
 
           {monitorMode === 'tcpdump' && hasPermission('view_tcpdump') && (
-            <TcpdumpTab token={session?.token || ''} />
+            <TcpdumpTab token={session?.token || ''} onNavigate={setMonitorMode} />
           )}
 
           {monitorMode === 'sngrep' && hasPermission('view_sngrep') && (
@@ -2543,19 +2493,27 @@ export default function App() {
               tcpdumpOutput={tcpdumpOutput}
               loadTcpdumpOutput={loadTcpdumpOutput}
               token={session?.token || ''}
+              onNavigate={setMonitorMode}
+              darkMode={darkMode}
             />
           )}
 
           {monitorMode === 'cli' && hasPermission('view_cli') && (
-            <AsteriskCliTab token={session?.token || ''} />
-          )}
-
-          {monitorMode === 'freepbx' && hasPermission('view_cli') && (
-            <FreepbxCliTab token={session?.token || ''} />
+            <CommandCenterTab token={session?.token || ''} onNavigate={setMonitorMode} />
           )}
 
           {monitorMode === 'db' && hasPermission('view_cli') && (
-            <DbExplorerTab token={session?.token || ''} />
+            <Suspense fallback={<div className="p-8 text-center text-slate-500 font-bold bg-white dark:bg-slate-800 rounded-2xl border border-slate-100 dark:border-slate-700">Загрузка базы данных...</div>}>
+              <DbExplorerTab token={session?.token || ''} />
+            </Suspense>
+          )}
+
+          {monitorMode === 'quality' && hasPermission('view_active_calls') && (
+            <QualityTab token={session?.token || ''} />
+          )}
+
+          {monitorMode === 'devices' && hasPermission('view_sip_devices_map') && (
+            <DevicesMapTab token={session?.token || ''} />
           )}
 
           {snapshotStatus && (
@@ -2582,59 +2540,6 @@ export default function App() {
               liveSearch={liveSearch}
               setLiveSearch={setLiveSearch}
             />
-          )}
-
-          <details className={(monitorMode === "calls" ? "block " : "hidden ") + "border-t border-slate-200 dark:border-[#334155]"}>
-            <summary className="p-4 cursor-pointer text-xs font-bold text-slate-500">RAW: core show channels concise</summary>
-            <pre className="p-4 bg-slate-950 text-slate-100 text-[11px] overflow-auto max-h-[420px]">{liveSessionsData?.raw?.concise || 'Нет данных'}</pre>
-          </details>
-
-          <details className={(monitorMode === "calls" ? "block " : "hidden ") + "border-t border-slate-200 dark:border-[#334155]"}>
-            <summary className="p-4 cursor-pointer text-xs font-bold text-slate-500">RAW: core show channels verbose</summary>
-            <pre className="p-4 bg-slate-950 text-slate-100 text-[11px] overflow-auto max-h-[420px]">{liveSessionsData?.raw?.verbose || 'Нет данных'}</pre>
-          </details>
-
-          <details className={(monitorMode === "calls" ? "block " : "hidden ") + "border-t border-slate-200 dark:border-[#334155]"}>
-            <summary className="p-4 cursor-pointer text-xs font-bold text-slate-500">RAW: queue show</summary>
-            <pre className="p-4 bg-slate-950 text-slate-100 text-[11px] overflow-auto max-h-[420px]">{liveSessionsData?.raw?.queues || 'Нет данных'}</pre>
-          </details>
-
-          <details className={(monitorMode === "calls" ? "block " : "hidden ") + "border-t border-slate-200 dark:border-[#334155]"}>
-            <summary className="p-4 cursor-pointer text-xs font-bold text-slate-500">RAW: sip show channels</summary>
-            <pre className="p-4 bg-slate-950 text-slate-100 text-[11px] overflow-auto max-h-[420px]">{liveSessionsData?.raw?.sipChannels || 'Нет данных'}</pre>
-          </details>
-
-          <details className={(monitorMode === "calls" ? "block " : "hidden ") + "border-t border-slate-200 dark:border-[#334155]"}>
-            <summary className="p-4 cursor-pointer text-xs font-bold text-slate-500">RAW: pjsip show channels</summary>
-            <pre className="p-4 bg-slate-950 text-slate-100 text-[11px] overflow-auto max-h-[420px]">{liveSessionsData?.raw?.pjsipChannels || 'Нет данных'}</pre>
-          </details>
-
-          {/* PBXPULS_ACTIVE_CALLS_BOTTOM_COUNTERS */}
-          {monitorMode === 'calls' && (
-            <div className="sticky bottom-0 z-20 border-t border-slate-200 dark:border-[#334155] bg-white/95 dark:bg-[#1e293b]/95 backdrop-blur px-4 py-3">
-              <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-                <div className="bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-[#334155] rounded-xl p-3">
-                  <div className="text-xs font-bold text-slate-500">Активные каналы</div>
-                  <div className="mt-1 text-xl font-black text-slate-900 dark:text-white font-mono">{liveSessionsData?.summary?.total ?? 0}</div></div>
-
-                <div className="bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-[#334155] rounded-xl p-3">
-                  <div className="text-xs font-bold text-slate-500">Звонков</div>
-                  <div className="mt-1 text-xl font-black text-indigo-600 font-mono">{filteredCalls.length}</div></div>
-
-                <div className="bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-[#334155] rounded-xl p-3">
-                  <div className="text-xs font-bold text-slate-500">Разговор</div>
-                  <div className="mt-1 text-xl font-black text-emerald-600 font-mono">{liveSessionsData?.summary?.up ?? 0}</div></div>
-
-                <div className="bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-[#334155] rounded-xl p-3">
-                  <div className="text-xs font-bold text-slate-500">Звонит</div>
-                  <div className="mt-1 text-xl font-black text-cyan-600 font-mono">{liveSessionsData?.summary?.ringing ?? 0}</div></div>
-
-                <div className="bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-[#334155] rounded-xl p-3">
-                  <div className="text-xs font-bold text-slate-500">Обновление</div>
-                  <div className="mt-1 text-xs font-bold text-slate-700 dark:text-slate-300">
-                    {liveSessionsData?.summary?.updatedAt ? new Date(liveSessionsData.summary.updatedAt).toLocaleTimeString('ru-RU') : '—'}
-                  </div></div>
-              </div></div>
           )}
 
         </div>
@@ -4132,19 +4037,13 @@ export default function App() {
     {activeView === 'monitoring' && renderMonitoringView()}
 
     {activeView === 'management' && (
-      <div className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-        <div className="text-sm font-black text-slate-900">Управление АТС</div>
-        <div className="mt-2 text-sm text-slate-500">
-          Раздел для будущего массового заведения extensions, транков, исходящих маршрутов и паттернов номерной емкости.
-        </div></div>
+      <ProvisioningCenter session={session} hasPermission={hasPermission} />
     )}
 
     {activeView === 'balance' && (
-      <div className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-        <div className="text-sm font-black text-slate-900">Баланс операторов связи</div>
-        <div className="mt-2 text-sm text-slate-500">
-          Раздел для будущей проверки балансов по счетам операторов, предоставляющих SIP-транки.
-        </div></div>
+      <Suspense fallback={<div className="p-8 text-center text-slate-500 font-bold bg-white dark:bg-slate-800 rounded-2xl border border-slate-100 dark:border-slate-700">Загрузка модуля баланса...</div>}>
+        <BalanceCenter session={session} hasPermission={hasPermission} />
+      </Suspense>
     )}
 
 

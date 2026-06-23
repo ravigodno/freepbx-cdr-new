@@ -78,7 +78,7 @@ const GROUPS: PermissionGroup[] = [
       { key: 'view_active_calls', label: 'Активные звонки', kind: 'tab', hint: 'Показывает live-сессии Asterisk' },
       { key: 'view_tcpdump', label: 'TCPDUMP / SIP-RTP', kind: 'tab', hint: 'Показывает tcpdump и SIP/RTP диагностику' },
       { key: 'view_sngrep', label: 'SNGREP', kind: 'tab', hint: 'Показывает SIP flow' },
-      { key: 'view_cli', label: 'CLI / DB Explorer', kind: 'tab', hint: 'Asterisk CLI, FreePBX CLI и DB Explorer' },
+  { key: 'view_cli', label: 'Командный центр / DB Explorer', kind: 'tab', hint: 'Командный центр (диагностика, CLI, справочник) и DB Explorer' },
       { key: 'view_sip_devices_map', label: 'Карта IP / SIP устройств', kind: 'tab', hint: 'Показывает SIP/PJSIP регистрации, IP-адреса, User-Agent и конфликтующие устройства' }
     ]
   },

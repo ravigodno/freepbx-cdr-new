@@ -142,13 +142,6 @@ export default function ActiveCallsTab({ liveSessionsData, liveSearch, setLiveSe
 
   return (
     <div className="p-4 space-y-4">
-      <div>
-        <h3 className="text-sm font-black">CellTrace — активные звонки</h3>
-        <div className="text-xs text-slate-500 mt-1">
-          Группировка каналов одного вызова. Клик по ячейке применяет фильтр.
-        </div>
-      </div>
-
       {groups.length === 0 && (
         <div className="rounded-xl border bg-white p-8 text-center text-slate-400">
           Активных звонков сейчас нет

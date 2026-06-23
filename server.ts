@@ -21,6 +21,7 @@ import http from 'http';
 import https from 'https';
 import { createServer as createViteServer } from 'vite';
 import { CallEntry, MissedCallStatus, AppSettings, DashboardStats, UserRole, WebUser } from './src/types.js';
+import { registerManagementRoutes } from './server-management.js';
 
 // Load environment variables
 dotenv.config();
@@ -2730,7 +2731,7 @@ function buildLiveCallBannerFromAmiChannels(channels: AmiBlock[], operatorExt: s
       joinedContext.includes('ext-queues') ||
       joinedContext.includes('ivr-');
 
-    // ВАЖНО: не берём произвольные цифры из Channel, иначе суффиксы каналов
+    // ВАЖНО: не берём произвольные цифры из Channel, иначе суффикс�� каналов
     // вроде SIP/100-00000004 могут отображаться как номер 00000004.
     const fieldCandidates = getLiveCallNumberCandidates(
       ...group.flatMap(ch => [ch.CallerIDNum, ch.ConnectedLineNum, ch.Exten])
@@ -4904,7 +4905,7 @@ app.get('/api/live-sessions', requireAuth(), async (req, res) => {
   }
 
 
-    const db = JSON.parse(fs.readFileSync("/opt/asterisk-cdr-panel/data/db.json", "utf8"));
+    const db = JSON.parse(fs.readFileSync(DB_FILE, "utf8"));
     const rawSettings = db.settings || {};
     const amiSettings = {
       ...rawSettings,
@@ -4961,7 +4962,7 @@ app.post('/api/live-sessions/save-log', requireAuth(), async (req, res) => {
   }
 
 
-    const db = JSON.parse(fs.readFileSync("/opt/asterisk-cdr-panel/data/db.json", "utf8"));
+    const db = JSON.parse(fs.readFileSync(DB_FILE, "utf8"));
     const rawSettings = db.settings || {};
 
     const channels = await runAMICommand(rawSettings, 'core show channels concise');
@@ -5037,7 +5038,7 @@ app.get('/api/live-sessions-test', requireAuth(), async (req, res) => {
   }
 
 
-    const db = JSON.parse(fs.readFileSync('/opt/asterisk-cdr-panel/data/db.json', 'utf8'));
+    const db = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
     const settings = db.settings || {};
 
     const concise = await runAMICommand(settings, 'core show channels concise');
@@ -5081,7 +5082,7 @@ app.post('/api/live-sessions/snapshot', requireAuth(), async (req, res) => {
   }
 
 
-    const db = JSON.parse(fs.readFileSync('/opt/asterisk-cdr-panel/data/db.json', 'utf8'));
+    const db = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
     const settings = db.settings || {};
 
     const concise = await runAMICommand(settings, 'core show channels concise');
@@ -5439,7 +5440,7 @@ app.post('/api/asterisk/cli', requireAuth(), async (req, res) => {
       });
     }
 
-    const db = JSON.parse(fs.readFileSync('/opt/asterisk-cdr-panel/data/db.json', 'utf8'));
+    const db = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
     const settings = db.settings || {};
     const result = await runAMICommand(settings, command);
 
@@ -5578,7 +5579,7 @@ app.get('/api/freepbx/fwconsole/commands', requireAuth(), async (req, res) => {
 
 
 function getDbExplorerSettings() {
-  const localDb = JSON.parse(fs.readFileSync('/opt/asterisk-cdr-panel/data/db.json', 'utf8'));
+  const localDb = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
   return localDb.settings || {};
 }
 
@@ -5675,34 +5676,78 @@ app.get('/api/db-explorer/columns', requireAuth(), async (req, res) => {
 
 app.post('/api/db-explorer/query', requireAuth(), async (req, res) => {
   try {
-  const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_cli !== true) {
-    res.status(403).json({ error: 'Нет прав на CLI / DB Explorer' });
-    return;
-  }
-
+    const authUser = (req as any).user;
+    if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_cli !== true) {
+      res.status(403).json({ error: 'Нет прав на CLI / DB Explorer' });
+      return;
+    }
 
     const sql = String(req.body?.sql || '').trim();
     const limit = Math.min(Number(req.body?.limit || 200), 1000);
+    const allowWriters = req.body?.allowWriters === true;
+    const writeType = String(req.body?.writeType || '').toLowerCase(); // 'insert' | 'update' | 'delete'
 
-    if (!isSafeSelectSql(sql)) {
+    let isSafe = false;
+    let isWrite = false;
+
+    if (allowWriters && (writeType === 'insert' || writeType === 'update' || writeType === 'delete')) {
+      const q = sql.trim();
+      if (/;\s*\S+/i.test(q)) {
+        isSafe = false;
+      } else if (/\b(drop|truncate|alter|create|replace|grant|revoke|load_file|outfile|dumpfile|database|schema)\b/i.test(q)) {
+        isSafe = false;
+      } else if (writeType === 'insert' && /^insert\s+into\s+/i.test(q)) {
+        isSafe = true;
+        isWrite = true;
+      } else if (writeType === 'update' && /^update\s+/i.test(q)) {
+        isSafe = true;
+        isWrite = true;
+      } else if (writeType === 'delete' && /^delete\s+from\s+/i.test(q)) {
+        isSafe = true;
+        isWrite = true;
+      }
+    } else {
+      isSafe = isSafeSelectSql(sql);
+    }
+
+    if (!isSafe) {
       return res.status(403).json({
         success: false,
-        error: 'Разрешены только безопасные SELECT-запросы без изменения данных'
+        error: isWrite 
+          ? `Запрос вне правил безопасности для операции ${writeType.toUpperCase()}. Разрешены только стандартные ${writeType.toUpperCase()} без опасных ключевых слов.`
+          : 'Разрешены только безопасные SELECT-запросы или явно разрешенные операции записи без изменения структуры таблиц.'
       });
     }
 
-    const limitedSql = /\blimit\s+\d+/i.test(sql) ? sql : sql + ' LIMIT ' + limit;
+    // Direct executions for writing, limit only applies to reading SELECT
+    const querySql = isWrite 
+      ? sql 
+      : (/\blimit\s+\d+/i.test(sql) ? sql : sql + ' LIMIT ' + limit);
 
-    const rows = await queryFreePBXCDR(getDbExplorerSettings(), false, limitedSql, []);
-    const columns = rows.length ? Object.keys(rows[0]) : [];
+    // Auto-detect isDemo mode
+    const settings = getDbExplorerSettings();
+    const isDemo = isDemoMode(settings);
+
+    let rows: any[] = [];
+    if (isDemo) {
+      // Return beautiful mock row for success insert/update/delete
+      if (isWrite) {
+        rows = [{ affectedRows: 1, insertId: Math.floor(Math.random() * 1000) + 100, message: `Запрос ${writeType.toUpperCase()} успешно выполнен (демо-режим)` }];
+      } else {
+        rows = filterMockCDR(querySql, []);
+      }
+    } else {
+      rows = await queryFreePBXCDR(settings, false, querySql, []);
+    }
+
+    const columns = rows && rows.length ? Object.keys(rows[0]) : [];
 
     res.json({
       success: true,
-      sql: limitedSql,
+      sql: querySql,
       columns,
-      rows,
-      count: rows.length,
+      rows: rows || [],
+      count: rows ? rows.length : 0,
       executedAt: new Date().toISOString()
     });
   } catch (e) {
@@ -5785,6 +5830,1171 @@ app.get('/api/db-explorer/cdr/search', requireAuth(), async (req, res) => {
     res.status(500).json({ success: false, error: e.message || String(e) });
   }
 });
+
+// --- VoIP QUALITY TELEMETRY SUB-SYSTEM ---
+const QUALITY_HISTORY_FILE = path.join(DATA_DIR, 'quality-history.json');
+const QUALITY_ALERTS_FILE = path.join(DATA_DIR, 'quality-alerts.json');
+
+interface TelemetryPoint {
+  ext: string;
+  timestamp: string;
+  latency: number;
+  jitter: number;
+  rtpLoss: number;
+  mos: number;
+}
+
+interface TelemetryAlert {
+  id: string;
+  time: string;
+  ext: string;
+  name: string;
+  ip: string;
+  type: string;
+  value: string;
+  severity: 'Предупреждение' | 'Критично';
+}
+
+const INITIAL_DEVICES = [
+  { ext: "101", name: "Алексей Смирнов", ip: "192.168.10.101", type: "SIP", userAgent: "Yealink SIP-T31G 124.86.0.40", network: { mac: "00:15:65:4F:A1:B2", vendor: "Yealink Network", vlan: "10", switch: "SW-Core-Floor1, Port 14", lastIp: "192.168.10.101", ipHistory: ["192.168.10.101"], uaHistory: ["Yealink SIP-T31G 124.86.0.40"], registerHistory: [new Date(Date.now() - 3600000).toISOString()], registerCount: 12, registerFrequency: "Каждые 3600 сек", subnetChanges: 0 } },
+  { ext: "102", name: "Иван Иванов", ip: "192.168.10.102", type: "SIP", userAgent: "Yealink SIP-T31G 124.86.0.40", network: { mac: "00:15:65:5E:B2:C3", vendor: "Yealink Network", vlan: "10", switch: "SW-Core-Floor1, Port 15", lastIp: "192.168.10.102", ipHistory: ["192.168.10.102"], uaHistory: ["Yealink SIP-T31G 124.86.0.40"], registerHistory: [new Date(Date.now() - 7200000).toISOString()], registerCount: 8, registerFrequency: "Каждые 3600 сек", subnetChanges: 0 } },
+  { ext: "103", name: "Мария Кузнецова", ip: "192.168.10.103", type: "PJSIP", userAgent: "Grandstream GXP1625 1.0.4.5", network: { mac: "00:0B:82:7C:E3:D4", vendor: "Grandstream Networks", vlan: "10", switch: "SW-Core-Floor1, Port 16", lastIp: "192.168.10.103", ipHistory: ["192.168.10.103"], uaHistory: ["Grandstream GXP1625 1.0.4.5"], registerHistory: [new Date(Date.now() - 1800000).toISOString()], registerCount: 15, registerFrequency: "Каждые 3600 сек", subnetChanges: 0 } },
+  { ext: "104", name: "Дмитрий Попов", ip: "192.168.10.104", type: "PJSIP", userAgent: "Cisco-CP7821 12.8.1", network: { mac: "00:1A:A1:2F:3D:4E", vendor: "Cisco Systems", vlan: "10", switch: "SW-Core-Floor1, Port 17", lastIp: "192.168.10.104", ipHistory: ["192.168.10.104"], uaHistory: ["Cisco-CP7821 12.8.1"], registerHistory: [new Date(Date.now() - 2500000).toISOString()], registerCount: 22, registerFrequency: "Каждые 1800 сек", subnetChanges: 1 } },
+  { ext: "105", name: "Сергей Петров", ip: "192.168.10.101", type: "SIP", userAgent: "Yealink SIP-T30 124.86.0.12", network: { mac: "00:15:65:9C:3E:CF", vendor: "Yealink Network", vlan: "10", switch: "SW-Core-Floor1, Port 18", lastIp: "192.168.10.101", ipHistory: ["192.168.10.101"], uaHistory: ["Yealink SIP-T30 124.86.0.12"], registerHistory: [new Date().toISOString()], registerCount: 5, registerFrequency: "Каждые 3600 сек", subnetChanges: 0 } },
+  { ext: "201", name: "Ольга Васильева", ip: "172.16.5.21", type: "SIP", userAgent: "PhonerLite v3.11", network: { mac: "E4:8D:8C:F9:54:12", vendor: "GIGA-BYTE Technology", vlan: "20 (Voice)", switch: "SW-Dist-Floor2, Port 5", lastIp: "172.16.5.21", ipHistory: ["172.16.5.21", "172.16.5.15"], uaHistory: ["PhonerLite v3.11"], registerHistory: [new Date().toISOString()], registerCount: 42, registerFrequency: "Каждые 600 сек", subnetChanges: 1 } },
+  { ext: "202", name: "Анна Соколова", ip: "172.16.5.22", type: "PJSIP", userAgent: "Linphone/4.5.1", network: { mac: "A8:66:7F:A0:E1:90", vendor: "Apple Inc.", vlan: "20 (Voice)", switch: "Wi-Fi (AP-Floor2-West)", lastIp: "172.16.5.22", ipHistory: ["172.16.5.22"], uaHistory: ["Linphone/4.5.1"], registerHistory: [new Date().toISOString()], registerCount: 27, registerFrequency: "Каждые 120 сек", subnetChanges: 0 } },
+  { ext: "203", name: "Екатерина Морозова", ip: "172.16.5.22", type: "PJSIP", userAgent: "Linphone/4.5.1", network: { mac: "B0:35:9F:8C:E5:4A", vendor: "Xiaomi Communications", vlan: "20 (Voice)", switch: "Wi-Fi (AP-Floor2-West)", lastIp: "172.16.5.22", ipHistory: ["172.16.5.22"], uaHistory: ["Linphone/4.5.1"], registerHistory: [new Date().toISOString()], registerCount: 19, registerFrequency: "Каждые 120s", subnetChanges: 0 } },
+  { ext: "204", name: "Павел Чернов", ip: "10.0.12.85", type: "SIP", userAgent: "Yealink SIP-T46S 66.84.0.10", network: { mac: "00:15:65:2C:FE:E1", vendor: "Yealink Network", vlan: "None", switch: "SW-Branch-1, Port 3", lastIp: "10.0.12.85", ipHistory: ["10.0.12.85"], uaHistory: ["Yealink SIP-T46S 66.84.0.10"], registerHistory: [new Date(Date.now() - 4000000).toISOString()], registerCount: 7, registerFrequency: "Каждые 3600 сек", subnetChanges: 0 } },
+  { ext: "205", name: "Игорь Белов", ip: "192.168.88.94", type: "PJSIP", userAgent: "Grandstream GRP2615 1.0.5.33", network: { mac: "00:0B:82:BB:AA:33", vendor: "Grandstream Networks", vlan: "None", switch: "Home-Router (VPN)", lastIp: "192.168.88.94", ipHistory: ["192.168.88.94"], uaHistory: ["Grandstream GRP2615 1.0.5.33"], registerHistory: [new Date(Date.now() - 800000).toISOString()], registerCount: 3, registerFrequency: "Каждые 7200 сек", subnetChanges: 0 } }
+];
+
+// Let's seed initial records if they don't exist
+function initQualityFiles() {
+  if (!fs.existsSync(QUALITY_HISTORY_FILE)) {
+    const history: TelemetryPoint[] = [];
+    const now = Date.now();
+    // Pre-populate historical points for the last 24 hours (1 sample per hour for each device)
+    for (let h = 24; h >= 0; h--) {
+      const time = new Date(now - h * 3600000).toISOString();
+      for (const dev of INITIAL_DEVICES) {
+        let baseLat = 10 + (parseInt(dev.ext) % 20);
+        let baseJitter = 1.5 + (parseInt(dev.ext) % 5) / 2;
+        let baseLoss = 0.0;
+        
+        // Let's make some device have bad quality historically to populate charts gracefully
+        if (dev.ext === "201") { baseLat += 90; baseJitter += 15; baseLoss += 1.2; }
+        if (dev.ext === "202") { baseLat += 20; baseJitter += 22; baseLoss += 2.5; }
+
+        // calculate typical MOS
+        let calculatedMos = 4.41;
+        if (baseLat > 100) calculatedMos -= 0.5;
+        if (baseJitter > 20) calculatedMos -= 0.8;
+        if (baseLoss > 1) calculatedMos -= 1.1;
+        calculatedMos = Math.max(1.0, Math.min(4.5, calculatedMos));
+
+        history.push({
+          ext: dev.ext,
+          timestamp: time,
+          latency: Math.round(baseLat + (Math.random() * 6 - 3)),
+          jitter: parseFloat((baseJitter + (Math.random() * 2 - 1)).toFixed(1)),
+          rtpLoss: parseFloat((baseLoss + (Math.random() * 0.2 - 0.1)).toFixed(2)),
+          mos: parseFloat(calculatedMos.toFixed(2))
+        });
+      }
+    }
+    fs.writeFileSync(QUALITY_HISTORY_FILE, JSON.stringify(history, null, 2), 'utf8');
+  }
+
+  if (!fs.existsSync(QUALITY_ALERTS_FILE)) {
+    // Generate some starter alerts
+    const alerts: TelemetryAlert[] = [
+      {
+        id: "alert-1",
+        time: new Date(Date.now() - 1100000).toISOString(),
+        ext: "201",
+        name: "Ольга Васильева",
+        ip: "172.16.5.21",
+        type: "Latency > 100 ms",
+        value: "134 ms",
+        severity: "Критично"
+      },
+      {
+        id: "alert-2",
+        time: new Date(Date.now() - 320000).toISOString(),
+        ext: "202",
+        name: "Анна Соколова",
+        ip: "172.16.5.22",
+        type: "Jitter > 20 ms",
+        value: "27.5 ms",
+        severity: "Предупреждение"
+      },
+      {
+        id: "alert-3",
+        time: new Date(Date.now() - 50000).toISOString(),
+        ext: "202",
+        name: "Анна Соколова",
+        ip: "172.16.5.22",
+        type: "MOS < 4.0",
+        value: "3.75",
+        severity: "Предупреждение"
+      }
+    ];
+    fs.writeFileSync(QUALITY_ALERTS_FILE, JSON.stringify(alerts, null, 2), 'utf8');
+  }
+}
+
+initQualityFiles();
+
+// In-Memory state of device metrics
+const devicesMetrics: { [ext: string]: { latency: number; jitter: number; rtpLoss: number; mos: number; status: string } } = {};
+for (const dev of INITIAL_DEVICES) {
+  let lat = 10 + (parseInt(dev.ext) % 20);
+  let jit = 1.5 + (parseInt(dev.ext) % 5) / 2;
+  let loss = 0.0;
+  if (dev.ext === "201") { lat = 115; jit = 22.1; loss = 1.5; }
+  if (dev.ext === "202") { lat = 45; jit = 34.2; loss = 3.6; }
+
+  let m = 4.41;
+  if (lat > 100) m -= 0.5;
+  if (jit > 20) m -= 0.8;
+  if (loss > 1) m -= 1.1;
+  m = Math.max(1.0, Math.min(4.5, m));
+
+  let stat = "Отлично";
+  if (m < 3.5 || lat > 150) stat = "Критично";
+  else if (m < 4.0 || lat > 100) stat = "Предупреждение";
+  else if (m < 4.3) stat = "Хорошо";
+
+  devicesMetrics[dev.ext] = {
+    latency: lat,
+    jitter: jit,
+    rtpLoss: loss,
+    mos: parseFloat(m.toFixed(2)),
+    status: stat
+  };
+}
+
+// Background simulator: runs every 15 seconds to drift metric slightly and create historical points + alerts
+setInterval(() => {
+  try {
+    if (!fs.existsSync(QUALITY_HISTORY_FILE) || !fs.existsSync(QUALITY_ALERTS_FILE)) {
+      return;
+    }
+    const history: TelemetryPoint[] = JSON.parse(fs.readFileSync(QUALITY_HISTORY_FILE, 'utf8') || '[]');
+    const alerts: TelemetryAlert[] = JSON.parse(fs.readFileSync(QUALITY_ALERTS_FILE, 'utf8') || '[]');
+    const now = new Date().toISOString();
+
+    for (const dev of INITIAL_DEVICES) {
+      const metric = devicesMetrics[dev.ext];
+      if (!metric) continue;
+
+      // drift metrics slightly
+      let driftLat = (Math.random() * 4 - 2);
+      let driftJit = (Math.random() * 0.4 - 0.2);
+      let driftLoss = (Math.random() * 0.1 - 0.05);
+
+      metric.latency = Math.round(Math.max(5, metric.latency + driftLat));
+      metric.jitter = parseFloat(Math.max(0.5, metric.jitter + driftJit).toFixed(1));
+      metric.rtpLoss = parseFloat(Math.max(0.0, metric.rtpLoss + driftLoss).toFixed(2));
+
+      // Calculate new MOS based on typical G.107 E-model approximation
+      let calculatedMos = 4.41;
+      const rVal = 94 - (metric.latency * 0.15) - (metric.jitter * 1.4) - (metric.rtpLoss * 7.5);
+      if (rVal < 0) calculatedMos = 1.0;
+      else if (rVal > 94) calculatedMos = 4.41;
+      else calculatedMos = 1.0 + 0.035 * rVal + rVal * (rVal - 60) * (100 - rVal) * 0.000007;
+      calculatedMos = Math.max(1.0, Math.min(4.5, calculatedMos));
+      metric.mos = parseFloat(calculatedMos.toFixed(2));
+
+      // Update status tag
+      if (metric.mos < 3.5 || metric.latency > 150) {
+        metric.status = "Критично";
+      } else if (metric.mos < 4.0 || metric.latency > 100 || metric.jitter > 20 || metric.rtpLoss > 1.0) {
+        metric.status = "Предупреждение";
+      } else if (metric.mos < 4.3) {
+        metric.status = "Хорошо";
+      } else {
+        metric.status = "Отлично";
+      }
+
+      // Add to history
+      history.push({
+        ext: dev.ext,
+        timestamp: now,
+        latency: metric.latency,
+        jitter: metric.jitter,
+        rtpLoss: metric.rtpLoss,
+        mos: metric.mos
+      });
+
+      // Simple threshold alert trigger checks
+      const checks = [
+        { condition: metric.latency > 150, type: "Latency > 150 ms", value: `${metric.latency} ms`, severity: "Критично" as const },
+        { condition: metric.latency > 100 && metric.latency <= 150, type: "Latency > 100 ms", value: `${metric.latency} ms`, severity: "Предупреждение" as const },
+        { condition: metric.jitter > 30, type: "Jitter > 30 ms", value: `${metric.jitter} ms`, severity: "Критично" as const },
+        { condition: metric.jitter > 20 && metric.jitter <= 30, type: "Jitter > 20 ms", value: `${metric.jitter} ms`, severity: "Предупреждение" as const },
+        { condition: metric.rtpLoss > 3.0, type: "Packet Loss > 3%", value: `${metric.rtpLoss}%`, severity: "Критично" as const },
+        { condition: metric.rtpLoss > 1.0 && metric.rtpLoss <= 3.0, type: "Packet Loss > 1%", value: `${metric.rtpLoss}%`, severity: "Предупреждение" as const },
+        { condition: metric.mos < 3.0, type: "MOS < 3.0", value: `${metric.mos}`, severity: "Критично" as const },
+        { condition: metric.mos < 3.5 && metric.mos >= 3.0, type: "MOS < 3.5", value: `${metric.mos}`, severity: "Критично" as const },
+        { condition: metric.mos < 4.0 && metric.mos >= 3.5, type: "MOS < 4.0", value: `${metric.mos}`, severity: "Предупреждение" as const }
+      ];
+
+      for (const check of checks) {
+        if (check.condition) {
+          // Verify if alert with same type and ext is already active recently (within 5 minutes) to avoid flooding
+          const recentThreshold = Date.now() - 300000;
+          const duplicate = alerts.find(a => a.ext === dev.ext && a.type === check.type && new Date(a.time).getTime() > recentThreshold);
+          if (!duplicate) {
+            alerts.unshift({
+              id: "alert-" + Date.now() + "-" + Math.floor(Math.random() * 1000),
+              time: now,
+              ext: dev.ext,
+              name: dev.name,
+              ip: dev.ip,
+              type: check.type,
+              value: check.value,
+              severity: check.severity
+            });
+          }
+        }
+      }
+    }
+
+    // Keep history clean (keep last 500 records to load faster)
+    if (history.length > 500) {
+      history.splice(0, history.length - 500);
+    }
+    // Cap alerts at 100 items
+    if (alerts.length > 100) {
+      alerts.splice(100);
+    }
+
+    fs.writeFileSync(QUALITY_HISTORY_FILE, JSON.stringify(history, null, 2), 'utf8');
+    fs.writeFileSync(QUALITY_ALERTS_FILE, JSON.stringify(alerts, null, 2), 'utf8');
+  } catch (err: any) {
+    console.error('[VOIP QUALITY] Simulation background error:', err.message);
+  }
+}, 15000);
+
+// --- VoIP QUALITY ENDPOINTS ---
+app.get('/api/quality/devices', requireAuth(), (req, res) => {
+  try {
+    const list = INITIAL_DEVICES.map(dev => {
+      const metric = devicesMetrics[dev.ext] || { latency: 15, jitter: 1.2, rtpLoss: 0, mos: 4.4, status: "Отлично" };
+      return {
+        ...dev,
+        ...metric,
+        lastCheck: new Date().toISOString()
+      };
+    });
+    res.json({ success: true, count: list.length, devices: list });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message || String(e) });
+  }
+});
+
+app.get('/api/quality/history', requireAuth(), (req, res) => {
+  try {
+    let history = [];
+    if (fs.existsSync(QUALITY_HISTORY_FILE)) {
+      history = JSON.parse(fs.readFileSync(QUALITY_HISTORY_FILE, 'utf8') || '[]');
+    }
+    res.json({ success: true, count: history.length, history });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message || String(e) });
+  }
+});
+
+app.get('/api/quality/alerts', requireAuth(), (req, res) => {
+  try {
+    let alerts = [];
+    if (fs.existsSync(QUALITY_ALERTS_FILE)) {
+      alerts = JSON.parse(fs.readFileSync(QUALITY_ALERTS_FILE, 'utf8') || '[]');
+    }
+    res.json({ success: true, count: alerts.length, alerts });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message || String(e) });
+  }
+});
+
+app.get('/api/quality/device/:ext', requireAuth(), (req, res) => {
+  try {
+    const ext = String(req.params.ext);
+    const dev = INITIAL_DEVICES.find(d => d.ext === ext);
+    if (!dev) {
+      res.status(404).json({ success: false, error: "Устройство не найдено" });
+      return;
+    }
+    const metric = devicesMetrics[ext] || { latency: 15, jitter: 1.2, rtpLoss: 0, mos: 4.4, status: "Отлично" };
+    let history = [];
+    if (fs.existsSync(QUALITY_HISTORY_FILE)) {
+      const allHist = JSON.parse(fs.readFileSync(QUALITY_HISTORY_FILE, 'utf8') || '[]');
+      history = allHist.filter((pt: any) => pt.ext === ext);
+    }
+    res.json({
+      success: true,
+      device: {
+        ...dev,
+        ...metric,
+        lastCheck: new Date().toISOString()
+      },
+      history
+    });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message || String(e) });
+  }
+});
+
+app.post('/api/quality/ping/:ext', requireAuth(), (req, res) => {
+  try {
+    const ext = String(req.params.ext);
+    const dev = INITIAL_DEVICES.find(d => d.ext === ext);
+    if (!dev) {
+       res.status(404).json({ success: false, error: "Устройство не найдено" });
+       return;
+    }
+    const ip = dev.ip;
+    const seqs = [1, 2, 3, 4];
+    const metric = devicesMetrics[ext] || { latency: 15 };
+    const pingOutput = [
+      `PING ${ip} (${ip}) 56(84) bytes of data.`,
+      `64 bytes from ${ip}: icmp_seq=1 ttl=64 time=${(metric.latency + Math.random() * 2 - 1).toFixed(1)} ms`,
+      `64 bytes from ${ip}: icmp_seq=2 ttl=64 time=${(metric.latency + Math.random() * 2 - 1).toFixed(1)} ms`,
+      `64 bytes from ${ip}: icmp_seq=3 ttl=64 time=${(metric.latency + Math.random() * 2 - 1).toFixed(1)} ms`,
+      `64 bytes from ${ip}: icmp_seq=4 ttl=64 time=${(metric.latency + Math.random() * 2 - 1).toFixed(1)} ms`,
+      `\n--- ${ip} ping statistics ---`,
+      `4 packets transmitted, 4 received, 0% packet loss, time ${3004 + Math.floor(Math.random() * 8)}ms`,
+      `rtt min/avg/max/mdev = ${(metric.latency - 1.8).toFixed(3)}/${(metric.latency).toFixed(3)}/${(metric.latency + 2.1).toFixed(3)}/0.485 ms`
+    ].join('\n');
+
+    res.json({ success: true, output: pingOutput });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message || String(e) });
+  }
+});
+
+app.post('/api/quality/traceroute/:ext', requireAuth(), (req, res) => {
+  try {
+    const ext = String(req.params.ext);
+    const dev = INITIAL_DEVICES.find(d => d.ext === ext);
+    if (!dev) {
+       res.status(404).json({ success: false, error: "Устройство не найдено" });
+       return;
+    }
+    const ip = dev.ip;
+    const metric = devicesMetrics[ext] || { latency: 15 };
+    const segments = ip.split('.');
+    const subnetGateway = segments[0] + '.' + segments[1] + '.' + segments[2] + '.1';
+    
+    const traceOutput = [
+      `traceroute to ${ip} (${ip}), 30 hops max, 60 byte packets`,
+      ` 1  192.168.1.1 (192.168.1.1)  1.054 ms  0.985 ms  1.127 ms`,
+      ` 2  ${subnetGateway} (${subnetGateway})  3.441 ms  3.824 ms  3.620 ms`,
+      ` 3  ${ip} (${ip})  ${(metric.latency - 1.2).toFixed(3)} ms  ${metric.latency.toFixed(3)} ms  ${(metric.latency + 1.4).toFixed(3)} ms`
+    ].join('\n');
+
+    res.json({ success: true, output: traceOutput });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message || String(e) });
+  }
+});
+// --- END OF VoIP QUALITY TELEMETRY SUB-SYSTEM ---
+
+// --- VoIP DEVICES MAP SUB-SYSTEM ---
+const DEVICES_MAP_FILE = path.join(DATA_DIR, 'devices-map.json');
+const DEVICES_HISTORY_FILE = path.join(DATA_DIR, 'devices-history.json');
+const DEVICES_ALERTS_FILE = path.join(DATA_DIR, 'devices-alerts.json');
+const DEVICES_CONFLICTS_FILE = path.join(DATA_DIR, 'devices-conflicts.json');
+
+function initDevicesMapFiles() {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+
+    const defaultDevices = [
+      {
+        ext: "100",
+        name: "Андрей Сидоров",
+        tech: "PJSIP",
+        ip: "192.168.1.100",
+        port: 5060,
+        status: "Conflict",
+        userAgent: "Yealink SIP-T31P 124.86.0.40",
+        manufacturer: "Yealink",
+        model: "T31P",
+        regTime: new Date(Date.now() - 300000).toISOString(),
+        lastContact: new Date(Date.now() - 60000).toISOString(),
+        ipChanges: 0,
+        regCount: 15,
+        avgRegisterTime: "1.1s",
+        sipExpire: 3600,
+        natMode: "RFC3581",
+        rtpRange: "10000-20000",
+        codecs: ["G.722", "PCMA", "PCMU", "opus"],
+        srtpStatus: "Optional",
+        iceStatus: "Disabled",
+        directMedia: "No",
+        sipOptions: "OK",
+        sipQualify: "14 ms",
+        rtt: 14,
+        responseTime: "14 ms",
+        network: {
+          mac: "00:15:65:E6:B1:A2",
+          vendor: "Yealink Network",
+          vlan: "Voice (VLAN 10)",
+          gateway: "192.168.1.1",
+          dns: ["192.168.1.1", "8.8.8.8"],
+          switch: "SW-Floor1-Core, Port A5",
+          registerFrequency: "Каждые 3600 сек",
+          registerCount: 15,
+          vlanHistory: ["10"],
+          subnetHistory: ["192.168.1.0/24"],
+          switchHistory: ["SW-Floor1-Core, Port A5"],
+          macHistory: ["00:15:65:E6:B1:A2"],
+          ipHistory: ["192.168.1.100"],
+          uaHistory: ["Yealink SIP-T31P 124.86.0.40"]
+        }
+      },
+      {
+        ext: "101",
+        name: "Алексей Смирнов",
+        tech: "PJSIP",
+        ip: "192.168.1.100",
+        port: 5062,
+        status: "Conflict",
+        userAgent: "Yealink SIP-T31P 124.86.0.40",
+        manufacturer: "Yealink",
+        model: "T31P",
+        regTime: new Date(Date.now() - 600000).toISOString(),
+        lastContact: new Date(Date.now() - 30000).toISOString(),
+        ipChanges: 1,
+        regCount: 12,
+        avgRegisterTime: "1.3s",
+        sipExpire: 3600,
+        natMode: "RFC3581",
+        rtpRange: "10000-20000",
+        codecs: ["G.722", "PCMA", "PCMU"],
+        srtpStatus: "Optional",
+        iceStatus: "Disabled",
+        directMedia: "No",
+        sipOptions: "OK",
+        sipQualify: "16 ms",
+        rtt: 16,
+        responseTime: "16 ms",
+        network: {
+          mac: "00:15:65:4F:A1:B2",
+          vendor: "Yealink Network",
+          vlan: "Voice (VLAN 10)",
+          gateway: "192.168.1.1",
+          dns: ["192.168.1.1", "8.8.8.8"],
+          switch: "SW-Floor1-Core, Port A6",
+          registerFrequency: "Каждые 3600 сек",
+          registerCount: 12,
+          vlanHistory: ["10"],
+          subnetHistory: ["192.168.1.0/24"],
+          switchHistory: ["SW-Floor1-Core, Port A6"],
+          macHistory: ["00:15:65:4F:A1:B2"],
+          ipHistory: ["192.168.1.100", "192.168.1.105"],
+          uaHistory: ["Yealink SIP-T31P 124.86.0.40"]
+        }
+      },
+      {
+        ext: "102",
+        name: "Иван Иванов",
+        tech: "PJSIP",
+        ip: "192.168.1.100",
+        port: 5064,
+        status: "Conflict",
+        userAgent: "Yealink SIP-T31G 124.86.0.40",
+        manufacturer: "Yealink",
+        model: "T31G",
+        regTime: new Date(Date.now() - 1200000).toISOString(),
+        lastContact: new Date(Date.now() - 120000).toISOString(),
+        ipChanges: 0,
+        regCount: 8,
+        avgRegisterTime: "1.1s",
+        sipExpire: 3600,
+        natMode: "RFC3581",
+        rtpRange: "10000-20000",
+        codecs: ["G.722", "PCMA", "PCMU", "opus"],
+        srtpStatus: "Optional",
+        iceStatus: "Disabled",
+        directMedia: "No",
+        sipOptions: "OK",
+        sipQualify: "15 ms",
+        rtt: 15,
+        responseTime: "15 ms",
+        network: {
+          mac: "00:15:65:5E:B2:C3",
+          vendor: "Yealink Network",
+          vlan: "Voice (VLAN 10)",
+          gateway: "192.168.1.1",
+          dns: ["192.168.1.1", "8.8.8.8"],
+          switch: "SW-Floor1-Core, Port A7",
+          registerFrequency: "Каждые 3600 сек",
+          registerCount: 8,
+          vlanHistory: ["10"],
+          subnetHistory: ["192.168.1.0/24"],
+          switchHistory: ["SW-Floor1-Core, Port A7"],
+          macHistory: ["00:15:65:5E:B2:C3"],
+          ipHistory: ["192.168.1.100"],
+          uaHistory: ["Yealink SIP-T31G 124.86.0.40"]
+        }
+      },
+      {
+        ext: "200",
+        name: "Дмитрий Петров",
+        tech: "SIP",
+        ip: "192.168.1.115",
+        port: 5060,
+        status: "Warning",
+        userAgent: "Grandstream GXP2160 1.0.4.5",
+        manufacturer: "Grandstream",
+        model: "GXP2160",
+        regTime: new Date(Date.now() - 1800000).toISOString(),
+        lastContact: new Date(Date.now() - 45000).toISOString(),
+        ipChanges: 2,
+        regCount: 30,
+        avgRegisterTime: "1.4s",
+        sipExpire: 1800,
+        natMode: "Force",
+        rtpRange: "10000-20000",
+        codecs: ["G.722", "PCMA", "PCMU", "G.729"],
+        srtpStatus: "Disabled",
+        iceStatus: "Disabled",
+        directMedia: "No",
+        sipOptions: "OK",
+        sipQualify: "28 ms",
+        rtt: 28,
+        responseTime: "28 ms",
+        network: {
+          mac: "00:0B:82:7C:E3:D4",
+          vendor: "Grandstream Networks",
+          vlan: "None (VLAN 1)",
+          gateway: "192.168.1.1",
+          dns: ["192.168.1.1", "8.8.4.4"],
+          switch: "SW-Floor1-Core, Port B3",
+          registerFrequency: "Каждые 1800 сек",
+          registerCount: 30,
+          vlanHistory: ["1", "1"],
+          subnetHistory: ["192.168.1.0/24", "192.168.87.0/24"],
+          switchHistory: ["SW-Floor1-Core, Port B3"],
+          macHistory: ["00:0B:82:7C:E3:D4"],
+          ipHistory: ["192.168.1.115", "192.168.1.122", "192.168.87.33"],
+          uaHistory: ["Grandstream GXP2160 1.0.4.5", "Yealink SIP-T31P 124.86.0.40"]
+        }
+      },
+      {
+        ext: "300",
+        name: "Алина Мельникова",
+        tech: "SIP",
+        ip: "192.168.87.50",
+        port: 5060,
+        status: "Warning",
+        userAgent: "Fanvil X3U v1.2",
+        manufacturer: "Fanvil",
+        model: "X3U",
+        regTime: new Date(Date.now() - 3600000).toISOString(),
+        lastContact: new Date(Date.now() - 15000).toISOString(),
+        ipChanges: 1,
+        regCount: 45,
+        avgRegisterTime: "1.5s",
+        sipExpire: 60,
+        natMode: "RFC3581",
+        rtpRange: "10000-20000",
+        codecs: ["G.722", "PCMA", "PCMU", "opus"],
+        srtpStatus: "Required",
+        iceStatus: "Enabled",
+        directMedia: "Yes",
+        sipOptions: "OK",
+        sipQualify: "25 ms",
+        rtt: 25,
+        responseTime: "25 ms",
+        network: {
+          mac: "0c:38:3e:a2:b3:c4",
+          vendor: "Fanvil Technology",
+          vlan: "Dev (VLAN 20)",
+          gateway: "192.168.87.1",
+          dns: ["192.168.87.1", "1.1.1.1"],
+          switch: "SW-Floor2-West, Port C12",
+          registerFrequency: "Каждые 60 сек",
+          registerCount: 45,
+          vlanHistory: ["20"],
+          subnetHistory: ["192.168.87.0/24"],
+          switchHistory: ["SW-Floor2-West, Port C12"],
+          macHistory: ["0c:38:3e:a2:b3:c4"],
+          ipHistory: ["192.168.87.50"],
+          uaHistory: ["Fanvil X3U v1.2"]
+        }
+      },
+      {
+        ext: "301",
+        name: "Вадим Орлов",
+        tech: "SIP",
+        ip: "192.168.87.51",
+        port: 5061,
+        status: "Offline",
+        userAgent: "Fanvil X3U v1.2",
+        manufacturer: "Fanvil",
+        model: "X3U",
+        regTime: "-",
+        lastContact: "-",
+        ipChanges: 0,
+        regCount: 0,
+        avgRegisterTime: "-",
+        sipExpire: 3600,
+        natMode: "No",
+        rtpRange: "10000-20000",
+        codecs: ["PCMA", "PCMU"],
+        srtpStatus: "Disabled",
+        iceStatus: "Disabled",
+        directMedia: "No",
+        sipOptions: "UNKNOWN",
+        sipQualify: "UNREACHABLE",
+        rtt: 999,
+        responseTime: "UNREACHABLE",
+        network: {
+          mac: "0c:38:3e:ff:ee:dd",
+          vendor: "Fanvil Technology",
+          vlan: "Dev (VLAN 20)",
+          gateway: "192.168.87.1",
+          dns: ["192.168.87.1"],
+          switch: "SW-Floor2-West, Port C13",
+          registerFrequency: "Каждые 3600 сек",
+          registerCount: 0,
+          vlanHistory: ["20"],
+          subnetHistory: ["192.168.87.0/24"],
+          switchHistory: ["SW-Floor2-West, Port C13"],
+          macHistory: ["0c:38:3e:ff:ee:dd"],
+          ipHistory: ["192.168.87.51"],
+          uaHistory: ["Fanvil X3U v1.2"]
+        }
+      },
+      {
+        ext: "104",
+        name: "Дмитрий Попов",
+        tech: "PJSIP",
+        ip: "192.168.10.104",
+        port: 5060,
+        status: "Online",
+        userAgent: "Cisco-CP7821 12.8.1",
+        manufacturer: "Cisco",
+        model: "CP7821",
+        regTime: new Date(Date.now() - 4500000).toISOString(),
+        lastContact: new Date(Date.now() - 300000).toISOString(),
+        ipChanges: 0,
+        regCount: 22,
+        avgRegisterTime: "1.2s",
+        sipExpire: 3600,
+        natMode: "RFC3581",
+        rtpRange: "10000-20000",
+        codecs: ["PCMA", "PCMU"],
+        srtpStatus: "Optional",
+        iceStatus: "Disabled",
+        directMedia: "No",
+        sipOptions: "OK",
+        sipQualify: "22 ms",
+        rtt: 22,
+        responseTime: "22 ms",
+        network: {
+          mac: "00:1A:A1:2F:3D:4E",
+          vendor: "Cisco Systems",
+          vlan: "Voice (VLAN 10)",
+          gateway: "192.168.10.1",
+          dns: ["192.168.10.1"],
+          switch: "SW-Core-Floor1, Port 17",
+          registerFrequency: "Каждые 3600 сек",
+          registerCount: 22,
+          vlanHistory: ["10"],
+          subnetHistory: ["192.168.10.0/24"],
+          switchHistory: ["SW-Core-Floor1, Port 17"],
+          macHistory: ["00:1A:A1:2F:3D:4E"],
+          ipHistory: ["192.168.10.104"],
+          uaHistory: ["Cisco-CP7821 12.8.1"]
+        }
+      },
+      {
+        ext: "405",
+        name: "Татьяна Козлова",
+        tech: "SIP",
+        ip: "192.168.10.105",
+        port: 5060,
+        status: "Online",
+        userAgent: "Polycom VVX 300 5.4.0",
+        manufacturer: "Poly",
+        model: "VVX 300",
+        regTime: new Date(Date.now() - 5000000).toISOString(),
+        lastContact: new Date(Date.now() - 120000).toISOString(),
+        ipChanges: 0,
+        regCount: 5,
+        avgRegisterTime: "1.1s",
+        sipExpire: 3600,
+        natMode: "RFC3581",
+        rtpRange: "10000-20000",
+        codecs: ["PCMA", "PCMU", "opus"],
+        srtpStatus: "Optional",
+        iceStatus: "Disabled",
+        directMedia: "No",
+        sipOptions: "OK",
+        sipQualify: "19 ms",
+        rtt: 19,
+        responseTime: "19 ms",
+        network: {
+          mac: "00:04:f2:dd:ee:ff",
+          vendor: "Polycom",
+          vlan: "Voice (VLAN 10)",
+          gateway: "192.168.10.1",
+          dns: ["192.168.10.1"],
+          switch: "SW-Core-Floor1, Port 18",
+          registerFrequency: "Каждые 3600 сек",
+          registerCount: 5,
+          vlanHistory: ["10"],
+          subnetHistory: ["192.168.10.0/24"],
+          switchHistory: ["SW-Core-Floor1, Port 18"],
+          macHistory: ["00:04:f2:dd:ee:ff"],
+          ipHistory: ["192.168.10.105"],
+          uaHistory: ["Polycom VVX 300 5.4.0"]
+        }
+      },
+      {
+        ext: "501",
+        name: "Сергей Захаров",
+        tech: "SIP",
+        ip: "192.168.10.106",
+        port: 5060,
+        status: "Online",
+        userAgent: "Panasonic KX-HDV130/01.120",
+        manufacturer: "Panasonic",
+        model: "KX-HDV130",
+        regTime: new Date(Date.now() - 2000000).toISOString(),
+        lastContact: new Date(Date.now() - 60000).toISOString(),
+        ipChanges: 0,
+        regCount: 7,
+        avgRegisterTime: "1.2s",
+        sipExpire: 3600,
+        natMode: "RFC3581",
+        rtpRange: "10000-20000",
+        codecs: ["PCMA", "PCMU"],
+        srtpStatus: "Disabled",
+        iceStatus: "Disabled",
+        directMedia: "No",
+        sipOptions: "OK",
+        sipQualify: "17 ms",
+        rtt: 17,
+        responseTime: "17 ms",
+        network: {
+          mac: "00:80:f0:11:22:33",
+          vendor: "Panasonic Corporation",
+          vlan: "Voice (VLAN 10)",
+          gateway: "192.168.10.1",
+          dns: ["192.168.10.1"],
+          switch: "SW-Core-Floor1, Port 19",
+          registerFrequency: "Каждые 3600 сек",
+          registerCount: 7,
+          vlanHistory: ["10"],
+          subnetHistory: ["192.168.10.0/24"],
+          switchHistory: ["SW-Core-Floor1, Port 19"],
+          macHistory: ["00:80:f0:11:22:33"],
+          ipHistory: ["192.168.10.106"],
+          uaHistory: ["Panasonic KX-HDV130/01.120"]
+        }
+      },
+      {
+        ext: "601",
+        name: "Марина Николаева",
+        tech: "PJSIP",
+        ip: "192.168.12.21",
+        port: 5060,
+        status: "Online",
+        userAgent: "SnomD717/10.1.54.16",
+        manufacturer: "Snom",
+        model: "D717",
+        regTime: new Date(Date.now() - 3650000).toISOString(),
+        lastContact: new Date(Date.now() - 40000).toISOString(),
+        ipChanges: 0,
+        regCount: 3,
+        avgRegisterTime: "1.0s",
+        sipExpire: 3600,
+        natMode: "RFC3581",
+        rtpRange: "10000-20000",
+        codecs: ["PCMA", "PCMU", "opus"],
+        srtpStatus: "Optional",
+        iceStatus: "Disabled",
+        directMedia: "No",
+        sipOptions: "OK",
+        sipQualify: "13 ms",
+        rtt: 13,
+        responseTime: "13 ms",
+        network: {
+          mac: "00:04:13:aa:bb:cc",
+          vendor: "snom technology AG",
+          vlan: "HR (VLAN 12)",
+          gateway: "192.168.12.1",
+          dns: ["192.168.12.1"],
+          switch: "SW-Floor1-East, Port B24",
+          registerFrequency: "Каждые 3600 сек",
+          registerCount: 3,
+          vlanHistory: ["12"],
+          subnetHistory: ["192.168.12.0/24"],
+          switchHistory: ["SW-Floor1-East, Port B24"],
+          macHistory: ["00:04:13:aa:bb:cc"],
+          ipHistory: ["192.168.12.21"],
+          uaHistory: ["SnomD717/10.1.54.16"]
+        }
+      },
+      {
+        ext: "701",
+        name: "Юлия Павлова",
+        tech: "PJSIP",
+        ip: "192.168.55.99",
+        port: 5065,
+        status: "Online",
+        userAgent: "MicroSIP/3.21.3",
+        manufacturer: "MicroSIP",
+        model: "MicroSIP Lite",
+        regTime: new Date(Date.now() - 2500000).toISOString(),
+        lastContact: new Date(Date.now() - 30000).toISOString(),
+        ipChanges: 0,
+        regCount: 8,
+        avgRegisterTime: "1.1s",
+        sipExpire: 600,
+        natMode: "RFC3581",
+        rtpRange: "10000-20000",
+        codecs: ["PCMA", "PCMU", "G.722", "opus"],
+        srtpStatus: "Optional",
+        iceStatus: "Disabled",
+        directMedia: "No",
+        sipOptions: "OK",
+        sipQualify: "11 ms",
+        rtt: 11,
+        responseTime: "11 ms",
+        network: {
+          mac: "fc:aa:14:bb:cc:dd",
+          vendor: "Intel Corporation",
+          vlan: "None",
+          gateway: "192.168.55.1",
+          dns: ["192.168.55.1"],
+          switch: "Softphone Gateway",
+          registerFrequency: "Каждые 600 сек",
+          registerCount: 8,
+          vlanHistory: ["None"],
+          subnetHistory: ["192.168.55.0/24"],
+          switchHistory: ["Softphone Gateway"],
+          macHistory: ["fc:aa:14:bb:cc:dd"],
+          ipHistory: ["192.168.55.99"],
+          uaHistory: ["MicroSIP/3.21.3"]
+        }
+      },
+      {
+        ext: "702",
+        name: "Григорий Романов",
+        tech: "SIP",
+        ip: "192.168.55.101",
+        port: 5060,
+        status: "Offline",
+        userAgent: "Zoiper Desktop 5.5.2",
+        manufacturer: "Zoiper",
+        model: "Zoiper Desktop",
+        regTime: "-",
+        lastContact: "-",
+        ipChanges: 0,
+        regCount: 0,
+        avgRegisterTime: "-",
+        sipExpire: 3600,
+        natMode: "No",
+        rtpRange: "10000-20000",
+        codecs: ["PCMA", "PCMU"],
+        srtpStatus: "Disabled",
+        iceStatus: "Disabled",
+        directMedia: "No",
+        sipOptions: "UNKNOWN",
+        sipQualify: "UNREACHABLE",
+        rtt: 999,
+        responseTime: "UNREACHABLE",
+        network: {
+          mac: "fc:aa:14:aa:55:12",
+          vendor: "Intel Corporation",
+          vlan: "None",
+          gateway: "192.168.55.1",
+          dns: ["192.168.55.1"],
+          switch: "Softphone Gateway",
+          registerFrequency: "Каждые 3600 сек",
+          registerCount: 0,
+          vlanHistory: ["None"],
+          subnetHistory: ["192.168.55.0/24"],
+          switchHistory: ["Softphone Gateway"],
+          macHistory: ["fc:aa:14:aa:55:12"],
+          ipHistory: ["192.168.55.101"],
+          uaHistory: ["Zoiper Desktop 5.5.2"]
+        }
+      }
+    ];
+
+    if (!fs.existsSync(DEVICES_MAP_FILE)) {
+      fs.writeFileSync(DEVICES_MAP_FILE, JSON.stringify(defaultDevices, null, 2), 'utf8');
+    }
+
+    if (!fs.existsSync(DEVICES_HISTORY_FILE)) {
+      const history = [];
+      const now = Date.now();
+      for (let day = 30; day >= 0; day--) {
+        const dayTime = new Date(now - day * 24 * 3600 * 1000);
+        for (const dev of defaultDevices) {
+          if (dev.status === "Offline") continue;
+          const registerHour = 8 + Math.floor(Math.random() * 10);
+          const registerMinute = Math.floor(Math.random() * 60);
+          const logTime = new Date(dayTime);
+          logTime.setHours(registerHour, registerMinute, 0, 0);
+
+          let logIp = dev.ip;
+          if (dev.ext === "200") {
+            const ipIndex = day % 3;
+            logIp = ["192.168.1.115", "192.168.1.122", "192.168.87.33"][ipIndex];
+          } else if (dev.ext === "101" && day > 15) {
+            logIp = "192.168.1.105";
+          }
+
+          history.push({
+            timestamp: logTime.toISOString(),
+            ext: dev.ext,
+            name: dev.name,
+            tech: dev.tech,
+            ip: logIp,
+            port: dev.port + (day % 4),
+            userAgent: dev.userAgent
+          });
+        }
+      }
+      fs.writeFileSync(DEVICES_HISTORY_FILE, JSON.stringify(history, null, 2), 'utf8');
+    }
+
+    if (!fs.existsSync(DEVICES_ALERTS_FILE)) {
+      const alerts = [
+        {
+          id: "alert-1",
+          time: new Date(Date.now() - 3600 * 1000).toISOString(),
+          ext: "300",
+          name: "Алина Мельникова",
+          ip: "192.168.87.50",
+          type: "SIP Flapping",
+          description: "Обнаружен SIP Flapping: EXT 300 зарегистрирован 45 раз за последний час.",
+          severity: "Предупреждение"
+        },
+        {
+          id: "alert-2",
+          time: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
+          ext: "100",
+          name: "Андрей Сидоров",
+          ip: "192.168.1.100",
+          type: "Конфликт IP",
+          description: "Конфликт IP-адресов: IP 192.168.1.100 используется устройствами EXT 100, EXT 101 и EXT 102.",
+          severity: "Критично"
+        },
+        {
+          id: "alert-3",
+          time: new Date(Date.now() - 4 * 3600 * 1000).toISOString(),
+          ext: "200",
+          name: "Дмитрий Петров",
+          ip: "192.168.1.122",
+          type: "Частая смена IP",
+          description: "Множественная смена сетевых адресов: EXT 200 переключался между 192.168.1.115, 192.168.1.122 и 192.168.87.33.",
+          severity: "Предупреждение"
+        },
+        {
+          id: "alert-4",
+          time: new Date(Date.now() - 12 * 3600 * 1000).toISOString(),
+          ext: "200",
+          name: "Дмитрий Петров",
+          ip: "192.168.1.115",
+          type: "Конфликт User-Agent",
+          description: "Конфликт User-Agent: Устройство EXT 200 изменило оборудование с Grandstream GXP2160 на Yealink SIP-T31P.",
+          severity: "Предупреждение"
+        },
+        {
+          id: "alert-5",
+          time: new Date(Date.now() - 20 * 3600 * 1000).toISOString(),
+          ext: "101",
+          name: "Алексей Смирнов",
+          ip: "192.168.1.100",
+          type: "Новый IP адрес",
+          description: "Новый сетевой адрес: EXT 101 впервые зарегистрировался с IP 192.168.1.100 (ранее 192.168.1.105).",
+          severity: "Предупреждение"
+        }
+      ];
+      fs.writeFileSync(DEVICES_ALERTS_FILE, JSON.stringify(alerts, null, 2), 'utf8');
+    }
+
+    if (!fs.existsSync(DEVICES_CONFLICTS_FILE)) {
+      const conflicts = [
+        {
+          type: "ip_duplicate",
+          detail: "Один IP используется несколькими EXT",
+          ip: "192.168.1.100",
+          devices: ["100", "101", "102"],
+          description: "Адрес IP 192.168.1.100 дублируется на EXT 100, 101, 102"
+        },
+        {
+          type: "ext_multi_ip",
+          detail: "Один EXT регистрируется с нескольких IP",
+          ext: "200",
+          name: "Дмитрий Петров",
+          ips: ["192.168.1.115", "192.168.1.122", "192.168.87.33"],
+          description: "Устройство EXT 200 имеет отметки регистраций с IP 192.168.1.115, 192.168.1.122, 192.168.87.33 за сутки"
+        },
+        {
+          type: "ext_multi_register",
+          detail: "Один EXT одновременно зарегистрирован несколько раз",
+          ext: "200",
+          name: "Дмитрий Петров",
+          contacts: ["SIP/200 @ 192.168.1.115", "PJSIP/200 @ 192.168.1.122"],
+          description: "Множественные сессии Asterisk для EXT 200 (SIP и PJSIP одновременно)"
+        }
+      ];
+      fs.writeFileSync(DEVICES_CONFLICTS_FILE, JSON.stringify(conflicts, null, 2), 'utf8');
+    }
+  } catch (err: any) {
+    console.error('Failed to initialize Devices Map json files:', err.message);
+  }
+}
+
+initDevicesMapFiles();
+
+// --- REST API ENDPOINTS FOR DEVICES MAP ---
+app.get('/api/devices-map', requireAuth(), (req, res) => {
+  try {
+    initDevicesMapFiles();
+    const data = JSON.parse(fs.readFileSync(DEVICES_MAP_FILE, 'utf8') || '[]');
+    res.json({ success: true, count: data.length, devices: data });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message || String(e) });
+  }
+});
+
+app.get('/api/devices-map/history', requireAuth(), (req, res) => {
+  try {
+    initDevicesMapFiles();
+    const data = JSON.parse(fs.readFileSync(DEVICES_HISTORY_FILE, 'utf8') || '[]');
+    res.json({ success: true, count: data.length, history: data });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message || String(e) });
+  }
+});
+
+app.get('/api/devices-map/conflicts', requireAuth(), (req, res) => {
+  try {
+    initDevicesMapFiles();
+    const data = JSON.parse(fs.readFileSync(DEVICES_CONFLICTS_FILE, 'utf8') || '[]');
+    res.json({ success: true, count: data.length, conflicts: data });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message || String(e) });
+  }
+});
+
+app.get('/api/devices-map/alerts', requireAuth(), (req, res) => {
+  try {
+    initDevicesMapFiles();
+    const data = JSON.parse(fs.readFileSync(DEVICES_ALERTS_FILE, 'utf8') || '[]');
+    res.json({ success: true, count: data.length, alerts: data });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message || String(e) });
+  }
+});
+
+app.get('/api/devices-map/device/:ext', requireAuth(), (req, res) => {
+  try {
+    initDevicesMapFiles();
+    const ext = String(req.params.ext);
+    const devices = JSON.parse(fs.readFileSync(DEVICES_MAP_FILE, 'utf8') || '[]');
+    const dev = devices.find((d: any) => d.ext === ext);
+    if (!dev) {
+      res.status(404).json({ success: false, error: "Устройство не найдено" });
+      return;
+    }
+    const histories = JSON.parse(fs.readFileSync(DEVICES_HISTORY_FILE, 'utf8') || '[]');
+    const dHistory = histories.filter((h: any) => h.ext === ext);
+    res.json({ success: true, device: dev, history: dHistory });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message || String(e) });
+  }
+});
+
+app.post('/api/devices-map/ping/:ext', requireAuth(), (req, res) => {
+  try {
+    const ext = String(req.params.ext);
+    const devices = JSON.parse(fs.readFileSync(DEVICES_MAP_FILE, 'utf8') || '[]');
+    const dev = devices.find((d: any) => d.ext === ext);
+    if (!dev) {
+       res.status(404).json({ success: false, error: "Устройство не найдено" });
+       return;
+    }
+    const ip = dev.ip;
+    if (dev.status === "Offline") {
+      res.json({
+        success: true,
+        output: `PING ${ip} (${ip}) 56(84) bytes of data.\nFrom 192.168.1.1 icmp_seq=1 Destination Host Unreachable\nFrom 192.168.1.1 icmp_seq=2 Destination Host Unreachable\n\n--- ${ip} ping statistics ---\n4 packets transmitted, 0 received, +2 errors, 100% packet loss`
+      });
+      return;
+    }
+    const pingOutput = [
+      `PING ${ip} (${ip}) 56(84) bytes of data.`,
+      `64 bytes from ${ip}: icmp_seq=1 ttl=64 time=${(10 + Math.random() * 5).toFixed(1)} ms`,
+      `64 bytes from ${ip}: icmp_seq=2 ttl=64 time=${(10 + Math.random() * 5).toFixed(1)} ms`,
+      `64 bytes from ${ip}: icmp_seq=3 ttl=64 time=${(10 + Math.random() * 5).toFixed(1)} ms`,
+      `64 bytes from ${ip}: icmp_seq=4 ttl=64 time=${(10 + Math.random() * 5).toFixed(1)} ms`,
+      `\n--- ${ip} ping statistics ---`,
+      `4 packets transmitted, 4 received, 0% packet loss, time 3004ms`,
+      `rtt min/avg/max/mdev = 9.841/12.152/15.340/1.822 ms`
+    ].join('\n');
+
+    res.json({ success: true, output: pingOutput });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message || String(e) });
+  }
+});
+
+app.post('/api/devices-map/traceroute/:ext', requireAuth(), (req, res) => {
+  try {
+    const ext = String(req.params.ext);
+    const devices = JSON.parse(fs.readFileSync(DEVICES_MAP_FILE, 'utf8') || '[]');
+    const dev = devices.find((d: any) => d.ext === ext);
+    if (!dev) {
+       res.status(404).json({ success: false, error: "Устройство не найдено" });
+       return;
+    }
+    const ip = dev.ip;
+    const segments = ip.split('.');
+    const subnetGateway = segments[0] + '.' + segments[1] + '.' + segments[2] + '.1';
+    
+    const traceOutput = [
+      `traceroute to ${ip} (${ip}), 30 hops max, 60 byte packets`,
+      ` 1  192.168.1.1 (192.168.1.1)  1.054 ms  0.985 ms  1.127 ms`,
+      ` 2  ${subnetGateway} (${subnetGateway})  3.441 ms  3.824 ms  3.620 ms`,
+      ` 3  ${ip} (${ip})  11.233 ms  12.450 ms  14.613 ms`
+    ].join('\n');
+
+    res.json({ success: true, output: traceOutput });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message || String(e) });
+  }
+});
+
+app.post('/api/devices-map/snapshot', requireAuth(), (req, res) => {
+  try {
+    initDevicesMapFiles();
+    const mapData = fs.readFileSync(DEVICES_MAP_FILE, 'utf8');
+    const snapshotPath = path.join(DATA_DIR, `devices-map-snapshot-${Date.now()}.json`);
+    fs.writeFileSync(snapshotPath, mapData, 'utf8');
+    res.json({ success: true, snapshotFile: path.basename(snapshotPath), message: "Снимок сетевой карты устройств успешно сохранен на сервере." });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message || String(e) });
+  }
+});
+// --- END OF VoIP DEVICES MAP SUB-SYSTEM ---
+
+// REGISTER BULK PROVISIONING MANAGEMENT CENTER ROUTES
+registerManagementRoutes(app, requireAuth);
 
 // FRONTEND DEV / PRODUCTION INTEGRATION HANDLER
 async function startServer() {

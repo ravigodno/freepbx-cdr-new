@@ -31,6 +31,9 @@ export type PermissionKey =
   | 'manage_outbound_routes'
   | 'manage_numbering_capacity'
   | 'view_balance'
+  | 'view_balance_analytics'
+  | 'manage_balance_sources'
+  | 'view_balance_alerts'
   | 'manage_balance_providers';
 
 export type UserPermissions = Partial<Record<PermissionKey, boolean>>;

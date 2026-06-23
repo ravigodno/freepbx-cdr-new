@@ -9,7 +9,29 @@ export async function fetchCdrStats(params: URLSearchParams, token: string) {
     throw new Error('UNAUTHORIZED');
   }
 
-  return resp.json();
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => '');
+    let errorMessage = 'Не удалось загрузить статистику вызовов';
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed.error) {
+        errorMessage = parsed.error;
+      }
+    } catch {
+      if (text && text.includes('Rate exceeded')) {
+        errorMessage = 'Превышен лимит запросов к серверу. Пожалуйста, подождите немного.';
+      } else if (text) {
+        errorMessage = text.slice(0, 100);
+      }
+    }
+    throw new Error(errorMessage);
+  }
+
+  try {
+    return await resp.json();
+  } catch (e) {
+    throw new Error('Некорректный формат ответа статистики от сервера');
+  }
 }
 
 export async function fetchCdrCalls(params: URLSearchParams, token: string) {
@@ -24,9 +46,27 @@ export async function fetchCdrCalls(params: URLSearchParams, token: string) {
   }
 
   if (!resp.ok) {
-    const errorData = await resp.json().catch(() => ({}));
-    throw new Error(errorData.error || 'Не удалось загрузить реестр вызовов');
+    const text = await resp.text().catch(() => '');
+    let errorMessage = 'Не удалось загрузить реестр вызовов';
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed.error) {
+        errorMessage = parsed.error;
+      }
+    } catch {
+      if (text && text.includes('Rate exceeded')) {
+        errorMessage = 'Превышен лимит запросов к серверу. Пожалуйста, подождите немного.';
+      } else if (text) {
+        errorMessage = text.slice(0, 100);
+      }
+    }
+    throw new Error(errorMessage);
   }
 
-  return resp.json();
+  try {
+    return await resp.json();
+  } catch (e) {
+    throw new Error('Некорректный формат ответа вызовов от сервера');
+  }
 }
+

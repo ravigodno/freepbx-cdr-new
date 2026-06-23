@@ -157,3 +157,77 @@ html.dark .theme-toggle-switch {
 html.dark .theme-toggle-switch.active {
   background-color: #ef4444 !important; /* Red 500 when active in dark mode */
 }
+
+/* ==========================================
+   sngrep vII Custom Modular Theme Overrides
+   ========================================== */
+
+/* Dark Mode Theme Definition */
+.sngrep-theme-dark {
+  --sngrep-bg-main: #0f172a !important;
+  --sngrep-bg-panel: #1e293b !important;
+  --sngrep-bg-card: rgba(30, 41, 59, 0.45) !important;
+  --sngrep-bg-sub: rgba(30, 41, 59, 0.25) !important;
+  --sngrep-bg-tab-active: rgba(30, 41, 59, 0.7) !important;
+  --sngrep-text-main: #cbd5e1 !important;
+  --sngrep-text-title: #f8fafc !important;
+  --sngrep-text-muted: #94a3b8 !important;
+  --sngrep-border: #334155 !important;
+  --sngrep-item-hover: rgba(30, 41, 59, 0.6) !important;
+  --sngrep-item-selected: #1e293b !important;
+  --sngrep-badge-bg: #334155 !important;
+  --sngrep-badge-text: #94a3b8 !important;
+}
+
+/* Light Mode Theme Definition */
+.sngrep-theme-light {
+  --sngrep-bg-main: #f8fafc !important;
+  --sngrep-bg-panel: #ffffff !important;
+  --sngrep-bg-card: #f1f5f9 !important;
+  --sngrep-bg-sub: #f8fafc !important;
+  --sngrep-bg-tab-active: #ffffff !important;
+  --sngrep-text-main: #334155 !important;
+  --sngrep-text-title: #0f172a !important;
+  --sngrep-text-muted: #64748b !important;
+  --sngrep-border: #e2e8f0 !important;
+  --sngrep-item-hover: #f1f5f9 !important;
+  --sngrep-item-selected: #cbd5e1 !important;
+  --sngrep-badge-bg: #e2e8f0 !important;
+  --sngrep-badge-text: #475569 !important;
+}
+
+/* Sngrep Element Binding Selectors */
+.sngrep-bg-main {
+  background-color: var(--sngrep-bg-main) !important;
+  color: var(--sngrep-text-main) !important;
+}
+.sngrep-bg-panel {
+  background-color: var(--sngrep-bg-panel) !important;
+}
+.sngrep-bg-card {
+  background-color: var(--sngrep-bg-card) !important;
+}
+.sngrep-bg-sub {
+  background-color: var(--sngrep-bg-sub) !important;
+}
+.sngrep-border {
+  border-color: var(--sngrep-border) !important;
+}
+.sngrep-divide > :not([hidden]) ~ :not([hidden]) {
+  border-color: var(--sngrep-border) !important;
+}
+.sngrep-item-hover:hover {
+  background-color: var(--sngrep-item-hover) !important;
+}
+.sngrep-text-title {
+  color: var(--sngrep-text-title) !important;
+}
+.sngrep-text-muted {
+  color: var(--sngrep-text-muted) !important;
+}
+.sngrep-badge {
+  background-color: var(--sngrep-badge-bg) !important;
+  color: var(--sngrep-badge-text) !important;
+  border-color: var(--sngrep-border) !important;
+}
+
