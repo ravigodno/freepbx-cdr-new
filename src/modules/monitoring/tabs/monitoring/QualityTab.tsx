@@ -359,7 +359,7 @@ interface QualityDevice {
   jitter: number;
   rtpLoss: number;
   mos: number;
-  status: 'Отлично' | 'Хорошо' | 'Предупреждение' | 'Критично';
+  status: 'Отлично' | 'Хорошо' | 'Предупреждение' | 'Критично' | 'Offline';
   lastCheck: string;
   network: {
     mac: string;
@@ -701,11 +701,11 @@ export default function QualityTab({ token }: Props) {
     const ip = selectedDevice.ip;
 
     // Check duplicate IP first
-    const isDuplicateIp = devices.some(d => d.ext !== ext && d.ip === ip);
+    const isDuplicateIp = ip && ip !== '0.0.0.0' && devices.some(d => d.ext !== ext && d.ip === ip && d.status !== 'Offline');
     // Check if multiple EXT on same IP
-    const extsOnSameIp = devices.filter(d => d.ip === ip).map(d => d.ext);
+    const extsOnSameIp = ip ? devices.filter(d => d.ip === ip && d.status !== 'Offline').map(d => d.ext) : [];
 
-    if (isDuplicateIp) {
+    if (isDuplicateIp && extsOnSameIp.length > 1) {
       return {
         hasIssue: true,
         issue: `Обнаружен конфликт IP-адресов. Данный IP (${ip}) одновременно используется на устройствах EXT: ${extsOnSameIp.join(', ')}.`,

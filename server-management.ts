@@ -2,6 +2,8 @@ import { Request, Response, Express } from 'express';
 import fs from 'fs';
 import path from 'path';
 import * as XLSX from 'xlsx';
+import mysql from 'mysql2/promise';
+import { spawnSync } from 'child_process';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const CAPACITY_FILE = path.join(DATA_DIR, 'numbering-capacity.json');
@@ -308,6 +310,59 @@ export function initManagementFiles() {
   // Change Log
   if (!fs.existsSync(CHANGE_LOG_FILE)) {
     safeWriteJson(CHANGE_LOG_FILE, []);
+  }
+}
+
+// Read settings from db.json to connect to MariaDB and execute fwconsole commands
+async function getPBXSettings() {
+  try {
+    if (fs.existsSync(DB_FILE)) {
+      const parentDb = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+      return parentDb.settings || {};
+    }
+  } catch (err) {}
+  return {};
+}
+
+async function executeAsteriskQuery(sql: string, params: any[] = []) {
+  const settings = await getPBXSettings();
+  if (!settings.dbHost) {
+    console.log('[MGMT-DB] No database host configured. Skipping real DB write.');
+    return [];
+  }
+
+  // Use asterisk database, fallback to settings.dbName if not using standard name
+  const dbName = 'asterisk';
+  
+  let connection;
+  try {
+    connection = await mysql.createConnection({
+      host: settings.dbHost,
+      port: Number(settings.dbPort || 3306),
+      user: settings.dbUser,
+      password: settings.dbPass,
+      database: dbName,
+      connectTimeout: 5000
+    });
+    const [rows] = await connection.execute(sql, params);
+    return rows as any[];
+  } catch (e: any) {
+    console.error(`[MGMT-DB] MariaDB query failed: "${sql}"`, e.message);
+    throw e;
+  } finally {
+    if (connection) await connection.end();
+  }
+}
+
+function reloadFreePBX() {
+  try {
+    console.log('[MGMT] Reloading FreePBX via fwconsole...');
+    const res = spawnSync('fwconsole reload', { shell: true, encoding: 'utf8', timeout: 60000 });
+    console.log('[MGMT] fwconsole reload finished with code:', res.status);
+    return res.status === 0;
+  } catch (e: any) {
+    console.error('[MGMT] fwconsole reload failed:', e.message);
+    return false;
   }
 }
 
@@ -671,6 +726,137 @@ export function registerManagementRoutes(app: Express, requireAuth: Function) {
   });
 
 
+  // Helper function to parse CSV robustly with quotes handling
+  function parseCsv(text: string): Record<string, string>[] {
+    const lines: string[] = [];
+    let currentLine = '';
+    let inQuotes = false;
+    
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i];
+      if (char === '"') {
+        inQuotes = !inQuotes;
+        currentLine += char;
+      } else if (char === '\n' && !inQuotes) {
+        lines.push(currentLine);
+        currentLine = '';
+      } else if (char === '\r' && !inQuotes) {
+        // skip
+      } else {
+        currentLine += char;
+      }
+    }
+    if (currentLine) {
+      lines.push(currentLine);
+    }
+
+    if (lines.length === 0) return [];
+
+    // Parse a single row
+    const parseRow = (rowText: string): string[] => {
+      const cells: string[] = [];
+      let currentCell = '';
+      let inQuotes = false;
+      for (let i = 0; i < rowText.length; i++) {
+        const char = rowText[i];
+        if (char === '"') {
+          inQuotes = !inQuotes;
+        } else if (char === ',' && !inQuotes) {
+          cells.push(currentCell.trim());
+          currentCell = '';
+        } else {
+          currentCell += char;
+        }
+      }
+      cells.push(currentCell.trim());
+      return cells;
+    };
+
+    const headers = parseRow(lines[0]);
+    const results: Record<string, string>[] = [];
+
+    for (let i = 1; i < lines.length; i++) {
+      if (!lines[i].trim()) continue;
+      const cells = parseRow(lines[i]);
+      const rowObj: Record<string, string> = {};
+      headers.forEach((h, idx) => {
+        if (h) {
+          rowObj[h] = cells[idx] !== undefined ? cells[idx] : '';
+        }
+      });
+      results.push(rowObj);
+    }
+
+    return results;
+  }
+
+  app.get('/api/management/extensions', requireAuth(), async (req, res) => {
+    try {
+      const { extensions } = await getPBXData();
+      res.json(extensions || []);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get('/api/management/extensions/export-csv', requireAuth(), async (req, res) => {
+    try {
+      const { extensions } = await getPBXData();
+      const headers = [
+        'extension',
+        'name',
+        'password',
+        'voicemail',
+        'ringtimer',
+        'noanswer',
+        'recording',
+        'outboundcid',
+        'sipname',
+        'noanswer_cid',
+        'busy_cid',
+        'chanunavail_cid',
+        'noanswer_dest',
+        'busy_dest',
+        'chanunavail_dest',
+        'mohclass',
+        'id',
+        'tech',
+        'dial',
+        'description',
+        'email',
+        'department',
+        'findmefollow_strategy',
+        'findmefollow_grptime',
+        'findmefollow_grppre',
+        'findmefollow_grplist',
+        'findmefollow_enabled'
+      ];
+
+      const csvRows = [headers.join(',')];
+
+      extensions.forEach((ext: any) => {
+        const row = headers.map(header => {
+          let val = ext[header];
+          if (val === undefined) {
+            if (header === 'id') val = ext.extension;
+            else if (header === 'dial') val = ext.dial || `${(ext.tech || 'sip').toUpperCase()}/${ext.extension}`;
+            else if (header === 'description') val = ext.name || '';
+            else val = '';
+          }
+          const strVal = String(val).replace(/"/g, '""');
+          return strVal.includes(',') || strVal.includes('\n') || strVal.includes('"') ? `"${strVal}"` : strVal;
+        });
+        csvRows.push(row.join(','));
+      });
+
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', 'attachment; filename="freepbx_extensions_current.csv"');
+      res.status(200).send(csvRows.join('\n'));
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // --- BULK EXTENSIONS OPERATIONS ---
   app.post('/api/management/extensions/preview', requireAuth(), async (req, res) => {
     try {
@@ -695,12 +881,13 @@ export function registerManagementRoutes(app: Express, requireAuth: Function) {
           const exists = extensions.find((e: any) => e.extension === extension);
           
           generated.push({
+            ...exists,
             extension,
             name,
-            tech: tech || 'pjsip',
-            email: `operator${extension}@domain.ru`,
-            recording: recording || 'always',
-            voicemail: voicemail ? 'yes' : 'no',
+            tech: tech || (exists ? exists.tech : 'pjsip'),
+            email: exists ? exists.email : `operator${extension}@domain.ru`,
+            recording: recording || (exists ? exists.recording : 'always'),
+            voicemail: voicemail ? 'yes' : (exists ? exists.voicemail : 'no'),
             status: exists ? 'update' : 'create'
           });
 
@@ -708,9 +895,29 @@ export function registerManagementRoutes(app: Express, requireAuth: Function) {
             conflicts.push(`Внутренний номер ${extension} уже существует (будет обновлен)`);
           }
         }
-      } else if (mode === 'manual' || mode === 'file') {
+      } else if (mode === 'manual' || mode === 'file' || mode === 'edit-active') {
         // e.g. "200; Иван Иванов; Отдел продаж" or parsed from file upload
-        const list = Array.isArray(payload.entries) ? payload.entries : [];
+        let list = Array.isArray(payload.entries) ? payload.entries : [];
+        if (mode === 'file' && payload.rawCsv) {
+          const parsed = parseCsv(payload.rawCsv);
+          list = parsed.map((row: any) => {
+            const ext = row.extension || row.ext || row.id || '';
+            const n = row.name || row.description || `Абонент ${ext}`;
+            const pwd = row.password || row.secret || '';
+            return {
+              ...row,
+              extension: ext,
+              name: n,
+              password: pwd,
+              tech: row.tech || row.sipdriver || 'sip',
+              email: row.email || `operator${ext}@domain.ru`,
+              department: row.department || 'Колл-центр',
+              recording: row.recording || 'always',
+              voicemail: row.voicemail || 'novm'
+            };
+          }).filter((x: any) => x.extension);
+        }
+
         list.forEach((item: any) => {
           const extension = String(item.extension || '').trim();
           if (!extension) return;
@@ -718,13 +925,15 @@ export function registerManagementRoutes(app: Express, requireAuth: Function) {
           const exists = extensions.find((e: any) => e.extension === extension);
           
           generated.push({
+            ...exists,
+            ...item,
             extension,
             name,
-            tech: item.tech || tech || 'pjsip',
-            email: item.email || `operator${extension}@domain.ru`,
-            department: item.department || 'Колл-центр',
-            recording: item.recording || recording || 'always',
-            voicemail: item.voicemail || 'no',
+            tech: item.tech || (exists ? exists.tech : (tech || 'pjsip')),
+            email: item.email || (exists ? exists.email : `operator${extension}@domain.ru`),
+            department: item.department || (exists ? exists.department : 'Колл-центр'),
+            recording: item.recording || (exists ? exists.recording : (recording || 'always')),
+            voicemail: item.voicemail || (exists ? exists.voicemail : 'no'),
             status: exists ? 'update' : 'create'
           });
 
@@ -786,6 +995,7 @@ export function registerManagementRoutes(app: Express, requireAuth: Function) {
         generated.forEach((gen: any) => {
           const idx = db.extensions.findIndex((existing: any) => existing.extension === gen.extension);
           const newExt = {
+            ...gen,
             id: 'ext-' + gen.extension,
             extension: gen.extension,
             name: gen.name,
@@ -808,6 +1018,143 @@ export function registerManagementRoutes(app: Express, requireAuth: Function) {
           createdIds.push('ext-' + gen.extension);
         });
       });
+
+      // --- WRITE TO REAL ASTERISK DATABASE ---
+      for (const gen of generated) {
+        const extension = String(gen.extension);
+        const name = String(gen.name || `Extension ${extension}`);
+        const tech = String(gen.tech || 'pjsip').toLowerCase();
+        
+        let recording = 'out=dontcare|in=dontcare';
+        if (gen.recording === 'always') {
+          recording = 'out=always|in=always';
+        } else if (gen.recording) {
+          recording = String(gen.recording);
+        }
+        
+        const voicemail = gen.voicemail || 'novm';
+        const secret = gen.password || gen.secret || 'Pass' + Math.random().toString(36).substring(2, 10).toUpperCase() + '1!';
+        const ringtimer = isNaN(parseInt(gen.ringtimer, 10)) ? 0 : parseInt(gen.ringtimer, 10);
+        const noanswer = gen.noanswer || '';
+        const outboundcid = gen.outboundcid || '';
+        const sipname = gen.sipname || '';
+        const noanswer_cid = gen.noanswer_cid || '';
+        const busy_cid = gen.busy_cid || '';
+        const chanunavail_cid = gen.chanunavail_cid || '';
+        const noanswer_dest = gen.noanswer_dest || '';
+        const busy_dest = gen.busy_dest || '';
+        const chanunavail_dest = gen.chanunavail_dest || '';
+        const mohclass = gen.mohclass || 'default';
+
+        // Delete from devices & users
+        await executeAsteriskQuery('DELETE FROM devices WHERE id = ?', [extension]).catch(() => {});
+        await executeAsteriskQuery('DELETE FROM users WHERE id = ?', [extension]).catch(() => {});
+        await executeAsteriskQuery('DELETE FROM sip WHERE id = ?', [extension]).catch(() => {});
+
+        // Insert devices
+        const dialStr = gen.dial || `${tech.toUpperCase()}/${extension}`;
+        await executeAsteriskQuery(
+          'INSERT INTO devices (id, tech, dial, devicestate, description, user) VALUES (?, ?, ?, ?, ?, ?)',
+          [extension, tech, dialStr, `${tech.toUpperCase()}/${extension}`, name, extension]
+        ).catch(() => {});
+
+        // Insert users
+        try {
+          await executeAsteriskQuery(
+            `INSERT INTO users (id, name, extension, password, voicemail, ringtimer, noanswer, recording, outboundcid, sipname, noanswer_cid, busy_cid, chanunavail_cid, noanswer_dest, busy_dest, chanunavail_dest, mohclass)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              extension, name, extension, secret, voicemail, ringtimer,
+              noanswer, recording, outboundcid, sipname, noanswer_cid,
+              busy_cid, chanunavail_cid, noanswer_dest, busy_dest,
+              chanunavail_dest, mohclass
+            ]
+          );
+        } catch (err: any) {
+          console.warn('[MGMT-DB] Detailed insert into users failed, falling back:', err.message);
+          await executeAsteriskQuery(
+            'INSERT INTO users (id, name, extension, password, voicemail, ringtimer, noanswer, recording, devicestate) VALUES (?, ?, ?, ?, ?, ?, "", ?, "")',
+            [extension, name, extension, secret, voicemail, ringtimer, recording]
+          ).catch(() => {});
+        }
+
+        // Insert sip/pjsip properties
+        const sipSettings = [
+          ['secret', secret],
+          ['dtmfmode', gen.dtmfmode || 'rfc2833'],
+          ['canreinvite', gen.canreinvite || 'no'],
+          ['host', gen.host || 'dynamic'],
+          ['context', gen.context || 'from-internal'],
+          ['type', gen.type || 'friend'],
+          ['nat', gen.nat || 'force_rport,comedia'],
+          ['port', gen.port || '5060'],
+          ['qualify', gen.qualify || 'yes'],
+          ['qualifyfreq', gen.qualifyfreq || '60'],
+          ['allow', gen.allow || ''],
+          ['disallow', gen.disallow || ''],
+          ['avpf', gen.avpf || 'no'],
+          ['encryption', gen.encryption || 'no'],
+          ['force_avp', gen.force_avp || 'no'],
+          ['icesupport', gen.icesupport || 'no'],
+          ['rtcp_mux', gen.rtcp_mux || 'no'],
+          ['sendrpid', gen.sendrpid || 'pai'],
+          ['sessiontimers', gen.sessiontimers || 'accept'],
+          ['transport', gen.transport || 'udp,tcp,tls'],
+          ['trustrpid', gen.trustrpid || 'yes'],
+          ['user_eq_phone', gen.user_eq_phone || 'no'],
+          ['videosupport', gen.videosupport || 'no'],
+          ['accountcode', gen.accountcode || ''],
+          ['deny', gen.deny || ''],
+          ['permit', gen.permit || ''],
+          ['callerid', gen.callerid || `${name} <${extension}>`]
+        ];
+        for (const [keyword, data] of sipSettings) {
+          if (data !== undefined && data !== '') {
+            await executeAsteriskQuery(
+              'INSERT INTO sip (id, keyword, data, flags) VALUES (?, ?, ?, 0)',
+              [extension, keyword, data]
+            ).catch(() => {});
+          }
+        }
+
+        // Handle Find-me-follow settings
+        const fmfEnabled = String(gen.findmefollow_enabled || '').toLowerCase();
+        if (fmfEnabled === 'yes' || fmfEnabled === 'enabled' || fmfEnabled === '1' || gen.findmefollow_strategy) {
+          await executeAsteriskQuery('DELETE FROM findmefollow WHERE grpnum = ?', [extension]).catch(() => {});
+          try {
+            await executeAsteriskQuery(
+              `INSERT INTO findmefollow (grpnum, strategy, grptime, grppre, grplist, annmsg_id, postdest, dring, needsconf, remotealert_id, toolate_id, ringing, pre_ring, voicemail, calendar_id, calendar_match, changecid, fixedcid, enabled)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [
+                extension,
+                gen.findmefollow_strategy || 'ringallv2-prim',
+                parseInt(gen.findmefollow_grptime || '20', 10),
+                gen.findmefollow_grppre || '',
+                gen.findmefollow_grplist || extension,
+                gen.findmefollow_annmsg_id || '',
+                gen.findmefollow_postdest || `ext-local,${extension},dest`,
+                gen.findmefollow_dring || '',
+                gen.findmefollow_needsconf || '',
+                gen.findmefollow_remotealert_id || '',
+                gen.findmefollow_toolate_id || '',
+                gen.findmefollow_ringing || 'Ring',
+                parseInt(gen.findmefollow_pre_ring || '7', 10),
+                gen.findmefollow_voicemail || 'novm',
+                gen.findmefollow_calendar_id || '',
+                gen.findmefollow_calendar_match || 'yes',
+                gen.findmefollow_changecid || 'default',
+                gen.findmefollow_fixedcid || '',
+                'yes'
+              ]
+            );
+          } catch (err: any) {
+            console.warn('[MGMT-DB] Insertion into findmefollow table failed:', err.message);
+          }
+        }
+      }
+
+      // Reload FreePBX
+      reloadFreePBX();
 
       addChangeLog(
         authUser?.username || 'admin',
@@ -926,6 +1273,53 @@ export function registerManagementRoutes(app: Express, requireAuth: Function) {
         });
       });
 
+      // --- WRITE TO REAL ASTERISK DATABASE ---
+      for (const gen of generated) {
+        const trunkName = String(gen.name);
+        const tech = String(gen.tech || 'pjsip').toLowerCase();
+        const host = String(gen.host || 'sip.mtt.ru');
+        const username = String(gen.username || gen.user || '74951234567');
+        const password = String(gen.password || 'S1pP@ssw0rd!');
+
+        // Check if trunk exists
+        const existing = await executeAsteriskQuery('SELECT trunkid FROM trunks WHERE name = ?', [trunkName]).catch(() => [] as any[]);
+        let trunkId;
+        if (existing && existing.length > 0) {
+          trunkId = existing[0].trunkid;
+        } else {
+          await executeAsteriskQuery(
+            'INSERT INTO trunks (name, tech, disable, `continue`) VALUES (?, ?, "off", "on")',
+            [trunkName, tech]
+          ).catch(() => {});
+          
+          const newTrunk = await executeAsteriskQuery('SELECT trunkid FROM trunks WHERE name = ?', [trunkName]).catch(() => [] as any[]);
+          if (newTrunk && newTrunk.length > 0) {
+            trunkId = newTrunk[0].trunkid;
+          }
+        }
+
+        if (trunkId) {
+          await executeAsteriskQuery('DELETE FROM sip WHERE id = ?', [`trunk-${trunkId}`]).catch(() => {});
+          const trunkSipSettings = [
+            ['host', host],
+            ['username', username],
+            ['secret', password],
+            ['type', 'peer'],
+            ['context', 'from-trunk'],
+            ['insecure', 'port,invite']
+          ];
+          for (const [keyword, data] of trunkSipSettings) {
+            await executeAsteriskQuery(
+              'INSERT INTO sip (id, keyword, data, flags) VALUES (?, ?, ?, 0)',
+              [`trunk-${trunkId}`, keyword, data]
+            ).catch(() => {});
+          }
+        }
+      }
+
+      // Reload FreePBX
+      reloadFreePBX();
+
       addChangeLog(
         authUser?.username || 'admin',
         'manage_trunks',
@@ -1029,6 +1423,57 @@ export function registerManagementRoutes(app: Express, requireAuth: Function) {
           createdIds.push(id);
         });
       });
+
+      // --- WRITE TO REAL ASTERISK DATABASE ---
+      for (const gen of generated) {
+        const routeName = String(gen.name);
+        const trunksList = Array.isArray(gen.trunks) ? gen.trunks : [];
+        const patternsList = Array.isArray(gen.patterns) ? gen.patterns : ['7XXXXXXXXXX'];
+
+        // Check if route exists
+        const existing = await executeAsteriskQuery('SELECT route_id FROM outbound_routes WHERE name = ?', [routeName]).catch(() => [] as any[]);
+        let routeId;
+        if (existing && existing.length > 0) {
+          routeId = existing[0].route_id;
+        } else {
+          await executeAsteriskQuery(
+            'INSERT INTO outbound_routes (name, password, emergency, musicclass, dialpattern_hash) VALUES (?, "", "0", "default", "")',
+            [routeName]
+          ).catch(() => {});
+          const newRoute = await executeAsteriskQuery('SELECT route_id FROM outbound_routes WHERE name = ?', [routeName]).catch(() => [] as any[]);
+          if (newRoute && newRoute.length > 0) {
+            routeId = newRoute[0].route_id;
+          }
+        }
+
+        if (routeId) {
+          // Clear and recreate outbound_route_trunks
+          await executeAsteriskQuery('DELETE FROM outbound_route_trunks WHERE route_id = ?', [routeId]).catch(() => {});
+          for (let seq = 0; seq < trunksList.length; seq++) {
+            const tName = trunksList[seq];
+            const trunkRow = await executeAsteriskQuery('SELECT trunkid FROM trunks WHERE name = ?', [tName]).catch(() => [] as any[]);
+            if (trunkRow && trunkRow.length > 0) {
+              const trunkId = trunkRow[0].trunkid;
+              await executeAsteriskQuery(
+                'INSERT INTO outbound_route_trunks (route_id, trunk_id, seq) VALUES (?, ?, ?)',
+                [routeId, trunkId, seq]
+              ).catch(() => {});
+            }
+          }
+
+          // Clear and recreate outbound_route_patterns
+          await executeAsteriskQuery('DELETE FROM outbound_route_patterns WHERE route_id = ?', [routeId]).catch(() => {});
+          for (const pattern of patternsList) {
+            await executeAsteriskQuery(
+              'INSERT INTO outbound_route_patterns (route_id, match_pattern_pass, match_pattern_prefix, match_cid, prepend_digits) VALUES (?, ?, "", "", "")',
+              [routeId, pattern]
+            ).catch(() => {});
+          }
+        }
+      }
+
+      // Reload FreePBX
+      reloadFreePBX();
 
       addChangeLog(
         authUser?.username || 'admin',
@@ -1140,6 +1585,32 @@ export function registerManagementRoutes(app: Express, requireAuth: Function) {
           createdIds.push('did-' + gen.did);
         });
       });
+
+      // --- WRITE TO REAL ASTERISK DATABASE ---
+      for (const gen of generated) {
+        const did = String(gen.did);
+        const destinationType = gen.destinationType;
+        const destinationValue = gen.destination;
+        const description = gen.description || '';
+
+        let dest = '';
+        if (destinationType === 'extension') {
+          dest = `from-did-direct,${destinationValue},1`;
+        } else if (destinationType === 'queue') {
+          dest = `ext-queues,${destinationValue},1`;
+        } else {
+          dest = `from-did-direct,${destinationValue},1`;
+        }
+
+        await executeAsteriskQuery('DELETE FROM incoming WHERE extension = ?', [did]).catch(() => {});
+        await executeAsteriskQuery(
+          'INSERT INTO incoming (cidnum, extension, destination, description, privacyman, alertinfo, ringing, grppre, delay_answer, pmmaxretries, pmdelay) VALUES ("", ?, ?, ?, "0", "", "0", "", "0", "2", "10")',
+          [did, dest, description]
+        ).catch(() => {});
+      }
+
+      // Reload FreePBX
+      reloadFreePBX();
 
       addChangeLog(
         authUser?.username || 'admin',

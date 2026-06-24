@@ -19,7 +19,6 @@ import { spawn, spawnSync } from 'child_process';
 import crypto from 'crypto';
 import http from 'http';
 import https from 'https';
-import { createServer as createViteServer } from 'vite';
 import { CallEntry, MissedCallStatus, AppSettings, DashboardStats, UserRole, WebUser } from './src/types.js';
 import os from 'os';
 import { registerManagementRoutes } from './server-management.js';
@@ -41,7 +40,7 @@ try {
 const __filename = myFilename;
 const __dirname = myDirname;
 
-const PORT = process.env.PORT || '3000';
+const PORT = '3000';
 const NODE_ENV = process.env.NODE_ENV || 'production';
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
@@ -771,11 +770,16 @@ function runAMICommand(settings: AppSettings, command: string): Promise<{ succes
         buffer = '';
         socket.write(`Action: Command\r\nCommand: ${command}\r\n\r\n`);
         stage = 'command';
-      } else if (stage === 'command' && (buffer.includes('\r\n\r\n') || buffer.includes('\n\n'))) {
+      } else if (stage === 'command' && (buffer.includes('--END COMMAND--') || (!buffer.toLowerCase().includes('follows') && (buffer.includes('\r\n\r\n') || buffer.includes('\n\n'))))) {
         const msg = buffer.trim();
         socket.write('Action: Logoff\r\n\r\n');
         socket.end();
         resolve({ success: true, message: msg });
+      }
+    });
+    socket.on('end', () => {
+      if (stage === 'command' && buffer) {
+        resolve({ success: true, message: buffer.trim() });
       }
     });
     socket.on('error', err => resolve({ success: false, message: err.message }));
@@ -7447,7 +7451,7 @@ async function getRealVoIPDevices(settings: AppSettings): Promise<any[]> {
 
   const ipToExtsMap = new Map<string, string[]>();
   for (const dev of list) {
-    if (dev.ip && dev.ip !== 'Offline' && dev.ip !== '0.0.0.0') {
+    if (dev.ip && dev.ip !== 'Offline' && dev.ip !== '0.0.0.0' && dev.status !== 'Offline') {
       if (!ipToExtsMap.has(dev.ip)) {
         ipToExtsMap.set(dev.ip, []);
       }
@@ -7456,7 +7460,7 @@ async function getRealVoIPDevices(settings: AppSettings): Promise<any[]> {
   }
 
   for (const dev of list) {
-    if (dev.ip && ipToExtsMap.has(dev.ip)) {
+    if (dev.ip && dev.status !== 'Offline' && ipToExtsMap.has(dev.ip)) {
       const peersWithSameIp = ipToExtsMap.get(dev.ip)!;
       if (peersWithSameIp.length > 1) {
         dev.status = 'Conflict';
@@ -7708,8 +7712,9 @@ registerManagementRoutes(app, requireAuth);
 
 // FRONTEND DEV / PRODUCTION INTEGRATION HANDLER
 async function startServer() {
-  if (NODE_ENV === 'development') {
+  if (process.env.NODE_ENV !== 'production') {
     // Instantiate Vite in dev middleware context
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa'
@@ -7719,7 +7724,7 @@ async function startServer() {
     console.log('Vite middleware registered for live client-side Hot Module Rendering proxy.');
   } else {
     // Serving production assets
-    const distPath = path.join(__dirname);
+    const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
     
     app.get('*', (req, res) => {
