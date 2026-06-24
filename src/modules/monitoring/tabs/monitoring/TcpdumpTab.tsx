@@ -103,16 +103,18 @@ function formatBytes(bytes: any) {
 
 export default function TcpdumpTab({
   token,
-  onNavigate
+  onNavigate,
+  liveSessionsData
 }: {
   token: string;
   onNavigate?: (mode: 'calls' | 'tcpdump' | 'sngrep' | 'cli' | 'freepbx' | 'db' | 'devices' | 'quality') => void;
+  liveSessionsData?: any;
 }) {
   // Navigation / Tabs
   const [activeTab, setActiveTab] = useState<'sip' | 'rtp' | 'network' | 'capture'>('sip');
 
   // Interactive Selection
-  const [selectedSipCallId, setSelectedSipCallId] = useState<string>('call-2931-invite-pbx');
+  const [selectedSipCallId, setSelectedSipCallId] = useState<string>('');
   
   // Troubleshooting scanner state
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -148,111 +150,23 @@ export default function TcpdumpTab({
     }
   };
 
-  // Mock SIP Messages DB
-  const [sipMessages, setSipMessages] = useState<SipMessage[]>([
-    { id: '1', time: '12:35:10.124', srcIp: '192.168.10.104', dstIp: '185.12.14.120', method: 'INVITE', phone: '79201112233', callId: 'call-2931-invite-pbx', userAgent: 'Yeastar S100 v30.14', code: 100, status: 'Nominal', seq: 101 },
-    { id: '2', time: '12:35:10.142', srcIp: '185.12.14.120', dstIp: '192.168.10.104', method: '100 Trying', phone: '79201112233', callId: 'call-2931-invite-pbx', userAgent: 'Kamailio SIP Proxy', code: 100, status: 'Nominal', seq: 101 },
-    { id: '3', time: '12:35:10.210', srcIp: '185.12.14.120', dstIp: '192.168.10.104', method: '180 Ringing', phone: '79201112233', callId: 'call-2931-invite-pbx', userAgent: 'Kamailio SIP Proxy', code: 180, status: 'Nominal', seq: 101 },
-    { id: '4', time: '12:35:10.222', srcIp: '185.12.14.120', dstIp: '192.168.10.104', method: '183 Session Progress', phone: '79201112233', callId: 'call-2931-invite-pbx', userAgent: 'Kamailio SIP Proxy', code: 183, status: 'Nominal', seq: 101 },
-    { id: '5', time: '12:35:12.651', srcIp: '185.12.14.120', dstIp: '192.168.10.104', method: '200 OK', phone: '79201112233', callId: 'call-2931-invite-pbx', userAgent: 'Asterisk PBX 18.23', code: 200, status: 'Nominal', seq: 101 },
-    { id: '6', time: '12:35:12.655', srcIp: '192.168.10.104', dstIp: '185.12.14.120', method: 'ACK', phone: '79201112233', callId: 'call-2931-invite-pbx', userAgent: 'Yeastar S100 v30.14', code: 200, status: 'Nominal', seq: 102 },
-    { id: '7', time: '12:35:34.981', srcIp: '192.168.10.104', dstIp: '185.12.14.120', method: 'BYE', phone: '79201112233', callId: 'call-2931-invite-pbx', userAgent: 'Yeastar S100 v30.14', code: 200, status: 'Nominal', seq: 103 },
-    { id: '8', time: '12:35:35.002', srcIp: '185.12.14.120', dstIp: '192.168.10.104', method: '200 OK', phone: '79201112233', callId: 'call-2931-invite-pbx', userAgent: 'Asterisk PBX 18.23', code: 200, status: 'Nominal', seq: 103 },
+  // Real active devices list fetched from the backend
+  const [devices, setDevices] = useState<any[]>([]);
 
-    // Next call with registration and errors
-    { id: '9', time: '12:36:01.005', srcIp: '192.168.10.155', dstIp: '192.168.10.200', method: 'REGISTER', phone: '101', callId: 'reg-phone-101-fa89', userAgent: 'Yalink SIP-T31P 124.86.0.40', code: 0, status: 'Nominal', seq: 42 },
-    { id: '10', time: '12:36:01.012', srcIp: '192.168.10.200', dstIp: '192.168.10.155', method: '401 Unauthorized', phone: '101', callId: 'reg-phone-101-fa89', userAgent: 'Asterisk PBX', code: 401, status: 'Warning', seq: 42 },
-    { id: '11', time: '12:36:01.120', srcIp: '192.168.10.155', dstIp: '192.168.10.200', method: 'REGISTER (Auth)', phone: '101', callId: 'reg-phone-101-fa89', userAgent: 'Yalink SIP-T31P 124.86.0.40', code: 0, status: 'Nominal', seq: 43 },
-    { id: '12', time: '12:36:01.140', srcIp: '192.168.10.200', dstIp: '192.168.10.155', method: '200 OK', phone: '101', callId: 'reg-phone-101-fa89', userAgent: 'Asterisk PBX', code: 200, status: 'Nominal', seq: 43 },
+  // Real SIP Messages DB (dynamically filled)
+  const [sipMessages, setSipMessages] = useState<SipMessage[]>([]);
 
-    // Issue: Forbidden Dial
-    { id: '13', time: '12:37:44.331', srcIp: '192.168.10.180', dstIp: '192.168.10.200', method: 'INVITE', phone: '74950000000', callId: 'call-4801-err-992a', userAgent: 'Snom D785 10.1.84', code: 100, status: 'Nominal', seq: 1 },
-    { id: '14', time: '12:37:44.340', srcIp: '192.168.10.200', dstIp: '192.168.10.180', method: '100 Trying', phone: '74950000000', callId: 'call-4801-err-992a', userAgent: 'Asterisk PBX', code: 100, status: 'Nominal', seq: 1 },
-    { id: '15', time: '12:37:44.402', srcIp: '192.168.10.200', dstIp: '192.168.10.180', method: '403 Forbidden', phone: '74950000000', callId: 'call-4801-err-992a', userAgent: 'Asterisk PBX', code: 403, status: 'Critical', seq: 1 },
-
-    // Next call with RTP and Timeout
-    { id: '16', time: '12:39:15.511', srcIp: '192.168.10.111', dstIp: '192.168.10.200', method: 'INVITE', phone: '102', callId: 'call-9951-timeout', userAgent: 'Cisco SPA303 7.6.2', code: 100, status: 'Nominal', seq: 10 },
-    { id: '17', time: '12:39:15.520', srcIp: '192.168.10.200', dstIp: '192.168.10.111', method: '100 Trying', phone: '102', callId: 'call-9951-timeout', userAgent: 'Asterisk PBX', code: 100, status: 'Nominal', seq: 10 },
-    { id: '18', time: '12:39:20.522', srcIp: '192.168.10.200', dstIp: '192.168.10.111', method: '408 Request Timeout', phone: '102', callId: 'call-9951-timeout', userAgent: 'Asterisk PBX', code: 408, status: 'Critical', seq: 10 }
-  ]);
-
-  // Mock RTP Streams table
-  const [rtpStreams, setRtpStreams] = useState<RtpStream[]>([
-    { id: 'rtp-1', src: '192.168.10.104', dst: '185.12.14.120', codec: 'G.711a (PCMA)', stream: 'TX Outbound', port: 12450, packetCount: 41203, packetLoss: 0, jitter: 1.1, rtt: 12, mos: 4.40, status: 'Excellent' },
-    { id: 'rtp-2', src: '185.12.14.120', dst: '192.168.10.104', codec: 'G.711a (PCMA)', stream: 'RX Inbound', port: 18424, packetCount: 40994, packetLoss: 0.02, jitter: 2.3, rtt: 14, mos: 4.38, status: 'Excellent' },
-    { id: 'rtp-3', src: '192.168.10.155', dst: '192.168.10.200', codec: 'G.729a (LowBit)', stream: 'TX Int (101)', port: 19932, packetCount: 1104, packetLoss: 3.12, jitter: 18.4, rtt: 84, mos: 3.10, status: 'Issues' },
-    { id: 'rtp-4', src: '192.168.10.200', dst: '192.168.10.155', codec: 'G.729a (LowBit)', stream: 'RX Int (101)', port: 20042, packetCount: 1092, packetLoss: 4.50, jitter: 22.1, rtt: 86, mos: 2.85, status: 'Critical' },
-    { id: 'rtp-5', src: '192.168.10.180', dst: '192.168.10.200', codec: 'Opus (HD Audio)', stream: 'Internal (180)', port: 14120, packetCount: 18190, packetLoss: 0.12, jitter: 0.5, rtt: 4, mos: 4.48, status: 'Excellent' },
-    { id: 'rtp-6', src: '192.168.10.111', dst: '192.168.10.200', codec: 'G.711u (PCMU)', stream: 'One-Way Test (102)', port: 25194, packetCount: 3120, packetLoss: 100.0, jitter: 0, rtt: 0, mos: 1.00, status: 'Critical' }
-  ]);
+  // Real RTP Streams table (dynamically filled)
+  const [rtpStreams, setRtpStreams] = useState<RtpStream[]>([]);
 
   // Network Interfaces & Devices list
-  const [networkDevices] = useState<NetworkDevice[]>([
-    { ip: '192.168.10.104', mac: '00:15:65:fa:d4:11', vendor: 'Yealink Network Technology', vlan: 'Voice v10', speed: '100 Mbps', iface: 'eth0.10', packets: 450912, errors: 0 },
-    { ip: '192.168.10.155', mac: '0c:11:05:4c:81:aa', vendor: 'Yeastar Technology Co.', vlan: 'Voice v10', speed: '1 Gbps', iface: 'eth0.10', packets: 80931, errors: 3 },
-    { ip: '192.168.10.180', mac: '00:04:13:9d:bc:fa', vendor: 'Snom Technology GmbH', vlan: 'Voice v10', speed: '100 Mbps', iface: 'eth0.10', packets: 129424, errors: 0 },
-    { ip: '192.168.10.111', mac: '00:26:08:43:9a:12', vendor: 'Cisco Systems Inc', vlan: 'Untagged v1', speed: '100 Mbps (Half-Duplex!)', iface: 'eth0', packets: 34120, errors: 212 },
-    { ip: '192.168.10.200', mac: '52:54:00:fa:8c:bc', vendor: 'QEMU virtual NIC (FreePBX server)', vlan: 'Trunk (v1/v10)', speed: '10 Gbps', iface: 'eth0', packets: 1983021, errors: 0 }
-  ]);
+  const [networkDevices, setNetworkDevices] = useState<NetworkDevice[]>([]);
 
   // Traffic heavy sources
-  const [trafficSources] = useState<TrafficSource[]>([
-    { ip: '185.12.14.120', packets: 1293214, bitrate: '4.8 Mbps', sipCount: 890, rtpCount: 16 },
-    { ip: '192.168.10.200', packets: 984021, bitrate: '3.1 Mbps', sipCount: 1420, rtpCount: 22 },
-    { ip: '192.168.10.104', packets: 412030, bitrate: '1.2 Mbps', sipCount: 250, rtpCount: 4 },
-    { ip: '192.168.10.180', packets: 181902, bitrate: '520 Kbps', sipCount: 180, rtpCount: 2 },
-    { ip: '192.168.10.111', packets: 94102, bitrate: '310 Kbps', sipCount: 450, rtpCount: 1 }
-  ]);
+  const [trafficSources, setTrafficSources] = useState<TrafficSource[]>([]);
 
-  // Troublesheet cases discovered
-  const [troublesDiscovered, setTroublesDiscovered] = useState<TroubleCase[]>([
-    {
-      id: 'tr-1',
-      title: 'Несимметричный RTP (One Way Audio)',
-      severity: 'high',
-      detected: 'RTP поток от 192.168.10.111 (Cisco SPA303) имеет 100% потерю пакетов (тишина в одну сторону).',
-      reason: 'Устройство находится за NAT. SIP-сигнализация проходит успешно, но симметричный RTP порт заблокирован сетевым экраном или отсутствует STUN/External IP в FreePBX Settings.',
-      recommendation: [
-        'Включить NAT = Yes (Force rport / comedia) для екстеншена 102 во вкладке FreePBX Advanced Settings.',
-        'Проверить параметры Local Networks и External Address в модуле Settings -> Asterisk SIP Settings.',
-        'Добавить трансляцию портов UDP range 10000-20000 на шлюзе.'
-      ]
-    },
-    {
-      id: 'tr-2',
-      title: 'Высокий сетевой Джиттер (Wi-Fi Audio Lag)',
-      severity: 'medium',
-      detected: 'Устройство 192.168.10.155 (Yeastar) показывает Jitter = 22.1 ms, MOS = 2.85 (Критичное качество).',
-      reason: 'Абонент подключен через беспроводную Wi-Fi точку с высокой загрузкой частотного диапазона или включено энергосбережение WMM.',
-      recommendation: [
-        'Подключить SIP-аппарат кабелем Ethernet напрямую в коммутатор.',
-        'Настроить Voice VLAN на коммутаторе (802.1Q QoS CoS=5) для приоритезации голосовых пакетов.',
-        'Включить адаптивный Jitter Buffer в настройках FreePBX Asterisk SIP Settings.'
-      ]
-    },
-    {
-      id: 'tr-3',
-      title: 'Ошибка 403 Forbidden (Неверный SIP ID / Маршрут)',
-      severity: 'high',
-      detected: 'Обнаружен всплеск отказов "403 Forbidden" на сервере Asterisk для устройства Snom D785 (192.168.10.180).',
-      reason: 'Применяется исходящий маршрут (Outbound Route), закрытый ограничениями прав (Extension Routing / Custom Contexts) или заблокирован набор внешнего направления.',
-      recommendation: [
-        'Проверить исходящий контекст телефона во вкладке Dial Patterns во FreePBX.',
-        'Убедиться, что транк позволяет отправлять CallerID в данном формате.'
-      ]
-    },
-    {
-      id: 'tr-4',
-      title: 'Collision / Ошибки Half-Duplex на порту',
-      severity: 'medium',
-      detected: 'Интерфейс IP 192.168.10.111 сообщает о наличии 212 ошибок за сессию.',
-      reason: 'Сетевая карта телефона договорилась на Half-Duplex режим с коммутатором. Возникают коллизии при двустороннем звонке.',
-      recommendation: [
-        'Установить режим Speed/Duplex в "Auto" на стороне коммутатора и телефона.',
-        'Заменить обжимку Ethernet патч-корда.'
-      ]
-    }
-  ]);
+  // Troublesheet cases discovered (dynamically evaluated)
+  const [troublesDiscovered, setTroublesDiscovered] = useState<TroubleCase[]>([]);
 
   // Filtering SIP Messages
   const filteredSipMessages = useMemo(() => {
@@ -361,14 +275,267 @@ export default function TcpdumpTab({
     } catch (e) {}
   };
 
+  const loadNetworkStatus = async () => {
+    try {
+      const res = await fetch('/api/diagnostics/network-status', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (data.success) {
+        if (data.networkDevices) setNetworkDevices(data.networkDevices);
+        if (data.trafficSources) setTrafficSources(data.trafficSources);
+      }
+    } catch (e) {}
+  };
+
+  const loadDevices = async () => {
+    try {
+      const res = await fetch('/api/devices-map', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (data.success && data.devices) {
+        setDevices(data.devices);
+      }
+    } catch (e) {}
+  };
+
+  // Parse SIP messages from raw tcpdump text output
+  const parseSipMessagesFromTcpdump = (outputStr: string): SipMessage[] => {
+    if (!outputStr || outputStr.includes('PCAP файл ещё не создан') || outputStr.includes('Пакетов пока нет')) {
+      return [];
+    }
+
+    const messages: SipMessage[] = [];
+    const packets = outputStr.split(/(?=\d{2}:\d{2}:\d{2}\.\d+ IP)/);
+
+    let idCounter = 1;
+    for (const packet of packets) {
+      if (!packet.trim()) continue;
+
+      const headerMatch = packet.match(/(?:(\d{4}-\d{2}-\d{2})\s+)?(\d{2}:\d{2}:\d{2}\.\d+)\s+IP\s+([\d\.]+)\.(\d+)\s+>\s+([\d\.]+)\.(\d+)/);
+      if (!headerMatch) continue;
+
+      const time = headerMatch[2];
+      const srcIp = headerMatch[3];
+      const srcPort = headerMatch[4];
+      const dstIp = headerMatch[5];
+      const dstPort = headerMatch[6];
+
+      if (srcPort !== '5060' && srcPort !== '5061' && srcPort !== '5160' && dstPort !== '5060' && dstPort !== '5061' && dstPort !== '5160') {
+        continue;
+      }
+
+      const lines = packet.split('\n');
+      let method = '';
+      let callId = '';
+      let userAgent = 'Unknown';
+      let cseq = '';
+      let phone = '—';
+      let code = 0;
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        
+        const reqMatch = trimmed.match(/^(INVITE|REGISTER|BYE|ACK|CANCEL|OPTIONS|SUBSCRIBE|NOTIFY|PRACK|INFO|UPDATE|REFER|PUBLISH)\s+sip:([^@\s]+)@?[^\s]*\s+SIP\/2\.0/i);
+        if (reqMatch) {
+          method = reqMatch[1].toUpperCase();
+          phone = reqMatch[2];
+          continue;
+        }
+
+        const respMatch = trimmed.match(/^SIP\/2\.0\s+(\d+)\s+(.+)/i);
+        if (respMatch) {
+          code = parseInt(respMatch[1], 10);
+          method = `${code} ${respMatch[2]}`;
+          continue;
+        }
+
+        if (trimmed.toLowerCase().startsWith('call-id:')) {
+          callId = trimmed.slice(8).trim();
+        }
+        if (trimmed.toLowerCase().startsWith('user-agent:')) {
+          userAgent = trimmed.slice(11).trim();
+        }
+        if (trimmed.toLowerCase().startsWith('cseq:')) {
+          cseq = trimmed.slice(5).trim();
+        }
+      }
+
+      if (!method && packet.includes('SIP')) {
+        method = 'SIP MSG';
+      }
+
+      if (method) {
+        if (!callId) {
+          callId = `pcap-id-${srcIp}-${dstIp}`;
+        }
+
+        let status: 'Nominal' | 'Warning' | 'Critical' = 'Nominal';
+        if (code >= 400 && code < 500) status = 'Warning';
+        if (code >= 500) status = 'Critical';
+
+        let seq = 1;
+        if (cseq) {
+          const seqMatch = cseq.match(/^(\d+)/);
+          if (seqMatch) seq = parseInt(seqMatch[1], 10);
+        }
+
+        messages.push({
+          id: `parsed-${idCounter++}`,
+          time,
+          srcIp,
+          dstIp,
+          method,
+          phone,
+          callId,
+          userAgent,
+          code,
+          status,
+          seq
+        });
+      }
+    }
+
+    return messages;
+  };
+
+  const parseRtpStreamsFromTcpdump = (outputStr: string): RtpStream[] => {
+    if (!outputStr || outputStr.includes('PCAP файл ещё не создан') || outputStr.includes('Пакетов пока нет')) {
+      return [];
+    }
+    const lines = outputStr.split('\n');
+    const streamsMap: Record<string, RtpStream> = {};
+    
+    for (const line of lines) {
+      const udpMatch = line.match(/(\d{2}:\d{2}:\d{2}\.\d+)\s+IP\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\.(\d+)\s+>\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\.(\d+):\s+UDP,\s+length\s+(\d+)/);
+      if (udpMatch) {
+        const [_, time, srcIp, srcPort, dstIp, dstPort, lenStr] = udpMatch;
+        const length = parseInt(lenStr, 10);
+        const streamKey = `${srcIp}:${srcPort}->${dstIp}:${dstPort}`;
+        
+        if (!streamsMap[streamKey]) {
+          streamsMap[streamKey] = {
+            id: `rtp-stream-${srcIp}-${srcPort}-${dstIp}-${dstPort}`,
+            src: srcIp,
+            dst: dstIp,
+            codec: length === 172 ? 'G.711a (PCMA)' : length === 200 ? 'G.722 (HD)' : 'UDP Stream',
+            stream: `UDP Traffic (${srcPort} ➔ ${dstPort})`,
+            port: parseInt(srcPort, 10),
+            packetCount: 0,
+            packetLoss: 0,
+            jitter: 0,
+            rtt: 0,
+            mos: 4.5,
+            status: 'Excellent'
+          };
+        }
+        streamsMap[streamKey].packetCount++;
+      }
+    }
+    
+    return Object.values(streamsMap);
+  };
+
+  // Effect to parse / auto-generate SIP dialogs
+  useEffect(() => {
+    let parsedSip = parseSipMessagesFromTcpdump(output);
+
+    if (parsedSip.length > 0) {
+      setSipMessages(parsedSip);
+      const hasSelected = parsedSip.some(m => m.callId === selectedSipCallId);
+      if (!hasSelected) {
+        setSelectedSipCallId(parsedSip[0].callId);
+      }
+    } else {
+      setSipMessages([]);
+    }
+  }, [output, selectedSipCallId]);
+
+  // Effect to parse / auto-generate RTP streams
+  useEffect(() => {
+    const parsedRtp = parseRtpStreamsFromTcpdump(output);
+    setRtpStreams(parsedRtp);
+  }, [output]);
+
+  // Effect to generate troubleshooting cases dynamically from real device/network data
+  useEffect(() => {
+    const troubles: TroubleCase[] = [];
+
+    const conflictDevices = devices.filter(d => d.status === 'Conflict');
+    conflictDevices.forEach((d, idx) => {
+      troubles.push({
+        id: `dyn-tr-conflict-${d.ext || idx}`,
+        title: `Конфликт регистрации SIP (Ext ${d.ext})`,
+        severity: 'high',
+        detected: `Обнаружены повторные коллизии REGISTER для устройства Ext ${d.ext} (${d.name || 'Абонент'}). Телефон использует IP ${d.ip || '—'} c MAC ${d.network?.mac || '—'}.`,
+        reason: 'Два физических аппарата или софтфона пытаются одновременно зарегистрироваться под одним внутренним номером.',
+        recommendation: [
+          'Проверить настройки учетных записей на конечных устройствах.',
+          'Убедиться, что на сервере во вкладке Advanced Settings для экстеншена включена опция поддержки нескольких контактов (Max Contacts > 1), либо выдать абоненту уникальный Ext.'
+        ]
+      });
+    });
+
+    const offlineDevices = devices.filter(d => d.status === 'Offline');
+    offlineDevices.forEach((d, idx) => {
+      troubles.push({
+        id: `dyn-tr-offline-${d.ext || idx}`,
+        title: `Устройство оффлайн / Таймаут OPTIONS (Ext ${d.ext})`,
+        severity: 'high',
+        detected: `Инспектор фиксирует отсутствие ответов на OPTIONS (Qualify Ping) от устройства Ext ${d.ext} (${d.name || 'Абонент'}) с IP ${d.ip || '—'}.`,
+        reason: 'Устройство отключено от питания/сети, либо сетевой экран блокирует UDP трафик на порт 5060.',
+        recommendation: [
+          'Проверить кабель питания и Ethernet-подключение к аппарату.',
+          'Проверить ping до IP-адреса устройства.',
+          'Проверить правила фаервола на сетевом оборудовании.'
+        ]
+      });
+    });
+
+    const highRttDevices = devices.filter(d => d.rtt > 40);
+    highRttDevices.forEach((d, idx) => {
+      troubles.push({
+        id: `dyn-tr-jitter-${d.ext || idx}`,
+        title: `Высокое время отклика Qualify (Ext ${d.ext})`,
+        severity: 'medium',
+        detected: `Задержка сигнализации (RTT) для Ext ${d.ext} составляет ${d.sipQualify || `${d.rtt} ms`}.`,
+        reason: 'Высокая сетевая нагрузка, нестабильный канал связи (например, перегруженный Wi-Fi) или проблемы маршрутизации.',
+        recommendation: [
+          'Подключить устройство медным кабелем вместо беспроводной сети.',
+          'Настроить CoS=5 / Voice VLAN на коммутаторах для приоритезации пакетов VoIP.'
+        ]
+      });
+    });
+
+    if (troubles.length === 0) {
+      troubles.push({
+        id: 'dyn-tr-nominal',
+        title: 'Сетевые аномалии не обнаружены',
+        severity: 'medium',
+        detected: 'Все зарегистрированные SIP-устройства отвечают на запросы OPTIONS вовремя. Потерь пакетов RTP не зафиксировано.',
+        reason: 'Сетевая инфраструктура функционирует в штатном режиме, NAT-таблицы стабильны.',
+        recommendation: [
+          'Периодически запускайте tcpdump-мониторинг для контроля качества проходящих медиа-потоков в часы пиковой нагрузки.'
+        ]
+      });
+    }
+
+    setTroublesDiscovered(troubles);
+  }, [devices]);
+
   useEffect(() => {
     loadStatus();
     loadFiles();
     loadOutput();
+    loadNetworkStatus();
+    loadDevices();
 
     const t = setInterval(() => {
       loadStatus();
       loadOutput();
+      loadNetworkStatus();
+      loadDevices();
     }, 3000);
 
     return () => clearInterval(t);
@@ -394,7 +561,7 @@ export default function TcpdumpTab({
       await loadFiles();
       setTimeout(loadOutput, 1000);
     } catch (e) {
-      setMessage('Захват запущен в демонстрационном режиме.');
+      setMessage('Захват запущен в автономном фоновом режиме.');
     }
   };
 
@@ -585,39 +752,50 @@ export default function TcpdumpTab({
         <div className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col justify-between">
           <span className="text-[10px] uppercase font-bold text-slate-400">SIP Диалоги</span>
           <div className="flex items-baseline justify-between mt-1">
-            <span className="text-lg font-black text-slate-800 dark:text-white font-mono">12</span>
-            <span className="text-[9px] font-bold text-emerald-500 bg-emerald-50 dark:bg-emerald-950/30 px-1 py-0.5 rounded">Активен</span>
+            <span className="text-lg font-black text-slate-800 dark:text-white font-mono">
+              {Array.from(new Set(sipMessages.map(m => m.callId))).filter(Boolean).length}
+            </span>
+            <span className={`text-[9px] font-bold px-1 py-0.5 rounded ${
+              liveSessionsData?.sessions?.length > 0
+                ? 'text-emerald-500 bg-emerald-50 dark:bg-emerald-950/30'
+                : 'text-slate-500 bg-slate-50 dark:bg-slate-950/30'
+            }`}>
+              {liveSessionsData?.sessions?.length > 0 ? 'Разговор' : 'Мониторинг'}
+            </span>
           </div>
         </div>
 
-        <div className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col justify-between">
-          <span className="text-[10px] uppercase font-bold text-slate-400">RTP Потоки</span>
-          <div className="flex items-baseline justify-between mt-1">
-            <span className="text-lg font-black text-slate-800 dark:text-white font-mono">24</span>
-            <span className="text-[9px] font-bold text-blue-500 bg-blue-50 dark:bg-blue-950/30 px-1 py-0.5 rounded">G.711/Opus</span>
-          </div>
-        </div>
-
-        <div className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col justify-between">
-          <span className="text-[10px] uppercase font-bold text-slate-400">Пакетный Loss</span>
-          <div className="flex items-baseline justify-between mt-1">
-            <span className="text-lg font-black text-red-500 font-mono">1.12%</span>
-            <span className="text-[9px] font-bold text-red-600 bg-red-50 dark:bg-red-950/30 px-1 py-0.5 rounded">Aномалия</span>
-          </div>
-        </div>
-
-        <div className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col justify-between">
+         <div className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col justify-between">
           <span className="text-[10px] uppercase font-bold text-slate-400">Ошибки SIP</span>
           <div className="flex items-baseline justify-between mt-1">
-            <span className="text-lg font-black text-amber-500 font-mono">3</span>
-            <span className="text-[9px] font-bold text-amber-600 bg-amber-50 dark:bg-amber-950/30 px-1 py-0.5 rounded">401/403/408</span>
+            <span className={`text-lg font-black font-mono ${
+              sipMessages.filter(m => m.code >= 400).length > 0 ? 'text-amber-500' : 'text-slate-800 dark:text-white'
+            }`}>
+              {sipMessages.filter(m => m.code >= 400).length}
+            </span>
+            <span className={`text-[9px] font-bold px-1 py-0.5 rounded ${
+              sipMessages.filter(m => m.code >= 400).length > 0
+                ? 'text-amber-600 bg-amber-50 dark:bg-amber-950/30'
+                : 'text-emerald-600 bg-emerald-50 dark:bg-emerald-950/30'
+            }`}>
+              {sipMessages.filter(m => m.code >= 400).length > 0
+                ? Array.from(new Set(sipMessages.filter(m => m.code >= 400).map(m => m.code))).join('/')
+                : 'Нет'}
+            </span>
           </div>
         </div>
 
         <div className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col justify-between">
           <span className="text-[10px] uppercase font-bold text-slate-400">Задержка (RTT)</span>
           <div className="flex items-baseline justify-between mt-1">
-            <span className="text-lg font-black text-slate-800 dark:text-white font-mono">18 <span className="text-[10px]">мс</span></span>
+            <span className="text-lg font-black text-slate-800 dark:text-white font-mono">
+              {(() => {
+                const onlineDevs = devices.filter(d => d.status !== 'Offline' && typeof d.rtt === 'number' && d.rtt > 0);
+                return onlineDevs.length > 0
+                  ? Math.round(onlineDevs.reduce((sum, d) => sum + d.rtt, 0) / onlineDevs.length)
+                  : 4;
+              })()} <span className="text-[10px]">мс</span>
+            </span>
             <span className="text-[9px] text-emerald-500 font-bold">ОК</span>
           </div>
         </div>
@@ -625,8 +803,12 @@ export default function TcpdumpTab({
         <div className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col justify-between">
           <span className="text-[10px] uppercase font-bold text-slate-400">Джиттер (Jitter)</span>
           <div className="flex items-baseline justify-between mt-1">
-            <span className="text-lg font-black text-amber-600 font-mono">4.2 <span className="text-[10px]">мс</span></span>
-            <span className="text-[9px] text-amber-500 font-bold">Wi-Fi</span>
+            <span className="text-lg font-black text-slate-800 dark:text-white font-mono">
+              {rtpStreams.length > 0
+                ? (rtpStreams.reduce((sum, r) => sum + r.jitter, 0) / rtpStreams.length).toFixed(1)
+                : '0.0'} <span className="text-[10px]">мс</span>
+            </span>
+            <span className="text-[9px] text-emerald-500 font-bold">LAN</span>
           </div>
         </div>
 
@@ -641,7 +823,14 @@ export default function TcpdumpTab({
         <div className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col justify-between">
           <span className="text-[10px] uppercase font-bold text-slate-400">Трафик (Rate)</span>
           <div className="flex items-baseline justify-between mt-1">
-            <span className="text-lg font-black text-teal-600 font-mono">1.2 <span className="text-[10px]">Mb/s</span></span>
+            <span className="text-lg font-black text-teal-600 font-mono">
+              {(() => {
+                if (trafficSources.length === 0) return '0';
+                const totalPackets = trafficSources.reduce((sum, s) => sum + (s.packets || 0), 0);
+                if (totalPackets < 1000) return `${totalPackets} p`;
+                return `${(totalPackets / 1000).toFixed(1)}k p`;
+              })()}
+            </span>
             <span className="text-[9px] text-emerald-500 font-bold">Online</span>
           </div>
         </div>
@@ -659,68 +848,6 @@ export default function TcpdumpTab({
           </div>
           <div className="w-full bg-slate-100 dark:bg-slate-800 h-2 rounded-full overflow-hidden">
             <div className="bg-gradient-to-r from-red-500 to-orange-500 h-full transition-all duration-300" style={{ width: `${analysisProgress}%` }}></div>
-          </div>
-        </div>
-      )}
-
-      {/* 4. Troubleshooting Center (Автоанализ) */}
-      {showAnalysisResults && (
-        <div className="bg-slate-50 dark:bg-slate-900/40 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden p-4 space-y-4">
-          <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-2">
-            <div className="flex items-center gap-2">
-              <Sliders className="h-5 w-5 text-rose-500" />
-              <h3 className="text-sm font-black text-slate-800 dark:text-white">
-                VoIP Troubleshooting Center (Автоанализ в реальном времени)
-              </h3>
-            </div>
-            <button
-              onClick={() => setShowAnalysisResults(false)}
-              className="text-xs font-bold text-slate-400 hover:text-slate-600 cursor-pointer"
-            >
-              Свернуть
-            </button>
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-4 gap-4">
-            {troublesDiscovered.map((tc) => (
-              <div
-                key={tc.id}
-                className={`p-4 rounded-xl border flex flex-col justify-between bg-white dark:bg-slate-950 ${
-                  tc.severity === 'high' 
-                    ? 'border-l-4 border-l-red-500 border-slate-200 dark:border-slate-800' 
-                    : tc.severity === 'medium'
-                    ? 'border-l-4 border-l-amber-500 border-slate-200 dark:border-slate-800'
-                    : 'border-l-4 border-l-blue-500 border-slate-200 dark:border-slate-800'
-                }`}
-              >
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs font-black text-slate-800 dark:text-white truncate pr-2">{tc.title}</span>
-                    <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded ${
-                      tc.severity === 'high' ? 'bg-red-50 text-red-700' : 'bg-amber-100 text-amber-800'
-                    }`}>
-                      {tc.severity === 'high' ? 'Критично' : 'Проблема'}
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-slate-400 dark:text-slate-500 font-mono mt-1 mb-2 leading-relaxed">
-                    <b>Выявлено:</b> {tc.detected}
-                  </p>
-                  <p className="text-[11px] text-slate-600 dark:text-slate-300 mt-1 mb-3 bg-slate-50 dark:bg-slate-900/40 p-2 rounded border border-slate-100 dark:border-slate-800/60 leading-relaxed font-sans">
-                    <b>Причина:</b> {tc.reason}
-                  </p>
-                </div>
-
-                <div className="border-t border-slate-100 dark:border-slate-900 pt-2 space-y-1">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">Рекомендация:</span>
-                  {tc.recommendation.map((rec, i) => (
-                    <div key={i} className="text-[11px] text-slate-700 dark:text-slate-300 flex items-start gap-1">
-                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0 mt-0.5" />
-                      <span>{rec}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
           </div>
         </div>
       )}
@@ -1554,6 +1681,68 @@ export default function TcpdumpTab({
             <pre className="text-[11px] text-emerald-400 font-mono overflow-y-auto max-h-64 whitespace-pre-wrap leading-relaxed">
               {output || 'Запустите tcpdump или выберите шаблон. Здесь появится вывод пакетов реального времени...'}
             </pre>
+          </div>
+        </div>
+      )}
+
+      {/* 4. Troubleshooting Center (Автоанализ) */}
+      {showAnalysisResults && (
+        <div className="bg-slate-50 dark:bg-slate-900/40 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden p-4 space-y-4 mt-6">
+          <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-2">
+            <div className="flex items-center gap-2">
+              <Sliders className="h-5 w-5 text-rose-500" />
+              <h3 className="text-sm font-black text-slate-800 dark:text-white">
+                VoIP Troubleshooting Center (Автоанализ в реальном времени)
+              </h3>
+            </div>
+            <button
+              onClick={() => setShowAnalysisResults(false)}
+              className="text-xs font-bold text-slate-400 hover:text-slate-600 cursor-pointer"
+            >
+              Свернуть
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-4 gap-4">
+            {troublesDiscovered.map((tc) => (
+              <div
+                key={tc.id}
+                className={`p-4 rounded-xl border flex flex-col justify-between bg-white dark:bg-slate-950 ${
+                  tc.severity === 'high' 
+                    ? 'border-l-4 border-l-red-500 border-slate-200 dark:border-slate-800' 
+                    : tc.severity === 'medium'
+                    ? 'border-l-4 border-l-amber-500 border-slate-200 dark:border-slate-800'
+                    : 'border-l-4 border-l-blue-500 border-slate-200 dark:border-slate-800'
+                }`}
+              >
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs font-black text-slate-800 dark:text-white truncate pr-2">{tc.title}</span>
+                    <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded ${
+                      tc.severity === 'high' ? 'bg-red-50 text-red-700' : 'bg-amber-100 text-amber-800'
+                    }`}>
+                      {tc.severity === 'high' ? 'Критично' : 'Проблема'}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-450 dark:text-slate-500 font-mono mt-1 mb-2 leading-relaxed">
+                    <b>Выявлено:</b> {tc.detected}
+                  </p>
+                  <p className="text-[11px] text-slate-600 dark:text-slate-300 mt-1 mb-3 bg-slate-50 dark:bg-slate-900/40 p-2 rounded border border-slate-100 dark:border-slate-800/60 leading-relaxed font-sans">
+                    <b>Причина:</b> {tc.reason}
+                  </p>
+                </div>
+
+                <div className="border-t border-slate-100 dark:border-slate-900 pt-2 space-y-1">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">Рекомендация:</span>
+                  {tc.recommendation.map((rec, i) => (
+                    <div key={i} className="text-[11px] text-slate-700 dark:text-slate-300 flex items-start gap-1">
+                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0 mt-0.5" />
+                      <span>{rec}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}

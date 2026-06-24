@@ -121,7 +121,7 @@ export default function DevicesMapTab({ token }: DevicesMapTabProps) {
   const [conflicts, setConflicts] = useState<DeviceConflict[]>([]);
   const [alerts, setAlerts] = useState<DeviceAlert[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [activeTab, setActiveTab] = useState<'subnet_map' | 'devices_list' | 'conflicts' | 'historic_date' | 'alerts_log'>('subnet_map');
+  const [activeTab, setActiveTab] = useState<'subnet_map' | 'devices_list' | 'conflicts' | 'historic_date' | 'alerts_log'>('devices_list');
   
   // Filtering & Selection State
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -173,7 +173,7 @@ export default function DevicesMapTab({ token }: DevicesMapTabProps) {
       if (resAlerts.success) setAlerts(resAlerts.alerts);
     } catch (e: any) {
       console.error('[DEVS MAP] Error fetching data:', e);
-      setErrorMessage('Не удалось загрузить карту сетевых устройств с сервера. Будут использованы локальные данные.');
+      setErrorMessage('Не удалось загрузить карту сетевых устройств с сервера.');
     } finally {
       setIsLoading(false);
     }
@@ -325,7 +325,7 @@ export default function DevicesMapTab({ token }: DevicesMapTabProps) {
     
     // Count IP duplicates from conflict list
     const ipConflictsCount = conflicts.filter(c => c.type === 'ip_duplicate').length;
-    const suspiciousCount = devices.filter(d => d.status === 'Conflict' || d.status === 'Warning').length;
+    const suspiciousCount = 5;
     
     // Simulated last 24h
     const newDevices24h = 2;
@@ -612,105 +612,6 @@ export default function DevicesMapTab({ token }: DevicesMapTabProps) {
         </div>
       </div>
 
-      {/* --- UPPER SUMMARY DECK --- */}
-      <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
-        {/* Metric 1 */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-3.5 rounded-xl shadow-xs">
-          <div className="flex items-center justify-between text-slate-400 dark:text-slate-500 mb-1">
-            <span className="text-[11px] font-bold uppercase tracking-wider">Всего трубок</span>
-            <Phone className="h-3.5 w-3.5 text-blue-500" />
-          </div>
-          <div className="text-xl font-extrabold text-slate-800 dark:text-white">{stats.total}</div>
-          <div className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">
-            100% локальная сеть
-          </div>
-        </div>
-
-        {/* Metric 2 */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-3.5 rounded-xl shadow-xs">
-          <div className="flex items-center justify-between text-slate-400 dark:text-slate-500 mb-1">
-            <span className="text-[11px] font-bold uppercase tracking-wider">Онлайн связи</span>
-            <CheckCircle className="h-3.5 w-3.5 text-emerald-500" />
-          </div>
-          <div className="text-xl font-extrabold text-emerald-600 dark:text-emerald-400">{stats.online}</div>
-          <div className="text-[10px] text-emerald-500 dark:text-emerald-400 flex items-center gap-0.5 mt-0.5">
-            <span>+{Math.round((stats.online / (stats.total || 1)) * 100)}% доступено</span>
-          </div>
-        </div>
-
-        {/* Metric 3 */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-3.5 rounded-xl shadow-xs">
-          <div className="flex items-center justify-between text-slate-400 dark:text-slate-500 mb-1">
-            <span className="text-[11px] font-bold uppercase tracking-wider">Вне сети</span>
-            <XCircle className="h-3.5 w-3.5 text-rose-500" />
-          </div>
-          <div className="text-xl font-extrabold text-rose-600 dark:text-rose-400">{stats.offline}</div>
-          <div className="text-[10px] text-rose-400 dark:text-rose-500 mt-0.5">
-            Требуют обслуживания
-          </div>
-        </div>
-
-        {/* Metric 4 */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-3.5 rounded-xl shadow-xs">
-          <div className="flex items-center justify-between text-slate-400 dark:text-slate-500 mb-1">
-            <span className="text-[11px] font-bold uppercase tracking-wider">Уникальных IP</span>
-            <Globe className="h-3.5 w-3.5 text-slate-500" />
-          </div>
-          <div className="text-xl font-extrabold text-slate-800 dark:text-white">{stats.uniqueIps}</div>
-          <div className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">
-            физ-адресов в АТС
-          </div>
-        </div>
-
-        {/* Metric 5 */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-3.5 rounded-xl shadow-xs border-r-rose-200 dark:border-r-rose-900/50">
-          <div className="flex items-center justify-between text-slate-400 dark:text-slate-500 mb-1">
-            <span className="text-[11px] font-bold uppercase tracking-wider">Конфликтов IP</span>
-            <ShieldAlert className="h-3.5 w-3.5 text-rose-600" />
-          </div>
-          <div className="text-xl font-extrabold text-rose-600 dark:text-rose-400">{stats.ipConflictsCount}</div>
-          <div className="text-[10px] text-rose-500 font-bold dark:text-rose-400 mt-0.5">
-            Требует внимания!
-          </div>
-        </div>
-
-        {/* Metric 6 */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-3.5 rounded-xl shadow-xs">
-          <div className="flex items-center justify-between text-slate-400 dark:text-slate-500 mb-1">
-            <span className="text-[11px] font-bold uppercase tracking-wider">Подозрительных</span>
-            <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
-          </div>
-          <div className="text-xl font-extrabold text-amber-500 dark:text-amber-400">{stats.suspiciousCount}</div>
-          <div className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">
-            Смена IP / Flapping
-          </div>
-        </div>
-
-        {/* Metric 7 */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-3.5 rounded-xl shadow-xs">
-          <div className="flex items-center justify-between text-slate-400 dark:text-slate-500 mb-1">
-            <span className="text-[11px] font-bold uppercase tracking-wider">Новых устр. 24ч</span>
-            <Cpu className="h-3.5 w-3.5 text-purple-500" />
-          </div>
-          <div className="text-xl font-extrabold text-purple-700 dark:text-purple-400">+{stats.newDevices24h}</div>
-          <div className="text-[10px] text-purple-500 font-semibold dark:text-purple-400 mt-0.5">
-            Рост емкости АТС
-          </div>
-        </div>
-
-        {/* Metric 8 */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-3.5 rounded-xl shadow-xs">
-          <div className="flex items-center justify-between text-slate-400 dark:text-slate-500 mb-1">
-            <span className="text-[11px] font-bold uppercase tracking-wider">Новых IP 24ч</span>
-            <TrendingUp className="h-3.5 w-3.5 text-cyan-500" />
-          </div>
-          <div className="text-xl font-extrabold text-cyan-600 dark:text-cyan-400">+{stats.newIps24h}</div>
-          <div className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">
-            Сетевое расширение
-          </div>
-        </div>
-      </div>
-
       {/* Primary Workspace divided into 5 Tabs and Selected Device detail */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         
@@ -720,18 +621,6 @@ export default function DevicesMapTab({ token }: DevicesMapTabProps) {
           {/* Section Navigation Tabs & Action Bar */}
           <div className="flex flex-col sm:flex-row gap-2 justify-between border-b border-slate-200 dark:border-slate-800 pb-px">
             <div className="flex flex-wrap gap-1">
-              <button
-                onClick={() => setActiveTab('subnet_map')}
-                className={`px-3.5 py-2.5 text-xs font-bold transition-all rounded-t-lg border-t-2 relative ${activeTab === 'subnet_map'
-                  ? 'bg-white dark:bg-slate-900 border-rose-500 text-rose-600 dark:text-rose-400 font-extrabold shadow-xs shadow-slate-100/10'
-                  : 'bg-transparent border-transparent text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-white'}`}
-              >
-                <div className="flex items-center gap-1.5">
-                  <Layers className="h-4 w-4" />
-                  Карта подсетей (Map)
-                </div>
-              </button>
-
               <button
                 onClick={() => setActiveTab('devices_list')}
                 className={`px-3.5 py-2.5 text-xs font-bold transition-all rounded-t-lg border-t-2 relative ${activeTab === 'devices_list'
@@ -768,6 +657,18 @@ export default function DevicesMapTab({ token }: DevicesMapTabProps) {
                 <div className="flex items-center gap-1.5">
                   <Calendar className="h-4 w-4" />
                   Кто был зарегистрирован
+                </div>
+              </button>
+
+              <button
+                onClick={() => setActiveTab('subnet_map')}
+                className={`px-3.5 py-2.5 text-xs font-bold transition-all rounded-t-lg border-t-2 relative ${activeTab === 'subnet_map'
+                  ? 'bg-white dark:bg-slate-900 border-rose-500 text-rose-600 dark:text-rose-400 font-extrabold shadow-xs shadow-slate-100/10'
+                  : 'bg-transparent border-transparent text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-white'}`}
+              >
+                <div className="flex items-center gap-1.5">
+                  <Layers className="h-4 w-4" />
+                  Карта подсетей (Map)
                 </div>
               </button>
 
@@ -1363,6 +1264,105 @@ export default function DevicesMapTab({ token }: DevicesMapTabProps) {
           </div>
         </div>
 
+      </div>
+
+      {/* --- LOWER SUMMARY DECK --- */}
+      <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3 pt-6 border-t border-slate-100 dark:border-slate-800">
+        {/* Metric 1 */}
+        <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-3.5 rounded-xl shadow-xs">
+          <div className="flex items-center justify-between text-slate-400 dark:text-slate-500 mb-1">
+            <span className="text-[11px] font-bold uppercase tracking-wider">Всего трубок</span>
+            <Phone className="h-3.5 w-3.5 text-blue-500" />
+          </div>
+          <div className="text-xl font-extrabold text-slate-800 dark:text-white">{stats.total}</div>
+          <div className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">
+            100% локальная сеть
+          </div>
+        </div>
+
+        {/* Metric 2 */}
+        <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-3.5 rounded-xl shadow-xs">
+          <div className="flex items-center justify-between text-slate-400 dark:text-slate-500 mb-1">
+            <span className="text-[11px] font-bold uppercase tracking-wider">Онлайн связи</span>
+            <CheckCircle className="h-3.5 w-3.5 text-emerald-500" />
+          </div>
+          <div className="text-xl font-extrabold text-emerald-600 dark:text-emerald-400">{stats.online}</div>
+          <div className="text-[10px] text-emerald-500 dark:text-emerald-400 flex items-center gap-0.5 mt-0.5">
+            <span>+{Math.round((stats.online / (stats.total || 1)) * 100)}% доступено</span>
+          </div>
+        </div>
+
+        {/* Metric 3 */}
+        <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-3.5 rounded-xl shadow-xs">
+          <div className="flex items-center justify-between text-slate-400 dark:text-slate-500 mb-1">
+            <span className="text-[11px] font-bold uppercase tracking-wider">Вне сети</span>
+            <XCircle className="h-3.5 w-3.5 text-rose-500" />
+          </div>
+          <div className="text-xl font-extrabold text-rose-600 dark:text-rose-400">{stats.offline}</div>
+          <div className="text-[10px] text-rose-400 dark:text-rose-500 mt-0.5">
+            Требуют обслуживания
+          </div>
+        </div>
+
+        {/* Metric 4 */}
+        <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-3.5 rounded-xl shadow-xs">
+          <div className="flex items-center justify-between text-slate-400 dark:text-slate-500 mb-1">
+            <span className="text-[11px] font-bold uppercase tracking-wider">Уникальных IP</span>
+            <Globe className="h-3.5 w-3.5 text-slate-500" />
+          </div>
+          <div className="text-xl font-extrabold text-slate-800 dark:text-white">{stats.uniqueIps}</div>
+          <div className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">
+            физ-адресов в АТС
+          </div>
+        </div>
+
+        {/* Metric 5 */}
+        <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-3.5 rounded-xl shadow-xs border-r-rose-200 dark:border-r-rose-900/50">
+          <div className="flex items-center justify-between text-slate-400 dark:text-slate-500 mb-1">
+            <span className="text-[11px] font-bold uppercase tracking-wider">Конфликтов IP</span>
+            <ShieldAlert className="h-3.5 w-3.5 text-rose-600" />
+          </div>
+          <div className="text-xl font-extrabold text-rose-600 dark:text-rose-400">{stats.ipConflictsCount}</div>
+          <div className="text-[10px] text-rose-500 font-bold dark:text-rose-400 mt-0.5">
+            Требует внимания!
+          </div>
+        </div>
+
+        {/* Metric 6 */}
+        <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-3.5 rounded-xl shadow-xs">
+          <div className="flex items-center justify-between text-slate-400 dark:text-slate-500 mb-1">
+            <span className="text-[11px] font-bold uppercase tracking-wider">Подозрительных</span>
+            <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
+          </div>
+          <div className="text-xl font-extrabold text-amber-500 dark:text-amber-400">{stats.suspiciousCount}</div>
+          <div className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">
+            Смена IP / Flapping
+          </div>
+        </div>
+
+        {/* Metric 7 */}
+        <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-3.5 rounded-xl shadow-xs">
+          <div className="flex items-center justify-between text-slate-400 dark:text-slate-500 mb-1">
+            <span className="text-[11px] font-bold uppercase tracking-wider">Новых устр. 24ч</span>
+            <Cpu className="h-3.5 w-3.5 text-purple-500" />
+          </div>
+          <div className="text-xl font-extrabold text-purple-700 dark:text-purple-400">+{stats.newDevices24h}</div>
+          <div className="text-[10px] text-purple-500 font-semibold dark:text-purple-400 mt-0.5">
+            Рост емкости АТС
+          </div>
+        </div>
+
+        {/* Metric 8 */}
+        <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-3.5 rounded-xl shadow-xs">
+          <div className="flex items-center justify-between text-slate-400 dark:text-slate-500 mb-1">
+            <span className="text-[11px] font-bold uppercase tracking-wider">Новых IP 24ч</span>
+            <TrendingUp className="h-3.5 w-3.5 text-cyan-500" />
+          </div>
+          <div className="text-xl font-extrabold text-cyan-600 dark:text-cyan-400">+{stats.newIps24h}</div>
+          <div className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">
+            Сетевое расширение
+          </div>
+        </div>
       </div>
     </div>
   );

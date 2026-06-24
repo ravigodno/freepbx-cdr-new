@@ -123,10 +123,10 @@ interface QueueStatus {
   waitingCount: number;
   membersOnline: number;
   membersBusy: number;
-  avgWait: string;
-  maxWait: string;
-  sla: string;
-  callers: {
+  avgWait?: string;
+  maxWait?: string;
+  sla?: string;
+  callers?: {
     callerId: string;
     joinedAt: string;
     waitTime: number;
@@ -144,12 +144,63 @@ function durationFmt(sec: number) {
 
 export default function ActiveCallsTab({ liveSessionsData, liveSearch, setLiveSearch }: Props) {
   // 1. Core State
-  const [isSimulatorMode, setIsSimulatorMode] = useState<boolean>(true);
+  const [isSimulatorMode, setIsSimulatorMode] = useState<boolean>(false);
   const [selectedCallId, setSelectedCallId] = useState<string | null>(null);
   const [activeSubTab, setActiveSubTab] = useState<'trace' | 'sip_rtp' | 'queue_transfer' | 'problems' | 'cel_cdr'>('trace');
   const [typeFilter, setTypeFilter] = useState<'All' | 'Inbound' | 'Outbound' | 'Internal'>('All');
   const [statusFilter, setStatusFilter] = useState<string>('All');
   
+  // Real terminal active Asterisk raw command selection
+  const [selectedRawCmd, setSelectedRawCmd] = useState<'concise' | 'verbose' | 'queues' | 'pjsip' | 'sip'>('concise');
+
+  const getRawCmdOutput = () => {
+    if (!liveSessionsData?.raw) return '';
+    const raw = liveSessionsData.raw;
+    if (selectedRawCmd === 'concise') return raw.concise || '';
+    if (selectedRawCmd === 'verbose') return raw.verbose || '';
+    if (selectedRawCmd === 'queues') return raw.queues || '';
+    if (selectedRawCmd === 'pjsip') return raw.pjsipChannels || '';
+    if (selectedRawCmd === 'sip') return raw.sipChannels || '';
+    return '';
+  };
+
+  const realQueues = useMemo(() => {
+    const queuesText = liveSessionsData?.raw?.queues || '';
+    if (!queuesText) return [];
+    
+    const parsed: QueueStatus[] = [];
+    const lines = queuesText.split('\n');
+    let currentQueue: QueueStatus | null = null;
+    
+    for (const line of lines) {
+      const match = line.match(/^(\d+|\w+)\s+has\s+(\d+)\s+calls/);
+      if (match) {
+        if (currentQueue) {
+          parsed.push(currentQueue);
+        }
+        currentQueue = {
+          queue: `Очередь ${match[1]}`,
+          waitingCount: parseInt(match[2], 10),
+          membersOnline: 0,
+          membersBusy: 0
+        };
+      } else if (currentQueue) {
+        if (line.includes('PJSIP/') || line.includes('SIP/')) {
+          currentQueue.membersOnline++;
+          if (line.includes('In use') || line.includes('Busy') || line.includes('Ringing') || line.includes('InUse')) {
+            currentQueue.membersBusy++;
+          }
+        }
+      }
+    }
+    
+    if (currentQueue) {
+      parsed.push(currentQueue);
+    }
+    
+    return parsed;
+  }, [liveSessionsData]);
+
   // Dialog/Modal diagnostics simulation states
   const [diagnosticModal, setDiagnosticModal] = useState<{ isOpen: boolean; title: string; output: string } | null>(null);
   const [isDiagnosticRunning, setIsDiagnosticRunning] = useState<boolean>(false);
@@ -781,37 +832,6 @@ export default function ActiveCallsTab({ liveSessionsData, liveSearch, setLiveSe
           </div>
         </div>
 
-        {/* Mode Selector Toggle */}
-        <div className="flex items-center bg-slate-100 dark:bg-slate-950 p-1.5 rounded-xl border border-slate-200/50 dark:border-slate-800/80">
-          <button
-            onClick={() => {
-              setIsSimulatorMode(false);
-              setLiveSearch('');
-            }}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
-              !isSimulatorMode
-                ? 'bg-rose-600 text-white shadow-sm'
-                : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
-            }`}
-          >
-            <Server className="h-3.5 w-3.5" />
-            📡 АТС Реал-тайм {parsedLiveCalls.length > 0 ? `(${parsedLiveCalls.length})` : ''}
-          </button>
-          <button
-            onClick={() => {
-              setIsSimulatorMode(true);
-              setLiveSearch('');
-            }}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
-              isSimulatorMode
-                ? 'bg-blue-600 text-white shadow-sm'
-                : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
-            }`}
-          >
-            <Zap className="h-3.5 w-3.5" />
-            🎮 Sandbox-Симулятор
-          </button>
-        </div>
       </div>
 
       {/* 2. Stats Summaries Cards */}
@@ -924,23 +944,11 @@ export default function ActiveCallsTab({ liveSessionsData, liveSearch, setLiveSe
           <div className="text-center py-12 bg-slate-50 dark:bg-slate-950/40 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800">
             <Activity className="h-12 w-12 text-slate-300 dark:text-slate-700 mx-auto animate-pulse" />
             <h3 className="mt-3 font-bold text-slate-700 dark:text-white text-sm">
-              {isSimulatorMode
-                ? 'Нет звонков в симуляторе (очищен список)'
-                : 'На АТС Asterisk нет активных каналов'}
+              На АТС Asterisk нет активных каналов
             </h3>
             <p className="mt-1 text-xs text-slate-400 max-w-sm mx-auto">
-              {isSimulatorMode
-                ? 'Перезапустите страницу или наполните симулятор.'
-                : 'Почтовый ящик Asterisk AMI молчит. Включите "Sandbox-Симулятор" вверху справа, чтобы проанализировать тестовый трафик.'}
+              Почтовый ящик Asterisk AMI молчит. Проверьте подключение и настройки AMI-соединения в разделе «Настройки».
             </p>
-            {!isSimulatorMode && (
-              <button
-                onClick={() => setIsSimulatorMode(true)}
-                className="mt-4 px-4 py-1.5 text-xs font-bold bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition"
-              >
-                Включить симулятор для демонстрации
-              </button>
-            )}
           </div>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
@@ -1457,14 +1465,20 @@ export default function ActiveCallsTab({ liveSessionsData, liveSearch, setLiveSe
                               Анализ загруженности Очередей АТС
                             </h4>
                             <div className="space-y-1.5 text-[11px]">
-                              {simulatedQueues.map((q, i) => (
-                                <div key={i} className="flex justify-between p-2 bg-slate-950 rounded border border-slate-850">
-                                  <span>{q.queue}</span>
-                                  <span className="text-slate-400">
-                                    Ожидают: <strong className="text-amber-500 font-mono">{q.waitingCount}</strong> | Агенты: <strong className="text-slate-300 font-mono">{q.membersBusy}/{q.membersOnline}</strong>
-                                  </span>
+                              {realQueues.length === 0 ? (
+                                <div className="p-2 bg-slate-950 rounded border border-slate-850 text-slate-500 text-center italic">
+                                  Нет активных очередей или данных с АТС
                                 </div>
-                              ))}
+                              ) : (
+                                realQueues.map((q, i) => (
+                                  <div key={i} className="flex justify-between p-2 bg-slate-950 rounded border border-slate-850">
+                                    <span>{q.queue}</span>
+                                    <span className="text-slate-400">
+                                      Ожидают: <strong className="text-amber-500 font-mono">{q.waitingCount}</strong> | Агенты: <strong className="text-slate-300 font-mono">{q.membersBusy}/{q.membersOnline}</strong>
+                                    </span>
+                                  </div>
+                                ))
+                              )}
                             </div>
                           </div>
                         </motion.div>
@@ -1631,10 +1645,10 @@ export default function ActiveCallsTab({ liveSessionsData, liveSearch, setLiveSe
         )}
       </div>
 
-      {/* 5. Real-Time Active AMI Events Feed console panel (Highly requested visual showcase) */}
+      {/* 5. Real-Time Active Asterisk AMI Terminal Console */}
       <div className="bg-slate-950 rounded-2xl border border-slate-900 overflow-hidden shadow-xl flex flex-col">
         {/* Terminal Header */}
-        <div className="px-4 py-3 bg-slate-900 border-b border-slate-800 flex items-center justify-between">
+        <div className="px-4 py-3 bg-slate-900 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <div className="flex gap-1">
               <span className="h-2.5 w-2.5 rounded-full bg-red-500" />
@@ -1643,52 +1657,51 @@ export default function ActiveCallsTab({ liveSessionsData, liveSearch, setLiveSe
             </div>
             <span className="text-xs font-black text-slate-300 font-mono tracking-widest uppercase flex items-center gap-1.5 ml-1">
               <Terminal className="h-3.5 w-3.5 text-rose-500 animate-pulse" />
-              <span>LOG: Asterisk AMI Live Stream (Живой поток событий)</span>
+              <span>Консоль Asterisk AMI: Живой Вывод</span>
             </span>
+          </div>
+
+          {/* Tab Selector inside terminal */}
+          <div className="flex flex-wrap items-center gap-1">
+            {[
+              { key: 'concise', label: 'channels concise' },
+              { key: 'verbose', label: 'channels verbose' },
+              { key: 'queues', label: 'queue show' },
+              { key: 'pjsip', label: 'pjsip channels' },
+              { key: 'sip', label: 'sip channels' }
+            ].map(tab => (
+              <button
+                key={tab.key}
+                onClick={() => setSelectedRawCmd(tab.key as any)}
+                className={`px-2 py-1 rounded font-mono text-[10px] font-bold transition ${
+                  selectedRawCmd === tab.key
+                    ? 'bg-rose-600 text-white shadow-sm'
+                    : 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
           </div>
 
           <div className="flex items-center gap-2">
-            {/* Status indicator */}
             <span className="text-[10px] text-emerald-400 font-mono font-bold flex items-center gap-1.5 bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-900/40">
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-ping" />
-              АКТИВЕН
+              РЕАЛ-ТАЙМ
             </span>
-            <button
-              onClick={() => setIsAmiFeedPaused(!isAmiFeedPaused)}
-              className={`px-3 py-1 rounded text-[10px] font-bold font-sans transition ${
-                isAmiFeedPaused
-                  ? 'bg-blue-600 hover:bg-blue-700 text-white'
-                  : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-              }`}
-            >
-              {isAmiFeedPaused ? '▶ Старт' : '⏸ Пауза'}
-            </button>
-            <button
-              onClick={() => setLiveAmiEvents([])}
-              className="px-2.5 py-1 text-[10px] font-bold bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-white rounded transition"
-            >
-              Очистить
-            </button>
           </div>
         </div>
 
-        {/* Live list container */}
-        <div className="p-4 h-48 overflow-y-auto font-mono text-[11px] space-y-2 max-h-48 scroll-smooth pr-2">
-          {liveAmiEvents.length === 0 ? (
-            <div className="text-slate-600 italic text-center py-10">
-              Ожидание AMI событий от Asterisk Manager Interface...
-            </div>
+        {/* Terminal Content container */}
+        <div className="p-4 h-56 overflow-y-auto font-mono text-[11px] max-h-56 scroll-smooth text-slate-350 bg-slate-950">
+          {getRawCmdOutput() ? (
+            <pre className="whitespace-pre-wrap font-mono leading-relaxed select-text font-light text-slate-300">
+              {getRawCmdOutput()}
+            </pre>
           ) : (
-            liveAmiEvents.map((evt, idx) => (
-              <div key={idx} className="flex items-start gap-3 hover:bg-slate-900/40 p-1 rounded transition">
-                <span className="text-slate-600 shrink-0 select-none">[{evt.ts}]</span>
-                <span className={`font-black shrink-0 ${getAmiEventColor(evt.event)}`}>
-                  {evt.event.padEnd(16)}
-                </span>
-                <span className="text-slate-400 font-bold shrink-0">[{evt.type}]</span>
-                <span className="text-slate-300 break-all">{evt.body}</span>
-              </div>
-            ))
+            <div className="text-slate-600 italic text-center py-12">
+              Нет активных данных. Убедитесь, что АТС подключена и AMI соединение настроено в настройках.
+            </div>
           )}
         </div>
       </div>

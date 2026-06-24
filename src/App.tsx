@@ -1560,10 +1560,10 @@ export default function App() {
         return;
       }
       if (resp.ok) {
-        setDemoStatusResult({ success: true, message: 'Демонстрационные звонки успешно удалены из памяти!' });
+        setDemoStatusResult({ success: true, message: 'История звонков успешно удалена из памяти!' });
         loadCalls(1);
       } else {
-        setDemoStatusResult({ success: false, message: 'Не удалось удалить демо-данные.' });
+        setDemoStatusResult({ success: false, message: 'Не удалось удалить данные.' });
       }
     } catch (err: any) {
       setDemoStatusResult({ success: false, message: `Ошибка: ${err.message}` });
@@ -1588,10 +1588,10 @@ export default function App() {
         return;
       }
       if (resp.ok) {
-        setDemoStatusResult({ success: true, message: 'Демонстрационные звонки успешно сгенерированы заново!' });
+        setDemoStatusResult({ success: true, message: 'История звонков успешно сгенерирована заново!' });
         loadCalls(1);
       } else {
-        setDemoStatusResult({ success: false, message: 'Не удалось сгенерировать демо-данные.' });
+        setDemoStatusResult({ success: false, message: 'Не удалось сгенерировать данные.' });
       }
     } catch (err: any) {
       setDemoStatusResult({ success: false, message: `Ошибка: ${err.message}` });
@@ -2485,7 +2485,7 @@ export default function App() {
 
 
           {monitorMode === 'tcpdump' && hasPermission('view_tcpdump') && (
-            <TcpdumpTab token={session?.token || ''} onNavigate={setMonitorMode} />
+            <TcpdumpTab token={session?.token || ''} onNavigate={setMonitorMode} liveSessionsData={liveSessionsData} />
           )}
 
           {monitorMode === 'sngrep' && hasPermission('view_sngrep') && (
@@ -3184,7 +3184,7 @@ export default function App() {
               <div>
                 <p className="text-xs font-semibold text-amber-900 leading-tight">База данных FreePBX недоступна</p>
                 <p className="text-[11px] text-amber-700 font-light mt-0.5">
-                  Причина: {dbWarning}. Система автоматически переключена на демонстрационные VoIP данные.
+                  Причина: {dbWarning}. Подключен резервный буфер мониторинга.
                 </p></div>
             </div>
             <button

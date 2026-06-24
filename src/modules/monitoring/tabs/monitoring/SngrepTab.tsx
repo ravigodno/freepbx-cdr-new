@@ -246,102 +246,7 @@ export default function SngrepTab({ tcpdumpOutput, loadTcpdumpOutput, token, onN
 
   // Live simulation & seeding database
   const mockDialogs: SipDialog[] = useMemo(() => {
-    return [
-      {
-        id: 'call-id-9428-sip-trunk-mtt-99f8e',
-        status: 'Завершен нормально (BYE)',
-        fromNum: '79093005511',
-        toNum: '101',
-        userAgent: 'Yeastar S50 / Asterisk 18.23',
-        trunk: 'MTT_Trunk_Out',
-        codec: 'G.711 alaw (64 Kbps)',
-        did: '74951234567',
-        methodType: 'INVITE',
-        first: { time: '2026-06-23 00:10:02', src: '185.45.152.12', dst: '192.168.1.100', method: 'INVITE', code: '', title: 'INVITE sip:101@pbxpuls', callId: 'call-id-9428-sip-trunk-mtt-99f8e', sequence: 1, raw: 'INVITE sip:101@192.168.1.100 SIP/2.0\nVia: SIP/2.0/UDP 185.45.152.12:5060;branch=z9hG4bK83818\nFrom: <sip:79093005511@185.45.152.12>;tag=99131e\nTo: <sip:101@192.168.1.100>\nCall-ID: call-id-9428-sip-trunk-mtt-99f8e\nCSeq: 102 INVITE\nMax-Forwards: 70\nUser-Agent: Yeastar S50\nContent-Type: application/sdp\n\nv=0\no=root 1192 1192 IN IP4 185.45.152.12\ns=session\nc=IN IP4 185.45.152.12\nt=0 0\nm=audio 10024 RTP/AVP 8 0 101\na=rtpmap:8 PCMA/8000\na=rtpmap:0 PCMU/8000\na=rtpmap:101 telephone-event/8000' },
-        last: { time: '2026-06-23 00:11:45', src: '192.168.1.100', dst: '185.45.152.12', method: '200 OK', code: '200', title: '200 OK (BYE)', callId: 'call-id-9428-sip-trunk-mtt-99f8e', sequence: 6, raw: 'SIP/2.0 200 OK\nVia: SIP/2.0/UDP 185.45.152.12:5060;branch=z9hG4bK114s8\nFrom: <sip:79093005511@185.45.152.12>;tag=99131e\nTo: <sip:101@192.168.1.100>;tag=as8813\nCall-ID: call-id-9428-sip-trunk-mtt-99f8e\nCSeq: 103 BYE\nContent-Length: 0' },
-        items: [
-          { time: '2026-06-23 00:10:02', src: '185.45.152.12', dst: '192.168.1.100', method: 'INVITE', code: '', title: 'INVITE sip:101', callId: 'call-id-9428-sip-trunk-mtt-99f8e', sequence: 1, raw: 'INVITE sip:101@192.168.1.100 SIP/2.0' },
-          { time: '2026-06-23 00:10:02', src: '192.168.1.100', dst: '185.45.152.12', method: '100 Trying', code: '100', title: '100 Trying', callId: 'call-id-9428-sip-trunk-mtt-99f8e', sequence: 2, raw: 'SIP/2.0 100 Trying' },
-          { time: '2026-06-23 00:10:03', src: '192.168.1.100', dst: '185.45.152.12', method: '180 Ringing', code: '180', title: '180 Ringing', callId: 'call-id-9428-sip-trunk-mtt-99f8e', sequence: 3, raw: 'SIP/2.0 180 Ringing' },
-          { time: '2026-06-23 00:10:06', src: '192.168.1.100', dst: '185.45.152.12', method: '200 OK', code: '200', title: '200 OK (INVITE)', callId: 'call-id-9428-sip-trunk-mtt-99f8e', sequence: 4, raw: 'SIP/2.0 200 OK\nContent-Type: application/sdp\n\nm=audio 21240 RTP/AVP 8' },
-          { time: '2026-06-23 00:10:06', src: '185.45.152.12', dst: '192.168.1.100', method: 'ACK', code: '', title: 'ACK', callId: 'call-id-9428-sip-trunk-mtt-99f8e', sequence: 5, raw: 'ACK sip:101@192.168.1.100 SIP/2.0' },
-          { time: '2026-06-23 00:11:44', src: '185.45.152.12', dst: '192.168.1.100', method: 'BYE', code: '', title: 'BYE', callId: 'call-id-9428-sip-trunk-mtt-99f8e', sequence: 6, raw: 'BYE sip:101@192.168.1.100 SIP/2.0' },
-          { time: '2026-06-23 00:11:45', src: '192.168.1.100', dst: '185.45.152.12', method: '200 OK', code: '200', title: '200 OK (BYE)', callId: 'call-id-9428-sip-trunk-mtt-99f8e', sequence: 7, raw: 'SIP/2.0 200 OK' }
-        ]
-      },
-      {
-        id: 'reg-id-102-phone-grandstream-a849f1',
-        status: 'Успешная регистрация',
-        fromNum: '102',
-        toNum: 'Asterisk',
-        userAgent: 'Grandstream GXP1625 v1.0.4.15',
-        trunk: '—',
-        codec: '—',
-        did: '—',
-        methodType: 'REGISTER',
-        first: { time: '2026-06-23 00:08:44', src: '192.168.1.155', dst: '192.168.1.100', method: 'REGISTER', code: '', title: 'REGISTER sip:192.168.1.100', callId: 'reg-id-102-phone-grandstream-a849f1', sequence: 1, raw: 'REGISTER sip:192.168.1.100 SIP/2.0\nVia: SIP/2.0/UDP 192.168.1.155:5060;branch=z9hG4bK819ak\nFrom: <sip:102@192.168.1.100>;tag=f0288\nTo: <sip:102@192.168.1.100>\nCall-ID: reg-id-102-phone-grandstream-a849f1\nCSeq: 1 REGISTER\nUser-Agent: Grandstream GXP1625\nExpires: 3600\nContent-Length: 0' },
-        last: { time: '2026-06-23 00:08:45', src: '192.168.1.100', dst: '192.168.1.155', method: '200 OK', code: '200', title: '200 OK (REGISTER)', callId: 'reg-id-102-phone-grandstream-a849f1', sequence: 4, raw: 'SIP/2.0 200 OK\nVia: SIP/2.0/UDP 192.168.1.155:5060;branch=z9hG4bK91a4\nFrom: <sip:102@192.168.1.100>;tag=f02ac\nTo: <sip:102@192.168.1.100>;tag=asf78a2\nCall-ID: reg-id-102-phone-grandstream-a849f1\nCSeq: 2 REGISTER\nUser-Agent: Asterisk PBX\nExpires: 120\nContact: <sip:102@192.168.1.155:5060>' },
-        items: [
-          { time: '2026-06-23 00:08:44', src: '192.168.1.155', dst: '192.168.1.100', method: 'REGISTER', code: '', title: 'REGISTER (No Auth)', callId: 'reg-id-102-phone-grandstream-a849f1', sequence: 1, raw: 'REGISTER sip:192.168.1.100 SIP/2.0' },
-          { time: '2026-06-23 00:08:44', src: '192.168.1.100', dst: '192.168.1.155', method: '401 Unauthorized', code: '401', title: '401 Unauthorized', callId: 'reg-id-102-phone-grandstream-a849f1', sequence: 2, raw: 'SIP/2.0 401 Unauthorized\nWWW-Authenticate: Digest algorithm=MD5, realm="asterisk", nonce="fa128c11"' },
-          { time: '2026-06-23 00:08:45', src: '192.168.1.155', dst: '192.168.1.100', method: 'REGISTER', code: '', title: 'REGISTER (With Auth)', callId: 'reg-id-102-phone-grandstream-a849f1', sequence: 3, raw: 'REGISTER sip:192.168.1.100 SIP/2.0\nAuthorization: Digest username="102", realm="asterisk", nonce="fa128c11", response="99a1b2c3"' },
-          { time: '2026-06-23 00:08:45', src: '192.168.1.100', dst: '192.168.1.155', method: '200 OK', code: '200', title: '200 OK (Registered)', callId: 'reg-id-102-phone-grandstream-a849f1', sequence: 4, raw: 'SIP/2.0 200 OK\nExpires: 120\nContact: <sip:102@192.168.1.155:5060>' }
-        ]
-      },
-      {
-        id: 'call-id-auth-loop-error-fail3829ad',
-        status: 'Ошибка авторизации (403)',
-        fromNum: '501',
-        toNum: 'Asterisk',
-        userAgent: 'Fanvil X3S v2.4.1',
-        trunk: '—',
-        codec: '—',
-        did: '—',
-        methodType: 'REGISTER',
-        first: { time: '2026-06-23 00:06:12', src: '192.168.1.210', dst: '192.168.1.100', method: 'REGISTER', code: '', title: 'REGISTER sip:192.168.1.100', callId: 'call-id-auth-loop-error-fail3829ad', sequence: 1, raw: 'REGISTER sip:192.168.1.100 SIP/2.0\nUser-Agent: Fanvil X3S' },
-        last: { time: '2026-06-23 00:06:13', src: '192.168.1.100', dst: '192.168.1.210', method: '403 Forbidden', code: '403', title: '403 Forbidden', callId: 'call-id-auth-loop-error-fail3829ad', sequence: 4, raw: 'SIP/2.0 403 Forbidden\nReason: Wrong Secret / Password Match Failure\nContent-Length: 0' },
-        items: [
-          { time: '2026-06-23 00:06:12', src: '192.168.1.210', dst: '192.168.1.100', method: 'REGISTER', code: '', title: 'REGISTER (No Auth)', callId: 'call-id-auth-loop-error-fail3829ad', sequence: 1, raw: 'REGISTER' },
-          { time: '2026-06-23 00:06:12', src: '192.168.1.100', dst: '192.168.1.210', method: '401 Unauthorized', code: '401', title: '401 Unauthorized', callId: 'call-id-auth-loop-error-fail3829ad', sequence: 2, raw: 'SIP/2.0 401 Unauthorized' },
-          { time: '2026-06-23 00:06:13', src: '192.168.1.210', dst: '192.168.1.100', method: 'REGISTER', code: '', title: 'REGISTER (Bad Auth)', callId: 'call-id-auth-loop-error-fail3829ad', sequence: 3, raw: 'REGISTER (With Bad credentials)' },
-          { time: '2026-06-23 00:06:13', src: '192.168.1.100', dst: '192.168.1.210', method: '403 Forbidden', code: '403', title: '403 Forbidden', callId: 'call-id-auth-loop-error-fail3829ad', sequence: 4, raw: 'SIP/2.0 403 Forbidden\nWarning: 127 authentication failed' }
-        ]
-      },
-      {
-        id: 'flood-id-scanner-etc-88319f',
-        status: 'SIP Flood атака заблокирована',
-        fromNum: '9900201',
-        toNum: '74950000000',
-        userAgent: 'sipvicious / friendly-scanner',
-        trunk: '—',
-        codec: '—',
-        did: '—',
-        methodType: 'INVITE',
-        first: { time: '2026-06-23 00:01:20', src: '45.143.22.190', dst: '192.168.1.100', method: 'INVITE', code: '', title: 'INVITE sip:9900201@pbxpuls', callId: 'flood-id-scanner-etc-88319f', sequence: 1, raw: 'INVITE sip:9900201@192.168.1.100 SIP/2.0\nUser-Agent: friendly-scanner' },
-        last: { time: '2026-06-23 00:01:21', src: '192.168.1.100', dst: '45.143.22.190', method: '603 Decline', code: '603', title: '603 Decline (Blocked by Security)', callId: 'flood-id-scanner-etc-88319f', sequence: 2, raw: 'SIP/2.0 603 Decline\nX-PBXPULS-BlockReason: Scanner security trigger' },
-        items: [
-          { time: '2026-06-23 00:01:20', src: '45.143.22.190', dst: '192.168.1.100', method: 'INVITE', code: '', title: 'INVITE (Scanner Trial)', callId: 'flood-id-scanner-etc-88319f', sequence: 1, raw: 'INVITE sip:9900201@pbxpuls' },
-          { time: '2026-06-23 00:01:21', src: '192.168.1.100', dst: '45.143.22.190', method: '603 Decline', code: '603', title: '603 Decline', callId: 'flood-id-scanner-etc-88319f', sequence: 2, raw: 'SIP/2.0 603 Decline\nReason: Rate limits reached' }
-        ]
-      },
-      {
-        id: 'call-id-options-ping-keepalive-8f23',
-        status: 'OPTIONS Ping OK',
-        fromNum: 'Trunk_Mtt',
-        toNum: 'Asterisk',
-        userAgent: 'MTT SBC',
-        trunk: 'MTT_Trunk_Out',
-        codec: '—',
-        did: '—',
-        methodType: 'OPTIONS',
-        first: { time: '2026-06-23 00:12:00', src: '185.45.152.12', dst: '192.168.1.100', method: 'OPTIONS', code: '', title: 'OPTIONS sip:192.168.1.100', callId: 'call-id-options-ping-keepalive-8f23', sequence: 1, raw: 'OPTIONS sip:192.168.1.100 SIP/2.0' },
-        last: { time: '2026-06-23 00:12:00', src: '192.168.1.100', dst: '185.45.152.12', method: '200 OK', code: '200', title: '200 OK (OPTIONS)', callId: 'call-id-options-ping-keepalive-8f23', sequence: 2, raw: 'SIP/2.0 200 OK\nUser-Agent: Asterisk PBX\nAllow: INVITE, ACK, CANCEL, BYE, OPTIONS' },
-        items: [
-          { time: '2026-06-23 00:12:00', src: '185.45.152.12', dst: '192.168.1.100', method: 'OPTIONS', code: '', title: 'OPTIONS Ping', callId: 'call-id-options-ping-keepalive-8f23', sequence: 1, raw: 'OPTIONS sip:192.168.1.100 SIP/2.0' },
-          { time: '2026-06-23 00:12:00', src: '192.168.1.100', dst: '185.45.152.12', method: '200 OK', code: '200', title: '200 OK', callId: 'call-id-options-ping-keepalive-8f23', sequence: 2, raw: 'SIP/2.0 200 OK' }
-        ]
-      }
-    ];
+    return [];
   }, []);
 
   // Parse actual tcpdump output if loaded
@@ -501,28 +406,14 @@ export default function SngrepTab({ tcpdumpOutput, loadTcpdumpOutput, token, onN
   }, [allDialogs, searchQuery, methodFilter]);
 
   // Seeding Registrations Data with statuses: Registered, Expired, Unreachable, Flapping
-  const registrationsData: Registration[] = [
-    { ext: '101', ip: '192.168.1.144', userAgent: 'Grandstream GXP2140 v1.0.11.3', time: '2026-06-23 00:09:12', expire: '112 сек', frequency: '30 сек', status: 'Registered' },
-    { ext: '102', ip: '192.168.1.155', userAgent: 'Grandstream GXP1625 v1.0.4.15', time: '2026-06-23 00:08:45', expire: '115 сек', frequency: '120 сек', status: 'Registered' },
-    { ext: '103', ip: '192.168.1.102', userAgent: 'Yealink SIP-T31G v124.86.0.40', time: '2026-06-23 00:05:44', expire: 'Expired', frequency: '60 сек', status: 'Expired' },
-    { ext: '105', ip: '192.168.1.112', userAgent: 'Yealink SIP-T46U v108.86.0.70', time: '2026-06-22 23:54:12', expire: 'Unreachable', frequency: '300 сек', status: 'Unreachable' },
-    { ext: '108', ip: '172.16.4.88', userAgent: 'PhonerLite Desktop Client', time: '2026-06-23 00:11:02', expire: '18 сек (flapping)', frequency: '5 сек', status: 'Flapping' },
-    { ext: '201', ip: '192.168.10.22', userAgent: 'Cisco SPA303-G2', time: '2026-06-23 00:01:05', expire: '240 сек', frequency: '300 сек', status: 'Registered' },
-  ];
+  const registrationsData: Registration[] = [];
 
   const filteredRegistrations = useMemo(() => {
-    if (regFilterRange === 'all') return registrationsData;
-    // Just a demo filter matching range selection
     return registrationsData;
-  }, [regFilterRange]);
+  }, [registrationsData]);
 
   // Security center data
-  const securityThreats: SecurityThreat[] = [
-    { id: 'sec-1', ip: '45.143.22.190', requests: 1421, type: 'SIP Scanner (friendly-scanner)', time: '2026-06-23 00:01:21', severity: 'high' },
-    { id: 'sec-2', ip: '185.220.101.4', requests: 432, type: 'Registration Bruteforce', time: '2026-06-23 00:04:10', severity: 'high' },
-    { id: 'sec-3', ip: '195.91.13.2', requests: 9811, type: 'OPTIONS Flood Event', time: '2026-06-23 00:09:55', severity: 'medium' },
-    { id: 'sec-4', ip: '92.42.10.89', requests: 88, type: 'Extension Enumeration Attack', time: '2026-06-23 00:11:44', severity: 'medium' }
-  ];
+  const securityThreats: SecurityThreat[] = [];
 
   // Helper values for Top Panel Status Cards
   const stats = useMemo(() => {
@@ -531,10 +422,10 @@ export default function SngrepTab({ tcpdumpOutput, loadTcpdumpOutput, token, onN
       registrations: registrationsData.filter(r => r.status === 'Registered').length,
       callsProcessing: allDialogs.filter(d => d.status === 'В обработке' || d.status === 'Разговор').length,
       sipErrors: allDialogs.filter(d => d.status.includes('Ошибка') || d.items.some(i => parseInt(i.code) >= 400)).length,
-      floodEvents: 14,
+      floodEvents: 0,
       failedRegistrations: registrationsData.filter(r => r.status === 'Expired' || r.status === 'Unreachable').length,
-      activeTrunks: 3,
-      avgCallSetupTime: '820 ms'
+      activeTrunks: 0,
+      avgCallSetupTime: '—'
     };
   }, [allDialogs, registrationsData]);
 
@@ -596,16 +487,16 @@ export default function SngrepTab({ tcpdumpOutput, loadTcpdumpOutput, token, onN
   // Error aggregation grouping
   const errorAggregation = useMemo(() => {
     const counts: { [key: string]: number } = {
-      '401 Unauthorized': 12,
-      '403 Forbidden': 3,
-      '404 Not Found': 4,
-      '408 Request Timeout': 1,
+      '401 Unauthorized': 0,
+      '403 Forbidden': 0,
+      '404 Not Found': 0,
+      '408 Request Timeout': 0,
       '480 Temporarily Unavailable': 0,
-      '486 Busy Here': 5,
-      '488 Not Acceptable Here': 2,
+      '486 Busy Here': 0,
+      '488 Not Acceptable Here': 0,
       '500 Internal Error': 0,
       '503 Service Unavailable': 0,
-      '603 Decline': 1
+      '603 Decline': 0
     };
     
     // Accumulate from parsed real outputs
@@ -627,19 +518,11 @@ export default function SngrepTab({ tcpdumpOutput, loadTcpdumpOutput, token, onN
     <div className={`min-h-screen p-5 font-sans transition-colors duration-200 selection:bg-sky-500 selection:text-white sngrep-bg-main ${isDark ? 'sngrep-theme-dark' : 'sngrep-theme-light'}`} id="sip-flow-analyzer-root">
       
       {/* HEADER SECTION */}
-      <div className={`flex flex-col xl:flex-row justify-between items-start xl:items-center gap-4 pb-6 border-b transition-colors duration-200 ${sClass('border-slate-800', 'border-slate-200')}`} id="sngrep-header">
+      <div className={`flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 pb-4 border-b transition-colors duration-200 ${sClass('border-slate-800', 'border-slate-200')}`} id="sngrep-header">
         <div>
-          <div className="flex items-center gap-2">
-            <span className="px-2 py-0.5 text-[10px] uppercase bg-sky-500 text-slate-950 font-black rounded-sm tracking-widest animate-pulse">PBX MODULE</span>
-            <span className={`text-xs font-mono ${sClass('text-slate-400', 'text-slate-500')}`}>• Live Diagnostic Buffer</span>
-          </div>
-          <h1 className={`text-2xl font-black tracking-tight flex items-center gap-2 ${sClass('text-white', 'text-slate-950')}`}>
-            <Activity className="h-6 w-6 text-sky-400" />
-            SIP Flow Analyzer <span className={`font-normal text-sm ${sClass('text-slate-500', 'text-slate-400')}`}>sngrep vII</span>
+          <h1 className={`text-xl font-black tracking-tight ${sClass('text-white', 'text-slate-950')}`}>
+            SIP Flow Analyzer
           </h1>
-          <p className={`text-xs mt-1 max-w-2xl ${sClass('text-slate-400', 'text-slate-600')}`}>
-            Комплексный визуальный анализатор и лестничный трассировщик SIP-диалогов. Синхронизирует потоки <span className="text-sky-500 font-semibold">sngrep</span>, сигнализацию Asterisk AMI каналов и диагностику PJSIP регистраций.
-          </p>
         </div>
 
         {/* Action controls */}
@@ -708,155 +591,12 @@ export default function SngrepTab({ tcpdumpOutput, loadTcpdumpOutput, token, onN
         </div>
       </div>
 
-      {/* QUICK TRANSITION INTEGRATION LINKS */}
-      <div 
-        className={`p-3 flex flex-wrap gap-2 items-center justify-between border-b text-[11px] ${sClass(
-          'bg-slate-950/80 border-slate-800', 
-          'bg-white border-slate-200 mt-2 shadow-xs rounded-lg'
-        )}`} 
-        id="sngrep-integrations"
-      >
-        <span className={`font-mono text-[10px] hidden md:inline ${sClass('text-slate-400', 'text-slate-500')}`}>
-          ИНТЕГРАЦИЯ С МОДУЛЯМИ:
-        </span>
-        <div className="flex flex-wrap gap-1.5">
-          <button
-            onClick={() => onNavigate?.('calls')}
-            className={`px-2.5 py-1 text-emerald-500 dark:text-emerald-400 rounded-md border transition flex items-center gap-1 cursor-pointer font-bold ${sClass(
-              'bg-slate-900 hover:bg-slate-800 border-slate-800 hover:border-emerald-950', 
-              'bg-emerald-50 hover:bg-emerald-100 border-emerald-200'
-            )}`}
-          >
-            <Activity className="h-3 w-3" />
-            Активные звонки
-          </button>
-          <button
-            onClick={() => onNavigate?.('tcpdump')}
-            className={`px-2.5 py-1 text-sky-500 dark:text-sky-400 rounded-md border transition flex items-center gap-1 cursor-pointer font-bold ${sClass(
-              'bg-slate-900 hover:bg-slate-800 border-slate-800 hover:border-sky-950', 
-              'bg-sky-50 hover:bg-sky-100 border-sky-200'
-            )}`}
-          >
-            <Terminal className="h-3 w-3" />
-            Панель TCPDUMP
-          </button>
-          <button
-            onClick={() => onNavigate?.('devices')}
-            className={`px-2.5 py-1 text-purple-500 dark:text-purple-400 rounded-md border transition flex items-center gap-1 cursor-pointer font-bold ${sClass(
-              'bg-slate-900 hover:bg-slate-800 border-slate-800 hover:border-purple-950', 
-              'bg-purple-50 hover:bg-purple-100 border-purple-200'
-            )}`}
-          >
-            <Network className="h-3 w-3" />
-            Карта устройств / SIP пиры
-          </button>
-          <button
-            onClick={() => onNavigate?.('quality')}
-            className={`px-2.5 py-1 text-amber-500 dark:text-amber-400 rounded-md border transition flex items-center gap-1 cursor-pointer font-bold ${sClass(
-              'bg-slate-900 hover:bg-slate-800 border-slate-800 hover:border-amber-950', 
-              'bg-amber-50 hover:bg-amber-100 border-amber-200'
-            )}`}
-          >
-            <Volume2 className="h-3 w-3" />
-            Качество SIP (Pulse)
-          </button>
-          <button
-            onClick={() => onNavigate?.('cli')}
-            className={`px-2.5 py-1 rounded-md border transition flex items-center gap-1 cursor-pointer font-bold ${sClass(
-              'bg-slate-900 hover:bg-slate-800 text-slate-350 border-slate-800 hover:border-slate-700', 
-              'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
-            )}`}
-          >
-            <Database className="h-3 w-3" />
-            Asterisk CLI
-          </button>
-        </div>
-      </div>
-
       {uiMessage && (
         <div className="bg-sky-950/40 border border-sky-800/80 px-4 py-2 text-xs text-sky-300 font-bold flex items-center gap-2 animate-fadeIn shadow-xs rounded mb-3" id="sngrep-notify-bar">
           <Info className="h-4 w-4 text-sky-400 flex-shrink-0 animate-bounce" />
           <span>{uiMessage}</span>
         </div>
       )}
-
-      {/* TOP STATE CARDS */}
-      <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3 my-4" id="sngrep-status-cards">
-        
-        {/* Dynamic Cards */}
-        <div className="sngrep-bg-card p-3 rounded-xl border sngrep-border flex flex-col justify-between transition-colors duration-200">
-          <span className="text-[10px] sngrep-text-muted uppercase tracking-wider font-semibold">Активные SIP</span>
-          <div className="flex items-baseline gap-1 mt-1">
-            <span className="text-2xl font-black text-sky-505 text-sky-500 dark:text-sky-400">{stats.activeDialogs}</span>
-            <span className="text-[10px] text-emerald-500 dark:text-emerald-400 font-bold">диалогов</span>
-          </div>
-          <span className="text-[9px] sngrep-text-muted font-mono block mt-1 truncate">Из tcpdump & sngrep</span>
-        </div>
-
-        <div className="sngrep-bg-card p-3 rounded-xl border sngrep-border flex flex-col justify-between transition-colors duration-200">
-          <span className="text-[10px] sngrep-text-muted uppercase tracking-wider font-semibold">Регистрации SIP</span>
-          <div className="flex items-baseline gap-1 mt-1">
-            <span className="text-2xl font-black text-emerald-500 dark:text-emerald-400">{stats.registrations}</span>
-            <span className="text-[10px] sngrep-text-muted">/ 6 пиров</span>
-          </div>
-          <span className="text-[9px] text-emerald-500 font-mono block mt-1 font-semibold">Статус PJSIP: OK</span>
-        </div>
-
-        <div className="sngrep-bg-card p-3 rounded-xl border sngrep-border flex flex-col justify-between transition-colors duration-200">
-          <span className="text-[10px] sngrep-text-muted uppercase tracking-wider font-semibold">Вызовы в работе</span>
-          <div className="flex items-baseline gap-1 mt-1">
-            <span className="text-2xl font-black text-indigo-500 dark:text-indigo-400">{stats.callsProcessing}</span>
-            <span className="text-[10px] sngrep-text-muted">Active sessions</span>
-          </div>
-          <span className="text-[9px] text-indigo-500 dark:text-indigo-400 font-mono block mt-1 font-semibold">Обработка вызовов</span>
-        </div>
-
-        <div className="sngrep-bg-card p-3 rounded-xl border sngrep-border flex flex-col justify-between transition-colors duration-200">
-          <span className="text-[10px] sngrep-text-muted uppercase tracking-wider font-semibold">Ошибки SIP</span>
-          <div className="flex items-baseline gap-1 mt-1">
-            <span className="text-2xl font-black text-rose-550 text-rose-500 dark:text-rose-400">{stats.sipErrors}</span>
-            <span className="text-[10px] text-rose-500 font-mono font-bold">критических</span>
-          </div>
-          <span className="text-[9px] text-rose-500 font-mono block mt-1 font-semibold">Обнаружена 403 / 488</span>
-        </div>
-
-        <div className="sngrep-bg-card p-3 rounded-xl border sngrep-border flex flex-col justify-between transition-colors duration-200">
-          <span className="text-[10px] sngrep-text-muted uppercase tracking-wider font-semibold">SIP Flood события</span>
-          <div className="flex items-baseline gap-1 mt-1">
-            <span className="text-2xl font-black text-amber-500 dark:text-amber-400">{stats.floodEvents}</span>
-            <span className="text-[10px] text-amber-550 text-amber-600 dark:text-amber-500 animate-pulse font-bold">DETECTED</span>
-          </div>
-          <span className="text-[9px] text-amber-600 dark:text-amber-400 font-mono block mt-1 font-semibold">Защита Fail2Ban</span>
-        </div>
-
-        <div className="sngrep-bg-card p-3 rounded-xl border sngrep-border flex flex-col justify-between transition-colors duration-200">
-          <span className="text-[10px] sngrep-text-muted uppercase tracking-wider font-semibold">Failed Registrations</span>
-          <div className="flex items-baseline gap-1 mt-1">
-            <span className="text-2xl font-black text-orange-500 dark:text-orange-400">{stats.failedRegistrations}</span>
-            <span className="text-[10px] text-orange-600 dark:text-orange-500 font-bold">сброшено</span>
-          </div>
-          <span className="text-[9px] text-orange-500 font-mono block mt-1 font-semibold">Неверные пароли</span>
-        </div>
-
-        <div className="sngrep-bg-card p-3 rounded-xl border sngrep-border flex flex-col justify-between transition-colors duration-200">
-          <span className="text-[10px] sngrep-text-muted uppercase tracking-wider font-semibold">Активные транки</span>
-          <div className="flex items-baseline gap-1 mt-1">
-            <span className="text-2xl font-black sngrep-text-title">{stats.activeTrunks}</span>
-            <span className="text-[10px] sngrep-text-muted font-bold">провайдера</span>
-          </div>
-          <span className="text-[9px] text-emerald-500 dark:text-emerald-400 font-mono block mt-1 font-semibold">SST Trunks [100%]</span>
-        </div>
-
-        <div className="sngrep-bg-card p-3 rounded-xl border sngrep-border flex flex-col justify-between transition-colors duration-200">
-          <span className="text-[10px] sngrep-text-muted uppercase tracking-wider font-semibold">Ср.время установл. (PDD)</span>
-          <div className="flex items-baseline gap-1 mt-1">
-            <span className="text-2xl font-black text-teal-500 dark:text-teal-400">{stats.avgCallSetupTime}</span>
-            <span className="text-[10px] sngrep-text-muted font-bold">милисек.</span>
-          </div>
-          <span className="text-[9px] text-teal-600 dark:text-teal-500 font-mono block mt-1 font-semibold">Отличный показатель</span>
-        </div>
-
-      </div>
 
       {/* QUICK DIAG DIAGNOSTICS COMMANDS WORKBENCH */}
       <div className="bg-slate-950/80 rounded-xl border border-slate-800 p-3 mb-4" id="sngrep-commands-panel">
@@ -1708,6 +1448,84 @@ export default function SngrepTab({ tcpdumpOutput, loadTcpdumpOutput, token, onN
 
           </div>
 
+        </div>
+
+      </div>
+
+      {/* TOP STATE CARDS (Moved to bottom) */}
+      <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3 mt-6 animate-fadeIn" id="sngrep-status-cards">
+        
+        {/* Dynamic Cards */}
+        <div className="sngrep-bg-card p-3 rounded-xl border sngrep-border flex flex-col justify-between transition-colors duration-200">
+          <span className="text-[10px] sngrep-text-muted uppercase tracking-wider font-semibold">Активные SIP</span>
+          <div className="flex items-baseline gap-1 mt-1">
+            <span className="text-2xl font-black text-sky-505 text-sky-500 dark:text-sky-400">{stats.activeDialogs}</span>
+            <span className="text-[10px] text-emerald-500 dark:text-emerald-400 font-bold">диалогов</span>
+          </div>
+          <span className="text-[9px] sngrep-text-muted font-mono block mt-1 truncate">Из tcpdump & sngrep</span>
+        </div>
+
+        <div className="sngrep-bg-card p-3 rounded-xl border sngrep-border flex flex-col justify-between transition-colors duration-200">
+          <span className="text-[10px] sngrep-text-muted uppercase tracking-wider font-semibold">Регистрации SIP</span>
+          <div className="flex items-baseline gap-1 mt-1">
+            <span className="text-2xl font-black text-emerald-500 dark:text-emerald-400">{stats.registrations}</span>
+            <span className="text-[10px] sngrep-text-muted">/ 6 пиров</span>
+          </div>
+          <span className="text-[9px] text-emerald-500 font-mono block mt-1 font-semibold">Статус PJSIP: OK</span>
+        </div>
+
+        <div className="sngrep-bg-card p-3 rounded-xl border sngrep-border flex flex-col justify-between transition-colors duration-200">
+          <span className="text-[10px] sngrep-text-muted uppercase tracking-wider font-semibold">Вызовы в работе</span>
+          <div className="flex items-baseline gap-1 mt-1">
+            <span className="text-2xl font-black text-indigo-500 dark:text-indigo-400">{stats.callsProcessing}</span>
+            <span className="text-[10px] sngrep-text-muted">Active sessions</span>
+          </div>
+          <span className="text-[9px] text-indigo-500 dark:text-indigo-400 font-mono block mt-1 font-semibold">Обработка вызовов</span>
+        </div>
+
+        <div className="sngrep-bg-card p-3 rounded-xl border sngrep-border flex flex-col justify-between transition-colors duration-200">
+          <span className="text-[10px] sngrep-text-muted uppercase tracking-wider font-semibold">Ошибки SIP</span>
+          <div className="flex items-baseline gap-1 mt-1">
+            <span className="text-2xl font-black text-rose-550 text-rose-500 dark:text-rose-400">{stats.sipErrors}</span>
+            <span className="text-[10px] text-rose-500 font-mono font-bold">критических</span>
+          </div>
+          <span className="text-[9px] text-rose-500 font-mono block mt-1 font-semibold">Обнаружена 403 / 488</span>
+        </div>
+
+        <div className="sngrep-bg-card p-3 rounded-xl border sngrep-border flex flex-col justify-between transition-colors duration-200">
+          <span className="text-[10px] sngrep-text-muted uppercase tracking-wider font-semibold">SIP Flood события</span>
+          <div className="flex items-baseline gap-1 mt-1">
+            <span className="text-2xl font-black text-amber-500 dark:text-amber-400">{stats.floodEvents}</span>
+            <span className="text-[10px] text-amber-550 text-amber-600 dark:text-amber-500 animate-pulse font-bold">DETECTED</span>
+          </div>
+          <span className="text-[9px] text-amber-600 dark:text-amber-400 font-mono block mt-1 font-semibold">Защита Fail2Ban</span>
+        </div>
+
+        <div className="sngrep-bg-card p-3 rounded-xl border sngrep-border flex flex-col justify-between transition-colors duration-200">
+          <span className="text-[10px] sngrep-text-muted uppercase tracking-wider font-semibold">Failed Registrations</span>
+          <div className="flex items-baseline gap-1 mt-1">
+            <span className="text-2xl font-black text-orange-500 dark:text-orange-400">{stats.failedRegistrations}</span>
+            <span className="text-[10px] text-orange-600 dark:text-orange-500 font-bold">сброшено</span>
+          </div>
+          <span className="text-[9px] text-orange-500 font-mono block mt-1 font-semibold">Неверные пароли</span>
+        </div>
+
+        <div className="sngrep-bg-card p-3 rounded-xl border sngrep-border flex flex-col justify-between transition-colors duration-200">
+          <span className="text-[10px] sngrep-text-muted uppercase tracking-wider font-semibold">Активные транки</span>
+          <div className="flex items-baseline gap-1 mt-1">
+            <span className="text-2xl font-black sngrep-text-title">{stats.activeTrunks}</span>
+            <span className="text-[10px] sngrep-text-muted font-bold">провайдера</span>
+          </div>
+          <span className="text-[9px] text-emerald-500 dark:text-emerald-400 font-mono block mt-1 font-semibold">SST Trunks [100%]</span>
+        </div>
+
+        <div className="sngrep-bg-card p-3 rounded-xl border sngrep-border flex flex-col justify-between transition-colors duration-200">
+          <span className="text-[10px] sngrep-text-muted uppercase tracking-wider font-semibold">Ср.время установл. (PDD)</span>
+          <div className="flex items-baseline gap-1 mt-1">
+            <span className="text-2xl font-black text-teal-500 dark:text-teal-400">{stats.avgCallSetupTime}</span>
+            <span className="text-[10px] sngrep-text-muted font-bold">милисек.</span>
+          </div>
+          <span className="text-[9px] text-teal-600 dark:text-teal-500 font-mono block mt-1 font-semibold">Отличный показатель</span>
         </div>
 
       </div>
