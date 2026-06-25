@@ -5,11 +5,13 @@ import path from 'path';
 import * as XLSX from 'xlsx';
 import mysql from 'mysql2/promise';
 import { spawnSync } from 'child_process';
+import * as crypto from 'crypto';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const CAPACITY_FILE = path.join(DATA_DIR, 'numbering-capacity.json');
 const CAPACITY_META_FILE = path.join(DATA_DIR, 'numbering-capacity-meta.json');
 const CHANGE_LOG_FILE = path.join(DATA_DIR, 'management-change-log.json');
+const MANAGEMENT_PREVIEWS_FILE = path.join(DATA_DIR, 'management-previews.json');
 const TRUNK_TEMPLATES_FILE = path.join(DATA_DIR, 'trunk-templates.json');
 const EXTENSION_TEMPLATES_FILE = path.join(DATA_DIR, 'extension-templates.json');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
@@ -96,6 +98,44 @@ interface ExtensionTemplate {
   deviceType: 'softphone' | 'deskphone' | 'gateway';
   transport: string;
   context: string;
+}
+
+interface NormalizedExtension {
+  extension: string;
+  name: string;
+  displayName: string;
+  secret?: string;
+  outboundCid: string;
+  tech: 'pjsip' | 'sip' | 'unknown';
+  enabled: boolean;
+  email: string;
+  voicemail: boolean;
+  recording: string;
+  callWaiting: boolean;
+  emergencyCid: string;
+  raw: any;
+  sourceStatus: 'loaded-from-pbx' | 'local' | 'error';
+}
+
+
+type ExtensionPreviewType = 'create' | 'update';
+type ExtensionPreviewAction = 'create' | 'update' | 'skip' | 'conflict' | 'error';
+
+interface ExtensionPreviewItem {
+  extension: string;
+  action: ExtensionPreviewAction;
+  before?: any;
+  after?: any;
+  message: string;
+  applyPayload?: any;
+}
+
+interface ExtensionPreviewRecord {
+  previewId: string;
+  createdAt: string;
+  type: ExtensionPreviewType;
+  originalPayload: any;
+  items: ExtensionPreviewItem[];
 }
 
 // Initial default templates and databases to pre-populate beautifully
@@ -312,6 +352,11 @@ export function initManagementFiles() {
   if (!fs.existsSync(CHANGE_LOG_FILE)) {
     safeWriteJson(CHANGE_LOG_FILE, []);
   }
+
+  // Management previews
+  if (!fs.existsSync(MANAGEMENT_PREVIEWS_FILE)) {
+    safeWriteJson(MANAGEMENT_PREVIEWS_FILE, []);
+  }
 }
 
 // Read settings from db.json to connect to MariaDB and execute fwconsole commands
@@ -367,6 +412,46 @@ function resolveFreepbxRequestEndpoint(settings: any, endpoint: string): string 
   return normalizedEndpoint;
 }
 
+async function freepbxRawRequest(endpoint: string) {
+  const settings = await getPBXSettings();
+  if (!settings.freepbxApiUrl) {
+    throw new Error('FreePBX REST API URL is not configured in settings.');
+  }
+
+  const baseUrl = normalizeFreepbxApiUrl(settings.freepbxApiUrl);
+  const normalizedEndpoint = normalizeFreepbxRestEndpoint(endpoint);
+  const url = baseUrl + normalizedEndpoint;
+  const headers: Record<string, string> = { Accept: 'application/json' };
+
+  if (settings.freepbxApiClientId && settings.freepbxApiClientSecret) {
+    const tokenUrl = getFreepbxOAuthTokenUrl(baseUrl);
+    const tokenBody = new URLSearchParams({
+      grant_type: 'client_credentials',
+      client_id: settings.freepbxApiClientId,
+      client_secret: settings.freepbxApiClientSecret
+    });
+    const tokenRes = await fetch(tokenUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+      body: tokenBody.toString()
+    });
+    if (!tokenRes.ok) {
+      const errText = await tokenRes.text().catch(() => '');
+      throw new Error('OAuth token request failed (' + tokenRes.status + '): ' + (errText || tokenRes.statusText));
+    }
+    const tokenData: any = await tokenRes.json();
+    if (!tokenData.access_token) throw new Error('OAuth token response did not include access_token.');
+    headers.Authorization = 'Bearer ' + tokenData.access_token;
+  } else if (settings.freepbxApiToken) {
+    headers.Authorization = 'Bearer ' + settings.freepbxApiToken;
+  }
+
+  const response = await fetch(url, { method: 'GET', headers });
+  const text = await response.text().catch(() => '');
+  let body: any = text;
+  try { body = text ? JSON.parse(text) : null; } catch (err) {}
+  return { endpoint: normalizedEndpoint, url, status: response.status, statusText: response.statusText, ok: response.ok, body: sanitizeExtensionRaw(body) };
+}
 async function freepbxRequest(endpoint: string, method: string, body?: any) {
   const settings = await getPBXSettings();
   if (!settings.freepbxApiUrl) {
@@ -439,6 +524,424 @@ async function freepbxRequest(endpoint: string, method: string, body?: any) {
     clearTimeout(timeoutId);
     throw err;
   }
+}
+
+function isPlainObject(value: any): value is Record<string, any> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isSensitiveExtensionKey(key: string): boolean {
+  return /secret|password|passwd|pass|client_secret|clientsecret|api_key|apikey|token/i.test(key);
+}
+
+function maskExtensionSecret(value: any): string | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  return '********';
+}
+
+function sanitizeExtensionRaw(value: any): any {
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeExtensionRaw(item));
+  }
+  if (!isPlainObject(value)) {
+    return value;
+  }
+
+  const sanitized: Record<string, any> = {};
+  Object.entries(value).forEach(([key, item]) => {
+    sanitized[key] = isSensitiveExtensionKey(key) ? maskExtensionSecret(item) : sanitizeExtensionRaw(item);
+  });
+  return sanitized;
+}
+
+function looksLikeExtensionRecord(value: any): boolean {
+  if (!isPlainObject(value)) return false;
+  return [
+    'extension',
+    'ext',
+    'id',
+    'user',
+    'number',
+    'name',
+    'displayName',
+    'displayname',
+    'outboundcid',
+    'outboundCid',
+    'tech',
+    'technology',
+    'voicemail'
+  ].some((key) => Object.prototype.hasOwnProperty.call(value, key));
+}
+
+function extractExtensionRecords(data: any): any[] {
+  const records: any[] = [];
+
+  const collect = (value: any) => {
+    if (!value) return;
+    if (Array.isArray(value)) {
+      value.forEach((item) => records.push(item));
+      return;
+    }
+    if (!isPlainObject(value)) return;
+
+    if (looksLikeExtensionRecord(value)) {
+      records.push(value);
+      return;
+    }
+
+    Object.entries(value).forEach(([key, item]) => {
+      if (['extensions', 'users', 'data', 'results', 'items'].includes(key)) return;
+      if (isPlainObject(item)) {
+        records.push({ mapKey: key, ...item });
+      }
+    });
+  };
+
+  collect(data);
+  if (isPlainObject(data)) {
+    ['extensions', 'users', 'data', 'results', 'items'].forEach((key) => collect(data[key]));
+  }
+
+  const seen = new Set<string>();
+  return records.filter((record, index) => {
+    const id = isPlainObject(record) ? String(record.mapKey || record.extension || record.ext || record.username || record.user || index) : String(index);
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
+function getField(objects: any[], fieldNames: string[]): any {
+  for (const obj of objects) {
+    if (!isPlainObject(obj)) continue;
+    for (const field of fieldNames) {
+      if (obj[field] !== undefined && obj[field] !== null && obj[field] !== '') {
+        return obj[field];
+      }
+    }
+  }
+  return undefined;
+}
+
+function toBoolean(value: any, defaultValue = false): boolean {
+  if (value === undefined || value === null || value === '') return defaultValue;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  const normalized = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on', 'enabled', 'enable', 'active'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off', 'disabled', 'disable', 'inactive'].includes(normalized)) return false;
+  return defaultValue;
+}
+
+function normalizeExtensionTech(value: any): 'pjsip' | 'sip' | 'unknown' {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized.includes('pjsip')) return 'pjsip';
+  if (normalized.includes('sip')) return 'sip';
+  return 'unknown';
+}
+
+function normalizeExtensionRecord(record: any, sourceStatus: NormalizedExtension['sourceStatus']): NormalizedExtension | null {
+  if (!isPlainObject(record)) return null;
+
+  const nestedUser = isPlainObject(record.user) ? record.user : undefined;
+  const nestedExtension = isPlainObject(record.extension) ? record.extension : undefined;
+  const nestedDevice = isPlainObject(record.device) ? record.device : undefined;
+  const sources = [record, nestedUser, nestedExtension, nestedDevice].filter(Boolean);
+
+  const mapKey = String(record.mapKey || '').trim();
+  const numericUsername = String(getField(sources, ['username']) || '').trim();
+  const extensionValue = getField(sources, ['extension', 'ext', 'number', 'default_extension']) ||
+    (/^\d+$/.test(numericUsername) ? numericUsername : undefined) ||
+    (/^\d+$/.test(mapKey) ? mapKey : undefined);
+  const extension = String(extensionValue || '').trim();
+  if (!extension) return null;
+
+  const name = String(getField(sources, ['name', 'displayName', 'displayname', 'description', 'fullName', 'fullname', 'realname', 'username']) || '').trim();
+  const displayName = String(getField(sources, ['displayName', 'displayname', 'name', 'description', 'fullName', 'fullname', 'realname', 'username']) || name || extension).trim();
+  const rawSecret = getField(sources, ['secret', 'password', 'passwd', 'devicesecret']);
+  const outboundCid = String(getField(sources, ['outboundCid', 'outboundcid', 'outbound_cid', 'callerid', 'callerId']) || '').trim();
+  const tech = normalizeExtensionTech(getField(sources, ['tech', 'technology', 'deviceType', 'devicetype', 'driver', 'dial']));
+  const enabled = toBoolean(getField(sources, ['enabled', 'enable', 'status', 'active']), true);
+  const email = String(getField(sources, ['email', 'email_address', 'emailAddress']) || '').trim();
+  const voicemail = toBoolean(getField(sources, ['voicemail', 'vm', 'voicemailEnabled', 'vmenabled']), false);
+  const recording = String(getField(sources, ['recording', 'recordingPolicy', 'recording_policy', 'recording_in_external', 'recording_out_external']) || '').trim();
+  const callWaiting = toBoolean(getField(sources, ['callWaiting', 'callwaiting', 'call_waiting']), false);
+  const emergencyCid = String(getField(sources, ['emergencyCid', 'emergencycid', 'emergency_cid']) || '').trim();
+
+  return {
+    extension,
+    name,
+    displayName,
+    secret: maskExtensionSecret(rawSecret),
+    outboundCid,
+    tech,
+    enabled,
+    email,
+    voicemail,
+    recording,
+    callWaiting,
+    emergencyCid,
+    raw: sanitizeExtensionRaw(record),
+    sourceStatus
+  };
+}
+
+function normalizeFreepbxExtensionsResponse(data: any): NormalizedExtension[] {
+  return extractExtensionRecords(data)
+    .map((record) => normalizeExtensionRecord(record, 'loaded-from-pbx'))
+    .filter((record): record is NormalizedExtension => !!record);
+}
+
+function normalizeLocalExtensions(data: any[]): NormalizedExtension[] {
+  return (Array.isArray(data) ? data : [])
+    .map((record) => normalizeExtensionRecord(record, 'local'))
+    .filter((record): record is NormalizedExtension => !!record);
+}
+
+
+function readManagementPreviews(): ExtensionPreviewRecord[] {
+  try {
+    return fs.existsSync(MANAGEMENT_PREVIEWS_FILE) ? JSON.parse(fs.readFileSync(MANAGEMENT_PREVIEWS_FILE, 'utf8')) : [];
+  } catch (err) {
+    return [];
+  }
+}
+
+function writeManagementPreviews(previews: ExtensionPreviewRecord[]) {
+  safeWriteJson(MANAGEMENT_PREVIEWS_FILE, previews.slice(0, 100));
+}
+
+function saveManagementPreview(record: ExtensionPreviewRecord) {
+  const previews = readManagementPreviews().filter((item) => item.previewId !== record.previewId);
+  previews.unshift(record);
+  writeManagementPreviews(previews);
+}
+
+function findManagementPreview(previewId: string, type: ExtensionPreviewType): ExtensionPreviewRecord | undefined {
+  return readManagementPreviews().find((item) => item.previewId === previewId && item.type === type);
+}
+
+function generatePreviewId(type: ExtensionPreviewType): string {
+  return type + '-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+}
+
+function getPreviewCryptoKey(): Buffer {
+  let seed = process.env.PBXPULS_PREVIEW_SECRET || '';
+  try {
+    if (!seed && fs.existsSync(DB_FILE)) {
+      const db = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+      seed = db?.settings?.directorySyncToken || db?.settings?.freepbxApiClientSecret || '';
+    }
+  } catch (err) {}
+  return crypto.createHash('sha256').update(seed || 'pbxpuls-local-preview-secret').digest();
+}
+
+function encryptPreviewSecret(value: any): string | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', getPreviewCryptoKey(), iv);
+  const encrypted = Buffer.concat([cipher.update(String(value), 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return [iv.toString('base64'), tag.toString('base64'), encrypted.toString('base64')].join(':');
+}
+
+function decryptPreviewSecret(value: any): string | undefined {
+  if (!value) return undefined;
+  try {
+    const [ivRaw, tagRaw, encryptedRaw] = String(value).split(':');
+    if (!ivRaw || !tagRaw || !encryptedRaw) return undefined;
+    const decipher = crypto.createDecipheriv('aes-256-gcm', getPreviewCryptoKey(), Buffer.from(ivRaw, 'base64'));
+    decipher.setAuthTag(Buffer.from(tagRaw, 'base64'));
+    return Buffer.concat([decipher.update(Buffer.from(encryptedRaw, 'base64')), decipher.final()]).toString('utf8');
+  } catch (err) {
+    return undefined;
+  }
+}
+
+function sanitizeExtensionPayload(value: any): any {
+  return sanitizeExtensionRaw(value);
+}
+
+function maskPreviewPayload(payload: any): any {
+  return sanitizeExtensionPayload(payload || {});
+}
+
+function parseRawJsonObject(rawJson: any): Record<string, any> {
+  if (!rawJson) return {};
+  if (isPlainObject(rawJson)) return rawJson;
+  const parsed = JSON.parse(String(rawJson));
+  if (!isPlainObject(parsed)) {
+    throw new Error('Advanced raw JSON должен быть объектом.');
+  }
+  return parsed;
+}
+
+function parseManualExtensionList(listText: any): string[] {
+  return String(listText || '')
+    .split(/[\n,;\s]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function buildExtensionNumbers(payload: any): string[] {
+  const mode = payload?.mode || (payload?.manualList || payload?.listText ? 'manual' : 'range');
+  if (mode === 'manual') {
+    const numbers = Array.isArray(payload.extensions) ? payload.extensions : parseManualExtensionList(payload.manualList || payload.listText);
+    return Array.from(new Set(numbers.map((item: any) => String(item).trim()).filter(Boolean)));
+  }
+
+  const start = parseInt(String(payload?.startExt || ''), 10);
+  const end = parseInt(String(payload?.endExt || ''), 10);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start > end) {
+    throw new Error('Неверно задан диапазон extensions.');
+  }
+  if (end - start > 1000) {
+    throw new Error('Диапазон слишком большой. Максимум 1001 extension за один preview.');
+  }
+  const numbers: string[] = [];
+  for (let ext = start; ext <= end; ext++) numbers.push(String(ext));
+  return numbers;
+}
+
+function generateExtensionSecret(extension: string, payload: any): string | undefined {
+  const mode = payload?.secretMode || 'auto';
+  if (mode === 'fixed') return String(payload?.fixedSecret || payload?.secret || '');
+  if (mode === 'mask') return String(payload?.secretMask || 'pbx{ext}!').replace(/\{ext\}/gi, extension).replace(/\{EXT\}/g, extension);
+  if (mode === 'none') return undefined;
+  return crypto.randomBytes(9).toString('base64').replace(/[^a-zA-Z0-9]/g, '').slice(0, 12) || ('pbx' + extension + '!');
+}
+
+function normalizeRecordingPolicy(value: any): string {
+  const recording = String(value || '').trim();
+  return recording || 'always';
+}
+
+function buildCreateExtensionPayload(extension: string, payload: any): any {
+  const name = String(payload?.nameMask || payload?.namePattern || 'User {ext}').replace(/\{ext\}/gi, extension).replace(/\{EXT\}/g, extension);
+  const emailDomain = String(payload?.emailDomain || '').trim().replace(/^@/, '');
+  const rawParams = parseRawJsonObject(payload?.rawJson || payload?.rawParams);
+  const secret = generateExtensionSecret(extension, payload);
+  return {
+    ...rawParams,
+    extension,
+    id: extension,
+    user: extension,
+    name,
+    displayName: name,
+    secret,
+    password: secret,
+    tech: payload?.technology || payload?.tech || 'pjsip',
+    context: payload?.context || 'from-internal',
+    outboundCid: payload?.outboundCid || payload?.outboundcid || '',
+    outboundcid: payload?.outboundCid || payload?.outboundcid || '',
+    email: emailDomain ? (extension + '@' + emailDomain) : (payload?.email || ''),
+    voicemail: toBoolean(payload?.voicemail, false),
+    recording: normalizeRecordingPolicy(payload?.recording),
+    callWaiting: toBoolean(payload?.callWaiting, false),
+    emergencyCid: payload?.emergencyCid || payload?.emergencycid || '',
+    emergencycid: payload?.emergencyCid || payload?.emergencycid || ''
+  };
+}
+
+function serializeApplyPayload(payload: any): any {
+  const clone = { ...(payload || {}) };
+  const secret = clone.secret || clone.password;
+  if (secret) {
+    clone.__encryptedSecret = encryptPreviewSecret(secret);
+  }
+  delete clone.secret;
+  delete clone.password;
+  return sanitizeExtensionPayload(clone);
+}
+
+function hydrateApplyPayload(payload: any): any {
+  const clone = { ...(payload || {}) };
+  const secret = decryptPreviewSecret(clone.__encryptedSecret);
+  delete clone.__encryptedSecret;
+  if (secret) {
+    clone.secret = secret;
+    clone.password = secret;
+  }
+  return clone;
+}
+
+async function fetchLiveExtensions(): Promise<NormalizedExtension[]> {
+  const apiData = await freepbxRequest('/extensions', 'GET');
+  return normalizeFreepbxExtensionsResponse(apiData);
+}
+
+function findExtensionByNumber(extensions: NormalizedExtension[], extension: string): NormalizedExtension | undefined {
+  return extensions.find((item) => String(item.extension) === String(extension));
+}
+
+function buildUpdatePatchFields(patchFields: any): Record<string, any> {
+  if (!isPlainObject(patchFields)) return {};
+  const patch: Record<string, any> = {};
+  const setIfPresent = (enabledKey: string, valueKey: string, targetKey: string = valueKey) => {
+    if (patchFields[enabledKey] === true) patch[targetKey] = patchFields[valueKey];
+  };
+
+  setIfPresent('updateName', 'name', 'name');
+  setIfPresent('updateDisplayName', 'displayName', 'displayName');
+  setIfPresent('updateOutboundCid', 'outboundCid', 'outboundCid');
+  setIfPresent('updateVoicemail', 'voicemail', 'voicemail');
+  setIfPresent('updateRecording', 'recording', 'recording');
+  setIfPresent('updateCallWaiting', 'callWaiting', 'callWaiting');
+  setIfPresent('updateContext', 'context', 'context');
+  setIfPresent('updateEmergencyCid', 'emergencyCid', 'emergencyCid');
+
+  if (patchFields.updateRaw === true) {
+    Object.assign(patch, parseRawJsonObject(patchFields.rawJson || patchFields.rawParams));
+  }
+  return patch;
+}
+
+function applyExtensionPatchMask(value: any, extension: string, before: NormalizedExtension): any {
+  if (typeof value !== 'string') return value;
+  return value
+    .replace(/\{ext\}/gi, extension)
+    .replace(/\{EXT\}/g, extension)
+    .replace(/\{name\}/gi, before.name || before.displayName || '')
+    .replace(/\{displayName\}/g, before.displayName || before.name || '');
+}
+
+function buildUpdateAfter(before: NormalizedExtension, patchFields: any): any {
+  const patch = buildUpdatePatchFields(patchFields);
+  const mappedPatch = Object.entries(patch).reduce((acc: Record<string, any>, [key, value]) => {
+    acc[key] = applyExtensionPatchMask(value, before.extension, before);
+    return acc;
+  }, {});
+  return {
+    ...before.raw,
+    ...mappedPatch,
+    extension: before.extension,
+    id: before.raw?.id || before.extension
+  };
+}
+
+function extensionPublicBefore(ext: NormalizedExtension): any {
+  return sanitizeExtensionPayload({
+    extension: ext.extension,
+    name: ext.name,
+    displayName: ext.displayName,
+    outboundCid: ext.outboundCid,
+    tech: ext.tech,
+    enabled: ext.enabled,
+    email: ext.email,
+    voicemail: ext.voicemail,
+    recording: ext.recording,
+    callWaiting: ext.callWaiting,
+    emergencyCid: ext.emergencyCid,
+    raw: ext.raw
+  });
+}
+
+function applyResultsSummary(results: any[]) {
+  return {
+    success: results.filter((item) => item.success).length,
+    failed: results.filter((item) => !item.success && !item.skipped).length,
+    skipped: results.filter((item) => item.skipped).length
+  };
 }
 
 // Read database.json extensions, trunks details to allow sync/dry run conflicts
@@ -865,24 +1368,39 @@ export function registerManagementRoutes(app: Express, requireAuth: Function) {
     return results;
   }
 
+  app.get('/api/management/extensions/rest-raw', requireAuth(), async (req, res) => {
+    try {
+      const endpoints = ['/extensions', '/userman/extensions', '/core/users'];
+      const results = [];
+      for (const endpoint of endpoints) {
+        try {
+          results.push(await freepbxRawRequest(endpoint));
+        } catch (err: any) {
+          results.push({ endpoint, ok: false, error: err.message });
+        }
+      }
+      res.json({ success: true, results });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
   app.get('/api/management/extensions', requireAuth(), async (req, res) => {
     try {
       const settings = await getPBXSettings();
       if (settings.freepbxApiUrl) {
         try {
           const apiData = await freepbxRequest('/extensions', 'GET');
-          if (Array.isArray(apiData)) {
-            await updatePBXData((db) => {
-              db.extensions = apiData;
-            });
-            return res.json(apiData);
-          }
+          const normalizedExtensions = normalizeFreepbxExtensionsResponse(apiData);
+          await updatePBXData((db) => {
+            db.extensions = normalizedExtensions;
+          });
+          return res.json(normalizedExtensions);
         } catch (apiErr: any) {
           console.warn('[FreePBX-REST] Failed to fetch live extensions:', apiErr.message);
         }
       }
       const { extensions } = await getPBXData();
-      res.json(extensions || []);
+      res.json(normalizeLocalExtensions(extensions));
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -941,6 +1459,274 @@ export function registerManagementRoutes(app: Express, requireAuth: Function) {
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
       res.setHeader('Content-Disposition', 'attachment; filename="freepbx_extensions_current.csv"');
       res.status(200).send(csvRows.join('\n'));
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+
+  // --- SAFE EXTENSIONS REST OPERATIONS ---
+  app.post('/api/management/extensions/create-preview', requireAuth(), async (req, res) => {
+    try {
+      const payload = req.body || {};
+      const numbers = buildExtensionNumbers(payload);
+      if (numbers.length === 0) {
+        res.status(400).json({ error: 'Не задан список extensions для создания.' });
+        return;
+      }
+
+      const liveExtensions = await fetchLiveExtensions();
+      const items: ExtensionPreviewItem[] = numbers.map((extension) => {
+        const existing = findExtensionByNumber(liveExtensions, extension);
+        if (existing) {
+          return {
+            extension,
+            action: 'conflict',
+            before: extensionPublicBefore(existing),
+            message: 'Extension уже существует на АТС. Создание будет пропущено.'
+          };
+        }
+
+        const createPayload = buildCreateExtensionPayload(extension, payload);
+        return {
+          extension,
+          action: 'create',
+          after: sanitizeExtensionPayload(createPayload),
+          applyPayload: serializeApplyPayload(createPayload),
+          message: 'Будет создан на АТС через FreePBX REST API.'
+        };
+      });
+
+      const preview: ExtensionPreviewRecord = {
+        previewId: generatePreviewId('create'),
+        createdAt: new Date().toISOString(),
+        type: 'create',
+        originalPayload: maskPreviewPayload(payload),
+        items
+      };
+      saveManagementPreview(preview);
+
+      res.json({
+        success: true,
+        previewId: preview.previewId,
+        createdAt: preview.createdAt,
+        type: preview.type,
+        items: preview.items.map(({ applyPayload, ...item }) => item),
+        counts: {
+          create: items.filter((item) => item.action === 'create').length,
+          conflict: items.filter((item) => item.action === 'conflict').length,
+          skip: items.filter((item) => item.action === 'skip').length,
+          error: items.filter((item) => item.action === 'error').length
+        }
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/management/extensions/create-apply', requireAuth(), async (req, res) => {
+    try {
+      const authUser = (req as any).user;
+      if (authUser?.role !== 'su' && (!authUser?.permissions?.dangerous_pbx_write || !authUser?.permissions?.bulk_extensions)) {
+        res.status(403).json({ error: 'Доступ заблокирован. Необходимы права bulk_extensions и dangerous_pbx_write.' });
+        return;
+      }
+
+      const preview = findManagementPreview(String(req.body?.previewId || ''), 'create');
+      if (!preview) {
+        res.status(404).json({ error: 'Preview не найден или устарел. Сформируйте preview повторно.' });
+        return;
+      }
+
+      const creatable = preview.items.filter((item) => item.action === 'create');
+      const results: any[] = [];
+      if (creatable.length === 0) {
+        res.json({ success: true, reloadRequired: false, results: [], summary: applyResultsSummary(results), message: 'Нет extensions для создания.' });
+        return;
+      }
+
+      let bulkSucceeded = false;
+      try {
+        const bulkPayload = creatable.map((item) => hydrateApplyPayload(item.applyPayload));
+        await freepbxRequest('/extensions/bulk', 'POST', { extensions: bulkPayload });
+        bulkSucceeded = true;
+        creatable.forEach((item) => results.push({ extension: item.extension, success: true, action: 'create', message: 'Создан через bulk endpoint.' }));
+      } catch (bulkErr: any) {
+        console.warn('[FreePBX-REST] Extensions bulk create unavailable:', bulkErr.message);
+      }
+
+      if (!bulkSucceeded) {
+        for (const item of creatable) {
+          try {
+            await freepbxRequest('/extensions', 'POST', hydrateApplyPayload(item.applyPayload));
+            results.push({ extension: item.extension, success: true, action: 'create', message: 'Создан через FreePBX REST API.' });
+          } catch (err: any) {
+            results.push({
+              extension: item.extension,
+              success: false,
+              action: 'create',
+              message: 'Create endpoint FreePBX недоступен или отклонил запрос: ' + err.message
+            });
+          }
+        }
+      }
+
+      const successfulIds = results.filter((item) => item.success).map((item) => 'ext-' + item.extension);
+      if (successfulIds.length > 0) {
+        try {
+          const liveExtensions = await fetchLiveExtensions();
+          await updatePBXData((db) => { db.extensions = liveExtensions; });
+        } catch (syncErr: any) {
+          console.warn('[MGMT] Failed to refresh local extension cache after create:', syncErr.message);
+        }
+        addChangeLog(
+          authUser?.username || 'admin',
+          'extensions_create_apply',
+          successfulIds.length,
+          'extensions',
+          successfulIds,
+          'Создание extensions через FreePBX REST API. Успешно: ' + successfulIds.length + ', ошибок: ' + results.filter((item) => !item.success).length + '. Affected: ' + successfulIds.map((id) => id.replace(/^ext-/, '')).join(', ')
+        );
+      }
+
+      res.json({
+        success: results.every((item) => item.success),
+        reloadRequired: successfulIds.length > 0,
+        results,
+        summary: applyResultsSummary(results)
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/management/extensions/update-preview', requireAuth(), async (req, res) => {
+    try {
+      const selectedExtensions = Array.isArray(req.body?.selectedExtensions) ? req.body.selectedExtensions.map((item: any) => String(item).trim()).filter(Boolean) : [];
+      if (selectedExtensions.length === 0) {
+        res.status(400).json({ error: 'selectedExtensions обязателен для массового изменения.' });
+        return;
+      }
+
+      const patchFields = req.body?.patchFields || {};
+      const patch = buildUpdatePatchFields(patchFields);
+      if (Object.keys(patch).length === 0) {
+        res.status(400).json({ error: 'patchFields не содержит отмеченных параметров для изменения.' });
+        return;
+      }
+
+      const liveExtensions = await fetchLiveExtensions();
+      const items: ExtensionPreviewItem[] = selectedExtensions.map((extension) => {
+        const existing = findExtensionByNumber(liveExtensions, extension);
+        if (!existing) {
+          return { extension, action: 'skip', message: 'Extension не найден на АТС. Изменение будет пропущено.' };
+        }
+        const after = buildUpdateAfter(existing, patchFields);
+        return {
+          extension,
+          action: 'update',
+          before: extensionPublicBefore(existing),
+          after: sanitizeExtensionPayload(after),
+          applyPayload: serializeApplyPayload(after),
+          message: 'Будут изменены только явно отмеченные параметры.'
+        };
+      });
+
+      const preview: ExtensionPreviewRecord = {
+        previewId: generatePreviewId('update'),
+        createdAt: new Date().toISOString(),
+        type: 'update',
+        originalPayload: maskPreviewPayload({ selectedExtensions, patchFields }),
+        items
+      };
+      saveManagementPreview(preview);
+
+      res.json({
+        success: true,
+        previewId: preview.previewId,
+        createdAt: preview.createdAt,
+        type: preview.type,
+        items: preview.items.map(({ applyPayload, ...item }) => item),
+        counts: {
+          update: items.filter((item) => item.action === 'update').length,
+          skip: items.filter((item) => item.action === 'skip').length,
+          error: items.filter((item) => item.action === 'error').length
+        }
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/management/extensions/update-apply', requireAuth(), async (req, res) => {
+    try {
+      const authUser = (req as any).user;
+      if (authUser?.role !== 'su' && (!authUser?.permissions?.dangerous_pbx_write || !authUser?.permissions?.bulk_extensions)) {
+        res.status(403).json({ error: 'Доступ заблокирован. Необходимы права bulk_extensions и dangerous_pbx_write.' });
+        return;
+      }
+
+      const preview = findManagementPreview(String(req.body?.previewId || ''), 'update');
+      if (!preview) {
+        res.status(404).json({ error: 'Preview не найден или устарел. Сформируйте preview повторно.' });
+        return;
+      }
+
+      const updatable = preview.items.filter((item) => item.action === 'update');
+      const results: any[] = [];
+      for (const item of updatable) {
+        const payload = hydrateApplyPayload(item.applyPayload);
+        try {
+          await freepbxRequest('/extensions/' + encodeURIComponent(item.extension), 'PATCH', payload);
+          results.push({ extension: item.extension, success: true, action: 'update', message: 'Изменён через PATCH.' });
+        } catch (patchErr: any) {
+          try {
+            let currentRaw = {};
+            try {
+              const fresh = await freepbxRequest('/extensions/' + encodeURIComponent(item.extension), 'GET');
+              const normalizedFresh = normalizeFreepbxExtensionsResponse(fresh);
+              currentRaw = normalizedFresh[0]?.raw || (isPlainObject(fresh) ? fresh : {});
+            } catch (getErr: any) {
+              currentRaw = item.before?.raw || {};
+            }
+            const merged = { ...currentRaw, ...payload, extension: item.extension, id: payload.id || item.extension };
+            await freepbxRequest('/extensions/' + encodeURIComponent(item.extension), 'PUT', merged);
+            results.push({ extension: item.extension, success: true, action: 'update', message: 'PATCH недоступен; применено через GET/merge/PUT.' });
+          } catch (putErr: any) {
+            results.push({
+              extension: item.extension,
+              success: false,
+              action: 'update',
+              message: 'Update endpoint FreePBX недоступен или отклонил запрос: ' + putErr.message
+            });
+          }
+        }
+      }
+
+      const successfulIds = results.filter((item) => item.success).map((item) => 'ext-' + item.extension);
+      if (successfulIds.length > 0) {
+        try {
+          const liveExtensions = await fetchLiveExtensions();
+          await updatePBXData((db) => { db.extensions = liveExtensions; });
+        } catch (syncErr: any) {
+          console.warn('[MGMT] Failed to refresh local extension cache after update:', syncErr.message);
+        }
+        addChangeLog(
+          authUser?.username || 'admin',
+          'extensions_update_apply',
+          successfulIds.length,
+          'extensions',
+          successfulIds,
+          'Массовое изменение extensions через FreePBX REST API. Успешно: ' + successfulIds.length + ', ошибок: ' + results.filter((item) => !item.success).length + '. Affected: ' + successfulIds.map((id) => id.replace(/^ext-/, '')).join(', ')
+        );
+      }
+
+      res.json({
+        success: results.every((item) => item.success),
+        reloadRequired: successfulIds.length > 0,
+        results,
+        summary: applyResultsSummary(results)
+      });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

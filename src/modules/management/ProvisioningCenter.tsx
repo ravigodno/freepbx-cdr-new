@@ -77,8 +77,54 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
   const [activeExtensions, setActiveExtensions] = useState<any[]>([]);
   const [activeExtLoading, setActiveExtLoading] = useState(false);
   const [activeExtSearch, setActiveExtSearch] = useState('');
-  const [batchMappingText, setBatchMappingText] = useState('');
-  const [showBatchMapping, setShowBatchMapping] = useState(false);
+  const [activeExtTechFilter, setActiveExtTechFilter] = useState<'all' | 'pjsip' | 'sip' | 'unknown'>('all');
+  const [activeExtError, setActiveExtError] = useState('');
+  const [activeExtLoadedAt, setActiveExtLoadedAt] = useState('');
+  const [activeExtEndpoint, setActiveExtEndpoint] = useState('');
+  const [activeExtRawLoading, setActiveExtRawLoading] = useState(false);
+  const [activeExtRawData, setActiveExtRawData] = useState<any>(null);
+  const [activeExtRawError, setActiveExtRawError] = useState('');
+  const [selectedExtensionIds, setSelectedExtensionIds] = useState<string[]>([]);
+  const [extensionPreviewResult, setExtensionPreviewResult] = useState<any>(null);
+  const [extensionPreviewLoading, setExtensionPreviewLoading] = useState(false);
+
+  const [createMode, setCreateMode] = useState<'range' | 'manual'>('range');
+  const [createStartExt, setCreateStartExt] = useState('200');
+  const [createEndExt, setCreateEndExt] = useState('202');
+  const [createManualList, setCreateManualList] = useState('');
+  const [createNameMask, setCreateNameMask] = useState('User {ext}');
+  const [createSecretMode, setCreateSecretMode] = useState<'auto' | 'fixed' | 'mask'>('auto');
+  const [createFixedSecret, setCreateFixedSecret] = useState('');
+  const [createSecretMask, setCreateSecretMask] = useState('pbx{ext}!');
+  const [createTechnology, setCreateTechnology] = useState<'pjsip' | 'sip'>('pjsip');
+  const [createContext, setCreateContext] = useState('from-internal');
+  const [createOutboundCid, setCreateOutboundCid] = useState('');
+  const [createEmailDomain, setCreateEmailDomain] = useState('');
+  const [createVoicemail, setCreateVoicemail] = useState(false);
+  const [createRecording, setCreateRecording] = useState('always');
+  const [createCallWaiting, setCreateCallWaiting] = useState(true);
+  const [createEmergencyCid, setCreateEmergencyCid] = useState('');
+  const [createRawJson, setCreateRawJson] = useState('');
+
+  const [updateFields, setUpdateFields] = useState({
+    updateDisplayName: false,
+    displayName: 'User {ext}',
+    updateRecording: false,
+    recording: 'always',
+    updateVoicemail: false,
+    voicemail: false,
+    updateCallWaiting: false,
+    callWaiting: true,
+    updateOutboundCid: false,
+    outboundCid: '',
+    updateContext: false,
+    context: 'from-internal',
+    updateEmergencyCid: false,
+    emergencyCid: '',
+    updateRaw: false,
+    rawJson: ''
+  });
+  const [batchMappingText, setBatchMappingText] = useState('');  const [showBatchMapping, setShowBatchMapping] = useState(false);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -132,25 +178,64 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
 
   const fetchActiveExtensions = async () => {
     setActiveExtLoading(true);
+    setActiveExtError('');
     try {
-      const res = await fetch('/api/management/extensions', {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (!res.ok) throw new Error('Не удалось получить список абонентов с АТС');
-      const data = await res.json();
-      if (Array.isArray(data)) {
-        setActiveExtensions(data);
-        showNoti('success', `Загружено ${data.length} активных абонентов с АТС!`);
-      } else {
-        showNoti('error', 'Формат ответа АТС не поддерживается');
+      const [extensionsRes, settingsRes] = await Promise.all([
+        fetch('/api/management/extensions', {
+          headers: { Authorization: `Bearer ${token}` }
+        }),
+        fetch('/api/settings', {
+          headers: { Authorization: `Bearer ${token}` }
+        }).catch(() => null)
+      ]);
+
+      if (!extensionsRes.ok) {
+        const errorText = await extensionsRes.text().catch(() => '');
+        throw new Error(errorText || 'Не удалось получить список extensions с АТС');
       }
+
+      const data = await extensionsRes.json();
+      if (!Array.isArray(data)) {
+        throw new Error('Формат ответа /api/management/extensions не поддерживается');
+      }
+
+      if (settingsRes?.ok) {
+        const settings = await settingsRes.json().catch(() => ({}));
+        setActiveExtEndpoint(settings.freepbxApiWorkingEndpoint || settings.freepbxApiUrl || '');
+      }
+
+      setActiveExtensions(data);
+      setSelectedExtensionIds(prev => prev.filter(ext => data.some((item: any) => String(item.extension) === ext)));
+      setActiveExtLoadedAt(new Date().toLocaleString());
+      showNoti('success', `Загружено ${data.length} extensions с АТС`);
     } catch (err: any) {
-      showNoti('error', err.message);
+      const message = err?.message || 'Ошибка загрузки extensions';
+      setActiveExtError(message);
+      showNoti('error', message);
     } finally {
       setActiveExtLoading(false);
     }
   };
 
+  const fetchRawExtensionsRest = async () => {
+    setActiveExtRawLoading(true);
+    setActiveExtRawError('');
+    try {
+      const res = await fetch('/api/management/extensions/rest-raw', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Не удалось получить raw REST ответ');
+      setActiveExtRawData(data);
+      showNoti('success', 'Raw REST ответ FreePBX API загружен');
+    } catch (err: any) {
+      const message = err?.message || 'Ошибка загрузки raw REST ответа';
+      setActiveExtRawError(message);
+      showNoti('error', message);
+    } finally {
+      setActiveExtRawLoading(false);
+    }
+  };
   const applyBatchMapping = () => {
     if (!batchMappingText.trim()) {
       showNoti('info', 'Пожалуйста, введите данные для сопоставления');
@@ -219,15 +304,65 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
   };
 
   const filteredActiveExtensions = useMemo(() => {
-    if (!activeExtSearch.trim()) return activeExtensions;
-    const query = activeExtSearch.toLowerCase();
-    return activeExtensions.filter(ext => 
-      String(ext.extension || '').toLowerCase().includes(query) || 
-      String(ext.name || '').toLowerCase().includes(query) ||
-      String(ext.department || '').toLowerCase().includes(query)
-    );
-  }, [activeExtensions, activeExtSearch]);
+    const query = activeExtSearch.trim().toLowerCase();
+    return activeExtensions.filter(ext => {
+      const tech = String(ext.tech || 'unknown').toLowerCase();
+      const matchesTech = activeExtTechFilter === 'all' || tech === activeExtTechFilter;
+      const matchesSearch = !query ||
+        String(ext.extension || '').toLowerCase().includes(query) ||
+        String(ext.name || '').toLowerCase().includes(query) ||
+        String(ext.displayName || '').toLowerCase().includes(query) ||
+        String(ext.email || '').toLowerCase().includes(query);
+      return matchesTech && matchesSearch;
+    });
+  }, [activeExtensions, activeExtSearch, activeExtTechFilter]);
 
+  const activeExtTechCounts = useMemo(() => {
+    return activeExtensions.reduce((acc: Record<string, number>, ext) => {
+      const tech = String(ext.tech || 'unknown').toLowerCase();
+      acc[tech] = (acc[tech] || 0) + 1;
+      return acc;
+    }, {});
+  }, [activeExtensions]);
+
+  const filteredExtensionIds = useMemo(() => filteredActiveExtensions.map(ext => String(ext.extension || '')).filter(Boolean), [filteredActiveExtensions]);
+  const allFilteredSelected = filteredExtensionIds.length > 0 && filteredExtensionIds.every(ext => selectedExtensionIds.includes(ext));
+  const toggleExtensionSelection = (extension: string) => setSelectedExtensionIds(prev => prev.includes(extension) ? prev.filter(item => item !== extension) : [...prev, extension]);
+  const toggleAllFilteredExtensions = () => setSelectedExtensionIds(prev => allFilteredSelected ? prev.filter(ext => !filteredExtensionIds.includes(ext)) : Array.from(new Set([...prev, ...filteredExtensionIds])));
+  const setUpdateField = (field: string, value: any) => setUpdateFields(prev => ({ ...prev, [field]: value }));
+  const summarizePreviewValue = (value: any) => {
+    if (!value) return '-';
+    const keys = ['name', 'displayName', 'tech', 'context', 'outboundCid', 'recording', 'voicemail', 'callWaiting', 'emergencyCid'];
+    const parts = keys.filter(key => value[key] !== undefined && value[key] !== '').map(key => `${key}: ${String(value[key])}`);
+    return parts.length ? parts.join(' | ') : JSON.stringify(value).slice(0, 160);
+  };
+  const handleCreatePreview = async () => {
+    setExtensionPreviewLoading(true);
+    try {
+      const res = await fetch('/api/management/extensions/create-preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ mode: createMode, startExt: createStartExt, endExt: createEndExt, manualList: createManualList, nameMask: createNameMask, secretMode: createSecretMode, fixedSecret: createSecretMode === 'fixed' ? createFixedSecret : undefined, secretMask: createSecretMode === 'mask' ? createSecretMask : undefined, technology: createTechnology, context: createContext, outboundCid: createOutboundCid, emailDomain: createEmailDomain, voicemail: createVoicemail, recording: createRecording, callWaiting: createCallWaiting, emergencyCid: createEmergencyCid, rawJson: createRawJson })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Ошибка preview создания');
+      setExtensionPreviewResult(data);
+      showNoti('success', `Preview создания сформирован: ${data.previewId}`);
+    } catch (err: any) { showNoti('error', err.message || 'Ошибка preview создания'); }
+    finally { setExtensionPreviewLoading(false); }
+  };
+  const handleUpdatePreview = async () => {
+    if (selectedExtensionIds.length === 0) { showNoti('info', 'Выберите extensions для массового изменения'); return; }
+    setExtensionPreviewLoading(true);
+    try {
+      const res = await fetch('/api/management/extensions/update-preview', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ selectedExtensions: selectedExtensionIds, patchFields: updateFields }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Ошибка preview изменения');
+      setExtensionPreviewResult(data);
+      showNoti('success', `Preview изменения сформирован: ${data.previewId}`);
+    } catch (err: any) { showNoti('error', err.message || 'Ошибка preview изменения'); }
+    finally { setExtensionPreviewLoading(false); }
+  };
   // MAC Phone assignment List inside extensions
   const [macAssignText, setMacAssignText] = useState("200;805EC0AABB01;Yealink T31P\n201;805EC0AABB02;Yealink T31P");
   const [applyMacs, setApplyMacs] = useState(false);
@@ -1328,630 +1463,24 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
           </div>
         )}
 
-        {/* TAB 3: BULK EXTENSIONS */}
+        {/* TAB 3: EXTENSIONS */}
         {activeTab === 'extensions' && (
           <div className="space-y-6 animate-fade-in">
-            {/* Steps indicator */}
-            <div className="flex justify-between items-center bg-slate-50 dark:bg-slate-750/30 p-3.5 rounded-xl border dark:border-slate-700">
-              <span className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wide">Пакетное Создание Абонентов</span>
-              <div className="flex items-center gap-2">
-                {[
-                  { step: 'draft', label: '1. Настройки' },
-                  { step: 'preview', label: '2. Предпросмотр' },
-                  { step: 'success', label: '3. Применено' }
-                ].map(s => (
-                  <span 
-                    key={s.step} 
-                    className={`text-[10.5px] px-2.5 py-1 rounded-full font-bold ${
-                      extStep === s.step 
-                        ? 'bg-indigo-600 text-white' 
-                        : 'bg-white dark:bg-slate-800 text-slate-400 border dark:border-slate-700'
-                    }`}
-                  >
-                    {s.label}
-                  </span>
-                ))}
-              </div>
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-slate-50 dark:bg-slate-750/30 p-4 rounded-xl border dark:border-slate-700">
+              <div><h3 className="text-sm font-extrabold text-slate-850 dark:text-white flex items-center gap-2"><Users className="w-4 h-4 text-indigo-500" />Extensions</h3><p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Просмотр и подготовка безопасных preview операций через FreePBX REST API.</p></div>
+              <div className="flex flex-col sm:flex-row gap-2"><button type="button" onClick={fetchActiveExtensions} disabled={activeExtLoading} className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-xs font-extrabold px-4 py-2.5 rounded-lg flex items-center justify-center gap-2 transition"><RefreshCw className={`w-4 h-4 ${activeExtLoading ? 'animate-spin' : ''}`} />Загрузить с АТС</button><button type="button" onClick={fetchRawExtensionsRest} disabled={activeExtRawLoading} className="bg-slate-700 hover:bg-slate-800 disabled:opacity-60 text-white text-xs font-extrabold px-4 py-2.5 rounded-lg flex items-center justify-center gap-2 transition"><Database className="w-4 h-4" />Raw REST API</button></div>
             </div>
-
-            {/* DRAFT STEP */}
-            {extStep === 'draft' && (
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                <div className="lg:col-span-2 space-y-5">
-                  <div className="flex items-center gap-4 border-b pb-3 border-slate-100 dark:border-slate-700">
-                    <span className="text-xs font-bold text-slate-400 block">РЕЖИМ ЗАВЕДЕНИЯ:</span>
-                    <button 
-                      onClick={() => setExtMode('range')} 
-                      className={`text-xs px-3 py-1 rounded-md font-bold transition ${extMode === 'range' ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-400' : 'bg-slate-50 dark:bg-slate-700 text-slate-550'}`}
-                    >
-                      Диапазон номеров
-                    </button>
-                    <button 
-                      onClick={() => setExtMode('manual')} 
-                      className={`text-xs px-3 py-1 rounded-md font-bold transition ${extMode === 'manual' ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-400' : 'bg-slate-50 dark:bg-slate-700 text-slate-550'}`}
-                    >
-                      Ручной список
-                    </button>
-                    <button 
-                      onClick={() => setExtMode('file')} 
-                      className={`text-xs px-3 py-1 rounded-md font-bold transition ${extMode === 'file' ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-400' : 'bg-slate-50 dark:bg-slate-700 text-slate-550'}`}
-                    >
-                      Импорт CSV/XLSX
-                    </button>
-                    <button 
-                      onClick={() => {
-                        setExtMode('edit-active');
-                        if (activeExtensions.length === 0) {
-                          fetchActiveExtensions();
-                        }
-                      }} 
-                      className={`text-xs px-3 py-1 rounded-md font-bold transition flex items-center gap-1 ${extMode === 'edit-active' ? 'bg-emerald-600 text-white shadow-sm' : 'bg-emerald-50 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800'}`}
-                    >
-                      Редактировать на АТС ⚡
-                    </button>
-                  </div>
-
-                  {extMode === 'range' && (
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                      <div>
-                        <label className="text-[10.5px] uppercase font-bold text-slate-400 block mb-1">С номера (Extensions START)</label>
-                        <input 
-                          type="number" 
-                          value={extRangeStart}
-                          onChange={e => setExtRangeStart(e.target.value)}
-                          className="w-full text-xs p-2.5 border bg-slate-50 dark:bg-slate-700 text-slate-900 dark:text-white rounded-lg focus:outline-none"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-[10.5px] uppercase font-bold text-slate-400 block mb-1">До номера (Extensions END)</label>
-                        <input 
-                          type="number" 
-                          value={extRangeEnd}
-                          onChange={e => setExtRangeEnd(e.target.value)}
-                          className="w-full text-xs p-2.5 border bg-slate-50 dark:bg-slate-700 text-slate-900 dark:text-white rounded-lg focus:outline-none"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-[10.5px] uppercase font-bold text-slate-400 block mb-1">Маска имени (Template)</label>
-                        <input 
-                          type="text" 
-                          value={extNamePattern}
-                          onChange={e => setExtNamePattern(e.target.value)}
-                          className="w-full text-xs p-2.5 border bg-slate-50 dark:bg-slate-700 text-slate-900 dark:text-white rounded-lg focus:outline-none"
-                        />
-                      </div>
-                    </div>
-                  )}
-
-                  {extMode === 'manual' && (
-                    <div className="space-y-2">
-                      <label className="text-[10.5px] uppercase font-bold text-slate-400 block">Список сотрудников (Формат: Номер; Имя; Отдел)</label>
-                      <textarea
-                        value={extManualText}
-                        onChange={e => setExtManualText(e.target.value)}
-                        rows={6}
-                        placeholder="200; Иван Иванов; Отдел Продаж..."
-                        className="w-full text-xs p-3 border bg-slate-50 dark:bg-slate-700 text-slate-900 dark:text-white rounded-lg font-mono focus:outline-none focus:ring-1 focus:ring-indigo-505"
-                      />
-                    </div>
-                  )}
-
-                  {extMode === 'file' && (
-                    <div className="border border-dashed border-slate-250 dark:border-slate-700 p-8 rounded-xl text-center space-y-4">
-                      <FileSpreadsheet className="w-12 h-12 text-indigo-500 mx-auto" />
-                      <div className="space-y-1">
-                        <div className="text-xs font-semibold text-slate-700 dark:text-slate-200">
-                          {extFileName ? (
-                            <span>Выбран файл: <strong className="text-emerald-600 dark:text-emerald-400">{extFileName}</strong></span>
-                          ) : (
-                            <span>Загрузите CSV файл или перетащите его сюда</span>
-                          )}
-                        </div>
-                        <p className="text-[10px] text-slate-400 leading-normal max-w-md mx-auto">
-                          Поддерживается автоматическое сопоставление колонок FreePBX: extension (Внутренний номер), name (ФИО), password (Пароль), voicemail, findmefollow_enabled и др.
-                        </p>
-                      </div>
-
-                      <div className="flex flex-wrap justify-center gap-3">
-                        <label className="relative cursor-pointer bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-4 py-2 rounded-lg transition-colors">
-                          <span>{extFileName ? 'Выбрать другой файл' : 'Выбрать CSV файл'}</span>
-                          <input 
-                            type="file" 
-                            accept=".csv"
-                            onChange={handleFileChange}
-                            className="hidden" 
-                          />
-                        </label>
-
-                        <button
-                          type="button"
-                          onClick={downloadCsvTemplate}
-                          className="bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold px-4 py-2 rounded-lg transition-colors border border-slate-200 dark:border-slate-700 flex items-center gap-1.5"
-                        >
-                          <FileText className="w-3.5 h-3.5" />
-                          Скачать шаблон CSV (FreePBX)
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={downloadCurrentExtensions}
-                          className="bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/20 dark:hover:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 text-xs font-semibold px-4 py-2 rounded-lg transition-colors border border-emerald-200 dark:border-emerald-800 flex items-center gap-1.5"
-                        >
-                          <FileSpreadsheet className="w-3.5 h-3.5" />
-                          Скачать текущих абонентов (CSV)
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {extMode === 'edit-active' && (
-                    <div className="space-y-4">
-                      {/* Search & Actions Header */}
-                      <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center justify-between bg-slate-50 dark:bg-slate-800 p-3 rounded-lg border dark:border-slate-700">
-                        <div className="relative flex-1">
-                          <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
-                          <input
-                            type="text"
-                            placeholder="Поиск по номеру, имени или отделу..."
-                            value={activeExtSearch}
-                            onChange={(e) => setActiveExtSearch(e.target.value)}
-                            className="w-full pl-9 pr-4 py-1.5 text-xs border rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                          />
-                        </div>
-                        <div className="flex gap-2 items-center">
-                          <button
-                            type="button"
-                            onClick={fetchActiveExtensions}
-                            disabled={activeExtLoading}
-                            className="bg-white hover:bg-slate-100 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 text-xs font-semibold px-3 py-1.5 rounded-lg border dark:border-slate-600 flex items-center gap-1.5 transition disabled:opacity-50"
-                          >
-                            <RefreshCw className={`h-3 w-3 ${activeExtLoading ? 'animate-spin' : ''}`} />
-                            Обновить с АТС
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const nextExt = String(Math.max(...activeExtensions.map(e => parseInt(e.extension) || 100), 100) + 1);
-                              const newExt = {
-                                extension: nextExt,
-                                name: 'Новый абонент',
-                                department: 'Отдел продаж',
-                                recording: 'always',
-                                voicemail: 'no',
-                                findmefollow_enabled: 'no',
-                                tech: 'pjsip'
-                              };
-                              setActiveExtensions(prev => [newExt, ...prev]);
-                              showNoti('success', `Добавлен новый пустой абонент ${newExt.extension}! Заполните данные.`);
-                            }}
-                            className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition"
-                          >
-                            <Plus className="h-3 w-3" />
-                            Добавить абонента
-                          </button>
-                        </div>
-                      </div>
-
-                      {activeExtLoading ? (
-                        <div className="flex flex-col items-center justify-center py-12 text-slate-400 gap-2">
-                          <RefreshCw className="h-8 w-8 animate-spin text-indigo-500" />
-                          <span className="text-xs">Загрузка списка абонентов с АТС...</span>
-                        </div>
-                      ) : activeExtensions.length === 0 ? (
-                        <div className="flex flex-col items-center justify-center py-12 text-slate-400 gap-2 border border-dashed rounded-lg">
-                          <Users className="h-10 w-10 text-slate-300" />
-                          <span className="text-xs font-medium">Нет загруженных абонентов с АТС</span>
-                          <button
-                            type="button"
-                            onClick={fetchActiveExtensions}
-                            className="mt-2 text-xs bg-indigo-50 hover:bg-indigo-100 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-400 px-3 py-1.5 rounded-md font-bold"
-                          >
-                            Загрузить список сейчас
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="space-y-4 animate-fade-in">
-                          {/* Bulk mapping and editing controls panel */}
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-50 dark:bg-slate-800 p-4 rounded-xl border dark:border-slate-700">
-                            {/* Bulk Mapping Textarea */}
-                            <div className="space-y-2">
-                              <div className="flex items-center justify-between">
-                                <label className="text-[10px] uppercase font-bold text-slate-400 block">Пакетное сопоставление (Номер; ФИО; Отдел)</label>
-                                <button
-                                  type="button"
-                                  onClick={applyBatchMapping}
-                                  className="text-[10px] bg-indigo-100 hover:bg-indigo-200 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-400 px-2.5 py-1 rounded font-bold"
-                                >
-                                  Сопоставить список
-                                </button>
-                              </div>
-                              <textarea
-                                value={batchMappingText}
-                                onChange={(e) => setBatchMappingText(e.target.value)}
-                                rows={4}
-                                placeholder="200; Иванов Иван; Отдел продаж&#10;201; Петров Петр; Техподдержка"
-                                className="w-full text-xs p-2 border bg-white dark:bg-slate-700 text-slate-900 dark:text-white rounded-lg font-mono focus:outline-none"
-                              />
-                            </div>
-
-                            {/* Quick bulk settings */}
-                            <div className="space-y-3 flex flex-col justify-between">
-                              <div>
-                                <span className="text-[10px] uppercase font-bold text-slate-400 block mb-2">Групповые действия</span>
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                                  <div className="space-y-1">
-                                    <span className="text-[9px] text-slate-400 block">Запись разговоров (Все):</span>
-                                    <div className="flex gap-1">
-                                      <button
-                                        type="button"
-                                        onClick={() => setAllRecording('always')}
-                                        className="text-[9px] bg-white dark:bg-slate-700 hover:bg-slate-100 dark:hover:bg-slate-600 border px-1.5 py-1 rounded text-slate-700 dark:text-slate-300 font-medium"
-                                      >
-                                        Всегда
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => setAllRecording('never')}
-                                        className="text-[9px] bg-white dark:bg-slate-700 hover:bg-slate-100 dark:hover:bg-slate-600 border px-1.5 py-1 rounded text-slate-700 dark:text-slate-300 font-medium"
-                                      >
-                                        Никогда
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => setAllRecording('optional')}
-                                        className="text-[9px] bg-white dark:bg-slate-700 hover:bg-slate-100 dark:hover:bg-slate-600 border px-1.5 py-1 rounded text-slate-700 dark:text-slate-300 font-medium"
-                                      >
-                                        Опц.
-                                      </button>
-                                    </div>
-                                  </div>
-                                  <div className="space-y-1">
-                                    <span className="text-[9px] text-slate-400 block">Режим FollowMe (Все):</span>
-                                    <div className="flex gap-1">
-                                      <button
-                                        type="button"
-                                        onClick={() => setAllFollowMe(true)}
-                                        className="text-[9px] bg-white dark:bg-slate-700 hover:bg-slate-100 dark:hover:bg-slate-600 border px-1.5 py-1 rounded text-slate-700 dark:text-slate-300 font-medium"
-                                      >
-                                        Вкл
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => setAllFollowMe(false)}
-                                        className="text-[9px] bg-white dark:bg-slate-700 hover:bg-slate-100 dark:hover:bg-slate-600 border px-1.5 py-1 rounded text-slate-700 dark:text-slate-300 font-medium"
-                                      >
-                                        Выкл
-                                      </button>
-                                    </div>
-                                  </div>
-                                </div>
-                              </div>
-
-                              <div className="pt-2 border-t dark:border-slate-700">
-                                <span className="text-[10px] text-slate-400 font-medium block">
-                                  Загружено с АТС: <strong className="text-slate-700 dark:text-white">{activeExtensions.length}</strong> | 
-                                  После фильтра: <strong className="text-indigo-600 dark:text-indigo-400">{filteredActiveExtensions.length}</strong>
-                                </span>
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* Interactive list table */}
-                          <div className="max-h-[350px] overflow-y-auto border border-slate-150 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-900">
-                            <table className="w-full text-left border-collapse text-xs">
-                              <thead>
-                                <tr className="bg-slate-50 dark:bg-slate-800 text-slate-400 font-bold border-b dark:border-slate-700 sticky top-0 z-10">
-                                  <th className="p-2.5 w-16">Номер</th>
-                                  <th className="p-2.5">ФИО Сотрудника</th>
-                                  <th className="p-2.5">Отдел</th>
-                                  <th className="p-2.5 w-24">Запись</th>
-                                  <th className="p-2.5 w-16">F-Me</th>
-                                  <th className="p-2.5 w-16">Почта</th>
-                                  <th className="p-2.5 w-16">Исключить</th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y dark:divide-slate-700">
-                                {filteredActiveExtensions.map((ext, idx) => (
-                                  <tr key={ext.extension || idx} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30">
-                                    <td className="p-2 font-mono font-bold text-slate-700 dark:text-slate-300">
-                                      <input
-                                        type="text"
-                                        value={ext.extension || ''}
-                                        onChange={(e) => {
-                                          const val = e.target.value;
-                                          setActiveExtensions(prev => prev.map((item, i) => item.extension === ext.extension ? { ...item, extension: val } : item));
-                                        }}
-                                        className="w-12 bg-transparent border-b border-dashed border-transparent hover:border-slate-300 focus:border-indigo-500 focus:outline-none font-bold"
-                                        placeholder="ext"
-                                      />
-                                    </td>
-                                    <td className="p-2">
-                                      <input
-                                        type="text"
-                                        value={ext.name || ''}
-                                        onChange={(e) => {
-                                          const val = e.target.value;
-                                          setActiveExtensions(prev => prev.map(item => item.extension === ext.extension ? { ...item, name: val } : item));
-                                        }}
-                                        placeholder="Иван Иванов"
-                                        className="w-full bg-transparent border-b border-dashed border-transparent hover:border-slate-300 focus:border-indigo-500 focus:outline-none py-0.5 font-medium text-slate-800 dark:text-slate-200"
-                                      />
-                                    </td>
-                                    <td className="p-2">
-                                      <input
-                                        type="text"
-                                        value={ext.department || ''}
-                                        onChange={(e) => {
-                                          const val = e.target.value;
-                                          setActiveExtensions(prev => prev.map(item => item.extension === ext.extension ? { ...item, department: val } : item));
-                                        }}
-                                        placeholder="Отдел"
-                                        className="w-full bg-transparent border-b border-dashed border-transparent hover:border-slate-300 focus:border-indigo-500 focus:outline-none py-0.5 text-slate-600 dark:text-slate-300"
-                                      />
-                                    </td>
-                                    <td className="p-2">
-                                      <select
-                                        value={ext.recording || 'always'}
-                                        onChange={(e) => {
-                                          const val = e.target.value;
-                                          setActiveExtensions(prev => prev.map(item => item.extension === ext.extension ? { ...item, recording: val } : item));
-                                        }}
-                                        className="bg-slate-50 dark:bg-slate-800 border dark:border-slate-700 rounded p-1 text-[11px] focus:outline-none text-slate-800 dark:text-slate-200"
-                                      >
-                                        <option value="always">Всегда</option>
-                                        <option value="never">Никогда</option>
-                                        <option value="optional">Опц.</option>
-                                      </select>
-                                    </td>
-                                    <td className="p-2 text-center">
-                                      <input
-                                        type="checkbox"
-                                        checked={ext.findmefollow_enabled === 'yes' || ext.findmefollow_enabled === true}
-                                        onChange={(e) => {
-                                          const val = e.target.checked ? 'yes' : 'no';
-                                          setActiveExtensions(prev => prev.map(item => item.extension === ext.extension ? { ...item, findmefollow_enabled: val } : item));
-                                        }}
-                                        className="w-3.5 h-3.5 rounded"
-                                      />
-                                    </td>
-                                    <td className="p-2 text-center">
-                                      <input
-                                        type="checkbox"
-                                        checked={ext.voicemail === 'yes' || ext.voicemail === true}
-                                        onChange={(e) => {
-                                          const val = e.target.checked ? 'yes' : 'no';
-                                          setActiveExtensions(prev => prev.map(item => item.extension === ext.extension ? { ...item, voicemail: val } : item));
-                                        }}
-                                        className="w-3.5 h-3.5 rounded"
-                                      />
-                                    </td>
-                                    <td className="p-2 text-center">
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setActiveExtensions(prev => prev.filter(item => item.extension !== ext.extension));
-                                          showNoti('info', `Абонент ${ext.extension} исключен из списка`);
-                                        }}
-                                        className="text-red-500 hover:text-red-700 p-1 transition"
-                                        title="Исключить из редактирования"
-                                      >
-                                        <Trash2 className="h-3.5 w-3.5 mx-auto" />
-                                      </button>
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* MAC Phones mapping toggle inside extensions */}
-                  <div className="bg-slate-50 dark:bg-slate-750/30 p-3.5 rounded-xl border dark:border-slate-700">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-slate-750 dark:text-slate-300">Массовая привязка MAC-адресов SIP телефонов</span>
-                      <input 
-                        type="checkbox" 
-                        checked={applyMacs}
-                        onChange={e => setApplyMacs(e.target.checked)}
-                        className="w-4 h-4"
-                      />
-                    </div>
-                    {applyMacs && (
-                      <div className="mt-3.5 space-y-2 animate-fade-in">
-                        <label className="text-[10px] text-slate-400 font-bold block mb-1">Ручной ввод MAC (Номер; MAC_ADDR; Спецификационная Модель)</label>
-                        <textarea
-                          value={macAssignText}
-                          onChange={e => setMacAssignText(e.target.value)}
-                          rows={3}
-                          className="w-full text-xs p-2.5 border bg-white dark:bg-indigo-950/20 font-mono text-slate-700 dark:text-slate-300 rounded-lg focus:outline-none"
-                        />
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Left Form: Templates Selector & Password settings */}
-                <div className="bg-slate-50 dark:bg-slate-750/30 p-5 rounded-xl border dark:border-slate-700 space-y-4">
-                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Шаблон настроек (Extension Template)</h4>
-                  
-                  <div>
-                    <label className="text-[10px] text-slate-400 block mb-1 uppercase font-bold">Выберите шаблон</label>
-                    <select
-                      value={selectedExtTemplate}
-                      onChange={e => handleExtTemplateChange(e.target.value)}
-                      className="w-full text-xs p-2 border bg-white dark:bg-slate-700 text-slate-900 dark:text-white rounded-lg focus:outline-none"
-                    >
-                      <option value="">-- Базовый шаблон (Ручной) --</option>
-                      {extTemplates.map(t => (
-                        <option key={t.id} value={t.id}>{t.name}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="text-[10px] text-slate-400 block mb-1 uppercase font-bold">Технология</label>
-                      <select
-                        value={extTech}
-                        onChange={e => setExtTech(e.target.value as any)}
-                        className="w-full text-xs p-2 border bg-white dark:bg-slate-700 text-slate-900 dark:text-white rounded-lg"
-                      >
-                        <option value="pjsip">PJSIP (Рекомендован)</option>
-                        <option value="sip">SIP (Legacу)</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="text-[10px] text-slate-400 block mb-1 uppercase font-bold">Генерация пароля</label>
-                      <select
-                        value={extPasswordComplexity}
-                        onChange={e => setExtPasswordComplexity(e.target.value as any)}
-                        className="w-full text-xs p-2 border bg-white dark:bg-slate-700 text-slate-900 dark:text-white rounded-lg"
-                      >
-                        <option value="strong">Надёжный пароль (12 симв)</option>
-                        <option value="simple">Простой (ext + rand)</option>
-                        <option value="pin">Числовой PIN-код</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="text-[10px] text-slate-400 block mb-1 uppercase font-bold">Запись разговоров</label>
-                    <select
-                      value={extRecording}
-                      onChange={e => setExtRecording(e.target.value as any)}
-                      className="w-full text-xs p-2 border bg-white dark:bg-slate-700 text-slate-900 dark:text-white rounded-lg"
-                    >
-                      <option value="always">Писать всегда (микшировать в стерео)</option>
-                      <option value="never">Не писать</option>
-                      <option value="optional">Опционально (по требованию)</option>
-                    </select>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <input 
-                      type="checkbox" 
-                      checked={extVoicemail} 
-                      onChange={e => setExtVoicemail(e.target.checked)} 
-                      id="voicemail-toggle"
-                    />
-                    <label htmlFor="voicemail-toggle" className="text-xs text-slate-700 dark:text-slate-300 font-bold block">Голосовая почта (Voicemail)</label>
-                  </div>
-
-                  <div className="pt-2 border-t dark:border-slate-700">
-                    <button
-                      onClick={handleExtPreview}
-                      disabled={extIsLoading}
-                      className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs py-3 rounded-lg flex items-center justify-center gap-2 transition"
-                    >
-                      {extIsLoading ? 'Сборка спецификации...' : 'Сгенерировать предпросмотр'}
-                      <ArrowRight className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* PREVIEW STEP */}
-            {extStep === 'preview' && extPreviewData && (
-              <div className="space-y-4">
-                <div className="flex justify-between items-center">
-                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">План заведения спецификации</h4>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => setExtStep('draft')}
-                      className="bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-white text-xs font-bold px-3 py-2 rounded-lg"
-                    >
-                      Вернуться
-                    </button>
-
-                    <button
-                      onClick={() => handleExtApply()}
-                      disabled={!canWrite && !isDryRun}
-                      className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold px-5 py-2 rounded-lg"
-                    >
-                      {isDryRun ? 'Запустить Тестовый План' : 'ПРИМЕНИТЬ В СИСТЕМЕ АТС'}
-                    </button>
-                  </div>
-                </div>
-
-                {/* Conflicts alert box */}
-                {extPreviewData.conflicts.length > 0 && (
-                  <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-rose-900/40 p-4 rounded-xl text-rose-800 dark:text-amber-400 text-xs">
-                    <p className="font-bold flex items-center gap-1.5"><AlertTriangle className="w-4 h-4 text-amber-500" /> Найдено пересечений с существующей базой FreePBX ({extPreviewData.conflicts.length}):</p>
-                    <ul className="list-disc list-inside mt-1.5 space-y-1 font-mono text-[11px]">
-                      {extPreviewData.conflicts.slice(0, 5).map((c: string, idx: number) => (
-                        <li key={idx}>{c}</li>
-                      ))}
-                      {extPreviewData.conflicts.length > 5 && <li>... и еще {extPreviewData.conflicts.length - 5} коллизий. Они будут корректно перезаписаны.</li>}
-                    </ul>
-                  </div>
-                )}
-
-                {/* Specification Table */}
-                <div className="border border-slate-150 dark:border-slate-700 rounded-xl overflow-hidden overflow-y-auto max-h-[350px]">
-                  <table className="w-full text-xs text-left">
-                    <thead className="bg-slate-50 dark:bg-slate-750 text-[10px] text-slate-400 font-bold uppercase">
-                      <tr>
-                        <th className="p-2.5">Ряд</th>
-                        <th className="p-2.5">Внутренний Номер (EXT)</th>
-                        <th className="p-2.5">Имя Сотрудника</th>
-                        <th className="p-2.5">SIP/PJSIP Пасс-код</th>
-                        <th className="p-2.5">Email</th>
-                        <th className="p-2.5 font-bold">Очередь событий</th>
-                        <th className="p-1.5 text-right">Поведение</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 dark:divide-slate-700 font-mono">
-                      {extPreviewData.generated.map((g: any, idx: number) => (
-                        <tr key={idx} className="hover:bg-slate-50/50 dark:hover:bg-slate-755/25">
-                          <td className="p-2.5 text-slate-400">{idx + 1}</td>
-                          <td className="p-2.5 font-bold text-slate-900 dark:text-white">{g.extension}</td>
-                          <td className="p-2.5 font-sans font-medium">{g.name}</td>
-                          <td className="p-2.5 text-slate-400">•••••••••• (Авто)</td>
-                          <td className="p-2.5 font-sans">{g.email}</td>
-                          <td className="p-2.5 text-xs">
-                            <span className="bg-slate-150 dark:bg-slate-700 px-1 py-0.5 rounded text-[10px]">PJSIP / {g.recording === 'always' ? 'Стереозапись' : 'Не писать'}</span>
-                          </td>
-                          <td className="p-2.5 text-right">
-                            <span className={`text-[9.5px] uppercase font-black px-2 py-0.5 rounded-full ${
-                              g.status === 'create' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30' : 'bg-indigo-50 text-indigo-750 dark:bg-indigo-950/20'
-                            }`}>{g.status === 'create' ? 'Создать' : 'Обновить'}</span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-
-            {/* SUCCESS STEP */}
-            {extStep === 'success' && (
-              <div className="p-12 text-center space-y-4">
-                <div className="w-16 h-16 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-500 rounded-full flex items-center justify-center mx-auto shadow-md">
-                  <Check className="w-10 h-10" />
-                </div>
-                <div>
-                  <h4 className="text-base font-extrabold text-slate-850 dark:text-white">Все сущности успешно созданы!</h4>
-                  <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">Пакет абонентов АТС FreePBX корректно применен и подключен к системе SIP хостинга Asterisk.</p>
-                </div>
-                <div className="pt-2">
-                  <button
-                    onClick={() => setExtStep('draft')}
-                    className="bg-indigo-600 font-bold text-xs px-5 py-2.5 text-white rounded-lg hover:bg-indigo-700"
-                  >
-                    Вернуться к созданию
-                  </button>
-                </div>
-              </div>
-            )}
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-3"><div className="bg-white dark:bg-slate-900 border border-slate-150 dark:border-slate-700 rounded-xl p-4"><span className="text-[10px] uppercase font-bold text-slate-400">Всего extensions</span><div className="text-2xl font-black text-slate-850 dark:text-white mt-1">{activeExtensions.length}</div></div><div className="bg-white dark:bg-slate-900 border border-slate-150 dark:border-slate-700 rounded-xl p-4"><span className="text-[10px] uppercase font-bold text-slate-400">Выбрано</span><div className="text-2xl font-black text-emerald-600 dark:text-emerald-400 mt-1">{selectedExtensionIds.length}</div></div><div className="bg-white dark:bg-slate-900 border border-slate-150 dark:border-slate-700 rounded-xl p-4"><span className="text-[10px] uppercase font-bold text-slate-400">После фильтра</span><div className="text-2xl font-black text-indigo-600 dark:text-indigo-400 mt-1">{filteredActiveExtensions.length}</div></div><div className="bg-white dark:bg-slate-900 border border-slate-150 dark:border-slate-700 rounded-xl p-4"><span className="text-[10px] uppercase font-bold text-slate-400">Статус загрузки</span><div className={`text-xs font-bold mt-2 ${activeExtError ? 'text-rose-600 dark:text-rose-400' : activeExtensions.length > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-500 dark:text-slate-400'}`}>{activeExtLoading ? 'Загрузка...' : activeExtError ? 'Ошибка' : activeExtensions.length > 0 ? 'Загружено с АТС' : 'Не загружено'}</div>{activeExtLoadedAt && <div className="text-[10px] text-slate-400 mt-1">{activeExtLoadedAt}</div>}</div><div className="bg-white dark:bg-slate-900 border border-slate-150 dark:border-slate-700 rounded-xl p-4 min-w-0"><span className="text-[10px] uppercase font-bold text-slate-400">REST endpoint</span><div className="text-xs font-mono text-slate-750 dark:text-slate-200 mt-2 truncate" title={activeExtEndpoint || 'Endpoint будет показан после загрузки, если доступен в настройках'}>{activeExtEndpoint || 'Не определён'}</div></div></div>
+            {activeExtError && <div className="bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/40 p-4 rounded-xl text-rose-800 dark:text-rose-300 text-xs flex gap-2"><AlertTriangle className="w-4 h-4 shrink-0 text-rose-500" /><span>{activeExtError}</span></div>}
+            {activeExtRawError && <div className="bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/40 p-4 rounded-xl text-rose-800 dark:text-rose-300 text-xs flex gap-2"><AlertTriangle className="w-4 h-4 shrink-0 text-rose-500" /><span>{activeExtRawError}</span></div>}
+            {activeExtRawData && (<div className="border border-slate-150 dark:border-slate-700 rounded-xl p-4 bg-white dark:bg-slate-900 space-y-3"><div className="flex items-center justify-between gap-3"><h4 className="text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-2"><Database className="w-4 h-4" /> Raw FreePBX REST API</h4><span className="text-[10px] text-slate-400">Без нормализации, secrets masked</span></div><pre className="max-h-[420px] overflow-auto rounded-lg bg-slate-950 text-slate-100 p-4 text-[11px] leading-relaxed font-mono whitespace-pre-wrap">{JSON.stringify(activeExtRawData, null, 2)}</pre></div>)}
+            <div className="flex flex-col lg:flex-row gap-3 items-stretch lg:items-center justify-between"><div className="relative flex-1"><Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" /><input type="text" placeholder="Поиск по номеру, имени или email..." value={activeExtSearch} onChange={(e) => setActiveExtSearch(e.target.value)} className="w-full pl-9 pr-4 py-2 text-xs border rounded-lg bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-indigo-500" /></div><div className="flex items-center gap-2"><span className="text-[10px] uppercase font-bold text-slate-400">Tech</span><select value={activeExtTechFilter} onChange={(e) => setActiveExtTechFilter(e.target.value as any)} className="text-xs p-2 border bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white rounded-lg focus:outline-none"><option value="all">Все ({activeExtensions.length})</option><option value="pjsip">PJSIP ({activeExtTechCounts.pjsip || 0})</option><option value="sip">SIP ({activeExtTechCounts.sip || 0})</option><option value="unknown">Unknown ({activeExtTechCounts.unknown || 0})</option></select></div></div>
+            <div className="border border-slate-150 dark:border-slate-700 rounded-xl overflow-hidden bg-white dark:bg-slate-900"><div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead className="bg-slate-50 dark:bg-slate-800 text-[10px] text-slate-400 font-bold uppercase border-b dark:border-slate-700"><tr><th className="p-3 w-10"><input type="checkbox" checked={allFilteredSelected} onChange={toggleAllFilteredExtensions} className="w-4 h-4 rounded" /></th><th className="p-3 w-24">Extension</th><th className="p-3 min-w-[180px]">Имя</th><th className="p-3 w-24">Tech</th><th className="p-3 min-w-[160px]">Email</th><th className="p-3 min-w-[140px]">Outbound CID</th><th className="p-3 w-24">Voicemail</th><th className="p-3 w-24">Recording</th><th className="p-3 w-28">Call Waiting</th><th className="p-3 min-w-[130px]">Статус</th></tr></thead><tbody className="divide-y divide-slate-100 dark:divide-slate-800">{activeExtLoading ? <tr><td colSpan={10} className="p-10 text-center text-slate-400"><RefreshCw className="w-8 h-8 animate-spin text-indigo-500 mx-auto mb-3" />Загрузка extensions с АТС...</td></tr> : filteredActiveExtensions.length > 0 ? filteredActiveExtensions.map((ext, idx) => { const extId = String(ext.extension || ''); return <tr key={ext.extension || idx} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/40"><td className="p-3"><input type="checkbox" checked={selectedExtensionIds.includes(extId)} onChange={() => toggleExtensionSelection(extId)} className="w-4 h-4 rounded" /></td><td className="p-3 font-mono font-black text-slate-850 dark:text-white">{ext.extension || '-'}</td><td className="p-3"><div className="font-bold text-slate-750 dark:text-slate-200">{ext.displayName || ext.name || '-'}</div>{ext.name && ext.displayName && ext.name !== ext.displayName && <div className="text-[10px] text-slate-400 mt-0.5">{ext.name}</div>}</td><td className="p-3"><span className={`px-2 py-1 rounded-full text-[10px] font-black uppercase ${ext.tech === 'pjsip' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400' : ext.tech === 'sip' ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/30 dark:text-indigo-400' : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'}`}>{ext.tech || 'unknown'}</span></td><td className="p-3 text-slate-600 dark:text-slate-300">{ext.email || '-'}</td><td className="p-3 font-mono text-slate-600 dark:text-slate-300">{ext.outboundCid || '-'}</td><td className="p-3">{ext.voicemail ? 'Да' : 'Нет'}</td><td className="p-3 text-slate-600 dark:text-slate-300">{ext.recording || '-'}</td><td className="p-3">{ext.callWaiting ? 'Да' : 'Нет'}</td><td className="p-3"><span className={`px-2 py-1 rounded-full text-[10px] font-bold ${ext.sourceStatus === 'loaded-from-pbx' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400' : ext.sourceStatus === 'error' ? 'bg-rose-50 text-rose-700 dark:bg-rose-950/30 dark:text-rose-400' : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'}`}>{ext.sourceStatus === 'loaded-from-pbx' ? 'Загружено с АТС' : ext.sourceStatus === 'error' ? 'Ошибка' : 'Локально'}</span></td></tr>; }) : <tr><td colSpan={10} className="p-10 text-center text-slate-400"><Users className="w-10 h-10 text-slate-300 dark:text-slate-600 mx-auto mb-3" />{activeExtensions.length === 0 ? 'Нажмите “Загрузить с АТС”, чтобы получить extensions.' : 'Нет extensions под выбранные условия.'}</td></tr>}</tbody></table></div></div>
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6"><div className="border border-slate-150 dark:border-slate-700 rounded-xl p-5 bg-white dark:bg-slate-900 space-y-4"><h4 className="text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-2"><ListPlus className="w-4 h-4" /> Массовое создание</h4><div className="flex gap-2"><button type="button" onClick={() => setCreateMode('range')} className={`text-xs px-3 py-1.5 rounded-lg font-bold border ${createMode === 'range' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700'}`}>Диапазон</button><button type="button" onClick={() => setCreateMode('manual')} className={`text-xs px-3 py-1.5 rounded-lg font-bold border ${createMode === 'manual' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700'}`}>Manual list</button></div>{createMode === 'range' ? <div className="grid grid-cols-2 gap-3"><input value={createStartExt} onChange={e => setCreateStartExt(e.target.value)} placeholder="Start ext" className="text-xs p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700" /><input value={createEndExt} onChange={e => setCreateEndExt(e.target.value)} placeholder="End ext" className="text-xs p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700" /></div> : <textarea value={createManualList} onChange={e => setCreateManualList(e.target.value)} rows={4} placeholder={'200\n201\n202'} className="w-full text-xs p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700 font-mono" />}<div className="grid grid-cols-1 md:grid-cols-2 gap-3"><input value={createNameMask} onChange={e => setCreateNameMask(e.target.value)} placeholder="Name mask" className="text-xs p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700" /><select value={createSecretMode} onChange={e => setCreateSecretMode(e.target.value as any)} className="text-xs p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700"><option value="auto">Secret auto</option><option value="fixed">Secret fixed</option><option value="mask">Secret mask</option></select>{createSecretMode === 'fixed' && <input value={createFixedSecret} onChange={e => setCreateFixedSecret(e.target.value)} type="password" placeholder="Fixed secret" className="text-xs p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700" />}{createSecretMode === 'mask' && <input value={createSecretMask} onChange={e => setCreateSecretMask(e.target.value)} placeholder="pbx{ext}!" className="text-xs p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700" />}<select value={createTechnology} onChange={e => setCreateTechnology(e.target.value as any)} className="text-xs p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700"><option value="pjsip">PJSIP</option><option value="sip">SIP</option></select><input value={createContext} onChange={e => setCreateContext(e.target.value)} placeholder="Context" className="text-xs p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700" /><input value={createOutboundCid} onChange={e => setCreateOutboundCid(e.target.value)} placeholder="Outbound CID" className="text-xs p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700" /><input value={createEmailDomain} onChange={e => setCreateEmailDomain(e.target.value)} placeholder="Email domain" className="text-xs p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700" /><select value={createRecording} onChange={e => setCreateRecording(e.target.value)} className="text-xs p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700"><option value="always">Recording always</option><option value="never">Recording never</option><option value="optional">Recording optional</option></select><input value={createEmergencyCid} onChange={e => setCreateEmergencyCid(e.target.value)} placeholder="Emergency CID" className="text-xs p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700" /></div><div className="flex flex-wrap gap-4 text-xs text-slate-600 dark:text-slate-300"><label className="flex items-center gap-2"><input type="checkbox" checked={createVoicemail} onChange={e => setCreateVoicemail(e.target.checked)} /> Voicemail</label><label className="flex items-center gap-2"><input type="checkbox" checked={createCallWaiting} onChange={e => setCreateCallWaiting(e.target.checked)} /> Call Waiting</label></div><textarea value={createRawJson} onChange={e => setCreateRawJson(e.target.value)} rows={3} placeholder='Raw JSON advanced params, например {"department":"Sales"}' className="w-full text-xs p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700 font-mono" /><button type="button" onClick={handleCreatePreview} disabled={extensionPreviewLoading} className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-xs font-extrabold px-4 py-2.5 rounded-lg flex items-center gap-2"><Eye className="w-4 h-4" /> Preview создания</button></div>
+            <div className="border border-slate-150 dark:border-slate-700 rounded-xl p-5 bg-white dark:bg-slate-900 space-y-4"><h4 className="text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-2"><Edit className="w-4 h-4" /> Массовое изменение</h4><div className="text-xs text-slate-500 dark:text-slate-400">Выбрано extensions: <strong className="text-slate-800 dark:text-white">{selectedExtensionIds.length}</strong></div><div className="grid grid-cols-1 md:grid-cols-2 gap-3"><label className="space-y-1 text-xs"><span><input type="checkbox" checked={updateFields.updateDisplayName} onChange={e => setUpdateField('updateDisplayName', e.target.checked)} /> DisplayName mask</span><input value={updateFields.displayName} onChange={e => setUpdateField('displayName', e.target.value)} className="w-full p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700" /></label><label className="space-y-1 text-xs"><span><input type="checkbox" checked={updateFields.updateRecording} onChange={e => setUpdateField('updateRecording', e.target.checked)} /> Recording</span><select value={updateFields.recording} onChange={e => setUpdateField('recording', e.target.value)} className="w-full p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700"><option value="always">always</option><option value="never">never</option><option value="optional">optional</option></select></label><label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={updateFields.updateVoicemail} onChange={e => setUpdateField('updateVoicemail', e.target.checked)} /> Voicemail <input type="checkbox" checked={updateFields.voicemail} onChange={e => setUpdateField('voicemail', e.target.checked)} /></label><label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={updateFields.updateCallWaiting} onChange={e => setUpdateField('updateCallWaiting', e.target.checked)} /> Call Waiting <input type="checkbox" checked={updateFields.callWaiting} onChange={e => setUpdateField('callWaiting', e.target.checked)} /></label><label className="space-y-1 text-xs"><span><input type="checkbox" checked={updateFields.updateOutboundCid} onChange={e => setUpdateField('updateOutboundCid', e.target.checked)} /> Outbound CID</span><input value={updateFields.outboundCid} onChange={e => setUpdateField('outboundCid', e.target.value)} className="w-full p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700" /></label><label className="space-y-1 text-xs"><span><input type="checkbox" checked={updateFields.updateContext} onChange={e => setUpdateField('updateContext', e.target.checked)} /> Context</span><input value={updateFields.context} onChange={e => setUpdateField('context', e.target.value)} className="w-full p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700" /></label><label className="space-y-1 text-xs"><span><input type="checkbox" checked={updateFields.updateEmergencyCid} onChange={e => setUpdateField('updateEmergencyCid', e.target.checked)} /> Emergency CID</span><input value={updateFields.emergencyCid} onChange={e => setUpdateField('emergencyCid', e.target.value)} className="w-full p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700" /></label></div><label className="space-y-1 text-xs block"><span><input type="checkbox" checked={updateFields.updateRaw} onChange={e => setUpdateField('updateRaw', e.target.checked)} /> Raw JSON advanced params</span><textarea value={updateFields.rawJson} onChange={e => setUpdateField('rawJson', e.target.value)} rows={3} className="w-full p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700 font-mono" /></label><button type="button" onClick={handleUpdatePreview} disabled={extensionPreviewLoading || selectedExtensionIds.length === 0} className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-xs font-extrabold px-4 py-2.5 rounded-lg flex items-center gap-2"><Eye className="w-4 h-4" /> Preview изменения</button></div></div>
+            <div className="border border-slate-150 dark:border-slate-700 rounded-xl p-5 bg-white dark:bg-slate-900 space-y-4"><div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3"><h4 className="text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-2"><FileText className="w-4 h-4" /> Preview</h4><button type="button" disabled className="bg-slate-200 dark:bg-slate-700 text-slate-500 dark:text-slate-400 text-xs font-bold px-4 py-2 rounded-lg cursor-not-allowed">Apply будет включён после финальной проверки</button></div>{extensionPreviewResult ? <div className="space-y-3"><div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs"><div><span className="text-slate-400 font-bold uppercase">previewId</span><div className="font-mono text-slate-800 dark:text-white break-all">{extensionPreviewResult.previewId}</div></div><div><span className="text-slate-400 font-bold uppercase">type</span><div className="font-bold text-slate-800 dark:text-white">{extensionPreviewResult.type}</div></div><div><span className="text-slate-400 font-bold uppercase">counts</span><div className="font-mono text-slate-800 dark:text-white">{JSON.stringify(extensionPreviewResult.counts || {})}</div></div></div><div className="overflow-x-auto border border-slate-100 dark:border-slate-800 rounded-lg"><table className="w-full text-left text-xs"><thead className="bg-slate-50 dark:bg-slate-800 text-[10px] uppercase text-slate-400"><tr><th className="p-2">Extension</th><th className="p-2">Action</th><th className="p-2">Message</th><th className="p-2">Before</th><th className="p-2">After</th></tr></thead><tbody className="divide-y dark:divide-slate-800">{(extensionPreviewResult.items || []).map((item: any, idx: number) => <tr key={`${item.extension}-${idx}`}><td className="p-2 font-mono font-bold">{item.extension}</td><td className="p-2"><span className="px-2 py-1 rounded-full bg-slate-100 dark:bg-slate-800 text-[10px] font-black uppercase">{item.action}</span></td><td className="p-2 text-slate-600 dark:text-slate-300">{item.message}</td><td className="p-2 font-mono text-[10px] text-slate-500 max-w-xs">{summarizePreviewValue(item.before)}</td><td className="p-2 font-mono text-[10px] text-slate-500 max-w-xs">{summarizePreviewValue(item.after)}</td></tr>)}</tbody></table></div></div> : <div className="text-xs text-slate-400 py-6 text-center border border-dashed border-slate-200 dark:border-slate-700 rounded-lg">Preview ещё не сформирован.</div>}</div>
           </div>
         )}
-
         {/* TAB 4: TRUNKS WIZARD */}
         {activeTab === 'trunks' && (
           <div className="space-y-6 animate-fade-in">
