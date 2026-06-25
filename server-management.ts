@@ -1,3 +1,4 @@
+import fetch from "node-fetch";
 import { Request, Response, Express } from 'express';
 import fs from 'fs';
 import path from 'path';
@@ -334,50 +335,85 @@ function reloadFreePBX() {
   return true;
 }
 
+function normalizeFreepbxApiUrl(rawUrl: string): string {
+  const trimmed = String(rawUrl || '').trim().replace(/\/$/, '');
+  if (!trimmed) return '';
+  return /^[a-z][a-z\d+\-.]*:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+}
+
+function getFreepbxOAuthTokenUrl(baseUrl: string): string {
+  return baseUrl.endsWith('/rest') ? baseUrl.replace(/\/rest$/, '/token') : `${baseUrl}/token`;
+}
+
+const FREEPBX_REST_DISCOVERY_ENDPOINTS = ['/extensions', '/userman/extensions', '/core/users'];
+
+function normalizeFreepbxRestEndpoint(endpoint: string): string {
+  const normalized = String(endpoint || '').trim();
+  return normalized.startsWith('/') ? normalized : `/${normalized}`;
+}
+
+function resolveFreepbxRequestEndpoint(settings: any, endpoint: string): string {
+  const normalizedEndpoint = normalizeFreepbxRestEndpoint(endpoint);
+  const workingEndpoint = normalizeFreepbxRestEndpoint(settings.freepbxApiWorkingEndpoint || '');
+  if (!workingEndpoint || !FREEPBX_REST_DISCOVERY_ENDPOINTS.includes(workingEndpoint)) {
+    return normalizedEndpoint;
+  }
+  if (normalizedEndpoint === '/extensions') {
+    return workingEndpoint;
+  }
+  if (normalizedEndpoint.startsWith('/extensions/')) {
+    return `${workingEndpoint}${normalizedEndpoint.slice('/extensions'.length)}`;
+  }
+  return normalizedEndpoint;
+}
+
 async function freepbxRequest(endpoint: string, method: string, body?: any) {
   const settings = await getPBXSettings();
   if (!settings.freepbxApiUrl) {
     throw new Error('FreePBX REST API URL is not configured in settings.');
   }
 
-  const baseUrl = settings.freepbxApiUrl.replace(/\/$/, '');
-  const url = `${baseUrl}${endpoint.startsWith('/') ? endpoint : '/' + endpoint}`;
+  const baseUrl = normalizeFreepbxApiUrl(settings.freepbxApiUrl);
+  const resolvedEndpoint = resolveFreepbxRequestEndpoint(settings, endpoint);
+  const url = `${baseUrl}${resolvedEndpoint}`;
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'Accept': 'application/json'
   };
 
-  if (settings.freepbxApiToken) {
-    headers['Authorization'] = `Bearer ${settings.freepbxApiToken}`;
-  } else if (settings.freepbxApiClientId && settings.freepbxApiClientSecret) {
-    // Attempt OAuth token request
+  if (settings.freepbxApiClientId && settings.freepbxApiClientSecret) {
+    // FreePBX API advertises /admin/api/api/token for OAuth client_credentials.
     try {
-      let tokenUrl = `${baseUrl}/token`;
-      if (baseUrl.endsWith('/rest')) {
-        tokenUrl = baseUrl.replace(/\/rest$/, '/token');
-      } else if (baseUrl.endsWith('/rest/')) {
-        tokenUrl = baseUrl.replace(/\/rest\/$/, '/token');
-      } else if (baseUrl.includes('/api/rest')) {
-        tokenUrl = baseUrl.replace('/api/rest', '/api/token');
-      }
+      const tokenUrl = getFreepbxOAuthTokenUrl(baseUrl);
+      const tokenBody = new URLSearchParams({
+        grant_type: 'client_credentials',
+        client_id: settings.freepbxApiClientId,
+        client_secret: settings.freepbxApiClientSecret
+      });
       const tokenRes = await fetch(tokenUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          grant_type: 'client_credentials',
-          client_id: settings.freepbxApiClientId,
-          client_secret: settings.freepbxApiClientSecret
-        })
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Accept': 'application/json'
+        },
+        body: tokenBody.toString()
       });
       if (tokenRes.ok) {
         const tokenData: any = await tokenRes.json();
         if (tokenData.access_token) {
           headers['Authorization'] = `Bearer ${tokenData.access_token}`;
+        } else {
+          throw new Error('OAuth token response did not include access_token.');
         }
+      } else {
+        const errText = await tokenRes.text().catch(() => '');
+        throw new Error(`OAuth token request to ${tokenUrl} failed (${tokenRes.status}): ${errText || tokenRes.statusText}`);
       }
     } catch (e: any) {
-      console.warn('[FreePBX-REST] OAuth Token fetching failed, proceeding without token:', e.message);
+      throw new Error(`FreePBX REST OAuth authorization failed: ${e.message}`);
     }
+  } else if (settings.freepbxApiToken) {
+    headers['Authorization'] = `Bearer ${settings.freepbxApiToken}`;
   }
 
   console.log(`[FreePBX-REST] Executing ${method} to ${url}`);

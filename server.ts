@@ -1,3 +1,4 @@
+import fetch from "node-fetch";
 import {
   detectCallDirection,
   getRealCallerExtFromCall,
@@ -114,6 +115,27 @@ function parseAmiPacket(packet: string): Record<string, string> {
 let dtmfListenerStarted = false;
 let dtmfListenerSocket: net.Socket | null = null;
 let dtmfReconnectTimer: NodeJS.Timeout | null = null;
+let dtmfReconnectDelayMs = 5000;
+
+const DTMF_RECONNECT_BASE_MS = 5000;
+const DTMF_RECONNECT_MAX_MS = 60000;
+
+function normalizeFreepbxApiUrl(rawUrl: string): string {
+  const trimmed = String(rawUrl || '').trim().replace(/\/$/, '');
+  if (!trimmed) return '';
+  return /^[a-z][a-z\d+\-.]*:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+}
+
+function getFreepbxOAuthTokenUrl(baseUrl: string): string {
+  return baseUrl.endsWith('/rest') ? baseUrl.replace(/\/rest$/, '/token') : `${baseUrl}/token`;
+}
+
+const FREEPBX_REST_DISCOVERY_ENDPOINTS = ['/extensions', '/userman/extensions', '/core/users'];
+
+function normalizeFreepbxRestEndpoint(endpoint: string): string {
+  const normalized = String(endpoint || '').trim();
+  return normalized.startsWith('/') ? normalized : `/${normalized}`;
+}
 
 async function startDtmfAmiListener(settings: AppSettings) {
   if (dtmfListenerStarted) return;
@@ -132,21 +154,23 @@ async function startDtmfAmiListener(settings: AppSettings) {
 
   const connect = () => {
     let buffer = '';
-    let loggedIn = false;
+    let loginSent = false;
+    let loginAccepted = false;
+    let authFailed = false;
 
     const socket = new net.Socket();
     dtmfListenerSocket = socket;
 
     socket.connect(port, host, () => {
-      console.log(`[DTMF] AMI listener connected to ${host}:${port}`);
+      console.log(`[DTMF] AMI listener TCP connection established to ${host}:${port}`);
     });
 
     socket.on('data', (data) => {
       buffer += data.toString();
 
-      if (!loggedIn && buffer.includes('Asterisk Call Manager')) {
+      if (!loginSent && buffer.includes('Asterisk Call Manager')) {
         socket.write(`Action: Login\r\nUsername: ${user}\r\nSecret: ${pass}\r\nEvents: on\r\n\r\n`);
-        loggedIn = true;
+        loginSent = true;
       }
 
       const packets = buffer.split(/\r?\n\r?\n/);
@@ -155,8 +179,24 @@ async function startDtmfAmiListener(settings: AppSettings) {
       for (const packet of packets) {
         const ami = parseAmiPacket(packet);
         const eventName = ami.Event || '';
+        const response = String(ami.Response || '').toLowerCase();
 
-        if (eventName === 'DTMFBegin' || eventName === 'DTMFEnd') {
+        if (loginSent && !loginAccepted && response) {
+          if (response === 'success') {
+            loginAccepted = true;
+            dtmfReconnectDelayMs = DTMF_RECONNECT_BASE_MS;
+            console.log(`[DTMF] AMI listener authenticated to ${host}:${port}`);
+          } else {
+            authFailed = true;
+            const reason = ami.Message || ami.Response || 'Authentication failed';
+            console.error(`[DTMF] AMI listener authentication failed: ${reason}`);
+            socket.destroy();
+            return;
+          }
+        }
+
+
+        if (loginAccepted && (eventName === 'DTMFBegin' || eventName === 'DTMFEnd')) {
           const digit = ami.Digit || '';
           const linkedid = ami.Linkedid || ami.LinkedID || ami.Uniqueid || ami.UniqueID || '';
           const uniqueid = ami.Uniqueid || ami.UniqueID || '';
@@ -184,14 +224,17 @@ async function startDtmfAmiListener(settings: AppSettings) {
     });
 
     socket.on('close', () => {
-      console.warn('[DTMF] AMI listener disconnected');
+      console.warn(authFailed ? '[DTMF] AMI listener disconnected after authentication failure' : '[DTMF] AMI listener disconnected');
       dtmfListenerSocket = null;
       dtmfListenerStarted = false;
 
+      const reconnectDelay = dtmfReconnectDelayMs;
+      dtmfReconnectDelayMs = Math.min(dtmfReconnectDelayMs * 2, DTMF_RECONNECT_MAX_MS);
       if (dtmfReconnectTimer) clearTimeout(dtmfReconnectTimer);
+      console.warn(`[DTMF] AMI listener reconnect scheduled in ${Math.round(reconnectDelay / 1000)}s`);
       dtmfReconnectTimer = setTimeout(() => {
         startDtmfAmiListener(settings).catch((e: any) => console.error('[DTMF] reconnect failed:', e.message));
-      }, 5000);
+      }, reconnectDelay);
     });
   };
 
@@ -2050,9 +2093,55 @@ app.post('/api/settings/test-ami', requireAuth(), async (req, res) => {
       return;
     }
 
-    const result = await runAMICommand(settings, 'Ping');
+    const result = await new Promise<{ success: boolean; message: string }>((resolve) => {
+      const socket = new net.Socket();
+      let buffer = '';
+      let loginSent = false;
+      let settled = false;
+
+      const finish = (success: boolean, message: string) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+        try {
+          if (socket.writable) socket.write('Action: Logoff\r\n\r\n');
+        } catch (e) {}
+        try {
+          socket.end();
+        } catch (e) {}
+        socket.destroy();
+        resolve({ success, message });
+      };
+
+      const timeoutId = setTimeout(() => finish(false, 'AMI test timeout'), 5000);
+
+      socket.connect(Number(port), host);
+      socket.on('data', (data) => {
+        buffer += data.toString();
+
+        if (!loginSent && buffer.includes('\n')) {
+          buffer = '';
+          loginSent = true;
+          socket.write(`Action: Login\r\nUsername: ${user}\r\nSecret: ${pass}\r\nEvents: off\r\n\r\n`);
+          return;
+        }
+
+        if (loginSent && (buffer.includes('\r\n\r\n') || buffer.includes('\n\n'))) {
+          const ami = parseAmiPacket(buffer);
+          const response = String(ami.Response || '').toLowerCase();
+          const message = ami.Message || ami.Response || 'AMI login failed';
+          if (response === 'success') {
+            finish(true, 'Подключение к Asterisk AMI успешно установлено!');
+          } else {
+            finish(false, message);
+          }
+        }
+      });
+      socket.on('error', (err) => finish(false, err.message));
+    });
+
     if (result.success) {
-      res.json({ success: true, message: 'Подключение к Asterisk AMI успешно установлено!' });
+      res.json({ success: true, message: result.message });
     } else {
       res.status(400).json({ error: result.message || 'Не удалось подключиться к Asterisk AMI.' });
     }
@@ -2074,30 +2163,25 @@ app.post('/api/settings/test-freepbx-api', requireAuth(), async (req, res) => {
       return res.json({ success: true, message: 'Режим имитации: URL REST API не задан. Тест пройден.' });
     }
 
-    const url = settings.freepbxApiUrl.replace(/\/$/, '');
+    const url = normalizeFreepbxApiUrl(settings.freepbxApiUrl);
     const headers: any = { 'Content-Type': 'application/json' };
     
     let tokenMessage = '';
-    if (settings.freepbxApiToken) {
-      headers['Authorization'] = `Bearer ${settings.freepbxApiToken}`;
-    } else if (settings.freepbxApiClientId && settings.freepbxApiClientSecret) {
+    if (settings.freepbxApiClientId && settings.freepbxApiClientSecret) {
       try {
-        let tokenUrl = `${url}/token`;
-        if (url.endsWith('/rest')) {
-          tokenUrl = url.replace(/\/rest$/, '/token');
-        } else if (url.endsWith('/rest/')) {
-          tokenUrl = url.replace(/\/rest\/$/, '/token');
-        } else if (url.includes('/api/rest')) {
-          tokenUrl = url.replace('/api/rest', '/api/token');
-        }
+        const tokenUrl = getFreepbxOAuthTokenUrl(url);
+        const tokenBody = new URLSearchParams({
+          grant_type: 'client_credentials',
+          client_id: settings.freepbxApiClientId,
+          client_secret: settings.freepbxApiClientSecret
+        });
         const tokenRes = await fetch(tokenUrl, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            grant_type: 'client_credentials',
-            client_id: settings.freepbxApiClientId,
-            client_secret: settings.freepbxApiClientSecret
-          })
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Accept': 'application/json'
+          },
+          body: tokenBody.toString()
         });
         if (tokenRes.ok) {
           const tokenData: any = await tokenRes.json();
@@ -2105,43 +2189,60 @@ app.post('/api/settings/test-freepbx-api', requireAuth(), async (req, res) => {
             headers['Authorization'] = `Bearer ${tokenData.access_token}`;
             tokenMessage = ' (Успешно получен OAuth токен!)';
           } else {
-            tokenMessage = ' (Токен получен без поля access_token)';
+            return res.status(400).json({ error: 'OAuth token получен без поля access_token' });
           }
         } else {
           const errText = await tokenRes.text().catch(() => '');
-          tokenMessage = ` (Ошибка получения токена через /token [Код: ${tokenRes.status}]: ${errText})`;
+          return res.status(400).json({ error: `Ошибка получения OAuth token через ${tokenUrl} [Код: ${tokenRes.status}]: ${errText || tokenRes.statusText}` });
         }
       } catch (e: any) {
-        tokenMessage = ` (Ошибка авторизации OAuth: ${e.message})`;
+        return res.status(400).json({ error: `Ошибка авторизации OAuth: ${e.message}` });
+      }
+    } else if (settings.freepbxApiToken) {
+      headers['Authorization'] = `Bearer ${settings.freepbxApiToken}`;
+    }
+
+    const checkedEndpoints: string[] = [];
+    for (const endpoint of FREEPBX_REST_DISCOVERY_ENDPOINTS) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+      try {
+        const response = await fetch(`${url}${endpoint}`, {
+          headers,
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+        checkedEndpoints.push(`${endpoint}: ${response.status}`);
+
+        if (response.ok) {
+          const localDb = await readLocalDb();
+          localDb.settings = {
+            ...localDb.settings,
+            freepbxApiWorkingEndpoint: endpoint,
+          };
+          await writeLocalDb(localDb);
+
+          return res.json({
+            success: true,
+            message: `REST API успешно подключен. Рабочий endpoint: ${endpoint}`
+          });
+        }
+
+        if (response.status === 401 || response.status === 403) {
+          return res.status(400).json({
+            error: `Ошибка авторизации FreePBX REST API: ${response.status} - ${response.statusText}${tokenMessage}`
+          });
+        }
+      } catch (fetchErr: any) {
+        clearTimeout(timeoutId);
+        checkedEndpoints.push(`${endpoint}: ${fetchErr.message || 'connection timeout'}`);
       }
     }
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
-
-    try {
-      const response = await fetch(`${url}/extensions`, {
-        headers,
-        signal: controller.signal
-      });
-      clearTimeout(timeoutId);
-      if (response.ok || response.status === 401 || response.status === 403) {
-        res.json({ 
-          success: true, 
-          message: `Успешный ответ от FreePBX REST API${tokenMessage}! Код статуса: ${response.status} (${response.statusText})` 
-        });
-      } else {
-        res.status(400).json({ 
-          error: `Сервер вернул код ошибки: ${response.status} - ${response.statusText}${tokenMessage}` 
-        });
-      }
-    } catch (fetchErr: any) {
-      clearTimeout(timeoutId);
-      res.json({ 
-        success: true, 
-        message: `[Режим имитации] Ошибка сети при запросе к ${url}: ${fetchErr.message || 'connection timeout'}. Тестовый запрос обработан успешно.${tokenMessage}` 
-      });
-    }
+    res.status(400).json({
+      error: `Не найден рабочий FreePBX REST endpoint. Проверены: ${checkedEndpoints.join(', ') || FREEPBX_REST_DISCOVERY_ENDPOINTS.join(', ')}${tokenMessage}`
+    });
   } catch (error: any) {
     res.status(400).json({ error: error.message || 'Ошибка тестирования FreePBX REST API' });
   }
