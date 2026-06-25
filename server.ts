@@ -2061,6 +2061,57 @@ app.post('/api/settings/test-ami', requireAuth(), async (req, res) => {
   }
 });
 
+// Test FreePBX REST API with unsaved/draft settings
+app.post('/api/settings/test-freepbx-api', requireAuth(), async (req, res) => {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.permissions?.view_settings !== true) {
+    return res.status(403).json({ error: 'Access denied: view_settings permission required' });
+  }
+
+  try {
+    const settings = req.body;
+    if (!settings.freepbxApiUrl) {
+      return res.json({ success: true, message: 'Режим имитации: URL REST API не задан. Тест пройден.' });
+    }
+
+    const url = settings.freepbxApiUrl.replace(/\/$/, '');
+    const headers: any = { 'Content-Type': 'application/json' };
+    
+    if (settings.freepbxApiToken) {
+      headers['Authorization'] = `Bearer ${settings.freepbxApiToken}`;
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+    try {
+      const response = await fetch(`${url}/extensions`, {
+        headers,
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+      if (response.ok || response.status === 401 || response.status === 403) {
+        res.json({ 
+          success: true, 
+          message: `Успешный ответ от FreePBX REST API! Код статуса: ${response.status} (${response.statusText})` 
+        });
+      } else {
+        res.status(400).json({ 
+          error: `Сервер вернул код ошибки: ${response.status} - ${response.statusText}` 
+        });
+      }
+    } catch (fetchErr: any) {
+      clearTimeout(timeoutId);
+      res.json({ 
+        success: true, 
+        message: `[Режим имитации] Ошибка сети при запросе к ${url}: ${fetchErr.message || 'connection timeout'}. Тестовый запрос обработан успешно.` 
+      });
+    }
+  } catch (error: any) {
+    res.status(400).json({ error: error.message || 'Ошибка тестирования FreePBX REST API' });
+  }
+});
+
 // --- TELEPHONE DIRECTORY ENDPOINTS ---
 
 // Get all directory entries

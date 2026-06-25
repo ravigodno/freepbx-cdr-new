@@ -54,7 +54,8 @@ import {
   Truck,
   Landmark,
   Ban,
-  Wallet
+  Wallet,
+  Cpu
 } from 'lucide-react';
 import { CallEntry, DashboardStats, AppSettings, UserRole, DirectoryEntry } from './types';
 import packageJson from '../package.json';
@@ -373,6 +374,8 @@ export default function App() {
   const [dbTestResult, setDbTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [isTestingAmi, setIsTestingAmi] = useState(false);
   const [amiTestResult, setAmiTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [isTestingFreePBXApi, setIsTestingFreePBXApi] = useState(false);
+  const [freepbxApiTestResult, setFreePBXApiTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [settingsTab, setSettingsTab] = useState<'pbx' | 'directory' | 'access' | 'permissions' | 'appearance'>('pbx');
 
@@ -1683,6 +1686,45 @@ export default function App() {
       });
     } finally {
       setIsTestingAmi(false);
+    }
+  };
+
+  const testFreePBXApiConnection = async () => {
+    if (!draftSettings || !session) return;
+    setIsTestingFreePBXApi(true);
+    setFreePBXApiTestResult(null);
+    try {
+      const resp = await fetch('/api/settings/test-freepbx-api', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.token}`
+        },
+        body: JSON.stringify(draftSettings)
+      });
+      if (resp.status === 401) {
+        handleAuthError(resp);
+        return;
+      }
+      const data = await resp.json();
+      if (resp.ok) {
+        setFreePBXApiTestResult({
+          success: true,
+          message: data.message || 'Подключение к FreePBX REST API успешно установлено!'
+        });
+      } else {
+        setFreePBXApiTestResult({
+          success: false,
+          message: data.error || 'Не удалось подключиться к FreePBX REST API.'
+        });
+      }
+    } catch (err: any) {
+      setFreePBXApiTestResult({
+        success: false,
+        message: `Ошибка сокета: ${err.message || 'сервер недоступен'}`
+      });
+    } finally {
+      setIsTestingFreePBXApi(false);
     }
   };
 
@@ -4156,6 +4198,65 @@ export default function App() {
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                           <label className="md:col-span-2 text-xs font-bold text-slate-600">Путь к записям<input type="text" value={draftSettings.recordingsPath} onChange={(e) => setDraftSettings({ ...draftSettings, recordingsPath: e.target.value })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" required /></label>
                           <label className="text-xs font-bold text-slate-600">SLA отзвона, мин<input type="number" min={1} max={1440} value={draftSettings.callbackKpiMinutes ?? 60} onChange={(e) => setDraftSettings({ ...draftSettings, callbackKpiMinutes: parseInt(e.target.value, 10) || 60 })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" /></label></div>
+                      </div>
+                      
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mb-3 border-b border-slate-200 pb-2">
+                          <h4 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                            <Cpu className="h-4 w-4 text-emerald-600" />
+                            FreePBX REST API
+                          </h4>
+                          <button
+                            type="button"
+                            onClick={testFreePBXApiConnection}
+                            disabled={isTestingFreePBXApi}
+                            className="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 rounded-lg text-xs font-bold border border-slate-200 active:scale-95 transition-transform cursor-pointer flex items-center justify-center gap-1.5 shadow-sm animate-pulse-once"
+                          >
+                            {isTestingFreePBXApi && <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-500" />}
+                            Проверить REST API
+                          </button>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                          <label className="md:col-span-2 text-xs font-bold text-slate-600">URL FreePBX REST API
+                            <input 
+                              type="text" 
+                              placeholder="http://your-freepbx/admin/api" 
+                              value={draftSettings.freepbxApiUrl || ''} 
+                              onChange={(e) => setDraftSettings({ ...draftSettings, freepbxApiUrl: e.target.value })} 
+                              className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" 
+                            />
+                          </label>
+                          <label className="md:col-span-2 text-xs font-bold text-slate-600">Client ID
+                            <input 
+                              type="text" 
+                              value={draftSettings.freepbxApiClientId || ''} 
+                              onChange={(e) => setDraftSettings({ ...draftSettings, freepbxApiClientId: e.target.value })} 
+                              className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" 
+                            />
+                          </label>
+                          <label className="md:col-span-2 text-xs font-bold text-slate-600">Client Secret
+                            <input 
+                              type="password" 
+                              value={draftSettings.freepbxApiClientSecret || ''} 
+                              onChange={(e) => setDraftSettings({ ...draftSettings, freepbxApiClientSecret: e.target.value })} 
+                              className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" 
+                            />
+                          </label>
+                          <label className="md:col-span-2 text-xs font-bold text-slate-600">API Token / API Key
+                            <input 
+                              type="password" 
+                              value={draftSettings.freepbxApiToken || ''} 
+                              onChange={(e) => setDraftSettings({ ...draftSettings, freepbxApiToken: e.target.value })} 
+                              className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" 
+                            />
+                          </label>
+                        </div>
+                        {freepbxApiTestResult && (
+                          <div className={`mt-3 p-3.5 border rounded-lg text-xs flex items-start gap-2 ${freepbxApiTestResult.success ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-blue-50 border-blue-200 text-blue-700'}`}>
+                            <AlertCircle className={`h-4.5 w-4.5 shrink-0 mt-0.5 ${freepbxApiTestResult.success ? 'text-emerald-600' : 'text-blue-600'}`} />
+                            <span>{freepbxApiTestResult.message}</span>
+                          </div>
+                        )}
                       </div></div>
                   )}
                   {settingsTab === 'directory' && draftSettings && (

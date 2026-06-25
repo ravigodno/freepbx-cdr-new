@@ -153,7 +153,7 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
 
   const applyBatchMapping = () => {
     if (!batchMappingText.trim()) {
-      showNoti('warning', 'Пожалуйста, введите данные для сопоставления');
+      showNoti('info', 'Пожалуйста, введите данные для сопоставления');
       return;
     }
     const lines = batchMappingText.split('\n');

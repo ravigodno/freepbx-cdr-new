@@ -325,44 +325,76 @@ async function getPBXSettings() {
 }
 
 async function executeAsteriskQuery(sql: string, params: any[] = []) {
-  const settings = await getPBXSettings();
-  if (!settings.dbHost) {
-    console.log('[MGMT-DB] No database host configured. Skipping real DB write.');
-    return [];
-  }
-
-  // Use asterisk database, fallback to settings.dbName if not using standard name
-  const dbName = 'asterisk';
-  
-  let connection;
-  try {
-    connection = await mysql.createConnection({
-      host: settings.dbHost,
-      port: Number(settings.dbPort || 3306),
-      user: settings.dbUser,
-      password: settings.dbPass,
-      database: dbName,
-      connectTimeout: 5000
-    });
-    const [rows] = await connection.execute(sql, params);
-    return rows as any[];
-  } catch (e: any) {
-    console.error(`[MGMT-DB] MariaDB query failed: "${sql}"`, e.message);
-    throw e;
-  } finally {
-    if (connection) await connection.end();
-  }
+  console.log('[MGMT-DB] Прямая запись в БД FreePBX отключена по архитектурной директиве. Запрос пропущен:', sql, params);
+  return [];
 }
 
 function reloadFreePBX() {
+  console.log('[MGMT] Перезагрузка FreePBX через fwconsole отключена по архитектурной директиве.');
+  return true;
+}
+
+async function freepbxRequest(endpoint: string, method: string, body?: any) {
+  const settings = await getPBXSettings();
+  if (!settings.freepbxApiUrl) {
+    throw new Error('FreePBX REST API URL is not configured in settings.');
+  }
+
+  const baseUrl = settings.freepbxApiUrl.replace(/\/$/, '');
+  const url = `${baseUrl}${endpoint.startsWith('/') ? endpoint : '/' + endpoint}`;
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json'
+  };
+
+  if (settings.freepbxApiToken) {
+    headers['Authorization'] = `Bearer ${settings.freepbxApiToken}`;
+  } else if (settings.freepbxApiClientId && settings.freepbxApiClientSecret) {
+    // Attempt OAuth token request
+    try {
+      const tokenUrl = `${baseUrl}/token` || `${baseUrl}/oauth/token`;
+      const tokenRes = await fetch(tokenUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          grant_type: 'client_credentials',
+          client_id: settings.freepbxApiClientId,
+          client_secret: settings.freepbxApiClientSecret
+        })
+      });
+      if (tokenRes.ok) {
+        const tokenData: any = await tokenRes.json();
+        if (tokenData.access_token) {
+          headers['Authorization'] = `Bearer ${tokenData.access_token}`;
+        }
+      }
+    } catch (e: any) {
+      console.warn('[FreePBX-REST] OAuth Token fetching failed, proceeding without token:', e.message);
+    }
+  }
+
+  console.log(`[FreePBX-REST] Executing ${method} to ${url}`);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 7000);
+
   try {
-    console.log('[MGMT] Reloading FreePBX via fwconsole...');
-    const res = spawnSync('fwconsole reload', { shell: true, encoding: 'utf8', timeout: 60000 });
-    console.log('[MGMT] fwconsole reload finished with code:', res.status);
-    return res.status === 0;
-  } catch (e: any) {
-    console.error('[MGMT] fwconsole reload failed:', e.message);
-    return false;
+    const response = await fetch(url, {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '');
+      throw new Error(`FreePBX REST API error (${response.status}): ${errorText || response.statusText}`);
+    }
+
+    return await response.json();
+  } catch (err: any) {
+    clearTimeout(timeoutId);
+    throw err;
   }
 }
 
@@ -792,6 +824,20 @@ export function registerManagementRoutes(app: Express, requireAuth: Function) {
 
   app.get('/api/management/extensions', requireAuth(), async (req, res) => {
     try {
+      const settings = await getPBXSettings();
+      if (settings.freepbxApiUrl) {
+        try {
+          const apiData = await freepbxRequest('/extensions', 'GET');
+          if (Array.isArray(apiData)) {
+            await updatePBXData((db) => {
+              db.extensions = apiData;
+            });
+            return res.json(apiData);
+          }
+        } catch (apiErr: any) {
+          console.warn('[FreePBX-REST] Failed to fetch live extensions:', apiErr.message);
+        }
+      }
       const { extensions } = await getPBXData();
       res.json(extensions || []);
     } catch (e: any) {
@@ -1019,142 +1065,36 @@ export function registerManagementRoutes(app: Express, requireAuth: Function) {
         });
       });
 
-      // --- WRITE TO REAL ASTERISK DATABASE ---
-      for (const gen of generated) {
-        const extension = String(gen.extension);
-        const name = String(gen.name || `Extension ${extension}`);
-        const tech = String(gen.tech || 'pjsip').toLowerCase();
-        
-        let recording = 'out=dontcare|in=dontcare';
-        if (gen.recording === 'always') {
-          recording = 'out=always|in=always';
-        } else if (gen.recording) {
-          recording = String(gen.recording);
-        }
-        
-        const voicemail = gen.voicemail || 'novm';
-        const secret = gen.password || gen.secret || 'Pass' + Math.random().toString(36).substring(2, 10).toUpperCase() + '1!';
-        const ringtimer = isNaN(parseInt(gen.ringtimer, 10)) ? 0 : parseInt(gen.ringtimer, 10);
-        const noanswer = gen.noanswer || '';
-        const outboundcid = gen.outboundcid || '';
-        const sipname = gen.sipname || '';
-        const noanswer_cid = gen.noanswer_cid || '';
-        const busy_cid = gen.busy_cid || '';
-        const chanunavail_cid = gen.chanunavail_cid || '';
-        const noanswer_dest = gen.noanswer_dest || '';
-        const busy_dest = gen.busy_dest || '';
-        const chanunavail_dest = gen.chanunavail_dest || '';
-        const mohclass = gen.mohclass || 'default';
+      let viaRestApi = false;
+      let apiMessage = '';
 
-        // Delete from devices & users
-        await executeAsteriskQuery('DELETE FROM devices WHERE id = ?', [extension]).catch(() => {});
-        await executeAsteriskQuery('DELETE FROM users WHERE id = ?', [extension]).catch(() => {});
-        await executeAsteriskQuery('DELETE FROM sip WHERE id = ?', [extension]).catch(() => {});
-
-        // Insert devices
-        const dialStr = gen.dial || `${tech.toUpperCase()}/${extension}`;
-        await executeAsteriskQuery(
-          'INSERT INTO devices (id, tech, dial, devicestate, description, user) VALUES (?, ?, ?, ?, ?, ?)',
-          [extension, tech, dialStr, `${tech.toUpperCase()}/${extension}`, name, extension]
-        ).catch(() => {});
-
-        // Insert users
+      const settings = await getPBXSettings();
+      if (settings.freepbxApiUrl) {
         try {
-          await executeAsteriskQuery(
-            `INSERT INTO users (id, name, extension, password, voicemail, ringtimer, noanswer, recording, outboundcid, sipname, noanswer_cid, busy_cid, chanunavail_cid, noanswer_dest, busy_dest, chanunavail_dest, mohclass)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-              extension, name, extension, secret, voicemail, ringtimer,
-              noanswer, recording, outboundcid, sipname, noanswer_cid,
-              busy_cid, chanunavail_cid, noanswer_dest, busy_dest,
-              chanunavail_dest, mohclass
-            ]
-          );
-        } catch (err: any) {
-          console.warn('[MGMT-DB] Detailed insert into users failed, falling back:', err.message);
-          await executeAsteriskQuery(
-            'INSERT INTO users (id, name, extension, password, voicemail, ringtimer, noanswer, recording, devicestate) VALUES (?, ?, ?, ?, ?, ?, "", ?, "")',
-            [extension, name, extension, secret, voicemail, ringtimer, recording]
-          ).catch(() => {});
-        }
-
-        // Insert sip/pjsip properties
-        const sipSettings = [
-          ['secret', secret],
-          ['dtmfmode', gen.dtmfmode || 'rfc2833'],
-          ['canreinvite', gen.canreinvite || 'no'],
-          ['host', gen.host || 'dynamic'],
-          ['context', gen.context || 'from-internal'],
-          ['type', gen.type || 'friend'],
-          ['nat', gen.nat || 'force_rport,comedia'],
-          ['port', gen.port || '5060'],
-          ['qualify', gen.qualify || 'yes'],
-          ['qualifyfreq', gen.qualifyfreq || '60'],
-          ['allow', gen.allow || ''],
-          ['disallow', gen.disallow || ''],
-          ['avpf', gen.avpf || 'no'],
-          ['encryption', gen.encryption || 'no'],
-          ['force_avp', gen.force_avp || 'no'],
-          ['icesupport', gen.icesupport || 'no'],
-          ['rtcp_mux', gen.rtcp_mux || 'no'],
-          ['sendrpid', gen.sendrpid || 'pai'],
-          ['sessiontimers', gen.sessiontimers || 'accept'],
-          ['transport', gen.transport || 'udp,tcp,tls'],
-          ['trustrpid', gen.trustrpid || 'yes'],
-          ['user_eq_phone', gen.user_eq_phone || 'no'],
-          ['videosupport', gen.videosupport || 'no'],
-          ['accountcode', gen.accountcode || ''],
-          ['deny', gen.deny || ''],
-          ['permit', gen.permit || ''],
-          ['callerid', gen.callerid || `${name} <${extension}>`]
-        ];
-        for (const [keyword, data] of sipSettings) {
-          if (data !== undefined && data !== '') {
-            await executeAsteriskQuery(
-              'INSERT INTO sip (id, keyword, data, flags) VALUES (?, ?, ?, 0)',
-              [extension, keyword, data]
-            ).catch(() => {});
-          }
-        }
-
-        // Handle Find-me-follow settings
-        const fmfEnabled = String(gen.findmefollow_enabled || '').toLowerCase();
-        if (fmfEnabled === 'yes' || fmfEnabled === 'enabled' || fmfEnabled === '1' || gen.findmefollow_strategy) {
-          await executeAsteriskQuery('DELETE FROM findmefollow WHERE grpnum = ?', [extension]).catch(() => {});
           try {
-            await executeAsteriskQuery(
-              `INSERT INTO findmefollow (grpnum, strategy, grptime, grppre, grplist, annmsg_id, postdest, dring, needsconf, remotealert_id, toolate_id, ringing, pre_ring, voicemail, calendar_id, calendar_match, changecid, fixedcid, enabled)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-              [
-                extension,
-                gen.findmefollow_strategy || 'ringallv2-prim',
-                parseInt(gen.findmefollow_grptime || '20', 10),
-                gen.findmefollow_grppre || '',
-                gen.findmefollow_grplist || extension,
-                gen.findmefollow_annmsg_id || '',
-                gen.findmefollow_postdest || `ext-local,${extension},dest`,
-                gen.findmefollow_dring || '',
-                gen.findmefollow_needsconf || '',
-                gen.findmefollow_remotealert_id || '',
-                gen.findmefollow_toolate_id || '',
-                gen.findmefollow_ringing || 'Ring',
-                parseInt(gen.findmefollow_pre_ring || '7', 10),
-                gen.findmefollow_voicemail || 'novm',
-                gen.findmefollow_calendar_id || '',
-                gen.findmefollow_calendar_match || 'yes',
-                gen.findmefollow_changecid || 'default',
-                gen.findmefollow_fixedcid || '',
-                'yes'
-              ]
-            );
-          } catch (err: any) {
-            console.warn('[MGMT-DB] Insertion into findmefollow table failed:', err.message);
+            await freepbxRequest('/extensions/bulk', 'POST', { extensions: generated });
+            viaRestApi = true;
+            apiMessage = ' (строго через FreePBX REST API)';
+          } catch (bulkErr: any) {
+            console.warn('[FreePBX-REST] Bulk creation failed, trying individual posts:', bulkErr.message);
+            for (const ext of generated) {
+              await freepbxRequest(`/extensions`, 'POST', ext).catch(async (err) => {
+                console.warn(`[FreePBX-REST] POST failed for ${ext.extension}, trying PUT:`, err.message);
+                await freepbxRequest(`/extensions/${ext.extension}`, 'PUT', ext);
+              });
+            }
+            viaRestApi = true;
+            apiMessage = ' (через FreePBX REST API)';
           }
+        } catch (apiErr: any) {
+          console.error('[FreePBX-REST] Failed to apply extensions via REST API:', apiErr.message);
+          return res.status(400).json({ error: `Ошибка FreePBX REST API: ${apiErr.message}` });
         }
       }
 
-      // Reload FreePBX
-      reloadFreePBX();
+      if (!viaRestApi) {
+        apiMessage = ' (сохранено локально в базу данных сервиса)';
+      }
 
       addChangeLog(
         authUser?.username || 'admin',
@@ -1162,13 +1102,13 @@ export function registerManagementRoutes(app: Express, requireAuth: Function) {
         generated.length,
         'extensions',
         createdIds,
-        `Массовое заведение/обновление ассигнаций телефонов для ${generated.length} внутренних линий.`,
+        `Массовое заведение/обновление ассигнаций телефонов для ${generated.length} внутренних линий.${apiMessage}`,
         previousState
       );
 
       res.json({
         success: true,
-        message: `Успешно сохранено ${generated.length} номеров в FreePBX.`
+        message: `Успешно сохранено ${generated.length} номеров в FreePBX${apiMessage}.`
       });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -1273,52 +1213,36 @@ export function registerManagementRoutes(app: Express, requireAuth: Function) {
         });
       });
 
-      // --- WRITE TO REAL ASTERISK DATABASE ---
-      for (const gen of generated) {
-        const trunkName = String(gen.name);
-        const tech = String(gen.tech || 'pjsip').toLowerCase();
-        const host = String(gen.host || 'sip.mtt.ru');
-        const username = String(gen.username || gen.user || '74951234567');
-        const password = String(gen.password || 'S1pP@ssw0rd!');
+      let viaRestApi = false;
+      let apiMessage = '';
 
-        // Check if trunk exists
-        const existing = await executeAsteriskQuery('SELECT trunkid FROM trunks WHERE name = ?', [trunkName]).catch(() => [] as any[]);
-        let trunkId;
-        if (existing && existing.length > 0) {
-          trunkId = existing[0].trunkid;
-        } else {
-          await executeAsteriskQuery(
-            'INSERT INTO trunks (name, tech, disable, `continue`) VALUES (?, ?, "off", "on")',
-            [trunkName, tech]
-          ).catch(() => {});
-          
-          const newTrunk = await executeAsteriskQuery('SELECT trunkid FROM trunks WHERE name = ?', [trunkName]).catch(() => [] as any[]);
-          if (newTrunk && newTrunk.length > 0) {
-            trunkId = newTrunk[0].trunkid;
+      const settings = await getPBXSettings();
+      if (settings.freepbxApiUrl) {
+        try {
+          try {
+            await freepbxRequest('/trunks/bulk', 'POST', { trunks: generated });
+            viaRestApi = true;
+            apiMessage = ' (строго через FreePBX REST API)';
+          } catch (bulkErr: any) {
+            console.warn('[FreePBX-REST] Bulk trunk creation failed, trying individual posts:', bulkErr.message);
+            for (const trunk of generated) {
+              await freepbxRequest(`/trunks`, 'POST', trunk).catch(async (err) => {
+                console.warn(`[FreePBX-REST] POST failed for trunk ${trunk.name}, trying PUT:`, err.message);
+                await freepbxRequest(`/trunks/${trunk.name}`, 'PUT', trunk);
+              });
+            }
+            viaRestApi = true;
+            apiMessage = ' (через FreePBX REST API)';
           }
-        }
-
-        if (trunkId) {
-          await executeAsteriskQuery('DELETE FROM sip WHERE id = ?', [`trunk-${trunkId}`]).catch(() => {});
-          const trunkSipSettings = [
-            ['host', host],
-            ['username', username],
-            ['secret', password],
-            ['type', 'peer'],
-            ['context', 'from-trunk'],
-            ['insecure', 'port,invite']
-          ];
-          for (const [keyword, data] of trunkSipSettings) {
-            await executeAsteriskQuery(
-              'INSERT INTO sip (id, keyword, data, flags) VALUES (?, ?, ?, 0)',
-              [`trunk-${trunkId}`, keyword, data]
-            ).catch(() => {});
-          }
+        } catch (apiErr: any) {
+          console.error('[FreePBX-REST] Failed to apply trunks via REST API:', apiErr.message);
+          return res.status(400).json({ error: `Ошибка FreePBX REST API: ${apiErr.message}` });
         }
       }
 
-      // Reload FreePBX
-      reloadFreePBX();
+      if (!viaRestApi) {
+        apiMessage = ' (сохранено локально в базу данных сервиса)';
+      }
 
       addChangeLog(
         authUser?.username || 'admin',
@@ -1326,13 +1250,13 @@ export function registerManagementRoutes(app: Express, requireAuth: Function) {
         generated.length,
         'trunks',
         createdIds,
-        `Создано ${generated.length} внешних SIP/PJSIP транков.`,
+        `Создано ${generated.length} внешних SIP/PJSIP транков.${apiMessage}`,
         previousState
       );
 
       res.json({
         success: true,
-        message: `Транк успешно добавлен в FreePBX.`
+        message: `Транк успешно добавлен в FreePBX${apiMessage}.`
       });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -1424,56 +1348,36 @@ export function registerManagementRoutes(app: Express, requireAuth: Function) {
         });
       });
 
-      // --- WRITE TO REAL ASTERISK DATABASE ---
-      for (const gen of generated) {
-        const routeName = String(gen.name);
-        const trunksList = Array.isArray(gen.trunks) ? gen.trunks : [];
-        const patternsList = Array.isArray(gen.patterns) ? gen.patterns : ['7XXXXXXXXXX'];
+      let viaRestApi = false;
+      let apiMessage = '';
 
-        // Check if route exists
-        const existing = await executeAsteriskQuery('SELECT route_id FROM outbound_routes WHERE name = ?', [routeName]).catch(() => [] as any[]);
-        let routeId;
-        if (existing && existing.length > 0) {
-          routeId = existing[0].route_id;
-        } else {
-          await executeAsteriskQuery(
-            'INSERT INTO outbound_routes (name, password, emergency, musicclass, dialpattern_hash) VALUES (?, "", "0", "default", "")',
-            [routeName]
-          ).catch(() => {});
-          const newRoute = await executeAsteriskQuery('SELECT route_id FROM outbound_routes WHERE name = ?', [routeName]).catch(() => [] as any[]);
-          if (newRoute && newRoute.length > 0) {
-            routeId = newRoute[0].route_id;
-          }
-        }
-
-        if (routeId) {
-          // Clear and recreate outbound_route_trunks
-          await executeAsteriskQuery('DELETE FROM outbound_route_trunks WHERE route_id = ?', [routeId]).catch(() => {});
-          for (let seq = 0; seq < trunksList.length; seq++) {
-            const tName = trunksList[seq];
-            const trunkRow = await executeAsteriskQuery('SELECT trunkid FROM trunks WHERE name = ?', [tName]).catch(() => [] as any[]);
-            if (trunkRow && trunkRow.length > 0) {
-              const trunkId = trunkRow[0].trunkid;
-              await executeAsteriskQuery(
-                'INSERT INTO outbound_route_trunks (route_id, trunk_id, seq) VALUES (?, ?, ?)',
-                [routeId, trunkId, seq]
-              ).catch(() => {});
+      const settings = await getPBXSettings();
+      if (settings.freepbxApiUrl) {
+        try {
+          try {
+            await freepbxRequest('/outbound-routes/bulk', 'POST', { routes: generated });
+            viaRestApi = true;
+            apiMessage = ' (строго через FreePBX REST API)';
+          } catch (bulkErr: any) {
+            console.warn('[FreePBX-REST] Bulk outbound-routes creation failed, trying individual posts:', bulkErr.message);
+            for (const route of generated) {
+              await freepbxRequest(`/outbound-routes`, 'POST', route).catch(async (err) => {
+                console.warn(`[FreePBX-REST] POST failed for outbound-route ${route.name}, trying PUT:`, err.message);
+                await freepbxRequest(`/outbound-routes/${route.name}`, 'PUT', route);
+              });
             }
+            viaRestApi = true;
+            apiMessage = ' (через FreePBX REST API)';
           }
-
-          // Clear and recreate outbound_route_patterns
-          await executeAsteriskQuery('DELETE FROM outbound_route_patterns WHERE route_id = ?', [routeId]).catch(() => {});
-          for (const pattern of patternsList) {
-            await executeAsteriskQuery(
-              'INSERT INTO outbound_route_patterns (route_id, match_pattern_pass, match_pattern_prefix, match_cid, prepend_digits) VALUES (?, ?, "", "", "")',
-              [routeId, pattern]
-            ).catch(() => {});
-          }
+        } catch (apiErr: any) {
+          console.error('[FreePBX-REST] Failed to apply outbound-routes via REST API:', apiErr.message);
+          return res.status(400).json({ error: `Ошибка FreePBX REST API: ${apiErr.message}` });
         }
       }
 
-      // Reload FreePBX
-      reloadFreePBX();
+      if (!viaRestApi) {
+        apiMessage = ' (сохранено локально в базу данных сервиса)';
+      }
 
       addChangeLog(
         authUser?.username || 'admin',
@@ -1481,11 +1385,11 @@ export function registerManagementRoutes(app: Express, requireAuth: Function) {
         generated.length,
         'outbound-routes',
         createdIds,
-        `Создана маска исходящих путей набора '${generated[0].name}'.`,
+        `Создана маска исходящих путей набора '${generated[0].name}'.${apiMessage}`,
         previousState
       );
 
-      res.json({ success: true, message: 'Исходящие маршруты успешно синхронизированы.' });
+      res.json({ success: true, message: `Исходящие маршруты успешно синхронизированы${apiMessage}.` });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -1586,31 +1490,36 @@ export function registerManagementRoutes(app: Express, requireAuth: Function) {
         });
       });
 
-      // --- WRITE TO REAL ASTERISK DATABASE ---
-      for (const gen of generated) {
-        const did = String(gen.did);
-        const destinationType = gen.destinationType;
-        const destinationValue = gen.destination;
-        const description = gen.description || '';
+      let viaRestApi = false;
+      let apiMessage = '';
 
-        let dest = '';
-        if (destinationType === 'extension') {
-          dest = `from-did-direct,${destinationValue},1`;
-        } else if (destinationType === 'queue') {
-          dest = `ext-queues,${destinationValue},1`;
-        } else {
-          dest = `from-did-direct,${destinationValue},1`;
+      const settings = await getPBXSettings();
+      if (settings.freepbxApiUrl) {
+        try {
+          try {
+            await freepbxRequest('/dids/bulk', 'POST', { dids: generated });
+            viaRestApi = true;
+            apiMessage = ' (строго через FreePBX REST API)';
+          } catch (bulkErr: any) {
+            console.warn('[FreePBX-REST] Bulk DIDs creation failed, trying individual posts:', bulkErr.message);
+            for (const item of generated) {
+              await freepbxRequest(`/dids`, 'POST', item).catch(async (err) => {
+                console.warn(`[FreePBX-REST] POST failed for DID ${item.did}, trying PUT:`, err.message);
+                await freepbxRequest(`/dids/${item.did}`, 'PUT', item);
+              });
+            }
+            viaRestApi = true;
+            apiMessage = ' (через FreePBX REST API)';
+          }
+        } catch (apiErr: any) {
+          console.error('[FreePBX-REST] Failed to apply DIDs via REST API:', apiErr.message);
+          return res.status(400).json({ error: `Ошибка FreePBX REST API: ${apiErr.message}` });
         }
-
-        await executeAsteriskQuery('DELETE FROM incoming WHERE extension = ?', [did]).catch(() => {});
-        await executeAsteriskQuery(
-          'INSERT INTO incoming (cidnum, extension, destination, description, privacyman, alertinfo, ringing, grppre, delay_answer, pmmaxretries, pmdelay) VALUES ("", ?, ?, ?, "0", "", "0", "", "0", "2", "10")',
-          [did, dest, description]
-        ).catch(() => {});
       }
 
-      // Reload FreePBX
-      reloadFreePBX();
+      if (!viaRestApi) {
+        apiMessage = ' (сохранено локально в базу данных сервиса)';
+      }
 
       addChangeLog(
         authUser?.username || 'admin',
@@ -1618,11 +1527,11 @@ export function registerManagementRoutes(app: Express, requireAuth: Function) {
         generated.length,
         'did',
         createdIds,
-        `Пакетная привязка внешних DID номеров (${generated.length} шт.) к внутренним абонентам АТС.`,
+        `Пакетная привязка внешних DID номеров (${generated.length} шт.) к внутренним абонентам АТС.${apiMessage}`,
         previousState
       );
 
-      res.json({ success: true, message: 'Входящие DID линии установлены.' });
+      res.json({ success: true, message: `Входящие DID линии установлены${apiMessage}.` });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

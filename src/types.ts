@@ -88,6 +88,12 @@ export interface AppSettings {
   // Auto-Resolution Settings (KPI Callback timeframe in minutes)
   callbackKpiMinutes?: number;
 
+  // FreePBX REST API Settings
+  freepbxApiUrl?: string;
+  freepbxApiToken?: string;
+  freepbxApiClientId?: string;
+  freepbxApiClientSecret?: string;
+
   // Phone Normalization Settings
   normEnabled?: boolean;
   normReplace8With7?: boolean;
