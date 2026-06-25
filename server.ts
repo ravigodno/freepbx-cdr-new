@@ -2077,8 +2077,36 @@ app.post('/api/settings/test-freepbx-api', requireAuth(), async (req, res) => {
     const url = settings.freepbxApiUrl.replace(/\/$/, '');
     const headers: any = { 'Content-Type': 'application/json' };
     
+    let tokenMessage = '';
     if (settings.freepbxApiToken) {
       headers['Authorization'] = `Bearer ${settings.freepbxApiToken}`;
+    } else if (settings.freepbxApiClientId && settings.freepbxApiClientSecret) {
+      try {
+        const tokenUrl = `${url}/token`;
+        const tokenRes = await fetch(tokenUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            grant_type: 'client_credentials',
+            client_id: settings.freepbxApiClientId,
+            client_secret: settings.freepbxApiClientSecret
+          })
+        });
+        if (tokenRes.ok) {
+          const tokenData: any = await tokenRes.json();
+          if (tokenData.access_token) {
+            headers['Authorization'] = `Bearer ${tokenData.access_token}`;
+            tokenMessage = ' (Успешно получен OAuth токен!)';
+          } else {
+            tokenMessage = ' (Токен получен без поля access_token)';
+          }
+        } else {
+          const errText = await tokenRes.text().catch(() => '');
+          tokenMessage = ` (Ошибка получения токена через /token [Код: ${tokenRes.status}]: ${errText})`;
+        }
+      } catch (e: any) {
+        tokenMessage = ` (Ошибка авторизации OAuth: ${e.message})`;
+      }
     }
 
     const controller = new AbortController();
@@ -2093,18 +2121,18 @@ app.post('/api/settings/test-freepbx-api', requireAuth(), async (req, res) => {
       if (response.ok || response.status === 401 || response.status === 403) {
         res.json({ 
           success: true, 
-          message: `Успешный ответ от FreePBX REST API! Код статуса: ${response.status} (${response.statusText})` 
+          message: `Успешный ответ от FreePBX REST API${tokenMessage}! Код статуса: ${response.status} (${response.statusText})` 
         });
       } else {
         res.status(400).json({ 
-          error: `Сервер вернул код ошибки: ${response.status} - ${response.statusText}` 
+          error: `Сервер вернул код ошибки: ${response.status} - ${response.statusText}${tokenMessage}` 
         });
       }
     } catch (fetchErr: any) {
       clearTimeout(timeoutId);
       res.json({ 
         success: true, 
-        message: `[Режим имитации] Ошибка сети при запросе к ${url}: ${fetchErr.message || 'connection timeout'}. Тестовый запрос обработан успешно.` 
+        message: `[Режим имитации] Ошибка сети при запросе к ${url}: ${fetchErr.message || 'connection timeout'}. Тестовый запрос обработан успешно.${tokenMessage}` 
       });
     }
   } catch (error: any) {
