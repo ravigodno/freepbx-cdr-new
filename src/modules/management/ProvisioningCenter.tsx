@@ -1484,6 +1484,270 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
                     </div>
                   )}
 
+                  {extMode === 'edit-active' && (
+                    <div className="space-y-4">
+                      {/* Search & Actions Header */}
+                      <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center justify-between bg-slate-50 dark:bg-slate-800 p-3 rounded-lg border dark:border-slate-700">
+                        <div className="relative flex-1">
+                          <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                          <input
+                            type="text"
+                            placeholder="Поиск по номеру, имени или отделу..."
+                            value={activeExtSearch}
+                            onChange={(e) => setActiveExtSearch(e.target.value)}
+                            className="w-full pl-9 pr-4 py-1.5 text-xs border rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                          />
+                        </div>
+                        <div className="flex gap-2 items-center">
+                          <button
+                            type="button"
+                            onClick={fetchActiveExtensions}
+                            disabled={activeExtLoading}
+                            className="bg-white hover:bg-slate-100 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 text-xs font-semibold px-3 py-1.5 rounded-lg border dark:border-slate-600 flex items-center gap-1.5 transition disabled:opacity-50"
+                          >
+                            <RefreshCw className={`h-3 w-3 ${activeExtLoading ? 'animate-spin' : ''}`} />
+                            Обновить с АТС
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const nextExt = String(Math.max(...activeExtensions.map(e => parseInt(e.extension) || 100), 100) + 1);
+                              const newExt = {
+                                extension: nextExt,
+                                name: 'Новый абонент',
+                                department: 'Отдел продаж',
+                                recording: 'always',
+                                voicemail: 'no',
+                                findmefollow_enabled: 'no',
+                                tech: 'pjsip'
+                              };
+                              setActiveExtensions(prev => [newExt, ...prev]);
+                              showNoti('success', `Добавлен новый пустой абонент ${newExt.extension}! Заполните данные.`);
+                            }}
+                            className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition"
+                          >
+                            <Plus className="h-3 w-3" />
+                            Добавить абонента
+                          </button>
+                        </div>
+                      </div>
+
+                      {activeExtLoading ? (
+                        <div className="flex flex-col items-center justify-center py-12 text-slate-400 gap-2">
+                          <RefreshCw className="h-8 w-8 animate-spin text-indigo-500" />
+                          <span className="text-xs">Загрузка списка абонентов с АТС...</span>
+                        </div>
+                      ) : activeExtensions.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center py-12 text-slate-400 gap-2 border border-dashed rounded-lg">
+                          <Users className="h-10 w-10 text-slate-300" />
+                          <span className="text-xs font-medium">Нет загруженных абонентов с АТС</span>
+                          <button
+                            type="button"
+                            onClick={fetchActiveExtensions}
+                            className="mt-2 text-xs bg-indigo-50 hover:bg-indigo-100 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-400 px-3 py-1.5 rounded-md font-bold"
+                          >
+                            Загрузить список сейчас
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="space-y-4 animate-fade-in">
+                          {/* Bulk mapping and editing controls panel */}
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-50 dark:bg-slate-800 p-4 rounded-xl border dark:border-slate-700">
+                            {/* Bulk Mapping Textarea */}
+                            <div className="space-y-2">
+                              <div className="flex items-center justify-between">
+                                <label className="text-[10px] uppercase font-bold text-slate-400 block">Пакетное сопоставление (Номер; ФИО; Отдел)</label>
+                                <button
+                                  type="button"
+                                  onClick={applyBatchMapping}
+                                  className="text-[10px] bg-indigo-100 hover:bg-indigo-200 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-400 px-2.5 py-1 rounded font-bold"
+                                >
+                                  Сопоставить список
+                                </button>
+                              </div>
+                              <textarea
+                                value={batchMappingText}
+                                onChange={(e) => setBatchMappingText(e.target.value)}
+                                rows={4}
+                                placeholder="200; Иванов Иван; Отдел продаж&#10;201; Петров Петр; Техподдержка"
+                                className="w-full text-xs p-2 border bg-white dark:bg-slate-700 text-slate-900 dark:text-white rounded-lg font-mono focus:outline-none"
+                              />
+                            </div>
+
+                            {/* Quick bulk settings */}
+                            <div className="space-y-3 flex flex-col justify-between">
+                              <div>
+                                <span className="text-[10px] uppercase font-bold text-slate-400 block mb-2">Групповые действия</span>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                  <div className="space-y-1">
+                                    <span className="text-[9px] text-slate-400 block">Запись разговоров (Все):</span>
+                                    <div className="flex gap-1">
+                                      <button
+                                        type="button"
+                                        onClick={() => setAllRecording('always')}
+                                        className="text-[9px] bg-white dark:bg-slate-700 hover:bg-slate-100 dark:hover:bg-slate-600 border px-1.5 py-1 rounded text-slate-700 dark:text-slate-300 font-medium"
+                                      >
+                                        Всегда
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setAllRecording('never')}
+                                        className="text-[9px] bg-white dark:bg-slate-700 hover:bg-slate-100 dark:hover:bg-slate-600 border px-1.5 py-1 rounded text-slate-700 dark:text-slate-300 font-medium"
+                                      >
+                                        Никогда
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setAllRecording('optional')}
+                                        className="text-[9px] bg-white dark:bg-slate-700 hover:bg-slate-100 dark:hover:bg-slate-600 border px-1.5 py-1 rounded text-slate-700 dark:text-slate-300 font-medium"
+                                      >
+                                        Опц.
+                                      </button>
+                                    </div>
+                                  </div>
+                                  <div className="space-y-1">
+                                    <span className="text-[9px] text-slate-400 block">Режим FollowMe (Все):</span>
+                                    <div className="flex gap-1">
+                                      <button
+                                        type="button"
+                                        onClick={() => setAllFollowMe(true)}
+                                        className="text-[9px] bg-white dark:bg-slate-700 hover:bg-slate-100 dark:hover:bg-slate-600 border px-1.5 py-1 rounded text-slate-700 dark:text-slate-300 font-medium"
+                                      >
+                                        Вкл
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setAllFollowMe(false)}
+                                        className="text-[9px] bg-white dark:bg-slate-700 hover:bg-slate-100 dark:hover:bg-slate-600 border px-1.5 py-1 rounded text-slate-700 dark:text-slate-300 font-medium"
+                                      >
+                                        Выкл
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="pt-2 border-t dark:border-slate-700">
+                                <span className="text-[10px] text-slate-400 font-medium block">
+                                  Загружено с АТС: <strong className="text-slate-700 dark:text-white">{activeExtensions.length}</strong> | 
+                                  После фильтра: <strong className="text-indigo-600 dark:text-indigo-400">{filteredActiveExtensions.length}</strong>
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Interactive list table */}
+                          <div className="max-h-[350px] overflow-y-auto border border-slate-150 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-900">
+                            <table className="w-full text-left border-collapse text-xs">
+                              <thead>
+                                <tr className="bg-slate-50 dark:bg-slate-800 text-slate-400 font-bold border-b dark:border-slate-700 sticky top-0 z-10">
+                                  <th className="p-2.5 w-16">Номер</th>
+                                  <th className="p-2.5">ФИО Сотрудника</th>
+                                  <th className="p-2.5">Отдел</th>
+                                  <th className="p-2.5 w-24">Запись</th>
+                                  <th className="p-2.5 w-16">F-Me</th>
+                                  <th className="p-2.5 w-16">Почта</th>
+                                  <th className="p-2.5 w-16">Исключить</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y dark:divide-slate-700">
+                                {filteredActiveExtensions.map((ext, idx) => (
+                                  <tr key={ext.extension || idx} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30">
+                                    <td className="p-2 font-mono font-bold text-slate-700 dark:text-slate-300">
+                                      <input
+                                        type="text"
+                                        value={ext.extension || ''}
+                                        onChange={(e) => {
+                                          const val = e.target.value;
+                                          setActiveExtensions(prev => prev.map((item, i) => item.extension === ext.extension ? { ...item, extension: val } : item));
+                                        }}
+                                        className="w-12 bg-transparent border-b border-dashed border-transparent hover:border-slate-300 focus:border-indigo-500 focus:outline-none font-bold"
+                                        placeholder="ext"
+                                      />
+                                    </td>
+                                    <td className="p-2">
+                                      <input
+                                        type="text"
+                                        value={ext.name || ''}
+                                        onChange={(e) => {
+                                          const val = e.target.value;
+                                          setActiveExtensions(prev => prev.map(item => item.extension === ext.extension ? { ...item, name: val } : item));
+                                        }}
+                                        placeholder="Иван Иванов"
+                                        className="w-full bg-transparent border-b border-dashed border-transparent hover:border-slate-300 focus:border-indigo-500 focus:outline-none py-0.5 font-medium text-slate-800 dark:text-slate-200"
+                                      />
+                                    </td>
+                                    <td className="p-2">
+                                      <input
+                                        type="text"
+                                        value={ext.department || ''}
+                                        onChange={(e) => {
+                                          const val = e.target.value;
+                                          setActiveExtensions(prev => prev.map(item => item.extension === ext.extension ? { ...item, department: val } : item));
+                                        }}
+                                        placeholder="Отдел"
+                                        className="w-full bg-transparent border-b border-dashed border-transparent hover:border-slate-300 focus:border-indigo-500 focus:outline-none py-0.5 text-slate-600 dark:text-slate-300"
+                                      />
+                                    </td>
+                                    <td className="p-2">
+                                      <select
+                                        value={ext.recording || 'always'}
+                                        onChange={(e) => {
+                                          const val = e.target.value;
+                                          setActiveExtensions(prev => prev.map(item => item.extension === ext.extension ? { ...item, recording: val } : item));
+                                        }}
+                                        className="bg-slate-50 dark:bg-slate-800 border dark:border-slate-700 rounded p-1 text-[11px] focus:outline-none text-slate-800 dark:text-slate-200"
+                                      >
+                                        <option value="always">Всегда</option>
+                                        <option value="never">Никогда</option>
+                                        <option value="optional">Опц.</option>
+                                      </select>
+                                    </td>
+                                    <td className="p-2 text-center">
+                                      <input
+                                        type="checkbox"
+                                        checked={ext.findmefollow_enabled === 'yes' || ext.findmefollow_enabled === true}
+                                        onChange={(e) => {
+                                          const val = e.target.checked ? 'yes' : 'no';
+                                          setActiveExtensions(prev => prev.map(item => item.extension === ext.extension ? { ...item, findmefollow_enabled: val } : item));
+                                        }}
+                                        className="w-3.5 h-3.5 rounded"
+                                      />
+                                    </td>
+                                    <td className="p-2 text-center">
+                                      <input
+                                        type="checkbox"
+                                        checked={ext.voicemail === 'yes' || ext.voicemail === true}
+                                        onChange={(e) => {
+                                          const val = e.target.checked ? 'yes' : 'no';
+                                          setActiveExtensions(prev => prev.map(item => item.extension === ext.extension ? { ...item, voicemail: val } : item));
+                                        }}
+                                        className="w-3.5 h-3.5 rounded"
+                                      />
+                                    </td>
+                                    <td className="p-2 text-center">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setActiveExtensions(prev => prev.filter(item => item.extension !== ext.extension));
+                                          showNoti('info', `Абонент ${ext.extension} исключен из списка`);
+                                        }}
+                                        className="text-red-500 hover:text-red-700 p-1 transition"
+                                        title="Исключить из редактирования"
+                                      >
+                                        <Trash2 className="h-3.5 w-3.5 mx-auto" />
+                                      </button>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {/* MAC Phones mapping toggle inside extensions */}
                   <div className="bg-slate-50 dark:bg-slate-750/30 p-3.5 rounded-xl border dark:border-slate-700">
                     <div className="flex items-center justify-between">

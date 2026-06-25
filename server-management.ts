@@ -352,7 +352,14 @@ async function freepbxRequest(endpoint: string, method: string, body?: any) {
   } else if (settings.freepbxApiClientId && settings.freepbxApiClientSecret) {
     // Attempt OAuth token request
     try {
-      const tokenUrl = `${baseUrl}/token` || `${baseUrl}/oauth/token`;
+      let tokenUrl = `${baseUrl}/token`;
+      if (baseUrl.endsWith('/rest')) {
+        tokenUrl = baseUrl.replace(/\/rest$/, '/token');
+      } else if (baseUrl.endsWith('/rest/')) {
+        tokenUrl = baseUrl.replace(/\/rest\/$/, '/token');
+      } else if (baseUrl.includes('/api/rest')) {
+        tokenUrl = baseUrl.replace('/api/rest', '/api/token');
+      }
       const tokenRes = await fetch(tokenUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

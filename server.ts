@@ -2082,7 +2082,14 @@ app.post('/api/settings/test-freepbx-api', requireAuth(), async (req, res) => {
       headers['Authorization'] = `Bearer ${settings.freepbxApiToken}`;
     } else if (settings.freepbxApiClientId && settings.freepbxApiClientSecret) {
       try {
-        const tokenUrl = `${url}/token`;
+        let tokenUrl = `${url}/token`;
+        if (url.endsWith('/rest')) {
+          tokenUrl = url.replace(/\/rest$/, '/token');
+        } else if (url.endsWith('/rest/')) {
+          tokenUrl = url.replace(/\/rest\/$/, '/token');
+        } else if (url.includes('/api/rest')) {
+          tokenUrl = url.replace('/api/rest', '/api/token');
+        }
         const tokenRes = await fetch(tokenUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
