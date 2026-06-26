@@ -12,6 +12,48 @@ interface ProvisioningCenterProps {
   hasPermission: (perm: string) => boolean;
 }
 
+type ExtensionUiProfile = 'simple' | 'admin' | 'engineer' | 'expert';
+type ExtensionFieldGroup = 'basic' | 'sip' | 'recording' | 'followme' | 'voicemail' | 'security' | 'advanced';
+
+type ExtensionUiSettings = { profile: ExtensionUiProfile; visibleFields: Record<string, boolean>; editableFields: Record<string, boolean>; defaultValues: Record<string, any>; fieldGroups: Record<string, boolean>; };
+
+const EXTENSION_GROUP_LABELS: Record<ExtensionFieldGroup, string> = { basic: 'Основное', sip: 'SIP/PJSIP', recording: 'Запись звонков', followme: 'Follow Me', voicemail: 'Voicemail', security: 'Безопасность / IP ACL', advanced: 'Advanced' };
+
+const EXTENSION_FIELD_DEFS: Array<{ key: string; label: string; group: ExtensionFieldGroup; aliases?: string[]; locked?: boolean }> = [
+  { key: 'extension', label: 'Extension', group: 'basic', locked: true }, { key: 'name', label: 'Name', group: 'basic', aliases: ['displayName', 'displayname', 'description'] }, { key: 'outboundcid', label: 'Outbound CID', group: 'basic', aliases: ['outboundCid', 'outbound_cid'] }, { key: 'emergency_cid', label: 'Emergency CID', group: 'basic', aliases: ['emergencyCid', 'emergencycid'] }, { key: 'voicemail', label: 'Voicemail', group: 'basic', aliases: ['vm', 'voicemailEnabled', 'vmenabled'] }, { key: 'callwaiting', label: 'Call Waiting', group: 'basic', aliases: ['callWaiting', 'call_waiting', 'callwaiting_enable'] },
+  { key: 'tech', label: 'Tech', group: 'sip', aliases: ['technology', 'sipdriver'] }, { key: 'dial', label: 'Dial', group: 'sip', locked: true }, { key: 'devicetype', label: 'Device Type', group: 'sip', aliases: ['deviceType'] }, { key: 'context', label: 'Context', group: 'sip' }, { key: 'transport', label: 'Transport', group: 'sip' }, { key: 'callerid', label: 'CallerID', group: 'sip', aliases: ['callerId'] }, { key: 'dtmfmode', label: 'DTMF Mode', group: 'sip' }, { key: 'qualify', label: 'Qualify', group: 'sip' }, { key: 'qualifyfreq', label: 'Qualify Freq', group: 'sip' }, { key: 'nat', label: 'NAT', group: 'sip' }, { key: 'encryption', label: 'Encryption', group: 'sip' }, { key: 'icesupport', label: 'ICE Support', group: 'sip' }, { key: 'rtcp_mux', label: 'RTCP Mux', group: 'sip' }, { key: 'allow', label: 'Allow', group: 'sip' }, { key: 'disallow', label: 'Disallow', group: 'sip' },
+  { key: 'permit', label: 'Permit', group: 'security' }, { key: 'deny', label: 'Deny', group: 'security' }, { key: 'host', label: 'Host', group: 'security' }, { key: 'port', label: 'Port', group: 'security' },
+  { key: 'recording_in_external', label: 'Rec In External', group: 'recording' }, { key: 'recording_out_external', label: 'Rec Out External', group: 'recording' }, { key: 'recording_in_internal', label: 'Rec In Internal', group: 'recording' }, { key: 'recording_out_internal', label: 'Rec Out Internal', group: 'recording' }, { key: 'recording_ondemand', label: 'Rec On Demand', group: 'recording' }, { key: 'recording_priority', label: 'Rec Priority', group: 'recording' },
+  { key: 'findmefollow_enabled', label: 'FMF Enabled', group: 'followme' }, { key: 'findmefollow_strategy', label: 'FMF Strategy', group: 'followme' }, { key: 'findmefollow_grptime', label: 'FMF Ring Time', group: 'followme' }, { key: 'findmefollow_grplist', label: 'FMF Group List', group: 'followme' }, { key: 'findmefollow_postdest', label: 'FMF Postdest', group: 'followme' },
+  { key: 'mailbox', label: 'Mailbox', group: 'voicemail' }, { key: 'vmexten', label: 'VM Exten', group: 'voicemail' },
+  { key: 'accountcode', label: 'Account Code', group: 'advanced' }, { key: 'namedcallgroup', label: 'Named Call Group', group: 'advanced' }, { key: 'namedpickupgroup', label: 'Named Pickup Group', group: 'advanced' }, { key: 'sendrpid', label: 'Send RPID', group: 'advanced' }, { key: 'trustrpid', label: 'Trust RPID', group: 'advanced' }, { key: 'sessiontimers', label: 'Session Timers', group: 'advanced' }, { key: 'videosupport', label: 'Video Support', group: 'advanced' }
+];
+
+const EXTENSION_UI_PROFILES: Record<ExtensionUiProfile, ExtensionFieldGroup[]> = { simple: ['basic', 'recording'], admin: ['basic', 'recording', 'voicemail', 'followme'], engineer: ['basic', 'recording', 'voicemail', 'followme', 'sip', 'security'], expert: ['basic', 'sip', 'recording', 'followme', 'voicemail', 'security', 'advanced'] };
+const SINGLE_RECORDING_OPTIONS = [
+  { value: 'force', label: 'Force' },
+  { value: 'yes', label: 'Yes' },
+  { value: 'dontcare', label: "Don't Care" },
+  { value: 'no', label: 'No' },
+  { value: 'never', label: 'Never' }
+];
+const SINGLE_ON_DEMAND_OPTIONS = [
+  { value: 'disabled', label: 'Disable' },
+  { value: 'enabled', label: 'Enable' },
+  { value: 'override', label: 'Override' }
+];
+const SINGLE_ENABLED_OPTIONS = [
+  { value: 'enabled', label: 'Enabled' },
+  { value: 'disabled', label: 'Disabled' }
+];
+const SINGLE_VOICEMAIL_OPTIONS = [
+  { value: 'novm', label: 'Disabled' },
+  { value: 'default', label: 'Enabled' }
+];
+const SINGLE_FOLLOW_ME_STRATEGIES = ['ringallv2-prim', 'ringall', 'hunt', 'memoryhunt', 'firstavailable', 'firstnotonphone', 'random'];
+
+const buildExtensionUiSettings = (profile: ExtensionUiProfile = 'admin'): ExtensionUiSettings => { const groups = EXTENSION_UI_PROFILES[profile]; const fieldGroups = Object.fromEntries(Object.keys(EXTENSION_GROUP_LABELS).map(group => [group, groups.includes(group as ExtensionFieldGroup)])); const visibleFields: Record<string, boolean> = {}; const editableFields: Record<string, boolean> = {}; EXTENSION_FIELD_DEFS.forEach(field => { const visible = fieldGroups[field.group] === true; visibleFields[field.key] = visible; editableFields[field.key] = visible && field.locked !== true; }); return { profile, visibleFields, editableFields, defaultValues: {}, fieldGroups }; };
+
 export default function ProvisioningCenter({ session, hasPermission }: ProvisioningCenterProps) {
   const token = session?.token || '';
   
@@ -76,22 +118,34 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
   // Active extensions inline editor state
   const [activeExtensions, setActiveExtensions] = useState<any[]>([]);
   const [activeExtLoading, setActiveExtLoading] = useState(false);
+  const [extensionUiSettings, setExtensionUiSettings] = useState<ExtensionUiSettings>(() => buildExtensionUiSettings('admin'));
+  const [extensionUiSettingsLoading, setExtensionUiSettingsLoading] = useState(false);
   const [activeExtSearch, setActiveExtSearch] = useState('');
   const [activeExtTechFilter, setActiveExtTechFilter] = useState<'all' | 'pjsip' | 'sip' | 'unknown'>('all');
+  const [activeExtVoicemailFilter, setActiveExtVoicemailFilter] = useState<'all' | 'enabled' | 'disabled'>('all');
+  const [activeExtRecordingFilter, setActiveExtRecordingFilter] = useState<'all' | 'always' | 'ondemand' | 'never' | 'unknown'>('all');
+  const [activeExtSourceFilter, setActiveExtSourceFilter] = useState<'all' | 'bmo' | 'rest' | 'merged' | 'unknown'>('all');
+  const [activeExtStatusFilter, setActiveExtStatusFilter] = useState<'all' | 'loaded' | 'warning' | 'error'>('all');
+  const [activeExtSortField, setActiveExtSortField] = useState<'extension' | 'name' | 'tech'>('extension');
+  const [activeExtSortDir, setActiveExtSortDir] = useState<'asc' | 'desc'>('asc');
   const [activeExtError, setActiveExtError] = useState('');
   const [activeExtLoadedAt, setActiveExtLoadedAt] = useState('');
   const [activeExtEndpoint, setActiveExtEndpoint] = useState('');
   const [activeExtRawLoading, setActiveExtRawLoading] = useState(false);
   const [activeExtRawData, setActiveExtRawData] = useState<any>(null);
   const [activeExtRawError, setActiveExtRawError] = useState('');
+  const [activeExtRawOpen, setActiveExtRawOpen] = useState(false);
   const [selectedExtensionIds, setSelectedExtensionIds] = useState<string[]>([]);
   const [extensionPreviewResult, setExtensionPreviewResult] = useState<any>(null);
   const [extensionPreviewLoading, setExtensionPreviewLoading] = useState(false);
+  const [extensionApplyLoading, setExtensionApplyLoading] = useState(false);
+  const [extensionApplyResult, setExtensionApplyResult] = useState<any>(null);
 
-  const [createMode, setCreateMode] = useState<'range' | 'manual'>('range');
+  const [createMode, setCreateMode] = useState<'range' | 'manual' | 'csv'>('range');
   const [createStartExt, setCreateStartExt] = useState('200');
   const [createEndExt, setCreateEndExt] = useState('202');
   const [createManualList, setCreateManualList] = useState('');
+  const [createCsvText, setCreateCsvText] = useState('');
   const [createNameMask, setCreateNameMask] = useState('User {ext}');
   const [createSecretMode, setCreateSecretMode] = useState<'auto' | 'fixed' | 'mask'>('auto');
   const [createFixedSecret, setCreateFixedSecret] = useState('');
@@ -121,10 +175,65 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
     context: 'from-internal',
     updateEmergencyCid: false,
     emergencyCid: '',
+    updateEmailDomain: false,
+    emailDomain: '',
+    updateRaw: false,
+    rawJson: ''
+  });
+  const [singleExtensionEdit, setSingleExtensionEdit] = useState<any>(null);
+  const [singleUpdateFields, setSingleUpdateFields] = useState<Record<string, any>>({
+    updateName: false,
+    name: '',
+    updateOutboundCid: false,
+    outboundCid: '',
+    updateEmergencyCid: false,
+    emergencyCid: '',
+    updateVoicemail: false,
+    voicemail: 'novm',
+    updateCallWaiting: false,
+    callWaiting: 'disabled',
+    updateRecordingInExternal: false,
+    recording_in_external: 'dontcare',
+    updateRecordingOutExternal: false,
+    recording_out_external: 'dontcare',
+    updateRecordingInInternal: false,
+    recording_in_internal: 'dontcare',
+    updateRecordingOutInternal: false,
+    recording_out_internal: 'dontcare',
+    updateRecordingOndemand: false,
+    recording_ondemand: 'disabled',
+    updateRecordingPriority: false,
+    recording_priority: '10',
+    updateFindmefollowEnabled: false,
+    findmefollow_enabled: 'disabled',
+    updateFindmefollowStrategy: false,
+    findmefollow_strategy: 'ringallv2-prim',
+    updateFindmefollowGrptime: false,
+    findmefollow_grptime: '',
+    updateFindmefollowGrplist: false,
+    findmefollow_grplist: '',
+    updateFindmefollowPostdest: false,
+    findmefollow_postdest: '',
     updateRaw: false,
     rawJson: ''
   });
   const [batchMappingText, setBatchMappingText] = useState('');  const [showBatchMapping, setShowBatchMapping] = useState(false);
+
+
+  const normalizeExtensionUiSettings = (settings: any): ExtensionUiSettings => {
+    const profile: ExtensionUiProfile = ['simple', 'admin', 'engineer', 'expert'].includes(settings?.profile) ? settings.profile : 'admin';
+    const base = buildExtensionUiSettings(profile);
+    return { profile, visibleFields: { ...base.visibleFields, ...(settings?.visibleFields || {}) }, editableFields: { ...base.editableFields, ...(settings?.editableFields || {}) }, defaultValues: settings?.defaultValues || {}, fieldGroups: { ...base.fieldGroups, ...(settings?.fieldGroups || {}) } };
+  };
+  const loadExtensionUiSettings = async () => { setExtensionUiSettingsLoading(true); try { const res = await fetch('/api/management/extensions/ui-settings', { headers: { Authorization: `Bearer ${token}` } }); const data = await res.json().catch(() => ({})); if (!res.ok) throw new Error(data.error || 'Не удалось загрузить настройки Extensions'); setExtensionUiSettings(normalizeExtensionUiSettings(data)); } catch (err: any) { showNoti('error', err.message || 'Ошибка загрузки настроек Extensions'); } finally { setExtensionUiSettingsLoading(false); } };
+  const saveExtensionUiSettings = async () => { setExtensionUiSettingsLoading(true); try { const res = await fetch('/api/management/extensions/ui-settings', { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(extensionUiSettings) }); const data = await res.json().catch(() => ({})); if (!res.ok) throw new Error(data.error || 'Не удалось сохранить настройки Extensions'); setExtensionUiSettings(normalizeExtensionUiSettings(data)); showNoti('success', 'Настройки вкладки Extensions сохранены'); } catch (err: any) { showNoti('error', err.message || 'Ошибка сохранения настроек Extensions'); } finally { setExtensionUiSettingsLoading(false); } };
+  const applyExtensionUiProfile = (profile: ExtensionUiProfile) => setExtensionUiSettings(prev => ({ ...buildExtensionUiSettings(profile), defaultValues: prev.defaultValues || {} }));
+  const setExtensionUiGroup = (group: ExtensionFieldGroup, enabled: boolean) => setExtensionUiSettings(prev => { const next = normalizeExtensionUiSettings({ ...prev, fieldGroups: { ...prev.fieldGroups, [group]: enabled } }); EXTENSION_FIELD_DEFS.filter(field => field.group === group).forEach(field => { next.visibleFields[field.key] = enabled; if (!enabled) next.editableFields[field.key] = false; else if (next.editableFields[field.key] === undefined) next.editableFields[field.key] = field.locked !== true; }); return next; });
+  const setExtensionUiField = (kind: 'visibleFields' | 'editableFields', field: string, enabled: boolean) => setExtensionUiSettings(prev => ({ ...prev, [kind]: { ...prev[kind], [field]: enabled } }));
+  const setExtensionDefaultValue = (field: string, value: string) => setExtensionUiSettings(prev => ({ ...prev, defaultValues: { ...prev.defaultValues, [field]: value } }));
+  const getVisibleExtensionFields = () => EXTENSION_FIELD_DEFS.filter(field => extensionUiSettings.fieldGroups[field.group] !== false && extensionUiSettings.visibleFields[field.key] !== false);
+  const getFieldsByGroup = (group: ExtensionFieldGroup) => EXTENSION_FIELD_DEFS.filter(field => field.group === group);
+  useEffect(() => { if (token) loadExtensionUiSettings(); }, [token]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -201,7 +310,7 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
 
       if (settingsRes?.ok) {
         const settings = await settingsRes.json().catch(() => ({}));
-        setActiveExtEndpoint(settings.freepbxApiWorkingEndpoint || settings.freepbxApiUrl || '');
+        setActiveExtEndpoint(settings.freepbxApiUrl ? 'BMO Core + /userman/extensions, fallback /core/users' : (settings.freepbxApiWorkingEndpoint || 'BMO Core'));
       }
 
       setActiveExtensions(data);
@@ -227,6 +336,7 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'Не удалось получить raw REST ответ');
       setActiveExtRawData(data);
+      setActiveExtRawOpen(true);
       showNoti('success', 'Raw REST ответ FreePBX API загружен');
     } catch (err: any) {
       const message = err?.message || 'Ошибка загрузки raw REST ответа';
@@ -303,23 +413,126 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
     showNoti('success', `Голосовая почта изменена на "${enabled ? 'Включена' : 'Выключена'}" для всех абонентов`);
   };
 
+  const getExtField = (ext: any, fields: string[], fallback: any = '') => {
+    const sources = [ext, ext?.bulkFields, ext?.raw?.bmo?.user, ext?.raw?.bmo?.device, ext?.raw?.bmo?.summary].filter(Boolean);
+    for (const source of sources) {
+      for (const field of fields) {
+        const value = source?.[field];
+        if (value !== undefined && value !== null && value !== '') return value;
+      }
+    }
+    return fallback;
+  };
+
+  const getExtText = (ext: any, fields: string[], fallback = '-') => {
+    const value = getExtField(ext, fields, '');
+    return value === undefined || value === null || value === '' ? fallback : String(value);
+  };
+
+  const getExtBool = (ext: any, fields: string[], defaultValue = false) => {
+    const value = getExtField(ext, fields, undefined);
+    if (value === undefined || value === null || value === '') return defaultValue;
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'number') return value !== 0;
+    const normalized = String(value).trim().toLowerCase();
+    if (['novm', 'none', 'disabled', 'disable', 'false', '0', 'no', 'off'].includes(normalized)) return false;
+    if (['yes', 'true', '1', 'on', 'enabled', 'enable', 'active'].includes(normalized)) return true;
+    return defaultValue;
+  };
+
+  const getExtTech = (ext: any): 'pjsip' | 'sip' | 'unknown' => {
+    const raw = String(getExtField(ext, ['tech', 'technology', 'sipdriver'], '') || '').toLowerCase();
+    const dial = String(getExtField(ext, ['dial'], '') || '').toLowerCase();
+    if (raw.includes('pjsip') || dial.startsWith('pjsip/')) return 'pjsip';
+    if (raw.includes('sip') || dial.startsWith('sip/')) return 'sip';
+    return 'unknown';
+  };
+
+  const getExtRecordingValue = (ext: any) => {
+    return getExtField(ext, ['recording', 'recordingPolicy', 'recording_policy'], '');
+  };
+
+  const getExtRecordingFlags = (ext: any) => ({
+    inExternal: getExtText(ext, ['recording_in_external'], ''),
+    outExternal: getExtText(ext, ['recording_out_external'], ''),
+    inInternal: getExtText(ext, ['recording_in_internal'], ''),
+    outInternal: getExtText(ext, ['recording_out_internal'], ''),
+    ondemand: getExtText(ext, ['recording_ondemand'], ''),
+    priority: getExtText(ext, ['recording_priority'], '')
+  });
+
+  const getExtensionSourceKey = (ext: any): 'bmo' | 'rest' | 'merged' | 'unknown' => {
+    const sources = Array.isArray(ext?.raw?.sources) ? ext.raw.sources : [];
+    if (sources.length > 1) return 'merged';
+    if (sources.includes('/bmo')) return 'bmo';
+    if (ext?.sourceStatus === 'loaded-from-pbx' || sources.length === 1) return 'rest';
+    return 'unknown';
+  };
+
+
+  const getFieldAliases = (field: { key: string; aliases?: string[] }) => [field.key, ...(field.aliases || [])];
+  const getExtensionFieldValue = (ext: any, field: { key: string; aliases?: string[] }) => { if (field.key === 'tech') return getTechLabel(ext); if (field.key === 'voicemail' || field.key === 'callwaiting' || field.key === 'findmefollow_enabled') return getExtBool(ext, getFieldAliases(field)) ? 'Enabled' : 'Disabled'; return getExtText(ext, getFieldAliases(field)); };
+  const formatDefaultValue = (field: string) => extensionUiSettings.defaultValues?.[field] ?? '';
+  const parseUiRawJson = (raw: string) => { if (!raw.trim()) return {}; try { const parsed = JSON.parse(raw); return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}; } catch (err) { return {}; } };
+
+  const getExtensionStatusKey = (ext: any): 'loaded' | 'warning' | 'error' => {
+    if (ext?.sourceStatus === 'error') return 'error';
+    if (!ext?.extension) return 'warning';
+    return 'loaded';
+  };
+
+  const getRecordingKey = (value: any): 'always' | 'ondemand' | 'never' | 'unknown' => {
+    const normalized = String(typeof value === 'object' ? getExtRecordingValue(value) : value || '').trim().toLowerCase();
+    if (['always', 'force', 'yes', 'enabled', 'record'].some((item) => normalized.includes(item))) return 'always';
+    if (['ondemand', 'on demand', 'optional'].some((item) => normalized.includes(item))) return 'ondemand';
+    if (['never', 'no', 'disabled', 'none'].some((item) => normalized.includes(item))) return 'never';
+    if (typeof value === 'object') {
+      const flags = getExtRecordingFlags(value);
+      const flagText = [flags.inExternal, flags.outExternal, flags.inInternal, flags.outInternal].join(' ').toLowerCase();
+      const ondemand = String(flags.ondemand || '').toLowerCase();
+      if (['yes', 'always', 'force', 'enabled'].some((item) => flagText.includes(item))) return 'always';
+      if (['ondemand', 'on demand', 'optional', 'enabled', 'yes'].some((item) => ondemand.includes(item))) return 'ondemand';
+      if (flagText && ['no', 'never', 'disabled', 'dontcare'].some((item) => flagText.includes(item))) return 'never';
+    }
+    return 'unknown';
+  };
+
   const filteredActiveExtensions = useMemo(() => {
     const query = activeExtSearch.trim().toLowerCase();
-    return activeExtensions.filter(ext => {
-      const tech = String(ext.tech || 'unknown').toLowerCase();
+    const filtered = activeExtensions.filter(ext => {
+      const tech = getExtTech(ext);
+      const sourceKey = getExtensionSourceKey(ext);
+      const statusKey = getExtensionStatusKey(ext);
+      const recordingKey = getRecordingKey(ext);
       const matchesTech = activeExtTechFilter === 'all' || tech === activeExtTechFilter;
+      const matchesVoicemail = activeExtVoicemailFilter === 'all' || (activeExtVoicemailFilter === 'enabled' ? !!ext.voicemail : !ext.voicemail);
+      const matchesRecording = activeExtRecordingFilter === 'all' || recordingKey === activeExtRecordingFilter;
+      const matchesSource = activeExtSourceFilter === 'all' || sourceKey === activeExtSourceFilter;
+      const matchesStatus = activeExtStatusFilter === 'all' || statusKey === activeExtStatusFilter;
       const matchesSearch = !query ||
         String(ext.extension || '').toLowerCase().includes(query) ||
         String(ext.name || '').toLowerCase().includes(query) ||
         String(ext.displayName || '').toLowerCase().includes(query) ||
-        String(ext.email || '').toLowerCase().includes(query);
-      return matchesTech && matchesSearch;
+        String(getExtField(ext, ['email', 'email_address'], '') || '').toLowerCase().includes(query) ||
+        String(getExtField(ext, ['dial', 'callerid', 'context', 'outboundcid', 'outboundCid'], '') || '').toLowerCase().includes(query);
+      return matchesTech && matchesVoicemail && matchesRecording && matchesSource && matchesStatus && matchesSearch;
     });
-  }, [activeExtensions, activeExtSearch, activeExtTechFilter]);
+
+    const getSortValue = (ext: any) => {
+      if (activeExtSortField === 'name') return String(ext.displayName || ext.name || '').toLowerCase();
+      if (activeExtSortField === 'tech') return getExtTech(ext);
+      return String(ext.extension || '');
+    };
+
+    return [...filtered].sort((a, b) => {
+      const result = getSortValue(a).localeCompare(getSortValue(b), undefined, { numeric: true });
+      return activeExtSortDir === 'asc' ? result : -result;
+    });
+  }, [activeExtensions, activeExtSearch, activeExtTechFilter, activeExtVoicemailFilter, activeExtRecordingFilter, activeExtSourceFilter, activeExtStatusFilter, activeExtSortField, activeExtSortDir]);
 
   const activeExtTechCounts = useMemo(() => {
     return activeExtensions.reduce((acc: Record<string, number>, ext) => {
-      const tech = String(ext.tech || 'unknown').toLowerCase();
+      const tech = getExtTech(ext);
       acc[tech] = (acc[tech] || 0) + 1;
       return acc;
     }, {});
@@ -328,13 +541,183 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
   const filteredExtensionIds = useMemo(() => filteredActiveExtensions.map(ext => String(ext.extension || '')).filter(Boolean), [filteredActiveExtensions]);
   const allFilteredSelected = filteredExtensionIds.length > 0 && filteredExtensionIds.every(ext => selectedExtensionIds.includes(ext));
   const toggleExtensionSelection = (extension: string) => setSelectedExtensionIds(prev => prev.includes(extension) ? prev.filter(item => item !== extension) : [...prev, extension]);
+  const selectAllFilteredExtensions = () => setSelectedExtensionIds(prev => Array.from(new Set([...prev, ...filteredExtensionIds])));
+  const clearSelectedExtensions = () => setSelectedExtensionIds([]);
   const toggleAllFilteredExtensions = () => setSelectedExtensionIds(prev => allFilteredSelected ? prev.filter(ext => !filteredExtensionIds.includes(ext)) : Array.from(new Set([...prev, ...filteredExtensionIds])));
   const setUpdateField = (field: string, value: any) => setUpdateFields(prev => ({ ...prev, [field]: value }));
+  const setSingleUpdateField = (field: string, value: any) => setSingleUpdateFields(prev => ({ ...prev, [field]: value }));
+  const singleValue = (ext: any, fields: string[], fallback = '') => getExtText(ext, fields, fallback);
+  const normalizeSingleEnabled = (value: any) => getExtBool({ value }, ['value']) ? 'enabled' : 'disabled';
+  const normalizeSingleVoicemail = (ext: any) => getExtBool(ext, ['voicemail', 'vm', 'voicemailEnabled', 'vmenabled']) ? 'default' : 'novm';
+  const openSingleExtensionEditor = (ext: any) => {
+    if (!ext?.extension) return;
+    setSingleExtensionEdit(ext);
+    setSingleUpdateFields({
+      updateName: false,
+      name: ext.displayName || ext.name || '',
+      updateOutboundCid: false,
+      outboundCid: singleValue(ext, ['outboundCid', 'outboundcid', 'outbound_cid']),
+      updateEmergencyCid: false,
+      emergencyCid: singleValue(ext, ['emergencyCid', 'emergencycid', 'emergency_cid']),
+      updateVoicemail: false,
+      voicemail: normalizeSingleVoicemail(ext),
+      updateCallWaiting: false,
+      callWaiting: getExtBool(ext, ['callWaiting', 'callwaiting', 'call_waiting', 'callwaiting_enable']) ? 'enabled' : 'disabled',
+      updateRecordingInExternal: false,
+      recording_in_external: singleValue(ext, ['recording_in_external'], 'dontcare').toLowerCase(),
+      updateRecordingOutExternal: false,
+      recording_out_external: singleValue(ext, ['recording_out_external'], 'dontcare').toLowerCase(),
+      updateRecordingInInternal: false,
+      recording_in_internal: singleValue(ext, ['recording_in_internal'], 'dontcare').toLowerCase(),
+      updateRecordingOutInternal: false,
+      recording_out_internal: singleValue(ext, ['recording_out_internal'], 'dontcare').toLowerCase(),
+      updateRecordingOndemand: false,
+      recording_ondemand: singleValue(ext, ['recording_ondemand'], 'disabled').toLowerCase(),
+      updateRecordingPriority: false,
+      recording_priority: singleValue(ext, ['recording_priority'], '10'),
+      updateFindmefollowEnabled: false,
+      findmefollow_enabled: normalizeSingleEnabled(getExtField(ext, ['findmefollow_enabled'], 'disabled')),
+      updateFindmefollowStrategy: false,
+      findmefollow_strategy: singleValue(ext, ['findmefollow_strategy'], 'ringallv2-prim'),
+      updateFindmefollowGrptime: false,
+      findmefollow_grptime: singleValue(ext, ['findmefollow_grptime'], ''),
+      updateFindmefollowGrplist: false,
+      findmefollow_grplist: singleValue(ext, ['findmefollow_grplist'], ''),
+      updateFindmefollowPostdest: false,
+      findmefollow_postdest: singleValue(ext, ['findmefollow_postdest'], ''),
+      updateRaw: false,
+      rawJson: ''
+    });
+  };
+  const getExtensionSourceLabel = (ext: any) => {
+    const key = getExtensionSourceKey(ext);
+    if (key === 'merged') return 'BMO + REST';
+    if (key === 'bmo') return 'BMO';
+    if (key === 'rest') return 'REST';
+    return 'Unknown';
+  };
+  const getExtensionStatusLabel = (ext: any) => {
+    const key = getExtensionStatusKey(ext);
+    if (key === 'loaded') return 'Loaded';
+    if (key === 'warning') return 'Warning';
+    return 'Error';
+  };
+  const getTechLabel = (value: any) => {
+    const normalized = typeof value === 'object' ? getExtTech(value) : String(value || 'unknown').toLowerCase();
+    if (normalized === 'pjsip') return 'PJSIP';
+    if (normalized === 'sip') return 'SIP';
+    return 'Нет данных';
+  };
+  const getBadgeClass = (tone: 'blue' | 'green' | 'slate' | 'amber' | 'rose' | 'indigo') => {
+    const tones: Record<string, string> = {
+      blue: 'bg-blue-50 text-blue-700 ring-blue-100 dark:bg-blue-950/30 dark:text-blue-300 dark:ring-blue-900/40',
+      green: 'bg-emerald-50 text-emerald-700 ring-emerald-100 dark:bg-emerald-950/30 dark:text-emerald-300 dark:ring-emerald-900/40',
+      slate: 'bg-slate-100 text-slate-600 ring-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700',
+      amber: 'bg-amber-50 text-amber-700 ring-amber-100 dark:bg-amber-950/30 dark:text-amber-300 dark:ring-amber-900/40',
+      rose: 'bg-rose-50 text-rose-700 ring-rose-100 dark:bg-rose-950/30 dark:text-rose-300 dark:ring-rose-900/40',
+      indigo: 'bg-indigo-50 text-indigo-700 ring-indigo-100 dark:bg-indigo-950/30 dark:text-indigo-300 dark:ring-indigo-900/40'
+    };
+    return 'inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-black uppercase ring-1 ' + tones[tone];
+  };
+  const getTechBadgeClass = (value: any) => getExtTech(value) === 'pjsip' ? getBadgeClass('blue') : getExtTech(value) === 'sip' ? getBadgeClass('green') : getBadgeClass('slate');
+  const getRecordingLabel = (value: any) => {
+    const key = getRecordingKey(value);
+    if (key === 'always') return 'Always';
+    if (key === 'ondemand') return 'On Demand';
+    if (key === 'never') return 'Never';
+    return 'Нет данных';
+  };
+  const getRecordingDetail = (ext: any) => {
+    const flags = getExtRecordingFlags(ext);
+    const parts = [
+      flags.inExternal && 'in-ext:' + flags.inExternal,
+      flags.outExternal && 'out-ext:' + flags.outExternal,
+      flags.inInternal && 'in-int:' + flags.inInternal,
+      flags.outInternal && 'out-int:' + flags.outInternal,
+      flags.ondemand && 'ondemand:' + flags.ondemand,
+      flags.priority && 'priority:' + flags.priority
+    ].filter(Boolean);
+    return parts.length ? parts.join(' | ') : '';
+  };
+  const getRecordingBadgeClass = (value: any) => {
+    const key = getRecordingKey(value);
+    if (key === 'always') return getBadgeClass('green');
+    if (key === 'ondemand') return getBadgeClass('indigo');
+    if (key === 'never') return getBadgeClass('slate');
+    return getBadgeClass('amber');
+  };
+  const getStatusBadgeClass = (ext: any) => {
+    const key = getExtensionStatusKey(ext);
+    if (key === 'loaded') return getBadgeClass('green');
+    if (key === 'warning') return getBadgeClass('amber');
+    return getBadgeClass('rose');
+  };
+  const getSourceBadgeClass = (ext: any) => getExtensionSourceKey(ext) === 'merged' ? getBadgeClass('indigo') : getExtensionSourceKey(ext) === 'bmo' ? getBadgeClass('green') : getExtensionSourceKey(ext) === 'rest' ? getBadgeClass('blue') : getBadgeClass('slate');
+  const getPreviewActionClass = (action: string) => {
+    if (action === 'create') return 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400';
+    if (action === 'update') return 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/30 dark:text-indigo-400';
+    if (action === 'conflict') return 'bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400';
+    if (action === 'error') return 'bg-rose-50 text-rose-700 dark:bg-rose-950/30 dark:text-rose-400';
+    return 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400';
+  };
+  const formatPreviewCounts = (counts: any) => {
+    const safeCounts = counts || {};
+    const parts = [
+      ['Create', safeCounts.create || 0],
+      ['Update', safeCounts.update || 0],
+      ['Skip', safeCounts.skip || 0],
+      ['Conflict', safeCounts.conflict || 0],
+      ['Error', safeCounts.error || 0]
+    ];
+    return parts.map(([label, value]) => label + ': ' + value).join(' · ');
+  };
   const summarizePreviewValue = (value: any) => {
     if (!value) return '-';
-    const keys = ['name', 'displayName', 'tech', 'context', 'outboundCid', 'recording', 'voicemail', 'callWaiting', 'emergencyCid'];
-    const parts = keys.filter(key => value[key] !== undefined && value[key] !== '').map(key => `${key}: ${String(value[key])}`);
+    const keys = ['name', 'displayName', 'tech', 'context', 'outboundCid', 'outboundcid', 'email', 'recording', 'voicemail', 'callWaiting', 'callwaiting', 'emergencyCid', 'recording_in_external', 'recording_out_external', 'recording_in_internal', 'recording_out_internal', 'recording_ondemand'];
+    const parts = keys.filter(key => value[key] !== undefined && value[key] !== '').map(key => key + ': ' + String(value[key]));
     return parts.length ? parts.join(' | ') : JSON.stringify(value).slice(0, 160);
+  };
+  const canApplyExtensionPreview = () => !!extensionPreviewResult?.previewId && ['create', 'update'].includes(String(extensionPreviewResult?.type || '')) && !extensionApplyLoading;
+  const formatDiffValue = (value: any) => value === undefined || value === null || value === '' ? '-' : String(value);
+  const handleExtensionApply = async () => {
+    if (!extensionPreviewResult?.previewId) { showNoti('info', 'Сначала сформируйте preview'); return; }
+    const type = String(extensionPreviewResult.type || '');
+    const endpoint = type === 'create' ? '/api/management/extensions/create-apply' : type === 'update' ? '/api/management/extensions/update-apply' : '';
+    if (!endpoint) { showNoti('error', 'Неизвестный тип preview для Apply'); return; }
+    const ok = window.confirm('Изменения будут отправлены в FreePBX. Продолжить?');
+    if (!ok) return;
+    setExtensionApplyLoading(true);
+    try {
+      const res = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ previewId: extensionPreviewResult.previewId }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Ошибка Apply Extensions');
+      setExtensionApplyResult(data);
+      await loadActiveExtensions();
+      showNoti(data.success ? 'success' : 'error', data.success ? 'Apply выполнен' : 'Apply завершился с ошибками');
+    } catch (err: any) { showNoti('error', err.message || 'Ошибка Apply Extensions'); }
+    finally { setExtensionApplyLoading(false); }
+  };
+  const singleInputClass = 'w-full rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white';
+  const setSingleChecked = (field: string, checked: boolean) => setSingleUpdateField(field, checked);
+  const renderSingleField = (enabledKey: string, valueKey: string, label: string, control: React.ReactNode) => (
+    <label className="space-y-1 text-xs">
+      <span className="flex items-center gap-2 font-black uppercase text-slate-500 dark:text-slate-400">
+        <input type="checkbox" checked={singleUpdateFields[enabledKey] === true} onChange={e => setSingleChecked(enabledKey, e.target.checked)} className="h-4 w-4 rounded" />
+        {label}
+      </span>
+      {control}
+    </label>
+  );
+  const singleTextInput = (key: string, placeholder = '') => <input value={singleUpdateFields[key] || ''} onChange={e => setSingleUpdateField(key, e.target.value)} placeholder={placeholder} className={singleInputClass} />;
+  const singleSelect = (key: string, options: Array<{ value: string; label: string }>) => <select value={singleUpdateFields[key] || ''} onChange={e => setSingleUpdateField(key, e.target.value)} className={singleInputClass}>{options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select>;
+
+  const renderExtensionApplyResult = () => {
+    if (!extensionApplyResult) return null;
+    const results = Array.isArray(extensionApplyResult.results) ? extensionApplyResult.results : [];
+    return <>
+      {extensionApplyResult.reloadRequired === true && <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs font-bold text-amber-700 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">Изменения применены. Требуется fwconsole reload. Автоматически reload не выполнялся.</div>}
+      <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700"><table className="w-full min-w-[640px] text-left text-xs"><thead className="bg-slate-100 text-[10px] uppercase text-slate-500 dark:bg-slate-900 dark:text-slate-400"><tr><th className="p-2">extension</th><th className="p-2">action</th><th className="p-2">success/error</th><th className="p-2">message</th></tr></thead><tbody className="divide-y divide-slate-200 dark:divide-slate-700">{results.map((item: any, idx: number) => <tr key={(item.extension || 'row') + '-' + idx}><td className="p-2 font-mono font-black text-slate-800 dark:text-white">{item.extension || '-'}</td><td className="p-2 font-mono text-slate-600 dark:text-slate-300">{item.action || '-'}</td><td className="p-2"><span className={item.success ? getBadgeClass('green') : getBadgeClass('rose')}>{item.success ? 'success' : 'error'}</span></td><td className="p-2 text-slate-600 dark:text-slate-300">{item.message || '-'}</td></tr>)}</tbody></table></div>
+    </>;
   };
   const handleCreatePreview = async () => {
     setExtensionPreviewLoading(true);
@@ -342,11 +725,12 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
       const res = await fetch('/api/management/extensions/create-preview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ mode: createMode, startExt: createStartExt, endExt: createEndExt, manualList: createManualList, nameMask: createNameMask, secretMode: createSecretMode, fixedSecret: createSecretMode === 'fixed' ? createFixedSecret : undefined, secretMask: createSecretMode === 'mask' ? createSecretMask : undefined, technology: createTechnology, context: createContext, outboundCid: createOutboundCid, emailDomain: createEmailDomain, voicemail: createVoicemail, recording: createRecording, callWaiting: createCallWaiting, emergencyCid: createEmergencyCid, rawJson: createRawJson })
+        body: JSON.stringify({ mode: createMode, startExt: createStartExt, endExt: createEndExt, manualList: createManualList, csvText: createCsvText, nameMask: createNameMask, secretMode: createSecretMode, fixedSecret: createSecretMode === 'fixed' ? createFixedSecret : undefined, secretMask: createSecretMode === 'mask' ? createSecretMask : undefined, technology: createTechnology, context: createContext, outboundCid: createOutboundCid, emailDomain: createEmailDomain, voicemail: createVoicemail, recording: createRecording, callWaiting: createCallWaiting, emergencyCid: createEmergencyCid, rawJson: { ...extensionUiSettings.defaultValues, ...parseUiRawJson(createRawJson) } })
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'Ошибка preview создания');
       setExtensionPreviewResult(data);
+      setExtensionApplyResult(null);
       showNoti('success', `Preview создания сформирован: ${data.previewId}`);
     } catch (err: any) { showNoti('error', err.message || 'Ошибка preview создания'); }
     finally { setExtensionPreviewLoading(false); }
@@ -359,10 +743,64 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'Ошибка preview изменения');
       setExtensionPreviewResult(data);
+      setExtensionApplyResult(null);
       showNoti('success', `Preview изменения сформирован: ${data.previewId}`);
     } catch (err: any) { showNoti('error', err.message || 'Ошибка preview изменения'); }
     finally { setExtensionPreviewLoading(false); }
   };
+  const buildSingleUpdatePatchFields = () => {
+    const rawPatch: Record<string, any> = {};
+    const patchFields: Record<string, any> = {
+      updateName: singleUpdateFields.updateName === true,
+      name: singleUpdateFields.name,
+      updateOutboundCid: singleUpdateFields.updateOutboundCid === true,
+      outboundCid: singleUpdateFields.outboundCid,
+      updateCallWaiting: singleUpdateFields.updateCallWaiting === true,
+      callWaiting: singleUpdateFields.callWaiting === 'enabled'
+    };
+    const addRaw = (enabledKey: string, fieldKey: string) => {
+      if (singleUpdateFields[enabledKey] === true) rawPatch[fieldKey] = singleUpdateFields[fieldKey];
+    };
+    addRaw('updateEmergencyCid', 'emergency_cid');
+    addRaw('updateVoicemail', 'voicemail');
+    addRaw('updateRecordingInExternal', 'recording_in_external');
+    addRaw('updateRecordingOutExternal', 'recording_out_external');
+    addRaw('updateRecordingInInternal', 'recording_in_internal');
+    addRaw('updateRecordingOutInternal', 'recording_out_internal');
+    addRaw('updateRecordingOndemand', 'recording_ondemand');
+    addRaw('updateRecordingPriority', 'recording_priority');
+    addRaw('updateFindmefollowEnabled', 'findmefollow_enabled');
+    addRaw('updateFindmefollowStrategy', 'findmefollow_strategy');
+    addRaw('updateFindmefollowGrptime', 'findmefollow_grptime');
+    addRaw('updateFindmefollowGrplist', 'findmefollow_grplist');
+    addRaw('updateFindmefollowPostdest', 'findmefollow_postdest');
+    if (Object.keys(rawPatch).length > 0) {
+      patchFields.updateRaw = true;
+      patchFields.rawJson = JSON.stringify(rawPatch);
+    } else {
+      patchFields.updateRaw = false;
+      patchFields.rawJson = '';
+    }
+    return patchFields;
+  };
+  const hasSingleCheckedFields = () => Object.keys(singleUpdateFields).some((key) => key.startsWith('update') && singleUpdateFields[key] === true);
+  const handleSingleUpdatePreview = async () => {
+    const extension = String(singleExtensionEdit?.extension || '').trim();
+    if (!extension) { showNoti('info', 'Выберите extension для редактирования'); return; }
+    if (!hasSingleCheckedFields()) { showNoti('info', 'Отметьте хотя бы одно поле для изменения'); return; }
+    const patchFields = buildSingleUpdatePatchFields();
+    setExtensionPreviewLoading(true);
+    try {
+      const res = await fetch('/api/management/extensions/update-preview', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ selectedExtensions: [extension], patchFields }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Ошибка preview изменения');
+      setExtensionPreviewResult(data);
+      setExtensionApplyResult(null);
+      showNoti('success', `Preview изменения ${extension} сформирован: ${data.previewId}`);
+    } catch (err: any) { showNoti('error', err.message || 'Ошибка preview изменения'); }
+    finally { setExtensionPreviewLoading(false); }
+  };
+
   // MAC Phone assignment List inside extensions
   const [macAssignText, setMacAssignText] = useState("200;805EC0AABB01;Yealink T31P\n201;805EC0AABB02;Yealink T31P");
   const [applyMacs, setApplyMacs] = useState(false);
@@ -1466,19 +1904,99 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
         {/* TAB 3: EXTENSIONS */}
         {activeTab === 'extensions' && (
           <div className="space-y-6 animate-fade-in">
-            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-slate-50 dark:bg-slate-750/30 p-4 rounded-xl border dark:border-slate-700">
-              <div><h3 className="text-sm font-extrabold text-slate-850 dark:text-white flex items-center gap-2"><Users className="w-4 h-4 text-indigo-500" />Extensions</h3><p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Просмотр и подготовка безопасных preview операций через FreePBX REST API.</p></div>
-              <div className="flex flex-col sm:flex-row gap-2"><button type="button" onClick={fetchActiveExtensions} disabled={activeExtLoading} className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-xs font-extrabold px-4 py-2.5 rounded-lg flex items-center justify-center gap-2 transition"><RefreshCw className={`w-4 h-4 ${activeExtLoading ? 'animate-spin' : ''}`} />Загрузить с АТС</button><button type="button" onClick={fetchRawExtensionsRest} disabled={activeExtRawLoading} className="bg-slate-700 hover:bg-slate-800 disabled:opacity-60 text-white text-xs font-extrabold px-4 py-2.5 rounded-lg flex items-center justify-center gap-2 transition"><Database className="w-4 h-4" />Raw REST API</button></div>
+            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+              <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+                <div>
+                  <h3 className="flex items-center gap-2 text-base font-black text-slate-850 dark:text-white"><Users className="h-5 w-5 text-indigo-500" /> Extensions</h3>
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">FreePBX REST inventory, selection and safe preview workspace.</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={fetchActiveExtensions} disabled={activeExtLoading} className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3.5 py-2 text-xs font-black text-white transition hover:bg-indigo-700 disabled:opacity-60"><Download className="h-4 w-4" /> Загрузить с АТС</button>
+                  <button type="button" onClick={fetchActiveExtensions} disabled={activeExtLoading} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3.5 py-2 text-xs font-bold text-slate-700 transition hover:bg-slate-100 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"><RefreshCw className={`h-4 w-4 ${activeExtLoading ? 'animate-spin' : ''}`} /> Обновить</button>
+                  <button type="button" onClick={downloadCurrentExtensions} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-xs font-bold text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"><FileSpreadsheet className="h-4 w-4" /> Экспорт CSV</button>
+                  <button type="button" onClick={fetchRawExtensionsRest} disabled={activeExtRawLoading} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-xs font-bold text-slate-600 transition hover:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"><Database className="h-4 w-4" /> Raw REST</button>
+                  {activeExtRawData && <button type="button" onClick={() => setActiveExtRawOpen(prev => !prev)} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-xs font-bold text-slate-600 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800">{activeExtRawOpen ? 'Свернуть Raw' : 'Показать Raw'}</button>}
+                </div>
+              </div>
+              <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-7">
+                <div className="rounded-lg border border-slate-150 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/60"><span className="text-[10px] font-black uppercase text-slate-400">Всего extensions</span><div className="mt-1 text-2xl font-black text-slate-850 dark:text-white">{activeExtensions.length}</div></div>
+                <div className="rounded-lg border border-slate-150 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/60"><span className="text-[10px] font-black uppercase text-slate-400">После фильтра</span><div className="mt-1 text-2xl font-black text-indigo-600 dark:text-indigo-300">{filteredActiveExtensions.length}</div></div>
+                <div className="rounded-lg border border-slate-150 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/60"><span className="text-[10px] font-black uppercase text-slate-400">Выбрано</span><div className="mt-1 text-2xl font-black text-emerald-600 dark:text-emerald-300">{selectedExtensionIds.length}</div></div>
+                <div className="col-span-2 rounded-lg border border-slate-150 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/60 xl:col-span-2"><span className="text-[10px] font-black uppercase text-slate-400">REST Endpoint</span><div className="mt-2 truncate font-mono text-xs text-slate-750 dark:text-slate-200" title={activeExtEndpoint || 'Не определён'}>{activeExtEndpoint || 'Не определён'}</div></div>
+                <div className="col-span-2 rounded-lg border border-slate-150 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/60"><span className="text-[10px] font-black uppercase text-slate-400">Статус подключения</span><div className="mt-2 flex items-center gap-2"><span className={activeExtError ? getBadgeClass('rose') : activeExtensions.length > 0 ? getBadgeClass('green') : getBadgeClass('slate')}>{activeExtLoading ? 'Loading' : activeExtError ? 'Error' : activeExtensions.length > 0 ? 'Connected' : 'Idle'}</span>{activeExtLoadedAt && <span className="text-[10px] text-slate-400">{activeExtLoadedAt}</span>}</div></div>
+              </div>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-5 gap-3"><div className="bg-white dark:bg-slate-900 border border-slate-150 dark:border-slate-700 rounded-xl p-4"><span className="text-[10px] uppercase font-bold text-slate-400">Всего extensions</span><div className="text-2xl font-black text-slate-850 dark:text-white mt-1">{activeExtensions.length}</div></div><div className="bg-white dark:bg-slate-900 border border-slate-150 dark:border-slate-700 rounded-xl p-4"><span className="text-[10px] uppercase font-bold text-slate-400">Выбрано</span><div className="text-2xl font-black text-emerald-600 dark:text-emerald-400 mt-1">{selectedExtensionIds.length}</div></div><div className="bg-white dark:bg-slate-900 border border-slate-150 dark:border-slate-700 rounded-xl p-4"><span className="text-[10px] uppercase font-bold text-slate-400">После фильтра</span><div className="text-2xl font-black text-indigo-600 dark:text-indigo-400 mt-1">{filteredActiveExtensions.length}</div></div><div className="bg-white dark:bg-slate-900 border border-slate-150 dark:border-slate-700 rounded-xl p-4"><span className="text-[10px] uppercase font-bold text-slate-400">Статус загрузки</span><div className={`text-xs font-bold mt-2 ${activeExtError ? 'text-rose-600 dark:text-rose-400' : activeExtensions.length > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-500 dark:text-slate-400'}`}>{activeExtLoading ? 'Загрузка...' : activeExtError ? 'Ошибка' : activeExtensions.length > 0 ? 'Загружено с АТС' : 'Не загружено'}</div>{activeExtLoadedAt && <div className="text-[10px] text-slate-400 mt-1">{activeExtLoadedAt}</div>}</div><div className="bg-white dark:bg-slate-900 border border-slate-150 dark:border-slate-700 rounded-xl p-4 min-w-0"><span className="text-[10px] uppercase font-bold text-slate-400">REST endpoint</span><div className="text-xs font-mono text-slate-750 dark:text-slate-200 mt-2 truncate" title={activeExtEndpoint || 'Endpoint будет показан после загрузки, если доступен в настройках'}>{activeExtEndpoint || 'Не определён'}</div></div></div>
-            {activeExtError && <div className="bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/40 p-4 rounded-xl text-rose-800 dark:text-rose-300 text-xs flex gap-2"><AlertTriangle className="w-4 h-4 shrink-0 text-rose-500" /><span>{activeExtError}</span></div>}
-            {activeExtRawError && <div className="bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/40 p-4 rounded-xl text-rose-800 dark:text-rose-300 text-xs flex gap-2"><AlertTriangle className="w-4 h-4 shrink-0 text-rose-500" /><span>{activeExtRawError}</span></div>}
-            {activeExtRawData && (<div className="border border-slate-150 dark:border-slate-700 rounded-xl p-4 bg-white dark:bg-slate-900 space-y-3"><div className="flex items-center justify-between gap-3"><h4 className="text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-2"><Database className="w-4 h-4" /> Raw FreePBX REST API</h4><span className="text-[10px] text-slate-400">Без нормализации, secrets masked</span></div><pre className="max-h-[420px] overflow-auto rounded-lg bg-slate-950 text-slate-100 p-4 text-[11px] leading-relaxed font-mono whitespace-pre-wrap">{JSON.stringify(activeExtRawData, null, 2)}</pre></div>)}
-            <div className="flex flex-col lg:flex-row gap-3 items-stretch lg:items-center justify-between"><div className="relative flex-1"><Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" /><input type="text" placeholder="Поиск по номеру, имени или email..." value={activeExtSearch} onChange={(e) => setActiveExtSearch(e.target.value)} className="w-full pl-9 pr-4 py-2 text-xs border rounded-lg bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-indigo-500" /></div><div className="flex items-center gap-2"><span className="text-[10px] uppercase font-bold text-slate-400">Tech</span><select value={activeExtTechFilter} onChange={(e) => setActiveExtTechFilter(e.target.value as any)} className="text-xs p-2 border bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white rounded-lg focus:outline-none"><option value="all">Все ({activeExtensions.length})</option><option value="pjsip">PJSIP ({activeExtTechCounts.pjsip || 0})</option><option value="sip">SIP ({activeExtTechCounts.sip || 0})</option><option value="unknown">Unknown ({activeExtTechCounts.unknown || 0})</option></select></div></div>
-            <div className="border border-slate-150 dark:border-slate-700 rounded-xl overflow-hidden bg-white dark:bg-slate-900"><div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead className="bg-slate-50 dark:bg-slate-800 text-[10px] text-slate-400 font-bold uppercase border-b dark:border-slate-700"><tr><th className="p-3 w-10"><input type="checkbox" checked={allFilteredSelected} onChange={toggleAllFilteredExtensions} className="w-4 h-4 rounded" /></th><th className="p-3 w-24">Extension</th><th className="p-3 min-w-[180px]">Имя</th><th className="p-3 w-24">Tech</th><th className="p-3 min-w-[160px]">Email</th><th className="p-3 min-w-[140px]">Outbound CID</th><th className="p-3 w-24">Voicemail</th><th className="p-3 w-24">Recording</th><th className="p-3 w-28">Call Waiting</th><th className="p-3 min-w-[130px]">Статус</th></tr></thead><tbody className="divide-y divide-slate-100 dark:divide-slate-800">{activeExtLoading ? <tr><td colSpan={10} className="p-10 text-center text-slate-400"><RefreshCw className="w-8 h-8 animate-spin text-indigo-500 mx-auto mb-3" />Загрузка extensions с АТС...</td></tr> : filteredActiveExtensions.length > 0 ? filteredActiveExtensions.map((ext, idx) => { const extId = String(ext.extension || ''); return <tr key={ext.extension || idx} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/40"><td className="p-3"><input type="checkbox" checked={selectedExtensionIds.includes(extId)} onChange={() => toggleExtensionSelection(extId)} className="w-4 h-4 rounded" /></td><td className="p-3 font-mono font-black text-slate-850 dark:text-white">{ext.extension || '-'}</td><td className="p-3"><div className="font-bold text-slate-750 dark:text-slate-200">{ext.displayName || ext.name || '-'}</div>{ext.name && ext.displayName && ext.name !== ext.displayName && <div className="text-[10px] text-slate-400 mt-0.5">{ext.name}</div>}</td><td className="p-3"><span className={`px-2 py-1 rounded-full text-[10px] font-black uppercase ${ext.tech === 'pjsip' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400' : ext.tech === 'sip' ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/30 dark:text-indigo-400' : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'}`}>{ext.tech || 'unknown'}</span></td><td className="p-3 text-slate-600 dark:text-slate-300">{ext.email || '-'}</td><td className="p-3 font-mono text-slate-600 dark:text-slate-300">{ext.outboundCid || '-'}</td><td className="p-3">{ext.voicemail ? 'Да' : 'Нет'}</td><td className="p-3 text-slate-600 dark:text-slate-300">{ext.recording || '-'}</td><td className="p-3">{ext.callWaiting ? 'Да' : 'Нет'}</td><td className="p-3"><span className={`px-2 py-1 rounded-full text-[10px] font-bold ${ext.sourceStatus === 'loaded-from-pbx' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400' : ext.sourceStatus === 'error' ? 'bg-rose-50 text-rose-700 dark:bg-rose-950/30 dark:text-rose-400' : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'}`}>{ext.sourceStatus === 'loaded-from-pbx' ? 'Загружено с АТС' : ext.sourceStatus === 'error' ? 'Ошибка' : 'Локально'}</span></td></tr>; }) : <tr><td colSpan={10} className="p-10 text-center text-slate-400"><Users className="w-10 h-10 text-slate-300 dark:text-slate-600 mx-auto mb-3" />{activeExtensions.length === 0 ? 'Нажмите “Загрузить с АТС”, чтобы получить extensions.' : 'Нет extensions под выбранные условия.'}</td></tr>}</tbody></table></div></div>
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6"><div className="border border-slate-150 dark:border-slate-700 rounded-xl p-5 bg-white dark:bg-slate-900 space-y-4"><h4 className="text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-2"><ListPlus className="w-4 h-4" /> Массовое создание</h4><div className="flex gap-2"><button type="button" onClick={() => setCreateMode('range')} className={`text-xs px-3 py-1.5 rounded-lg font-bold border ${createMode === 'range' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700'}`}>Диапазон</button><button type="button" onClick={() => setCreateMode('manual')} className={`text-xs px-3 py-1.5 rounded-lg font-bold border ${createMode === 'manual' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700'}`}>Manual list</button></div>{createMode === 'range' ? <div className="grid grid-cols-2 gap-3"><input value={createStartExt} onChange={e => setCreateStartExt(e.target.value)} placeholder="Start ext" className="text-xs p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700" /><input value={createEndExt} onChange={e => setCreateEndExt(e.target.value)} placeholder="End ext" className="text-xs p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700" /></div> : <textarea value={createManualList} onChange={e => setCreateManualList(e.target.value)} rows={4} placeholder={'200\n201\n202'} className="w-full text-xs p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700 font-mono" />}<div className="grid grid-cols-1 md:grid-cols-2 gap-3"><input value={createNameMask} onChange={e => setCreateNameMask(e.target.value)} placeholder="Name mask" className="text-xs p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700" /><select value={createSecretMode} onChange={e => setCreateSecretMode(e.target.value as any)} className="text-xs p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700"><option value="auto">Secret auto</option><option value="fixed">Secret fixed</option><option value="mask">Secret mask</option></select>{createSecretMode === 'fixed' && <input value={createFixedSecret} onChange={e => setCreateFixedSecret(e.target.value)} type="password" placeholder="Fixed secret" className="text-xs p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700" />}{createSecretMode === 'mask' && <input value={createSecretMask} onChange={e => setCreateSecretMask(e.target.value)} placeholder="pbx{ext}!" className="text-xs p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700" />}<select value={createTechnology} onChange={e => setCreateTechnology(e.target.value as any)} className="text-xs p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700"><option value="pjsip">PJSIP</option><option value="sip">SIP</option></select><input value={createContext} onChange={e => setCreateContext(e.target.value)} placeholder="Context" className="text-xs p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700" /><input value={createOutboundCid} onChange={e => setCreateOutboundCid(e.target.value)} placeholder="Outbound CID" className="text-xs p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700" /><input value={createEmailDomain} onChange={e => setCreateEmailDomain(e.target.value)} placeholder="Email domain" className="text-xs p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700" /><select value={createRecording} onChange={e => setCreateRecording(e.target.value)} className="text-xs p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700"><option value="always">Recording always</option><option value="never">Recording never</option><option value="optional">Recording optional</option></select><input value={createEmergencyCid} onChange={e => setCreateEmergencyCid(e.target.value)} placeholder="Emergency CID" className="text-xs p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700" /></div><div className="flex flex-wrap gap-4 text-xs text-slate-600 dark:text-slate-300"><label className="flex items-center gap-2"><input type="checkbox" checked={createVoicemail} onChange={e => setCreateVoicemail(e.target.checked)} /> Voicemail</label><label className="flex items-center gap-2"><input type="checkbox" checked={createCallWaiting} onChange={e => setCreateCallWaiting(e.target.checked)} /> Call Waiting</label></div><textarea value={createRawJson} onChange={e => setCreateRawJson(e.target.value)} rows={3} placeholder='Raw JSON advanced params, например {"department":"Sales"}' className="w-full text-xs p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700 font-mono" /><button type="button" onClick={handleCreatePreview} disabled={extensionPreviewLoading} className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-xs font-extrabold px-4 py-2.5 rounded-lg flex items-center gap-2"><Eye className="w-4 h-4" /> Preview создания</button></div>
-            <div className="border border-slate-150 dark:border-slate-700 rounded-xl p-5 bg-white dark:bg-slate-900 space-y-4"><h4 className="text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-2"><Edit className="w-4 h-4" /> Массовое изменение</h4><div className="text-xs text-slate-500 dark:text-slate-400">Выбрано extensions: <strong className="text-slate-800 dark:text-white">{selectedExtensionIds.length}</strong></div><div className="grid grid-cols-1 md:grid-cols-2 gap-3"><label className="space-y-1 text-xs"><span><input type="checkbox" checked={updateFields.updateDisplayName} onChange={e => setUpdateField('updateDisplayName', e.target.checked)} /> DisplayName mask</span><input value={updateFields.displayName} onChange={e => setUpdateField('displayName', e.target.value)} className="w-full p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700" /></label><label className="space-y-1 text-xs"><span><input type="checkbox" checked={updateFields.updateRecording} onChange={e => setUpdateField('updateRecording', e.target.checked)} /> Recording</span><select value={updateFields.recording} onChange={e => setUpdateField('recording', e.target.value)} className="w-full p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700"><option value="always">always</option><option value="never">never</option><option value="optional">optional</option></select></label><label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={updateFields.updateVoicemail} onChange={e => setUpdateField('updateVoicemail', e.target.checked)} /> Voicemail <input type="checkbox" checked={updateFields.voicemail} onChange={e => setUpdateField('voicemail', e.target.checked)} /></label><label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={updateFields.updateCallWaiting} onChange={e => setUpdateField('updateCallWaiting', e.target.checked)} /> Call Waiting <input type="checkbox" checked={updateFields.callWaiting} onChange={e => setUpdateField('callWaiting', e.target.checked)} /></label><label className="space-y-1 text-xs"><span><input type="checkbox" checked={updateFields.updateOutboundCid} onChange={e => setUpdateField('updateOutboundCid', e.target.checked)} /> Outbound CID</span><input value={updateFields.outboundCid} onChange={e => setUpdateField('outboundCid', e.target.value)} className="w-full p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700" /></label><label className="space-y-1 text-xs"><span><input type="checkbox" checked={updateFields.updateContext} onChange={e => setUpdateField('updateContext', e.target.checked)} /> Context</span><input value={updateFields.context} onChange={e => setUpdateField('context', e.target.value)} className="w-full p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700" /></label><label className="space-y-1 text-xs"><span><input type="checkbox" checked={updateFields.updateEmergencyCid} onChange={e => setUpdateField('updateEmergencyCid', e.target.checked)} /> Emergency CID</span><input value={updateFields.emergencyCid} onChange={e => setUpdateField('emergencyCid', e.target.value)} className="w-full p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700" /></label></div><label className="space-y-1 text-xs block"><span><input type="checkbox" checked={updateFields.updateRaw} onChange={e => setUpdateField('updateRaw', e.target.checked)} /> Raw JSON advanced params</span><textarea value={updateFields.rawJson} onChange={e => setUpdateField('rawJson', e.target.value)} rows={3} className="w-full p-2 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700 font-mono" /></label><button type="button" onClick={handleUpdatePreview} disabled={extensionPreviewLoading || selectedExtensionIds.length === 0} className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-xs font-extrabold px-4 py-2.5 rounded-lg flex items-center gap-2"><Eye className="w-4 h-4" /> Preview изменения</button></div></div>
-            <div className="border border-slate-150 dark:border-slate-700 rounded-xl p-5 bg-white dark:bg-slate-900 space-y-4"><div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3"><h4 className="text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-2"><FileText className="w-4 h-4" /> Preview</h4><button type="button" disabled className="bg-slate-200 dark:bg-slate-700 text-slate-500 dark:text-slate-400 text-xs font-bold px-4 py-2 rounded-lg cursor-not-allowed">Apply будет включён после финальной проверки</button></div>{extensionPreviewResult ? <div className="space-y-3"><div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs"><div><span className="text-slate-400 font-bold uppercase">previewId</span><div className="font-mono text-slate-800 dark:text-white break-all">{extensionPreviewResult.previewId}</div></div><div><span className="text-slate-400 font-bold uppercase">type</span><div className="font-bold text-slate-800 dark:text-white">{extensionPreviewResult.type}</div></div><div><span className="text-slate-400 font-bold uppercase">counts</span><div className="font-mono text-slate-800 dark:text-white">{JSON.stringify(extensionPreviewResult.counts || {})}</div></div></div><div className="overflow-x-auto border border-slate-100 dark:border-slate-800 rounded-lg"><table className="w-full text-left text-xs"><thead className="bg-slate-50 dark:bg-slate-800 text-[10px] uppercase text-slate-400"><tr><th className="p-2">Extension</th><th className="p-2">Action</th><th className="p-2">Message</th><th className="p-2">Before</th><th className="p-2">After</th></tr></thead><tbody className="divide-y dark:divide-slate-800">{(extensionPreviewResult.items || []).map((item: any, idx: number) => <tr key={`${item.extension}-${idx}`}><td className="p-2 font-mono font-bold">{item.extension}</td><td className="p-2"><span className="px-2 py-1 rounded-full bg-slate-100 dark:bg-slate-800 text-[10px] font-black uppercase">{item.action}</span></td><td className="p-2 text-slate-600 dark:text-slate-300">{item.message}</td><td className="p-2 font-mono text-[10px] text-slate-500 max-w-xs">{summarizePreviewValue(item.before)}</td><td className="p-2 font-mono text-[10px] text-slate-500 max-w-xs">{summarizePreviewValue(item.after)}</td></tr>)}</tbody></table></div></div> : <div className="text-xs text-slate-400 py-6 text-center border border-dashed border-slate-200 dark:border-slate-700 rounded-lg">Preview ещё не сформирован.</div>}</div>
+            {activeExtError && <div className="flex gap-2 rounded-lg border border-rose-200 bg-rose-50 p-4 text-xs text-rose-800 dark:border-rose-900/40 dark:bg-rose-950/30 dark:text-rose-300"><AlertTriangle className="h-4 w-4 shrink-0 text-rose-500" /><span>{activeExtError}</span></div>}
+            {activeExtRawError && <div className="flex gap-2 rounded-lg border border-rose-200 bg-rose-50 p-4 text-xs text-rose-800 dark:border-rose-900/40 dark:bg-rose-950/30 dark:text-rose-300"><AlertTriangle className="h-4 w-4 shrink-0 text-rose-500" /><span>{activeExtRawError}</span></div>}
+            {activeExtRawData && activeExtRawOpen && (<div className="space-y-3 rounded-xl border border-slate-150 bg-white p-4 dark:border-slate-700 dark:bg-slate-900"><div className="flex items-center justify-between gap-3"><h4 className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400"><Database className="h-4 w-4" /> Raw FreePBX REST API</h4><div className="flex items-center gap-2"><span className="text-[10px] text-slate-400">Secrets masked</span><button type="button" onClick={() => setActiveExtRawOpen(false)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">Закрыть</button></div></div><pre className="max-h-[320px] overflow-auto rounded-lg bg-slate-950 p-4 font-mono text-[11px] leading-relaxed text-slate-100 whitespace-pre-wrap">{JSON.stringify(activeExtRawData, null, 2)}</pre></div>)}
+            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+              <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(260px,1fr)_repeat(6,minmax(120px,auto))]">
+                <div className="relative"><Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" /><input type="text" placeholder="Поиск: extension, имя, email" value={activeExtSearch} onChange={(e) => setActiveExtSearch(e.target.value)} className="h-9 w-full rounded-lg border border-slate-200 bg-slate-50 py-2 pl-9 pr-3 text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white" /></div>
+                <select value={activeExtTechFilter} onChange={(e) => setActiveExtTechFilter(e.target.value as any)} className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white"><option value="all">Technology</option><option value="pjsip">PJSIP</option><option value="sip">SIP</option><option value="unknown">Unknown</option></select>
+                <select value={activeExtVoicemailFilter} onChange={(e) => setActiveExtVoicemailFilter(e.target.value as any)} className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white"><option value="all">Voicemail</option><option value="enabled">Enabled</option><option value="disabled">Disabled</option></select>
+                <select value={activeExtRecordingFilter} onChange={(e) => setActiveExtRecordingFilter(e.target.value as any)} className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white"><option value="all">Recording</option><option value="always">Always</option><option value="ondemand">On Demand</option><option value="never">Never</option><option value="unknown">Unknown</option></select>
+                <select value={activeExtSourceFilter} onChange={(e) => setActiveExtSourceFilter(e.target.value as any)} className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white"><option value="all">Source</option><option value="bmo">BMO</option><option value="rest">REST</option><option value="merged">BMO + REST</option><option value="unknown">Unknown</option></select>
+                <select value={activeExtStatusFilter} onChange={(e) => setActiveExtStatusFilter(e.target.value as any)} className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white"><option value="all">Status</option><option value="loaded">Loaded</option><option value="warning">Warning</option><option value="error">Error</option></select>
+                <div className="flex gap-2"><select value={activeExtSortField} onChange={(e) => setActiveExtSortField(e.target.value as any)} className="h-9 min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white"><option value="extension">Extension</option><option value="name">Name</option><option value="tech">Tech</option></select><button type="button" onClick={() => setActiveExtSortDir(activeExtSortDir === 'asc' ? 'desc' : 'asc')} className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-3 text-xs font-black text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">{activeExtSortDir === 'asc' ? 'ASC' : 'DESC'}</button></div>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-xs"><button type="button" onClick={selectAllFilteredExtensions} className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 font-bold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">Выбрать все</button><button type="button" onClick={clearSelectedExtensions} className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 font-bold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">Снять выбор</button><span className="text-slate-400">Выбрано: <strong className="text-slate-750 dark:text-white">{selectedExtensionIds.length}</strong></span></div>
+            </div>
+            <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900">
+              <div className="max-h-[560px] overflow-auto"><table className="w-full min-w-[1480px] text-left text-xs"><thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50 text-[10px] font-black uppercase tracking-wide text-slate-400 dark:border-slate-700 dark:bg-slate-800"><tr><th className="w-10 p-3"><input type="checkbox" checked={allFilteredSelected} onChange={toggleAllFilteredExtensions} className="h-4 w-4 rounded" /></th>{getVisibleExtensionFields().map(field => <th key={field.key} className="p-3">{field.label}</th>)}<th className="p-3">Source</th><th className="p-3">Status</th></tr></thead><tbody className="divide-y divide-slate-100 dark:divide-slate-800">{activeExtLoading ? <tr><td colSpan={getVisibleExtensionFields().length + 3} className="p-12 text-center text-slate-400"><RefreshCw className="mx-auto mb-3 h-8 w-8 animate-spin text-indigo-500" />Загрузка extensions с АТС...</td></tr> : filteredActiveExtensions.length > 0 ? filteredActiveExtensions.map((ext, idx) => { const extId = String(ext.extension || ''); const selected = selectedExtensionIds.includes(extId); return <tr key={ext.extension || idx} onClick={() => openSingleExtensionEditor(ext)} className={'cursor-pointer transition ' + (singleExtensionEdit?.extension === extId ? 'bg-amber-50/70 dark:bg-amber-950/20' : selected ? 'bg-indigo-50/70 dark:bg-indigo-950/20' : 'hover:bg-slate-50 dark:hover:bg-slate-800/60')}><td className="p-3"><input type="checkbox" checked={selected} onChange={() => toggleExtensionSelection(extId)} onClick={(e) => e.stopPropagation()} className="h-4 w-4 rounded" /></td>{getVisibleExtensionFields().map(field => <td key={field.key} className="p-3"><span className={field.key === 'tech' ? getTechBadgeClass(ext) : 'font-mono text-slate-600 dark:text-slate-300'}>{getExtensionFieldValue(ext, field)}</span></td>)}<td className="p-3"><span className={getSourceBadgeClass(ext)}>{getExtensionSourceLabel(ext)}</span></td><td className="p-3"><span className={getStatusBadgeClass(ext)}>{getExtensionStatusLabel(ext)}</span></td></tr>; }) : <tr><td colSpan={getVisibleExtensionFields().length + 3} className="p-12 text-center text-slate-400"><Users className="mx-auto mb-3 h-10 w-10 text-slate-300 dark:text-slate-600" />{activeExtensions.length === 0 ? 'Загрузите extensions с АТС.' : 'Нет extensions под выбранные условия.'}</td></tr>}</tbody></table></div>
+            </div>
+            {singleExtensionEdit && (
+              <div className="rounded-xl border border-amber-200 bg-white p-5 shadow-sm dark:border-amber-900/50 dark:bg-slate-900">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div>
+                    <h4 className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400"><Edit className="h-4 w-4 text-amber-500" /> Редактировать extension</h4>
+                    <div className="mt-2 flex flex-wrap items-center gap-2"><span className="font-mono text-lg font-black text-slate-850 dark:text-white">{singleExtensionEdit.extension}</span><span className={getTechBadgeClass(singleExtensionEdit)}>{getTechLabel(singleExtensionEdit)}</span><span className={getSourceBadgeClass(singleExtensionEdit)}>{getExtensionSourceLabel(singleExtensionEdit)}</span></div>
+                  </div>
+                  <div className="flex gap-2"><button type="button" onClick={() => setSingleExtensionEdit(null)} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">Закрыть</button><button type="button" onClick={handleExtensionApply} disabled={!canApplyExtensionPreview()} className={canApplyExtensionPreview() ? "inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-black text-white hover:bg-emerald-700 disabled:opacity-60" : "rounded-lg bg-slate-200 px-3 py-2 text-xs font-bold text-slate-500 cursor-not-allowed dark:bg-slate-700 dark:text-slate-400"}>{extensionApplyLoading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Apply</button></div>
+                </div>
+                <div className="mt-4 space-y-4">
+                  <div className="rounded-lg border border-slate-100 p-3 dark:border-slate-800">
+                    <div className="mb-3 text-[10px] font-black uppercase tracking-wider text-slate-400">Основное</div>
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                      {renderSingleField('updateName', 'name', 'Name', singleTextInput('name'))}
+                      {renderSingleField('updateOutboundCid', 'outboundCid', 'Outbound CID', singleTextInput('outboundCid'))}
+                      {renderSingleField('updateEmergencyCid', 'emergencyCid', 'Emergency CID', singleTextInput('emergencyCid'))}
+                      {renderSingleField('updateVoicemail', 'voicemail', 'Voicemail', singleSelect('voicemail', SINGLE_VOICEMAIL_OPTIONS))}
+                      {renderSingleField('updateCallWaiting', 'callWaiting', 'Call Waiting', singleSelect('callWaiting', SINGLE_ENABLED_OPTIONS))}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-slate-100 p-3 dark:border-slate-800">
+                    <div className="mb-3 text-[10px] font-black uppercase tracking-wider text-slate-400">Recording Options</div>
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                      {renderSingleField('updateRecordingInExternal', 'recording_in_external', 'recording_in_external', singleSelect('recording_in_external', SINGLE_RECORDING_OPTIONS))}
+                      {renderSingleField('updateRecordingOutExternal', 'recording_out_external', 'recording_out_external', singleSelect('recording_out_external', SINGLE_RECORDING_OPTIONS))}
+                      {renderSingleField('updateRecordingInInternal', 'recording_in_internal', 'recording_in_internal', singleSelect('recording_in_internal', SINGLE_RECORDING_OPTIONS))}
+                      {renderSingleField('updateRecordingOutInternal', 'recording_out_internal', 'recording_out_internal', singleSelect('recording_out_internal', SINGLE_RECORDING_OPTIONS))}
+                      {renderSingleField('updateRecordingOndemand', 'recording_ondemand', 'On Demand Recording', singleSelect('recording_ondemand', SINGLE_ON_DEMAND_OPTIONS))}
+                      {renderSingleField('updateRecordingPriority', 'recording_priority', 'Record Priority', <input type="number" min="0" value={singleUpdateFields.recording_priority || ''} onChange={e => setSingleUpdateField('recording_priority', e.target.value)} className={singleInputClass} />)}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-slate-100 p-3 dark:border-slate-800">
+                    <div className="mb-3 text-[10px] font-black uppercase tracking-wider text-slate-400">Follow Me</div>
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                      {renderSingleField('updateFindmefollowEnabled', 'findmefollow_enabled', 'findmefollow_enabled', singleSelect('findmefollow_enabled', SINGLE_ENABLED_OPTIONS))}
+                      {renderSingleField('updateFindmefollowStrategy', 'findmefollow_strategy', 'findmefollow_strategy', <input list="single-followme-strategies" value={singleUpdateFields.findmefollow_strategy || ''} onChange={e => setSingleUpdateField('findmefollow_strategy', e.target.value)} className={singleInputClass} />)}
+                      {renderSingleField('updateFindmefollowGrptime', 'findmefollow_grptime', 'findmefollow_grptime', singleTextInput('findmefollow_grptime'))}
+                      {renderSingleField('updateFindmefollowGrplist', 'findmefollow_grplist', 'findmefollow_grplist', singleTextInput('findmefollow_grplist'))}
+                      {renderSingleField('updateFindmefollowPostdest', 'findmefollow_postdest', 'findmefollow_postdest', singleTextInput('findmefollow_postdest'))}
+                    </div>
+                    <datalist id="single-followme-strategies">{SINGLE_FOLLOW_ME_STRATEGIES.map(item => <option key={item} value={item} />)}</datalist>
+                  </div>
+                </div>
+                <div className="mt-4 flex flex-wrap items-center gap-2"><button type="button" onClick={handleSingleUpdatePreview} disabled={extensionPreviewLoading || !hasSingleCheckedFields()} className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-xs font-black text-white hover:bg-indigo-700 disabled:opacity-60"><Eye className="h-4 w-4" /> Preview изменения</button><span className="text-xs text-slate-400">Preview использует update-preview с selectedExtensions=[{singleExtensionEdit.extension}]</span></div>
+              </div>
+            )}
+            <div className="grid grid-cols-1 gap-4 xl:grid-cols-4">
+              <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-900 xl:col-span-2"><div className="mb-4 flex items-start justify-between gap-3"><div><h4 className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400"><ListPlus className="h-4 w-4 text-indigo-500" /> Массовое создание</h4><p className="mt-1 text-xs text-slate-400">Range, manual list or CSV. Только preview.</p></div><span className={getBadgeClass('indigo')}>Preview</span></div><div className="space-y-4"><div className="flex flex-wrap gap-2"><button type="button" onClick={() => setCreateMode('range')} className={`rounded-lg border px-3 py-1.5 text-xs font-bold ${createMode === 'range' ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300'}`}>Диапазон</button><button type="button" onClick={() => setCreateMode('manual')} className={`rounded-lg border px-3 py-1.5 text-xs font-bold ${createMode === 'manual' ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300'}`}>Manual</button><button type="button" onClick={() => setCreateMode('csv')} className={`rounded-lg border px-3 py-1.5 text-xs font-bold ${createMode === 'csv' ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300'}`}>CSV</button></div>{createMode === 'range' ? <div className="grid grid-cols-2 gap-3"><input value={createStartExt} onChange={e => setCreateStartExt(e.target.value)} placeholder="Start" className="rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs dark:border-slate-700 dark:bg-slate-800" /><input value={createEndExt} onChange={e => setCreateEndExt(e.target.value)} placeholder="End" className="rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs dark:border-slate-700 dark:bg-slate-800" /></div> : createMode === 'manual' ? <textarea value={createManualList} onChange={e => setCreateManualList(e.target.value)} rows={4} placeholder={'200\n201\n202'} className="w-full rounded-lg border border-slate-200 bg-slate-50 p-2 font-mono text-xs dark:border-slate-700 dark:bg-slate-800" /> : <textarea value={createCsvText} onChange={e => setCreateCsvText(e.target.value)} rows={4} placeholder={'extension,name\n200,User 200\n201,User 201'} className="w-full rounded-lg border border-slate-200 bg-slate-50 p-2 font-mono text-xs dark:border-slate-700 dark:bg-slate-800" />}<div className="grid grid-cols-1 gap-3 md:grid-cols-2"><input value={createNameMask} onChange={e => setCreateNameMask(e.target.value)} placeholder="Name mask: User {ext}" className="rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs dark:border-slate-700 dark:bg-slate-800" /><select value={createSecretMode} onChange={e => setCreateSecretMode(e.target.value as any)} className="rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs dark:border-slate-700 dark:bg-slate-800"><option value="auto">Secret auto</option><option value="fixed">Secret fixed</option><option value="mask">Secret mask</option></select>{createSecretMode === 'fixed' && <input value={createFixedSecret} onChange={e => setCreateFixedSecret(e.target.value)} type="password" placeholder="Fixed secret" className="rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs dark:border-slate-700 dark:bg-slate-800" />}{createSecretMode === 'mask' && <input value={createSecretMask} onChange={e => setCreateSecretMask(e.target.value)} placeholder="pbx{ext}!" className="rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs dark:border-slate-700 dark:bg-slate-800" />}<select value={createTechnology} onChange={e => setCreateTechnology(e.target.value as any)} className="rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs dark:border-slate-700 dark:bg-slate-800"><option value="pjsip">PJSIP</option><option value="sip">SIP</option></select><input value={createContext} onChange={e => setCreateContext(e.target.value)} placeholder="Context" className="rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs dark:border-slate-700 dark:bg-slate-800" /><input value={createOutboundCid} onChange={e => setCreateOutboundCid(e.target.value)} placeholder="Outbound CID" className="rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs dark:border-slate-700 dark:bg-slate-800" /><input value={createEmailDomain} onChange={e => setCreateEmailDomain(e.target.value)} placeholder="Email domain" className="rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs dark:border-slate-700 dark:bg-slate-800" /><select value={createRecording} onChange={e => setCreateRecording(e.target.value)} className="rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs dark:border-slate-700 dark:bg-slate-800"><option value="always">Recording always</option><option value="optional">Recording on demand</option><option value="never">Recording never</option></select><input value={createEmergencyCid} onChange={e => setCreateEmergencyCid(e.target.value)} placeholder="Emergency CID" className="rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs dark:border-slate-700 dark:bg-slate-800" /></div><div className="flex flex-wrap gap-4 text-xs text-slate-600 dark:text-slate-300"><label className="flex items-center gap-2"><input type="checkbox" checked={createVoicemail} onChange={e => setCreateVoicemail(e.target.checked)} /> Voicemail</label><label className="flex items-center gap-2"><input type="checkbox" checked={createCallWaiting} onChange={e => setCreateCallWaiting(e.target.checked)} /> Call Waiting</label></div><textarea value={createRawJson} onChange={e => setCreateRawJson(e.target.value)} rows={3} placeholder='Raw JSON advanced params' className="w-full rounded-lg border border-slate-200 bg-slate-50 p-2 font-mono text-xs dark:border-slate-700 dark:bg-slate-800" /><button type="button" onClick={handleCreatePreview} disabled={extensionPreviewLoading} className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-xs font-black text-white hover:bg-indigo-700 disabled:opacity-60"><Eye className="h-4 w-4" /> Preview создания</button></div></div>
+              <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-900 xl:col-span-2"><div className="mb-4 flex items-start justify-between gap-3"><div><h4 className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400"><Edit className="h-4 w-4 text-indigo-500" /> Массовое изменение</h4><p className="mt-1 text-xs text-slate-400">1. Выберите extensions в таблице. 2. Отметьте параметры. 3. Нажмите Preview изменения.</p>{selectedExtensionIds.length === 0 && <p className="mt-2 text-xs font-bold text-amber-600 dark:text-amber-300">Сначала выберите один или несколько extensions</p>}</div><span className={selectedExtensionIds.length ? getBadgeClass('green') : getBadgeClass('slate')}>{selectedExtensionIds.length}</span></div><div className="grid grid-cols-1 gap-3 md:grid-cols-2"><label className="space-y-1 text-xs"><span><input type="checkbox" checked={updateFields.updateDisplayName} onChange={e => setUpdateField('updateDisplayName', e.target.checked)} /> DisplayName mask</span><input value={updateFields.displayName} onChange={e => setUpdateField('displayName', e.target.value)} className="w-full rounded-lg border border-slate-200 bg-slate-50 p-2 dark:border-slate-700 dark:bg-slate-800" /></label><label className="space-y-1 text-xs"><span><input type="checkbox" checked={updateFields.updateRecording} onChange={e => setUpdateField('updateRecording', e.target.checked)} /> Recording</span><select value={updateFields.recording} onChange={e => setUpdateField('recording', e.target.value)} className="w-full rounded-lg border border-slate-200 bg-slate-50 p-2 dark:border-slate-700 dark:bg-slate-800"><option value="always">always</option><option value="optional">on demand</option><option value="never">never</option></select></label><label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={updateFields.updateVoicemail} disabled onChange={e => setUpdateField('updateVoicemail', e.target.checked)} /> Voicemail <input type="checkbox" checked={updateFields.voicemail} disabled onChange={e => setUpdateField('voicemail', e.target.checked)} /></label><label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={updateFields.updateCallWaiting} onChange={e => setUpdateField('updateCallWaiting', e.target.checked)} /> Call Waiting <input type="checkbox" checked={updateFields.callWaiting} onChange={e => setUpdateField('callWaiting', e.target.checked)} /></label><label className="space-y-1 text-xs"><span><input type="checkbox" checked={updateFields.updateOutboundCid} onChange={e => setUpdateField('updateOutboundCid', e.target.checked)} /> Outbound CID</span><input value={updateFields.outboundCid} onChange={e => setUpdateField('outboundCid', e.target.value)} className="w-full rounded-lg border border-slate-200 bg-slate-50 p-2 dark:border-slate-700 dark:bg-slate-800" /></label><label className="space-y-1 text-xs"><span><input type="checkbox" checked={updateFields.updateContext} disabled onChange={e => setUpdateField('updateContext', e.target.checked)} /> Context</span><input value={updateFields.context} disabled onChange={e => setUpdateField('context', e.target.value)} className="w-full rounded-lg border border-slate-200 bg-slate-50 p-2 dark:border-slate-700 dark:bg-slate-800" /></label><label className="space-y-1 text-xs"><span><input type="checkbox" checked={updateFields.updateEmergencyCid} disabled onChange={e => setUpdateField('updateEmergencyCid', e.target.checked)} /> Emergency CID</span><input value={updateFields.emergencyCid} disabled onChange={e => setUpdateField('emergencyCid', e.target.value)} className="w-full rounded-lg border border-slate-200 bg-slate-50 p-2 dark:border-slate-700 dark:bg-slate-800" /></label><label className="space-y-1 text-xs"><span><input type="checkbox" checked={updateFields.updateEmailDomain} disabled onChange={e => setUpdateField('updateEmailDomain', e.target.checked)} /> Email domain</span><input value={updateFields.emailDomain} disabled onChange={e => setUpdateField('emailDomain', e.target.value)} placeholder="example.com" className="w-full rounded-lg border border-slate-200 bg-slate-50 p-2 dark:border-slate-700 dark:bg-slate-800" /></label></div><label className="mt-3 block space-y-1 text-xs"><span><input type="checkbox" checked={updateFields.updateRaw} disabled onChange={e => setUpdateField('updateRaw', e.target.checked)} /> Raw JSON advanced params</span><textarea value={updateFields.rawJson} disabled onChange={e => setUpdateField('rawJson', e.target.value)} rows={3} className="w-full rounded-lg border border-slate-200 bg-slate-50 p-2 font-mono dark:border-slate-700 dark:bg-slate-800" /></label><button type="button" onClick={handleUpdatePreview} disabled={extensionPreviewLoading || selectedExtensionIds.length === 0} className="mt-4 inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-xs font-black text-white hover:bg-indigo-700 disabled:opacity-60"><Eye className="h-4 w-4" /> Preview изменения</button></div>
+              <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-900"><h4 className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400"><Layers className="h-4 w-4 text-indigo-500" /> Шаблоны</h4><p className="mt-2 text-xs text-slate-400">Локальные шаблоны будут подключены в следующем этапе.</p><div className="mt-4 text-2xl font-black text-slate-850 dark:text-white">{extTemplates.length}</div></div>
+              <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-900"><h4 className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400"><FileText className="h-4 w-4 text-indigo-500" /> Preview</h4><p className="mt-2 text-xs text-slate-400">Последний preview: {extensionPreviewResult?.previewId || 'нет'}</p><div className="mt-4 font-mono text-xs text-slate-500 dark:text-slate-300">{extensionPreviewResult ? formatPreviewCounts(extensionPreviewResult.counts) : 'Preview ещё не сформирован'}</div></div>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-900"><div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between"><div><h4 className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400"><FileText className="h-4 w-4" /> Preview</h4><p className="mt-1 text-xs text-slate-400">Create, update, skip, conflict and error review.</p></div><button type="button" onClick={handleExtensionApply} disabled={!canApplyExtensionPreview()} className={canApplyExtensionPreview() ? "inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-xs font-black text-white hover:bg-emerald-700 disabled:opacity-60" : "rounded-lg bg-slate-200 px-4 py-2 text-xs font-bold text-slate-500 cursor-not-allowed dark:bg-slate-700 dark:text-slate-400"}>{extensionApplyLoading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Apply BMO</button></div>{extensionPreviewResult ? <><div className="mt-4 space-y-4"><div className="grid grid-cols-1 gap-3 text-xs md:grid-cols-3"><div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-800"><span className="font-black uppercase text-slate-400">previewId</span><div className="mt-1 break-all font-mono text-slate-800 dark:text-white">{extensionPreviewResult.previewId}</div></div><div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-800"><span className="font-black uppercase text-slate-400">type</span><div className="mt-1 font-black text-slate-800 dark:text-white">{extensionPreviewResult.type}</div></div><div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-800"><span className="font-black uppercase text-slate-400">counts</span><div className="mt-1 font-mono text-slate-800 dark:text-white">{formatPreviewCounts(extensionPreviewResult.counts)}</div></div></div><div className="overflow-hidden rounded-lg border border-slate-100 dark:border-slate-800"><table className="w-full min-w-[880px] text-left text-xs"><thead className="bg-slate-50 text-[10px] uppercase text-slate-400 dark:bg-slate-800"><tr><th className="p-3">Extension</th><th className="p-3">Имя</th><th className="p-3">Action</th><th className="p-3">Message</th><th className="p-3">Old</th><th className="p-3">New</th></tr></thead><tbody className="divide-y divide-slate-100 dark:divide-slate-800">{(extensionPreviewResult.items || []).map((item: any, idx: number) => <tr key={`${item.extension}-${idx}`} className="hover:bg-slate-50 dark:hover:bg-slate-800/60"><td className="p-3 font-mono font-black text-slate-850 dark:text-white">{item.extension}</td><td className="p-3 font-bold text-slate-700 dark:text-slate-200">{item.after?.displayName || item.after?.name || item.before?.displayName || item.before?.name || '-'}</td><td className="p-3"><span className={`px-2 py-1 rounded-full text-[10px] font-black uppercase ${getPreviewActionClass(item.action)}`}>{item.action}</span></td><td className="p-3 text-slate-600 dark:text-slate-300">{item.message}</td><td className="p-3 font-mono text-[10px] text-slate-500">{summarizePreviewValue(item.before)}</td><td className="p-3"><div className="font-mono text-[10px] text-slate-500"><div className="text-slate-300">↓</div>{summarizePreviewValue(item.after)}{Array.isArray(item.diff) && item.diff.length > 0 && <div className="mt-2 space-y-1">{item.diff.map((diff: any) => <div key={diff.field} className="rounded bg-slate-50 px-2 py-1 dark:bg-slate-800"><span className="font-black text-slate-700 dark:text-slate-200">{diff.field}</span>: {formatDiffValue(diff.before)} → {formatDiffValue(diff.after)}</div>)}</div>}</div></td></tr>)}</tbody></table></div></div>{extensionApplyResult && <div className="mt-4 rounded-lg border border-slate-100 bg-slate-50 p-3 text-xs dark:border-slate-800 dark:bg-slate-800"><div className="mb-2 font-black uppercase text-slate-400">Apply result</div>{renderExtensionApplyResult()}</div>}</> : <div className="mt-4 rounded-lg border border-dashed border-slate-200 py-10 text-center text-xs text-slate-400 dark:border-slate-700">Preview ещё не сформирован.</div>}</div>
           </div>
         )}
         {/* TAB 4: TRUNKS WIZARD */}
