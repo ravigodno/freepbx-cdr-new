@@ -257,3 +257,24 @@ The section includes:
 The migration preview parses pasted key=value text only. It masks secret/password/token/clientSecret values and does not save data. It does not read real FreePBX trunks, call REST/BMO, create Trunks, register Trunks or run reload.
 
 Git Templates differ from future Local Working Configs. Git Templates are anonymized and committed. Local Working Configs will be PBX-specific and must not be committed to Git.
+
+## Trunk Lab Read-only Diagnostics
+
+Trunk Lab is the v5.2.0 read-only diagnostics section in Management. It runs through `POST /api/management/trunks/preview` with `operationType: "trunk_lab_diagnostics"`, reads Asterisk CLI state through existing AMI command execution, and normalizes PJSIP/chan_sip Trunk status.
+
+Read commands:
+
+- PJSIP: pjsip show registrations, endpoints, contacts, auths and aors.
+- chan_sip: sip show registry, peers, users and settings.
+
+The Management preview response returns `success`, `previewId`, `type`, `operationType`, `items`, `counts`, `diagnostics`, `summary`, masked `raw`, `readOnly: true` and `reloadRequired: false`. The section displays summary cards, filters, a diagnostics table and a details panel with Registration, Endpoint/Peer, Contacts, Auth, Problems, Recommendations and masked raw snippets.
+
+Trunk Lab does not create, update or delete Trunks. It does not apply Operator Templates, call BMO write paths, call FreePBX REST apply endpoints, run test calls or run fwconsole reload.
+
+Operator Template matching is read-only and limited to simple name/operator hints.
+
+
+Trunk Lab filters extension-looking SIP/PJSIP objects before creating diagnostics. Numeric SIP peers, numeric/numeric peers, numeric PJSIP endpoints, numeric AORs and numeric-auth endpoint patterns are excluded. AMI/CLI source failures are reported as source status, not fake diagnostics rows.
+
+
+Trunk Lab v5.2.0 uses FreePBX DB `asterisk.trunks` as the primary read-only Trunk inventory and uses Asterisk CLI only as runtime enrichment. CLI-only peers/endpoints are not shown as Trunks unless they match a DB trunk record.

@@ -21,6 +21,7 @@ import { ProvisioningTopNav } from './components/ProvisioningTopNav';
 import { ProvisioningOverview } from './components/ProvisioningOverview';
 import { ProvisioningPlaceholder } from './components/ProvisioningPlaceholder';
 import { OperatorTemplatesView } from './operatorTemplates/OperatorTemplatesView';
+import { TrunkLabView } from './trunkLab/TrunkLabView';
 import { operatorTemplates } from './operatorTemplates/operatorTemplatesData';
 import { MANAGEMENT_SECTIONS, ManagementSectionId } from './components/provisioningSections';
 import { ui } from '../../locales/ru';
@@ -37,7 +38,7 @@ type OperationType = 'CREATE' | 'UPDATE' | 'DELETE' | 'IMPORT' | 'EXPORT';
 type ActionStatus = 'SUCCESS' | 'WARNING' | 'ERROR' | 'SKIP' | 'CONFLICT';
 
 type OperationPreviewItem = { object: string; action: string; status: ActionStatus; oldValue: any; newValue: any; message: string; diff?: any[]; };
-type ProvisioningSectionId = 'extensions' | 'trunks' | 'operator-templates' | 'routes' | 'departments';
+type ProvisioningSectionId = 'extensions' | 'trunks' | 'operator-templates' | 'trunk-lab' | 'routes' | 'departments';
 type ProvisioningSectionDef = { id: ProvisioningSectionId; label: string; operationTypes: OperationType[] };
 type ActiveManagementTab = ManagementSectionId | 'branch' | 'numbering' | 'routes' | 'did' | 'templates' | 'changelog';
 
@@ -104,6 +105,7 @@ const PROVISIONING_SECTIONS: ProvisioningSectionDef[] = [
   { id: 'extensions', label: 'Extensions', operationTypes: ['CREATE', 'UPDATE', 'DELETE', 'IMPORT', 'EXPORT'] },
   { id: 'trunks', label: 'Trunks', operationTypes: ['CREATE', 'UPDATE', 'DELETE', 'IMPORT', 'EXPORT'] },
   { id: 'operator-templates', label: 'Operator Templates', operationTypes: ['CREATE', 'UPDATE', 'DELETE', 'IMPORT', 'EXPORT'] },
+  { id: 'trunk-lab', label: 'Trunk Lab', operationTypes: ['EXPORT'] },
   { id: 'routes', label: 'Routes', operationTypes: ['CREATE', 'UPDATE', 'DELETE', 'IMPORT', 'EXPORT'] },
   { id: 'departments', label: 'Departments', operationTypes: ['CREATE', 'UPDATE', 'DELETE', 'IMPORT', 'EXPORT'] }
 ];
@@ -1962,7 +1964,8 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
         <div className="min-w-0 bg-white dark:bg-slate-800 p-4 rounded-lg shadow-xs border border-slate-100 dark:border-slate-750">
         {activeTab === 'overview' && <ProvisioningOverview extensionsCount={activeExtensions.length} operatorTemplatesCount={operatorTemplates.length} extensionTemplatesCount={extTemplates.length} onNavigate={(section) => setActiveTab(section)} />}
         {activeTab === 'operator-templates' && <OperatorTemplatesView />}
-        {activeTab !== 'overview' && activeTab !== 'extensions' && activeTab !== 'operator-templates' && <ProvisioningPlaceholder section={MANAGEMENT_SECTIONS.find(section => section.id === activeTab)!} />}
+        {activeTab === 'trunk-lab' && <TrunkLabView token={token} />}
+        {activeTab !== 'overview' && activeTab !== 'extensions' && activeTab !== 'operator-templates' && activeTab !== 'trunk-lab' && <ProvisioningPlaceholder section={MANAGEMENT_SECTIONS.find(section => section.id === activeTab)!} />}
         
         {/* TAB 1: BRANCH CONSTRUCTOR */}
         {activeTab === 'branch' && (

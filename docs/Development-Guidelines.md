@@ -263,3 +263,28 @@ Migration preview code must mask secret/password/token/clientSecret fields and m
 Operator Templates v5.1.0 is read-only. Do not create Trunks, call FreePBX REST apply endpoints, call BMO, register Trunks, run test calls or run fwconsole reload from this module.
 
 Local Working Configs are future local PBX-specific files and must not be committed to Git.
+
+## Trunk Lab Rules
+
+Trunk Lab v5.2.0 is read-only and must run through the Management operation endpoint `POST /api/management/trunks/preview` with `operationType: "trunk_lab_diagnostics"`. It may execute only safe Asterisk CLI read commands through AMI.
+
+Allowed command families for this module:
+
+- pjsip show registrations/endpoints/contacts/auths/aors;
+- sip show registry/peers/users/settings.
+
+Forbidden in Trunk Lab v5.2.0:
+
+- creating, updating or deleting Trunks;
+- applying Operator Templates;
+- FreePBX REST write calls;
+- BMO write calls;
+- fwconsole reload;
+- test calls;
+- route or Extension mutations;
+- storing passwords or Local Working Configs.
+
+Backend responses must mask secret/password/passwd/token/client_secret/auth_password before the frontend receives raw snippets.
+
+
+Trunk Lab filters extension-looking SIP/PJSIP objects before creating diagnostics. Numeric SIP peers, numeric/numeric peers, numeric PJSIP endpoints, numeric AORs and numeric-auth endpoint patterns are excluded. AMI/CLI source failures are reported as source status, not fake diagnostics rows.

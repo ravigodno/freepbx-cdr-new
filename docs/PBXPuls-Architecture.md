@@ -205,3 +205,14 @@ Git Templates are anonymized and may include SIP/PJSIP defaults, public server n
 Local Working Configs are planned separately. They may contain installation-specific values and must remain outside Git.
 
 The v5.1.0 migration preview is a pure frontend parser for pasted chan_sip key=value text. It does not read live PBX trunks and does not perform FreePBX mutations. Trunk Lab, test Trunks and live diagnostics are future modules.
+
+## Trunk Lab Architecture
+
+Trunk Lab adds a read-only diagnostics layer for SIP/PJSIP Trunks. It uses the existing Management operation endpoint `POST /api/management/trunks/preview` with `operationType: "trunk_lab_diagnostics"`. The backend code lives in server-management.ts near the Trunks preview operation and uses a short-lived AMI Action: Command helper.
+
+The backend parses Asterisk CLI output into a normalized TrunkDiagnostic model and masks secrets before sending data to the frontend. It does not use standalone `/api/trunk-lab/*` endpoints, FreePBX REST write calls, or BMO write flows.
+
+The frontend module lives in src/modules/management/trunkLab/. It renders read-only status, problems and recommendations. Future Trunk Lab testing and Trunks Management must remain separate stages and must use Preview → Apply before any mutation.
+
+
+Trunk Lab filters extension-looking SIP/PJSIP objects before creating diagnostics. Numeric SIP peers, numeric/numeric peers, numeric PJSIP endpoints, numeric AORs and numeric-auth endpoint patterns are excluded. AMI/CLI source failures are reported as source status, not fake diagnostics rows.

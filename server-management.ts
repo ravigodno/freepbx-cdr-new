@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import * as XLSX from 'xlsx';
 import mysql from 'mysql2/promise';
+import net from 'net';
 import { spawnSync } from 'child_process';
 import * as crypto from 'crypto';
 
@@ -214,8 +215,8 @@ interface NormalizedExtension {
 }
 
 
-type ExtensionPreviewType = 'create' | 'update' | 'delete';
-type ExtensionPreviewAction = 'create' | 'update' | 'delete' | 'skip' | 'conflict' | 'error';
+type ExtensionPreviewType = 'create' | 'update' | 'delete' | 'trunk_lab_diagnostics';
+type ExtensionPreviewAction = 'create' | 'update' | 'delete' | 'skip' | 'conflict' | 'error' | 'diagnostic';
 
 interface ExtensionPreviewItem {
   extension: string;
@@ -2238,6 +2239,552 @@ async function updatePBXData(updater: (db: any) => void) {
   return false;
 }
 
+
+type TrunkLabTechnology = 'pjsip' | 'chan_sip' | 'unknown';
+type TrunkLabRisk = 'ok' | 'warning' | 'critical' | 'unknown';
+type TrunkLabRegistrationStatus = 'registered' | 'rejected' | 'auth_failed' | 'timeout' | 'no_registration' | 'unavailable' | 'unknown';
+type TrunkLabEndpointStatus = 'available' | 'unavailable' | 'not_in_use' | 'unreachable' | 'unknown';
+type TrunkLabContactStatus = 'reachable' | 'nonqual' | 'unreachable' | 'no_contact' | 'unknown';
+type TrunkLabSourceState = 'ok' | 'unavailable' | 'error' | 'timeout';
+
+type TrunkLabCommandResult = { command: string; success: boolean; output: string; status: TrunkLabSourceState; message?: string };
+type TrunkLabSourceStatusEntry = { status: TrunkLabSourceState; message?: string; command?: string };
+type TrunkLabSourceStatus = Record<string, TrunkLabSourceStatusEntry>;
+type TrunkLabInventoryTrunk = {
+  trunkid: number | string;
+  name: string;
+  tech: string;
+  channelId: string;
+  outcid: string;
+  disabled: boolean;
+};
+type TrunkLabDiagnostic = {
+  id: string;
+  name: string;
+  technology: TrunkLabTechnology;
+  source: string;
+  registrationStatus: TrunkLabRegistrationStatus;
+  endpointStatus: TrunkLabEndpointStatus;
+  contactStatus: TrunkLabContactStatus;
+  authStatus: 'available' | 'missing' | 'unavailable' | 'unknown';
+  networkStatus: 'ok' | 'warning' | 'critical' | 'unknown';
+  riskLevel: TrunkLabRisk;
+  summary: string;
+  problems: string[];
+  recommendations: string[];
+  rawRefs: Record<string, string>;
+  templateSuggestion?: string;
+  rawPeerName?: string;
+  displayName?: string;
+  notes?: string[];
+  trunkid?: number | string;
+  tech?: string;
+  channelId?: string;
+  outcid?: string;
+  disabled?: boolean;
+  registryUsername?: string;
+  registryHost?: string;
+  peerHost?: string;
+  peerPort?: string;
+  rtt?: string;
+};
+
+const TRUNK_LAB_OPERATION_TYPE = 'trunk_lab_diagnostics';
+const TRUNK_LAB_CLI_TIMEOUT_MS = 2500;
+const TRUNK_LAB_PJSIP_COMMANDS = ['pjsip show registrations', 'pjsip show endpoints', 'pjsip show contacts', 'pjsip show auths', 'pjsip show aors'];
+const TRUNK_LAB_CHANSIP_COMMANDS = ['sip show registry', 'sip show peers', 'sip show users', 'sip show settings'];
+const TRUNK_LAB_SECRET_PATTERN = /(secret|password|passwd|token|client_secret|auth_password)(\s*[:=]\s*)([^\s,;]+)/ig;
+
+function maskTrunkLabSecrets(value: string): string {
+  return String(value || '').replace(TRUNK_LAB_SECRET_PATTERN, (_m, key, sep) => key + sep + '********');
+}
+
+function mapFreePbxTrunkTechnology(tech: string): TrunkLabTechnology {
+  const normalized = String(tech || '').trim().toLowerCase();
+  if (normalized === 'sip') return 'chan_sip';
+  if (normalized === 'pjsip') return 'pjsip';
+  return 'unknown';
+}
+
+function normalizeFreePbxDisabled(value: any): boolean {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  return normalized === 'on' || normalized === 'yes' || normalized === 'true' || normalized === '1';
+}
+
+async function loadFreePbxTrunkInventory(settings: any): Promise<{ trunks: TrunkLabInventoryTrunk[]; status: TrunkLabSourceStatusEntry }> {
+  let connection: any;
+  try {
+    connection = await mysql.createConnection({
+      host: settings?.dbHost || process.env.DB_HOST || 'localhost',
+      port: Number(settings?.dbPort || process.env.DB_PORT || 3306),
+      user: settings?.dbUser || process.env.DB_USER || 'freepbxuser',
+      password: settings?.dbPass || process.env.DB_PASS || '',
+      database: settings?.dbName || process.env.DB_NAME || 'asteriskcdrdb',
+      connectTimeout: TRUNK_LAB_CLI_TIMEOUT_MS,
+      dateStrings: true
+    });
+    const [rows] = await connection.execute('SELECT trunkid, name, tech, channelid, outcid, disabled FROM asterisk.trunks ORDER BY trunkid', []);
+    const trunks = (Array.isArray(rows) ? rows : []).map((row: any) => ({
+      trunkid: row.trunkid,
+      name: String(row.name || row.channelid || row.trunkid || '').trim(),
+      tech: String(row.tech || '').trim(),
+      channelId: String(row.channelid || '').trim(),
+      outcid: String(row.outcid || '').trim(),
+      disabled: normalizeFreePbxDisabled(row.disabled)
+    })).filter((item: TrunkLabInventoryTrunk) => item.name && !isForbiddenTrunkLabName(item.name));
+    return { trunks, status: { status: 'ok', message: 'Loaded ' + trunks.length + ' trunk' + (trunks.length === 1 ? '' : 's') + ' from FreePBX DB' } };
+  } catch (e: any) {
+    const rawMessage = String(e?.message || 'FreePBX DB read failed');
+    const isTimeout = /timeout|timed out|etimedout/i.test(rawMessage);
+    return { trunks: [], status: { status: isTimeout ? 'timeout' : 'error', message: isTimeout ? 'FreePBX DB read timeout' : maskTrunkLabSecrets(rawMessage) } };
+  } finally {
+    if (connection) await connection.end().catch(() => undefined);
+  }
+}
+
+function runTrunkLabAmiCommand(settings: any, command: string): Promise<{ success: boolean; message: string; timedOut?: boolean }> {
+  return new Promise((resolve) => {
+    const host = settings?.amiHost || 'localhost';
+    const port = settings?.amiPort || 5038;
+    const user = settings?.amiUser || '';
+    const pass = settings?.amiPass || '';
+    if (!host || !user || !pass) {
+      resolve({ success: false, message: 'AMI не настроен' });
+      return;
+    }
+
+    const socket = new net.Socket();
+    socket.setTimeout(TRUNK_LAB_CLI_TIMEOUT_MS);
+    let buffer = '';
+    let stage = 'greeting';
+    let settled = false;
+    const finish = (result: { success: boolean; message: string; timedOut?: boolean }) => {
+      if (settled) return;
+      settled = true;
+      try { socket.destroy(); } catch {}
+      resolve(result);
+    };
+
+    socket.connect(Number(port), host);
+    socket.on('data', data => {
+      buffer += data.toString();
+      if (stage === 'greeting' && buffer.includes('\n')) {
+        buffer = '';
+        socket.write('Action: Login\r\nUsername: ' + user + '\r\nSecret: ' + pass + '\r\nEvents: off\r\n\r\n');
+        stage = 'login';
+      } else if (stage === 'login' && (buffer.includes('\r\n\r\n') || buffer.includes('\n\n'))) {
+        if (!buffer.toLowerCase().includes('success')) {
+          finish({ success: false, message: 'AMI login failed' });
+          return;
+        }
+        buffer = '';
+        socket.write('Action: Command\r\nCommand: ' + command + '\r\n\r\n');
+        stage = 'command';
+      } else if (stage === 'command' && (buffer.includes('--END COMMAND--') || (!buffer.toLowerCase().includes('follows') && (buffer.includes('\r\n\r\n') || buffer.includes('\n\n'))))) {
+        const msg = buffer.trim();
+        socket.write('Action: Logoff\r\n\r\n');
+        finish({ success: true, message: msg });
+      }
+    });
+    socket.on('end', () => {
+      if (stage === 'command' && buffer) finish({ success: true, message: buffer.trim() });
+    });
+    socket.on('error', err => finish({ success: false, message: err.message }));
+    socket.on('timeout', () => finish({ success: false, message: 'Command did not respond in ' + TRUNK_LAB_CLI_TIMEOUT_MS + ' ms', timedOut: true }));
+  });
+}
+
+function trunkLabLines(output: string): string[] {
+  return maskTrunkLabSecrets(output).split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+}
+
+function isTrunkLabUnavailable(output: string): boolean {
+  const lower = String(output || '').toLowerCase();
+  return lower.includes('no such command') || lower.includes('not found') || lower.includes('unable to') || (lower.includes('module') && lower.includes('not loaded'));
+}
+
+function runTrunkLabLocalCliCommand(command: string): TrunkLabCommandResult {
+  const allowed = [...TRUNK_LAB_PJSIP_COMMANDS, ...TRUNK_LAB_CHANSIP_COMMANDS];
+  if (!allowed.includes(command)) {
+    return { command, success: false, output: '', status: 'unavailable', message: 'Command is not allowed for Trunk Lab' };
+  }
+  const result = spawnSync('asterisk', ['-rx', command], { encoding: 'utf8', timeout: TRUNK_LAB_CLI_TIMEOUT_MS, maxBuffer: 1024 * 1024 });
+  const output = maskTrunkLabSecrets(String(result.stdout || result.stderr || '').trim());
+  if (result.error) {
+    const message = result.error.message || 'Asterisk CLI read failed';
+    return { command, success: false, output, status: /timeout/i.test(message) ? 'timeout' : 'error', message: maskTrunkLabSecrets(message) };
+  }
+  if (result.status !== 0 && !output) {
+    return { command, success: false, output: '', status: 'error', message: 'Asterisk CLI exited with code ' + result.status };
+  }
+  if (isTrunkLabUnavailable(output)) {
+    return { command, success: false, output, status: 'unavailable', message: output || 'Command unavailable' };
+  }
+  return { command, success: true, output, status: 'ok' };
+}
+
+async function runTrunkLabCommands(settings: any, commands: string[]): Promise<Record<string, TrunkLabCommandResult>> {
+  const pairs = await Promise.all(commands.map(async (command) => {
+    try {
+      const result = await runTrunkLabAmiCommand(settings, command);
+      const output = maskTrunkLabSecrets(result.message || '');
+      const unavailable = !result.success || isTrunkLabUnavailable(output);
+      if (result.success && !unavailable) {
+        return [command, { command, success: true, output, status: 'ok' as TrunkLabSourceState }] as const;
+      }
+      const fallback = runTrunkLabLocalCliCommand(command);
+      if (fallback.success) return [command, fallback] as const;
+      const status: TrunkLabSourceState = result.timedOut ? 'timeout' : unavailable ? 'unavailable' : fallback.status;
+      return [command, { command, success: false, output: fallback.output || output, status, message: fallback.message || output || 'Command unavailable' }] as const;
+    } catch (e: any) {
+      const fallback = runTrunkLabLocalCliCommand(command);
+      if (fallback.success) return [command, fallback] as const;
+      return [command, { command, success: false, output: fallback.output || '', status: fallback.status || 'error' as TrunkLabSourceState, message: fallback.message || maskTrunkLabSecrets(e?.message || 'AMI/CLI read failed') }] as const;
+    }
+  }));
+  return Object.fromEntries(pairs);
+}
+function isForbiddenTrunkLabName(name: string): boolean {
+  const raw = String(name || '').trim();
+  return !raw || /^(ami|cli|timeout|unknown|unavailable|error|failed|command|response|null|undefined)$/i.test(raw);
+}
+
+function stripPeerUsername(value: string): string {
+  return String(value || '').trim().split('/')[0];
+}
+
+function peerUsername(value: string): string {
+  const parts = String(value || '').trim().split('/');
+  return parts.length > 1 ? parts.slice(1).join('/') : '';
+}
+
+function isNumericExtensionName(value: string): boolean {
+  const raw = String(value || '').trim();
+  if (!raw) return false;
+  return /^\d+$/.test(raw) || /^\d+\/\d+$/.test(raw);
+}
+
+function commandOutput(commands: Record<string, TrunkLabCommandResult>, command: string): string {
+  const result = commands[command];
+  return result?.success && result.status === 'ok' ? result.output || '' : '';
+}
+
+function parsePjsipRegistrations(output: string) {
+  return trunkLabLines(output).filter(line => !line.startsWith('<') && !line.toLowerCase().includes('objects found')).map(line => {
+    const parts = line.split(/\s+/);
+    const statusMatch = line.match(/\b(Registered|Rejected|Unregistered|Timeout|Auth\s*Failed|No Authentication|Request Sent)\b/i);
+    return { name: parts[0] || 'unknown-registration', clientUri: (line.match(/sip:[^\s]+/i) || [])[0] || '', serverUri: (line.match(/\bsips?:[^\s]+/ig) || [])[1] || '', status: statusMatch ? statusMatch[0] : (parts.find(p => /registered|rejected|timeout|failed/i.test(p)) || 'unknown'), retryInterval: (line.match(/Retry[^0-9]*(\d+)/i) || [])[1] || '', expiration: (line.match(/Expir[^0-9]*(\d+)/i) || [])[1] || '', nextReg: (line.match(/Next[^0-9]*(\d+)/i) || [])[1] || '', lastResponse: (line.match(/\b(\d{3})\b/) || [])[1] || '' };
+  }).filter(item => item.name && !/^-+$/.test(item.name));
+}
+
+function parsePjsipEndpoints(output: string) {
+  const lines = trunkLabLines(output);
+  const endpoints: any[] = [];
+  let current: any | null = null;
+  const pushCurrent = () => {
+    if (!current) return;
+    if (!isForbiddenTrunkLabName(current.endpoint)) endpoints.push(current);
+  };
+  for (const line of lines) {
+    const endpointMatch = line.match(/^Endpoint:\s*([^\s]+)\s+(.+)?$/i) || line.match(/^Endpoint\s+([^\s]+)\s+(.+)?$/i);
+    if (endpointMatch) {
+      pushCurrent();
+      const endpoint = String(endpointMatch[1] || '').trim();
+      const state = (line.match(/\b(Available|Unavailable|Not in use|Unreachable|Unknown)\b/i) || [])[1] || 'unknown';
+      current = { endpoint, state, channels: (line.match(/\b(\d+)\s+of\s+[^\s]+/i) || [])[1] || '', aor: '', auth: '', outboundAuth: '', transport: '', identify: '' };
+      continue;
+    }
+    if (!current) continue;
+    const auth = line.match(/^InAuth:\s*([^\s]+)/i) || line.match(/^Auth:\s*([^\s]+)/i);
+    const outAuth = line.match(/^OutAuth:\s*([^\s]+)/i) || line.match(/^OutboundAuth:\s*([^\s]+)/i);
+    const aor = line.match(/^Aor:\s*([^\s]+)/i);
+    const transport = line.match(/^Transport:\s*([^\s]+)/i);
+    const identify = line.match(/^Identify:\s*(.+)$/i);
+    if (auth) current.auth = auth[1];
+    if (outAuth) current.outboundAuth = outAuth[1];
+    if (aor) current.aor = aor[1];
+    if (transport) current.transport = transport[1];
+    if (identify) current.identify = identify[1];
+  }
+  pushCurrent();
+  return endpoints;
+}
+
+function parsePjsipContactsForTrunkLab(output: string) {
+  return trunkLabLines(output).filter(line => /^Contact:/i.test(line) || line.includes('Avail') || line.includes('NonQual') || line.includes('Unavail')).map(line => {
+    const contact = (line.match(/Contact:\s*([^/\s]+)\/([^\s]+)/i) || []);
+    const status = (line.match(/\b(Avail|Available|NonQual|Unavail|Unavailable|Reachable|Unknown)\b/i) || [])[1] || 'unknown';
+    return { aor: contact[1] || (line.split(/\s+/)[0] || 'unknown-aor').replace(/[:/]$/, ''), contactUri: (line.match(/sip:[^\s]+/i) || [])[0] || contact[2] || '', status, rtt: (line.match(/\b(\d+\.\d+|\d+)\s*m?s\b/i) || [])[0] || '', userAgent: (line.match(/UserAgent:\s*(.+)$/i) || [])[1] || '' };
+  });
+}
+
+function parsePjsipAuths(output: string) {
+  return trunkLabLines(output).filter(line => /^Auth:/i.test(line) || /^I\/OAuth:/i.test(line)).map(line => ({ authId: (line.match(/Auth:\s*([^\s]+)/i) || line.match(/^I\/OAuth:\s*([^\s]+)/i) || [])[1] || line.split(/\s+/)[1] || 'unknown-auth', username: (line.match(/Username:\s*([^\s]+)/i) || [])[1] || '', authType: (line.match(/AuthType:\s*([^\s]+)/i) || [])[1] || 'userpass' }));
+}
+
+function parseSipRegistry(output: string) {
+  return trunkLabLines(output).filter(line => !/^Host\s+/i.test(line) && !/registrations?/i.test(line)).map(line => {
+    const parts = line.split(/\s+/);
+    const username = (line.match(/Username:\s*([^\s]+)/i) || [])[1] || parts[2] || parts[1] || '';
+    const state = (line.match(/\b(Registered|Rejected|Request Sent|Timeout|Auth\. Sent|No Authentication)\b/i) || line.match(/State:\s*([^\s]+)/i) || [])[1] || parts[4] || 'unknown';
+    return { host: parts[0] || '', username, refresh: parts.find(p => /^\d+$/.test(p)) || '', state, regTime: parts.slice(-2).join(' ') };
+  }).filter(item => item.host && item.username);
+}
+
+function parseSipPeersForTrunkLab(output: string) {
+  return trunkLabLines(output)
+    .filter(line => !/^Name\/username/i.test(line) && !/sip peers/i.test(line))
+    .map(line => {
+      const parts = line.split(/\s+/);
+      const rawName = parts[0] || '';
+      const peer = stripPeerUsername(rawName);
+      const username = peerUsername(rawName);
+      const status = (line.match(/(OK\s*\([^)]*\)|UNREACHABLE|Unmonitored|UNKNOWN|Lagged\s*\([^)]*\))/i) || [])[1] || 'unknown';
+      const rtt = (status.match(/\(([^)]+)\)/) || [])[1] || '';
+      return { rawName, peer, username, host: parts[1] || '', dynamic: parts[2] || '', nat: parts[3] || '', acl: parts[4] || '', port: parts.find(p => /^\d{2,5}$/.test(p)) || '', status, rtt, description: '' };
+    })
+    .filter(item => item.rawName && !isForbiddenTrunkLabName(item.rawName));
+}
+
+function parseSipUsers(output: string) {
+  return trunkLabLines(output).filter(line => !/^Username/i.test(line)).map(line => {
+    const parts = line.split(/\s+/);
+    return { user: parts[0] || '', accountcode: (line.match(/accountcode\s*[:=]\s*([^\s]+)/i) || [])[1] || '', context: (line.match(/context\s*[:=]\s*([^\s]+)/i) || [])[1] || '' };
+  }).filter(item => item.user);
+}
+
+function normalizeRegistrationStatus(value: string): TrunkLabRegistrationStatus {
+  const lower = String(value || '').toLowerCase();
+  if (lower.includes('unregistered')) return 'no_registration';
+  if (lower.includes('registered')) return 'registered';
+  if (lower.includes('reject') || lower.includes('403')) return 'rejected';
+  if (lower.includes('no authentication') || lower.includes('auth')) return 'auth_failed';
+  if (lower.includes('timeout') || lower.includes('request sent')) return 'timeout';
+  if (lower.includes('no registration')) return 'no_registration';
+  if (lower.includes('unavailable')) return 'unavailable';
+  return 'unknown';
+}
+
+function normalizeEndpointStatus(value: string): TrunkLabEndpointStatus {
+  const lower = String(value || '').toLowerCase();
+  if (lower.includes('not in use') || lower.includes('unmonitored')) return 'not_in_use';
+  if (lower.includes('unreach')) return 'unreachable';
+  if (lower.includes('unavail')) return 'unavailable';
+  if (lower.includes('available') || lower.includes('ok')) return 'available';
+  return 'unknown';
+}
+
+function normalizeContactStatus(value: string): TrunkLabContactStatus {
+  const lower = String(value || '').toLowerCase();
+  if (lower.includes('nonqual')) return 'nonqual';
+  if (lower.includes('unreach') || lower.includes('unavail')) return 'unreachable';
+  if (lower.includes('no contact')) return 'no_contact';
+  if (lower.includes('avail') || lower.includes('reachable') || lower.includes('ok')) return 'reachable';
+  return 'unknown';
+}
+
+function buildRisk(registrationStatus: TrunkLabRegistrationStatus, endpointStatus: TrunkLabEndpointStatus, contactStatus: TrunkLabContactStatus): TrunkLabRisk {
+  if (registrationStatus === 'rejected' || registrationStatus === 'auth_failed' || endpointStatus === 'unreachable' || contactStatus === 'unreachable') return 'critical';
+  if (registrationStatus === 'timeout' || registrationStatus === 'unavailable' || endpointStatus === 'unavailable' || endpointStatus === 'not_in_use' || contactStatus === 'nonqual' || contactStatus === 'no_contact') return 'warning';
+  if (registrationStatus === 'registered' || endpointStatus === 'available' || contactStatus === 'reachable') return 'ok';
+  return 'unknown';
+}
+
+function addTrunkLabRules(diag: TrunkLabDiagnostic) {
+  if (diag.technology === 'pjsip') {
+    if (diag.registrationStatus === 'rejected' || diag.registrationStatus === 'auth_failed') { diag.problems.push('Регистрация отклонена оператором.'); diag.recommendations.push('Проверьте username/auth username, password, from_user/from_domain и разрешенный IP у оператора.'); }
+    if (diag.contactStatus === 'nonqual') { diag.problems.push('Contact не отвечает на qualify.'); diag.recommendations.push('Проверьте OPTIONS, transport, firewall, NAT и поддержку qualify оператором.'); }
+    if (diag.endpointStatus === 'unavailable') { diag.problems.push('Endpoint недоступен.'); diag.recommendations.push('Проверьте contact, transport, registration и NAT/firewall.'); }
+    if (diag.contactStatus === 'no_contact') { diag.problems.push('Нет активного contact.'); diag.recommendations.push('Проверьте registration, связь AOR с endpoint и sip server.'); }
+  }
+  if (diag.technology === 'chan_sip') {
+    if (diag.registrationStatus === 'rejected') { diag.problems.push('Регистрация chan_sip отклонена.'); diag.recommendations.push('Проверьте username, secret, fromuser/fromdomain и host.'); }
+    if (diag.endpointStatus === 'unreachable') { diag.problems.push('Peer Unreachable.'); diag.recommendations.push('Проверьте qualify, OPTIONS, firewall/NAT и доступность host.'); }
+    if (diag.endpointStatus === 'not_in_use') diag.recommendations.push('Peer Unmonitored: qualify выключен, доступность peer не проверяется.');
+    if (/lagged/i.test(diag.rawRefs.peer || '')) { diag.problems.push('Peer отвечает медленно.'); diag.recommendations.push('Проверьте сетевые задержки и маршрут до оператора.'); }
+  }
+}
+
+function suggestOperatorTemplate(name: string, technology: TrunkLabTechnology): string | undefined {
+  const lower = String(name || '').toLowerCase();
+  const candidates = [
+    { keys: ['volna', 'волна'], label: technology === 'pjsip' ? 'Волна PJSIP NAT' : 'Volna chan_sip legacy' },
+    { keys: ['mts', 'мтс'], label: technology === 'pjsip' ? 'MTS PJSIP standard' : 'MTS chan_sip legacy' },
+    { keys: ['beeline', 'билайн'], label: technology === 'pjsip' ? 'Beeline PJSIP standard' : 'Beeline chan_sip legacy' },
+    { keys: ['megafon', 'мегафон'], label: technology === 'pjsip' ? 'MegaFon PJSIP standard' : 'MegaFon chan_sip legacy' },
+    { keys: ['mtt', 'мтт'], label: technology === 'pjsip' ? 'MTT PJSIP standard' : 'MTT chan_sip legacy' },
+    { keys: ['uis'], label: technology === 'pjsip' ? 'UIS PJSIP standard' : 'UIS chan_sip legacy' }
+  ];
+  return candidates.find(item => item.keys.some(key => lower.includes(key)))?.label;
+}
+
+function findChanSipPeerForTrunk(trunk: TrunkLabInventoryTrunk, peers: any[]) {
+  const channelId = String(trunk.channelId || '').trim();
+  if (!channelId) return undefined;
+  return peers.find(peer => peer.peer === channelId || peer.rawName === channelId || peer.rawName.startsWith(channelId + '/'));
+}
+
+function findPjsipEndpointForTrunk(trunk: TrunkLabInventoryTrunk, endpoints: any[]) {
+  const channelId = String(trunk.channelId || trunk.name || '').trim();
+  if (!channelId) return undefined;
+  return endpoints.find(endpoint => endpoint.endpoint === channelId || endpoint.endpoint.startsWith(channelId + '/'));
+}
+
+function buildChanSipDiagnosticFromInventory(trunk: TrunkLabInventoryTrunk, commands: Record<string, TrunkLabCommandResult>): TrunkLabDiagnostic {
+  const registry = parseSipRegistry(commandOutput(commands, 'sip show registry'));
+  const peers = parseSipPeersForTrunkLab(commandOutput(commands, 'sip show peers'));
+  const users = parseSipUsers(commandOutput(commands, 'sip show users'));
+  const peer = findChanSipPeerForTrunk(trunk, peers);
+  const registryUsername = peer?.username || '';
+  const reg = registry.find(item => registryUsername ? item.username === registryUsername : false) || registry.find(item => trunk.channelId && (item.username === trunk.channelId || item.host.includes(trunk.channelId)));
+  const user = users.find(item => item.user === trunk.channelId || (registryUsername && item.user === registryUsername));
+  const registrationStatus = reg ? normalizeRegistrationStatus(reg.state) : 'no_registration';
+  const endpointStatus = peer ? normalizeEndpointStatus(peer.status || 'unknown') : 'unknown';
+  const contactStatus: TrunkLabContactStatus = endpointStatus === 'available' ? 'reachable' : endpointStatus === 'unreachable' ? 'unreachable' : 'unknown';
+  const riskLevel = buildRisk(registrationStatus, endpointStatus, contactStatus);
+  const peerLabel = peer?.peer || trunk.channelId || trunk.name;
+  const summary = riskLevel === 'ok' && registrationStatus === 'registered' && endpointStatus === 'available'
+    ? 'SIP trunk ' + trunk.name + ' зарегистрирован, peer ' + peerLabel + ' отвечает ' + peer.status + '.'
+    : endpointStatus === 'not_in_use'
+      ? 'SIP trunk ' + trunk.name + ': qualify выключен, доступность peer не проверяется.'
+      : riskLevel === 'critical' ? 'Обнаружена критичная проблема chan_sip trunk ' + trunk.name + '.' : riskLevel === 'warning' ? 'Есть предупреждения по chan_sip trunk ' + trunk.name + '.' : 'Статус chan_sip trunk ' + trunk.name + ' не определён.';
+  const diag: TrunkLabDiagnostic = {
+    id: 'trunk-' + trunk.trunkid,
+    name: trunk.name,
+    displayName: trunk.name,
+    rawPeerName: peer?.rawName || trunk.channelId,
+    technology: 'chan_sip',
+    tech: trunk.tech,
+    trunkid: trunk.trunkid,
+    channelId: trunk.channelId,
+    outcid: trunk.outcid,
+    disabled: trunk.disabled,
+    registryUsername: reg?.username || registryUsername,
+    registryHost: reg?.host || '',
+    peerHost: peer?.host || '',
+    peerPort: peer?.port || '',
+    rtt: peer?.rtt || '',
+    source: 'FreePBX DB trunks + Asterisk CLI enrichment',
+    registrationStatus,
+    endpointStatus,
+    contactStatus,
+    authStatus: user ? 'available' : 'unknown',
+    networkStatus: riskLevel === 'critical' ? 'critical' : riskLevel === 'warning' ? 'warning' : riskLevel === 'ok' ? 'ok' : 'unknown',
+    riskLevel,
+    summary,
+    problems: [],
+    recommendations: [],
+    rawRefs: { trunk: JSON.stringify(trunk), registry: reg ? JSON.stringify(reg) : '', peer: peer ? JSON.stringify(peer) : '', user: user ? JSON.stringify(user) : '' },
+    templateSuggestion: suggestOperatorTemplate(trunk.name + ' ' + trunk.channelId, 'chan_sip'),
+    notes: []
+  };
+  if (!peer) diag.recommendations.push('Peer не найден в sip show peers по channelid ' + trunk.channelId + '.');
+  if (!reg) diag.recommendations.push('Registration не найдена в sip show registry для username ' + (registryUsername || trunk.channelId) + '.');
+  addTrunkLabRules(diag);
+  return diag;
+}
+
+function buildPjsipDiagnosticFromInventory(trunk: TrunkLabInventoryTrunk, commands: Record<string, TrunkLabCommandResult>): TrunkLabDiagnostic {
+  const registrations = parsePjsipRegistrations(commandOutput(commands, 'pjsip show registrations'));
+  const endpoints = parsePjsipEndpoints(commandOutput(commands, 'pjsip show endpoints'));
+  const contacts = parsePjsipContactsForTrunkLab(commandOutput(commands, 'pjsip show contacts'));
+  const auths = parsePjsipAuths(commandOutput(commands, 'pjsip show auths'));
+  const endpoint = findPjsipEndpointForTrunk(trunk, endpoints);
+  const reg = registrations.find(item => item.name === trunk.channelId || item.name === trunk.name || item.name.includes(trunk.channelId) || trunk.channelId.includes(item.name));
+  const contact = contacts.find(item => item.aor === trunk.channelId || item.aor === trunk.name || item.aor.includes(trunk.channelId) || trunk.channelId.includes(item.aor));
+  const auth = auths.find(item => item.authId === trunk.channelId || item.authId === trunk.name || item.authId.includes(trunk.channelId) || trunk.channelId.includes(item.authId));
+  const registrationStatus = reg ? normalizeRegistrationStatus(reg.status) : 'no_registration';
+  const endpointStatus = normalizeEndpointStatus(endpoint?.state || 'unknown');
+  const contactStatus = contact ? normalizeContactStatus(contact.status) : 'no_contact';
+  const riskLevel = buildRisk(registrationStatus, endpointStatus, contactStatus);
+  const diag: TrunkLabDiagnostic = {
+    id: 'trunk-' + trunk.trunkid,
+    name: trunk.name,
+    displayName: trunk.name,
+    technology: 'pjsip',
+    tech: trunk.tech,
+    trunkid: trunk.trunkid,
+    channelId: trunk.channelId,
+    outcid: trunk.outcid,
+    disabled: trunk.disabled,
+    source: 'FreePBX DB trunks + Asterisk CLI enrichment',
+    registrationStatus,
+    endpointStatus,
+    contactStatus,
+    authStatus: auth ? 'available' : 'unknown',
+    networkStatus: riskLevel === 'critical' ? 'critical' : riskLevel === 'warning' ? 'warning' : riskLevel === 'ok' ? 'ok' : 'unknown',
+    riskLevel,
+    summary: riskLevel === 'ok' ? 'PJSIP trunk ' + trunk.name + ' зарегистрирован или доступен.' : riskLevel === 'critical' ? 'Обнаружена критичная проблема PJSIP trunk ' + trunk.name + '.' : riskLevel === 'warning' ? 'Есть предупреждения по PJSIP trunk ' + trunk.name + '.' : 'Статус PJSIP trunk ' + trunk.name + ' не определён.',
+    problems: [],
+    recommendations: [],
+    rawRefs: { trunk: JSON.stringify(trunk), registration: reg ? JSON.stringify(reg) : '', endpoint: endpoint ? JSON.stringify(endpoint) : '', contact: contact ? JSON.stringify(contact) : '', auth: auth ? JSON.stringify(auth) : '' },
+    templateSuggestion: suggestOperatorTemplate(trunk.name + ' ' + trunk.channelId, 'pjsip')
+  };
+  addTrunkLabRules(diag);
+  return diag;
+}
+
+function buildTrunkDiagnosticsFromInventory(inventory: TrunkLabInventoryTrunk[], pjsip: Record<string, TrunkLabCommandResult>, chansip: Record<string, TrunkLabCommandResult>): TrunkLabDiagnostic[] {
+  return inventory.filter(trunk => trunk.name && !isForbiddenTrunkLabName(trunk.name)).map(trunk => {
+    const technology = mapFreePbxTrunkTechnology(trunk.tech);
+    if (technology === 'chan_sip') return buildChanSipDiagnosticFromInventory(trunk, chansip);
+    if (technology === 'pjsip') return buildPjsipDiagnosticFromInventory(trunk, pjsip);
+    const riskLevel: TrunkLabRisk = 'unknown';
+    return { id: 'trunk-' + trunk.trunkid, name: trunk.name, displayName: trunk.name, technology: 'unknown', tech: trunk.tech, trunkid: trunk.trunkid, channelId: trunk.channelId, outcid: trunk.outcid, disabled: trunk.disabled, source: 'FreePBX DB trunks', registrationStatus: 'unknown', endpointStatus: 'unknown', contactStatus: 'unknown', authStatus: 'unknown', networkStatus: 'unknown', riskLevel, summary: 'Технология trunk ' + trunk.name + ' не определена.', problems: [], recommendations: ['Проверьте поле tech в FreePBX DB trunks.'], rawRefs: { trunk: JSON.stringify(trunk) } };
+  });
+}
+
+function sourceStatusFromCommands(freepbxDb: TrunkLabSourceStatusEntry, pjsip: Record<string, TrunkLabCommandResult>, chansip: Record<string, TrunkLabCommandResult>): TrunkLabSourceStatus {
+  const sourceStatus: TrunkLabSourceStatus = { freepbxDb };
+  const commandKeys: Record<string, string> = {
+    'sip show peers': 'chansipPeers',
+    'sip show registry': 'chansipRegistry',
+    'sip show users': 'chansipUsers',
+    'sip show settings': 'chansipSettings',
+    'pjsip show endpoints': 'pjsipEndpoints',
+    'pjsip show registrations': 'pjsipRegistrations',
+    'pjsip show contacts': 'pjsipContacts',
+    'pjsip show auths': 'pjsipAuths',
+    'pjsip show aors': 'pjsipAors'
+  };
+  [...Object.values(chansip), ...Object.values(pjsip)].forEach(item => {
+    const key = commandKeys[item.command] || item.command.replace(/\s+/g, '_');
+    sourceStatus[key] = { status: item.status, message: item.message, command: item.command };
+  });
+  return sourceStatus;
+}
+
+function summarizeTrunkLab(diagnostics: TrunkLabDiagnostic[], sourceStatus: TrunkLabSourceStatus, pjsipRegistrations: number) {
+  const values = Object.values(sourceStatus || {});
+  return { total: diagnostics.length, registered: diagnostics.filter(item => item.registrationStatus === 'registered').length, problems: diagnostics.filter(item => item.riskLevel === 'warning' || item.riskLevel === 'critical').length, pjsip: diagnostics.filter(item => item.technology === 'pjsip').length, chanSip: diagnostics.filter(item => item.technology === 'chan_sip').length, unreachable: diagnostics.filter(item => item.endpointStatus === 'unreachable' || item.contactStatus === 'unreachable').length, unknown: diagnostics.filter(item => item.riskLevel === 'unknown').length, pjsipRegistrations, sourceWarnings: values.filter(item => item.status !== 'ok').length, pjsipSourcesOk: Object.keys(sourceStatus).filter(key => key.startsWith('pjsip') && sourceStatus[key].status === 'ok').length, chanSipSourcesOk: Object.keys(sourceStatus).filter(key => key.startsWith('chansip') && sourceStatus[key].status === 'ok').length };
+}
+
+async function readTrunkLabPayload(settings: any, includePjsip = true, includeChanSip = true) {
+  const inventoryResult = await loadFreePbxTrunkInventory(settings);
+  const [pjsip, chansip] = await Promise.all([
+    includePjsip ? runTrunkLabCommands(settings, TRUNK_LAB_PJSIP_COMMANDS) : Promise.resolve({}),
+    includeChanSip ? runTrunkLabCommands(settings, TRUNK_LAB_CHANSIP_COMMANDS) : Promise.resolve({})
+  ]);
+  const diagnostics = buildTrunkDiagnosticsFromInventory(inventoryResult.trunks, pjsip, chansip);
+  const sourceStatus = sourceStatusFromCommands(inventoryResult.status, pjsip, chansip);
+  const pjsipRegistrations = parsePjsipRegistrations(commandOutput(pjsip, 'pjsip show registrations')).length;
+  return { generatedAt: new Date().toISOString(), inventory: inventoryResult.trunks, pjsip, chansip, diagnostics, sourceStatus, summary: summarizeTrunkLab(diagnostics, sourceStatus, pjsipRegistrations) };
+}
+function buildTrunkLabPreviewItems(diagnostics: TrunkLabDiagnostic[]) {
+  return diagnostics.map((diag) => ({
+    extension: diag.id,
+    object: diag.name,
+    action: 'diagnostic' as ExtensionPreviewAction,
+    status: diag.riskLevel,
+    before: null,
+    after: diag,
+    oldValue: null,
+    newValue: diag,
+    message: diag.summary,
+    diff: []
+  }));
+}
+
 // Register endpoints helper
 export function registerManagementRoutes(app: Express, requireAuth: Function) {
   initManagementFiles();
@@ -3490,6 +4037,45 @@ export function registerManagementRoutes(app: Express, requireAuth: Function) {
   // --- BULK TRUNKS OPERATIONS ---
   app.post('/api/management/trunks/preview', requireAuth(), async (req, res) => {
     try {
+      const operationType = String(req.body?.operationType || req.body?.payload?.operationType || '').trim();
+      if (operationType === TRUNK_LAB_OPERATION_TYPE) {
+        const db = fs.existsSync(DB_FILE) ? JSON.parse(fs.readFileSync(DB_FILE, 'utf8')) : {};
+        const payload = await readTrunkLabPayload(db.settings || {}, true, true);
+        const items = buildTrunkLabPreviewItems(payload.diagnostics);
+        const preview: ExtensionPreviewRecord = {
+          previewId: generatePreviewId('trunk_lab_diagnostics'),
+          createdAt: payload.generatedAt,
+          type: 'trunk_lab_diagnostics',
+          originalPayload: { operationType },
+          items: items as any
+        };
+        saveManagementPreview(preview);
+        res.json({
+          success: true,
+          previewId: preview.previewId,
+          createdAt: preview.createdAt,
+          generatedAt: payload.generatedAt,
+          type: preview.type,
+          operationType,
+          items,
+          counts: {
+            ok: payload.diagnostics.filter(item => item.riskLevel === 'ok').length,
+            warning: payload.diagnostics.filter(item => item.riskLevel === 'warning').length,
+            critical: payload.diagnostics.filter(item => item.riskLevel === 'critical').length,
+            unknown: payload.diagnostics.filter(item => item.riskLevel === 'unknown').length,
+            error: payload.diagnostics.filter(item => item.riskLevel === 'critical').length
+          },
+          diagnostics: payload.diagnostics,
+          inventory: payload.inventory,
+          summary: payload.summary,
+          raw: { pjsip: payload.pjsip, chansip: payload.chansip },
+          sourceStatus: payload.sourceStatus,
+          reloadRequired: false,
+          readOnly: true
+        });
+        return;
+      }
+
       const { trunks } = await getPBXData();
       const payload = req.body.payload;
       const { name, tech, host, port, transport, registrationString } = payload || {};

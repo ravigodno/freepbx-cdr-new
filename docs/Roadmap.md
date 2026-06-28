@@ -240,3 +240,38 @@ Next releases:
 - v5.8.0 — Management Dashboard.
 
 Management Dashboard remains deferred until modules provide real data.
+
+## v5.2.0 Trunk Lab Read-only Diagnostics
+
+Status: in progress
+
+Scope:
+
+- run read-only Management operation `trunk_lab_diagnostics`;
+- read PJSIP registrations, endpoints, contacts, auths and aors;
+- read chan_sip registry, peers, users and settings;
+- parse Asterisk CLI output into TrunkDiagnostic;
+- show read-only Management UI with summary cards, filters, table and details;
+- mask secrets in backend responses;
+- show simple Operator Template suggestions when names match.
+
+Out of scope:
+
+- Trunk creation/update/delete;
+- template apply;
+- test registration or test calls;
+- fwconsole reload;
+- Local Working Config persistence.
+
+Next releases:
+
+- v5.3.0 — Trunk Lab Testing.
+- v5.4.0 — Trunks Management.
+- v5.5.0 — Outbound Routes.
+- v5.6.0 — Inbound Routes.
+- v5.7.0 — Dial Patterns and Number Ranges.
+- v5.8.0 — Departments and RBAC Foundation.
+- v5.9.0 — Management Dashboard.
+
+
+Trunk Lab v5.2.0 uses FreePBX DB `asterisk.trunks` as the primary read-only Trunk inventory and uses Asterisk CLI only as runtime enrichment. CLI-only peers/endpoints are not shown as Trunks unless they match a DB trunk record.

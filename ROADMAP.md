@@ -85,7 +85,7 @@ Goals:
 
 ---
 
-## v5.1.0 — Operator Templates Foundation
+## v5.2.0 — Trunk Lab Read-only Diagnostics
 
 Status: in progress
 
@@ -110,34 +110,34 @@ Out of scope:
 
 ---
 
-## v5.2.0 — Trunk Lab Testing
+## v5.2.0 — Trunk Lab Read-only Diagnostics
 
 Status: planned
 
 Goals:
 
-- Trunk diagnostics planning
-- Registration and media checks design
-- Safe read-only diagnostic workflow
-- No automatic live PBX mutation
+- Read PJSIP registrations, endpoints, contacts, auths and aors
+- Read chan_sip registry, peers, users and settings
+- Parse Asterisk CLI output into normalized diagnostics
+- Show read-only Trunk Lab UI
+- Mask secrets in raw snippets
 
 ---
 
-## v5.3.0 — Trunks Management
+## v5.3.0 — Trunk Lab Testing
 
 Status: planned
 
 Goals:
 
-- Load trunks
-- View trunk configuration
-- Create/update previews
-- Apply only after verified API/BMO path
-- Change log
+- Test trunk registration planning
+- Test outbound call planning
+- Read-only diagnostics expansion
+- No apply without preview
 
 ---
 
-## v5.4.0 — Outbound Routes
+## v5.4.0 — Trunks Management
 
 Status: planned
 
@@ -150,7 +150,7 @@ Goals:
 
 ---
 
-## v5.5.0 — Inbound Routes
+## v5.5.0 — Outbound Routes
 
 Status: planned
 
@@ -163,7 +163,7 @@ Goals:
 
 ---
 
-## v5.6.0 — Dial Patterns and Number Ranges
+## v5.6.0 — Inbound Routes
 
 Status: planned
 
@@ -176,7 +176,7 @@ Goals:
 
 ---
 
-## v5.7.0 — Departments and RBAC Foundation
+## v5.7.0 — Dial Patterns and Number Ranges
 
 Status: planned
 
@@ -189,7 +189,20 @@ Goals:
 
 ---
 
-## v5.8.0 — Management Dashboard
+## v5.8.0 — Departments and RBAC Foundation
+
+Status: planned
+
+Goals:
+
+- Department model
+- Extension ranges per department
+- Manager/role mapping
+- RBAC integration foundation
+
+---
+
+## v5.9.0 — Management Dashboard
 
 Status: planned
 
@@ -197,7 +210,7 @@ Goals:
 
 - Management Dashboard based on real module data
 - Cross-module health and provisioning metrics
-- Final-stage overview after Operator Templates, Trunks, Routes, Dial Patterns and Departments provide stable data
+- Final-stage overview after Operator Templates, Trunk Lab, Trunks, Routes, Dial Patterns and Departments provide stable data
 
 ---
 
@@ -227,4 +240,4 @@ Current active focus:
 v5.1.0 — Operator Templates Foundation
 ```
 
-Operator Templates v5.1.0 is read-only foundation work. Do not create real Trunks, call FreePBX apply APIs, call BMO, run test calls, or run fwconsole reload in this release.
+Trunk Lab v5.2.0 is read-only diagnostics work. Do not create or modify Trunks, apply Operator Templates, call FreePBX write APIs, call BMO write paths, run test calls, or run fwconsole reload in this release.

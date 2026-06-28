@@ -29,6 +29,7 @@ export const ui = {
     extensions: 'Extensions',
     departments: 'Отделы',
     operatorTemplates: 'Шаблоны операторов',
+    trunkLabNav: 'Trunk Lab',
     trunks: 'Trunks',
     outboundRoutes: 'Outbound Routes',
     inboundRoutes: 'Inbound Routes',
@@ -56,6 +57,7 @@ export const ui = {
       extensionsDescription: 'Массовое создание, изменение, удаление и импорт Extensions.',
       departmentsDescription: 'Модель отделов, диапазоны номеров и владельцы.',
       operatorTemplatesDescription: 'Переиспользуемые профили операторов для Trunks и маршрутов.',
+      trunkLabDescription: 'Read-only диагностика SIP/PJSIP Trunks через Asterisk CLI/AMI.',
       trunksDescription: 'Безопасное provisioning управление Trunks через Preview и Apply.',
       outboundRoutesDescription: 'Шаблоны Outbound Routes и preview Dial Pattern.',
       inboundRoutesDescription: 'DID и сопоставление входящих назначений.',
@@ -65,6 +67,7 @@ export const ui = {
       roadmapExtensionsComplete: 'Функциональный CRUD завершён',
       roadmapDepartments: 'v5.1.x Отделы',
       roadmapOperatorTemplates: 'v5.1.x Шаблоны операторов',
+      roadmapTrunkLab: 'v5.2.0 Trunk Lab Read-only Diagnostics',
       roadmapTrunks: 'v5.1.0 Trunks',
       roadmapRoutes: 'v5.1.x Routes',
       roadmapInboundRoutes: 'v5.1.x Inbound Routes',
@@ -148,6 +151,67 @@ export const ui = {
         tested: 'Tested',
         verified: 'Verified',
         deprecated: 'Deprecated'
+      }
+    },
+    trunkLab: {
+      title: 'Trunk Lab',
+      description: 'Read-only диагностика SIP/PJSIP Trunks. PBXPuls анализирует состояние регистраций, endpoints, contacts и peers без изменения FreePBX.',
+      readOnlyWarning: 'Этот экран только читает состояние Asterisk/FreePBX. Он не создаёт, не изменяет и не удаляет Trunks.',
+      refresh: 'Обновить диагностику',
+      generatedAt: 'Сформировано',
+      sourceStatus: {
+        title: 'Статус источников',
+        warning: 'Часть источников недоступна. Диагностика показана по доступным данным.'
+      },
+      summary: {
+        total: 'Всего Trunks',
+        registered: 'Registered',
+        problems: 'Problems',
+        pjsip: 'PJSIP',
+        chansip: 'chan_sip',
+        unreachable: 'Unreachable',
+        unknown: 'Unknown'
+      },
+      filters: {
+        search: 'Поиск по имени',
+        technology: 'Технология',
+        risk: 'Статус',
+        registration: 'Registration',
+        all: 'Все'
+      },
+      table: {
+        trunk: 'Trunk',
+        technology: 'Технология',
+        registration: 'Регистрация',
+        endpoint: 'Endpoint/Peer',
+        contact: 'Contact',
+        risk: 'Риск',
+        summary: 'Кратко',
+        actions: 'Действия'
+      },
+      details: {
+        empty: 'Выберите Trunk в таблице.',
+        summary: 'Общая сводка',
+        registration: 'Registration',
+        endpoint: 'Endpoint/Peer',
+        contacts: 'Contacts',
+        auth: 'Auth',
+        problems: 'Problems',
+        recommendations: 'Recommendations',
+        notes: 'Notes',
+        raw: 'Raw command snippets',
+        masked: 'masked secrets',
+        templateSuggestion: 'Возможный шаблон'
+      },
+      empty: {
+        noTrunks: 'Trunks не найдены или команды недоступны.',
+        noProblems: 'Проблем не обнаружено.',
+        noRecommendations: 'Рекомендаций нет.',
+        cliUnavailable: 'AMI/CLI недоступен или Asterisk не отвечает.'
+      },
+      status: {
+        risk: { ok: 'ok', warning: 'warning', critical: 'critical', unknown: 'unknown' },
+        registration: { registered: 'registered', rejected: 'rejected', auth_failed: 'auth_failed', timeout: 'timeout', no_registration: 'no_registration', unavailable: 'unavailable', unknown: 'unknown' }
       }
     }
   },
