@@ -937,26 +937,21 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
     if (!extensionPreviewResult?.previewId) { showNoti('info', 'Сначала сформируйте preview'); return; }
     const type = String(extensionPreviewResult.type || '');
     const counts = getPreviewCounts(extensionPreviewResult.counts);
-    if (type === 'delete') {
-      if (deleteConfirmText.trim() !== 'DELETE') { showNoti('info', 'Введите DELETE для подтверждения удаления'); return; }
-      const okDelete = window.confirm(['Вы собираетесь удалить ' + counts.delete + ' extensions. Это действие может повлиять на маршрутизацию, записи, пользователей и устройства.', '', 'Delete backend is not implemented yet. Фактическое удаление не будет выполнено.'].join('\n'));
-      if (!okDelete) return;
-      setExtensionApplyResult({ success: false, results: [], summary: counts, message: 'Delete backend is not implemented yet' });
-      showNoti('error', 'Delete backend is not implemented yet');
-      return;
-    }
-    const endpoint = type === 'create' ? '/api/management/extensions/create-apply' : type === 'update' ? '/api/management/extensions/update-apply' : '';
+    const endpoint = type === 'create' ? '/api/management/extensions/create-apply' : type === 'update' ? '/api/management/extensions/update-apply' : type === 'delete' ? '/api/freepbx/extensions/bulk-delete' : '';
     if (!endpoint) { showNoti('error', 'Неизвестный тип preview для Apply'); return; }
+    if (type === 'delete' && deleteConfirmText.trim() !== 'DELETE') { showNoti('info', 'Введите DELETE для подтверждения удаления'); return; }
     const ok = window.confirm(['Вы действительно хотите применить изменения?', '', 'Create: ' + counts.create, 'Update: ' + counts.update, 'Delete: ' + counts.delete, 'Skip: ' + counts.skip, 'Conflict: ' + counts.conflict, 'Error: ' + counts.error].join('\n'));
     if (!ok) return;
     setExtensionApplyLoading(true);
     try {
-      const res = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ previewId: extensionPreviewResult.previewId }) });
+      const body = type === 'delete' ? { previewId: extensionPreviewResult.previewId, dryRun: false } : { previewId: extensionPreviewResult.previewId };
+      const res = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(body) });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'Ошибка Apply Extensions');
       setExtensionApplyResult(data);
       await fetchActiveExtensions();
-      showNoti(data.success ? 'success' : 'error', data.success ? 'Apply выполнен' : 'Apply завершился с ошибками');
+      const applyOk = data.success === true || data.ok === true;
+      showNoti(applyOk ? 'success' : 'error', applyOk ? 'Apply выполнен' : 'Apply завершился с ошибками');
     } catch (err: any) { showNoti('error', err.message || 'Ошибка Apply Extensions'); }
     finally { setExtensionApplyLoading(false); }
   };
@@ -977,14 +972,16 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
   const renderExtensionApplyResult = () => {
     if (!extensionApplyResult) return null;
     const results = Array.isArray(extensionApplyResult.results) ? extensionApplyResult.results : [];
-    const created = results.filter((item: any) => item.success && item.action === 'create').length;
-    const updated = results.filter((item: any) => item.success && item.action === 'update').length;
+    const isResultOk = (item: any) => item.success === true || item.ok === true;
+    const created = results.filter((item: any) => isResultOk(item) && item.action === 'create').length;
+    const updated = results.filter((item: any) => isResultOk(item) && item.action === 'update').length;
+    const deleted = results.filter((item: any) => isResultOk(item) && item.action === 'delete').length;
     const skipped = results.filter((item: any) => item.action === 'skip').length;
-    const failed = results.filter((item: any) => !item.success).length;
+    const failed = results.filter((item: any) => !isResultOk(item)).length;
     return <>
-      <div className="mb-3 rounded-lg border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-900/40 dark:bg-emerald-950/20"><div className="text-xs font-black uppercase tracking-wider text-emerald-700 dark:text-emerald-300">Successfully Applied</div><div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4"><div><span className={getBadgeClass('green')}>Created</span><div className="mt-1 text-2xl font-black text-slate-850 dark:text-white">{created}</div></div><div><span className={getBadgeClass('indigo')}>Updated</span><div className="mt-1 text-2xl font-black text-slate-850 dark:text-white">{updated}</div></div><div><span className={getBadgeClass('slate')}>Skipped</span><div className="mt-1 text-2xl font-black text-slate-850 dark:text-white">{skipped}</div></div><div><span className={failed ? getBadgeClass('rose') : getBadgeClass('green')}>Failed</span><div className="mt-1 text-2xl font-black text-slate-850 dark:text-white">{failed}</div></div></div></div>
+      <div className="mb-3 rounded-lg border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-900/40 dark:bg-emerald-950/20"><div className="text-xs font-black uppercase tracking-wider text-emerald-700 dark:text-emerald-300">Successfully Applied</div><div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-5"><div><span className={getBadgeClass('green')}>Created</span><div className="mt-1 text-2xl font-black text-slate-850 dark:text-white">{created}</div></div><div><span className={getBadgeClass('indigo')}>Updated</span><div className="mt-1 text-2xl font-black text-slate-850 dark:text-white">{updated}</div></div><div><span className={getBadgeClass('rose')}>Deleted</span><div className="mt-1 text-2xl font-black text-slate-850 dark:text-white">{deleted}</div></div><div><span className={getBadgeClass('slate')}>Skipped</span><div className="mt-1 text-2xl font-black text-slate-850 dark:text-white">{skipped}</div></div><div><span className={failed ? getBadgeClass('rose') : getBadgeClass('green')}>Failed</span><div className="mt-1 text-2xl font-black text-slate-850 dark:text-white">{failed}</div></div></div></div>
       {extensionApplyResult.reloadRequired === true && <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs font-bold text-amber-700 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">Изменения применены. Требуется fwconsole reload. Автоматически reload не выполнялся.</div>}
-      <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700"><table className="w-full min-w-[640px] text-left text-xs"><thead className="bg-slate-100 text-[10px] uppercase text-slate-500 dark:bg-slate-900 dark:text-slate-400"><tr><th className="p-2">extension</th><th className="p-2">action</th><th className="p-2">success/error</th><th className="p-2">message</th></tr></thead><tbody className="divide-y divide-slate-200 dark:divide-slate-700">{results.map((item: any, idx: number) => <tr key={(item.extension || 'row') + '-' + idx}><td className="p-2 font-mono font-black text-slate-800 dark:text-white">{item.extension || '-'}</td><td className="p-2"><span className={getPreviewActionClass(item.action || '')}>{item.action || '-'}</span></td><td className="p-2"><span className={item.success ? getBadgeClass('green') : getBadgeClass('rose')}>{item.success ? 'success' : 'error'}</span></td><td className="p-2 text-slate-600 dark:text-slate-300">{item.message || '-'}</td></tr>)}</tbody></table></div>
+      <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700"><table className="w-full min-w-[640px] text-left text-xs"><thead className="bg-slate-100 text-[10px] uppercase text-slate-500 dark:bg-slate-900 dark:text-slate-400"><tr><th className="p-2">extension</th><th className="p-2">action</th><th className="p-2">success/error</th><th className="p-2">message</th></tr></thead><tbody className="divide-y divide-slate-200 dark:divide-slate-700">{results.map((item: any, idx: number) => <tr key={(item.extension || 'row') + '-' + idx}><td className="p-2 font-mono font-black text-slate-800 dark:text-white">{item.extension || '-'}</td><td className="p-2"><span className={getPreviewActionClass(item.action || '')}>{item.action || '-'}</span></td><td className="p-2"><span className={isResultOk(item) ? getBadgeClass('green') : getBadgeClass('rose')}>{isResultOk(item) ? 'success' : 'error'}</span></td><td className="p-2 text-slate-600 dark:text-slate-300">{item.message || '-'}</td></tr>)}</tbody></table></div>
     </>;
   };
   const handleCreatePreview = async () => {
@@ -1073,30 +1070,19 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
     } catch (err: any) { showNoti('error', err.message || 'Ошибка preview изменения'); }
     finally { setExtensionPreviewLoading(false); }
   };
-  const handleDeletePreview = () => {
+  const handleDeletePreview = async () => {
     if (selectedExtensionIds.length === 0) { showNoti('info', 'Выберите extensions в таблице выше'); return; }
-    const selectedSet = new Set(selectedExtensionIds);
-    const items = activeExtensions
-      .filter((ext: any) => selectedSet.has(String(ext.extension || '')))
-      .map((ext: any) => ({
-        extension: String(ext.extension || ''),
-        action: 'delete',
-        status: 'DELETE',
-        before: ext,
-        after: null,
-        message: 'Delete backend is not implemented yet'
-      }));
-    setDeleteConfirmText('');
-    setExtensionPreviewResult({
-      success: true,
-      previewId: 'delete-ui-preview-' + Date.now(),
-      type: 'delete',
-      operation: 'Delete Extensions',
-      counts: { create: 0, update: 0, delete: items.length, skip: 0, conflict: 0, error: 0 },
-      items
-    });
-    setExtensionApplyResult(null);
-    showNoti('info', 'Delete Preview сформирован. Backend удаления пока не реализован.');
+    setExtensionPreviewLoading(true);
+    try {
+      const res = await fetch('/api/freepbx/extensions/bulk-delete', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ extensions: selectedExtensionIds, dryRun: true }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Ошибка preview удаления');
+      setDeleteConfirmText('');
+      setExtensionPreviewResult(data);
+      setExtensionApplyResult(null);
+      showNoti(data.ok ? 'success' : 'error', data.ok ? `Preview удаления сформирован: ${data.previewId}` : 'Preview удаления содержит ошибки');
+    } catch (err: any) { showNoti('error', err.message || 'Ошибка preview удаления'); }
+    finally { setExtensionPreviewLoading(false); }
   };
 
   // MAC Phone assignment List inside extensions
@@ -1851,9 +1837,9 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
       if (currentTab.id === 'delete') {
         return (
           <div className="space-y-4">
-            <OperationHeader icon={Trash2} title="Параметры операции" description="Preview удаления готовит единый список объектов. Backend удаления пока не подключён." meta={<StatusBadge tone={selectedExtensionIds.length ? 'error' : 'neutral'}>Selected {selectedExtensionIds.length}</StatusBadge>} />
+            <OperationHeader icon={Trash2} title="Параметры операции" description="Preview удаления проверяет extensions на АТС. Apply доступен только после подтверждения DELETE." meta={<StatusBadge tone={selectedExtensionIds.length ? 'error' : 'neutral'}>Selected {selectedExtensionIds.length}</StatusBadge>} />
             {selectedHint}
-            <div className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-xs text-rose-800 dark:border-rose-900/40 dark:bg-rose-950/20 dark:text-rose-300">Вы собираетесь удалить {selectedExtensionIds.length} extensions. Это действие может повлиять на маршрутизацию, записи, пользователей и устройства. Фактическое удаление пока не выполняется.</div>
+            <div className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-xs text-rose-800 dark:border-rose-900/40 dark:bg-rose-950/20 dark:text-rose-300">Вы собираетесь удалить {selectedExtensionIds.length} extensions. Это действие может повлиять на маршрутизацию, записи, пользователей и устройства. Автоматический fwconsole reload не выполняется.</div>
             {isDeletePreview && <label className="block max-w-sm space-y-1 text-xs"><span className="font-black uppercase text-slate-500 dark:text-slate-400">Введите DELETE для Apply</span><input value={deleteConfirmText} onChange={e => setDeleteConfirmText(e.target.value)} placeholder="DELETE" className={inputClass + ' font-mono'} /></label>}
           </div>
         );

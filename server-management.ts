@@ -214,8 +214,8 @@ interface NormalizedExtension {
 }
 
 
-type ExtensionPreviewType = 'create' | 'update';
-type ExtensionPreviewAction = 'create' | 'update' | 'skip' | 'conflict' | 'error';
+type ExtensionPreviewType = 'create' | 'update' | 'delete';
+type ExtensionPreviewAction = 'create' | 'update' | 'delete' | 'skip' | 'conflict' | 'error';
 
 interface ExtensionPreviewItem {
   extension: string;
@@ -225,6 +225,7 @@ interface ExtensionPreviewItem {
   diff?: any[];
   changedFields?: string[];
   message: string;
+  status?: string;
   applyPayload?: any;
 }
 
@@ -1123,8 +1124,8 @@ try {
   if (!is_array($payload)) { throw new RuntimeException('Invalid BMO create payload.'); }
   $extension = trim((string) pbxpuls_pick($payload, array('extension', 'id', 'user'), ''));
   if ($extension === '' || !preg_match('/^[0-9]+$/', $extension)) { throw new RuntimeException('Only numeric extension create is supported.'); }
-  $tech = strtolower(trim((string) pbxpuls_pick($payload, array('tech', 'technology'), 'sip')));
-  if ($tech !== 'sip') { throw new RuntimeException('Only SIP extension create is supported at this stage.'); }
+  $tech = strtolower(trim((string) pbxpuls_pick($payload, array('tech', 'technology'), 'pjsip')));
+  if (!in_array($tech, array('sip', 'pjsip'), true)) { throw new RuntimeException('Unsupported extension technology: ' . $tech . '. Supported: sip, pjsip.'); }
   $name = trim((string) pbxpuls_pick($payload, array('name', 'displayName', 'displayname', 'description'), 'User ' . $extension));
   $context = trim((string) pbxpuls_pick($payload, array('context'), 'from-internal'));
   $outboundcid = trim((string) pbxpuls_pick($payload, array('outboundcid', 'outboundCid', 'outbound_cid'), ''));
@@ -1133,25 +1134,41 @@ try {
   if ($secret === '') { $secret = bin2hex(random_bytes(16)); }
   $transport = trim((string) pbxpuls_pick($payload, array('transport'), 'udp,tcp,tls'));
   $freepbx = FreePBX::Create();
+  $sipdriver = '';
+  if (isset($freepbx->Config) && is_object($freepbx->Config)) {
+    if (method_exists($freepbx->Config, 'get_conf_setting')) { $sipdriver = (string) $freepbx->Config->get_conf_setting('ASTSIPDRIVER'); }
+    else if (method_exists($freepbx->Config, 'get')) { $sipdriver = (string) $freepbx->Config->get('ASTSIPDRIVER'); }
+  }
+  if ($sipdriver === 'chan_pjsip' && $tech !== 'pjsip') { throw new RuntimeException('The active FreePBX SIP driver requires pjsip technology.'); }
+  if ($sipdriver === 'chan_sip' && $tech !== 'sip') { throw new RuntimeException('The active FreePBX SIP driver requires sip technology.'); }
   $core = $freepbx->Core;
   if (!is_object($core)) { throw new RuntimeException('Core BMO object is not available.'); }
   $existingUser = method_exists($core, 'getUser') ? $core->getUser($extension) : array();
   $existingDevice = method_exists($core, 'getDevice') ? $core->getDevice($extension) : array();
   if (!empty($existingUser) || !empty($existingDevice)) { throw new RuntimeException('Extension already exists: ' . $extension); }
   if (!method_exists($core, 'generateDefaultDeviceSettings') || !method_exists($core, 'generateDefaultUserSettings')) { throw new RuntimeException('Core default settings helpers are not available.'); }
-  $deviceSettings = $core->generateDefaultDeviceSettings('sip', $extension, $name, false);
+  $deviceSettings = $core->generateDefaultDeviceSettings($tech, $extension, $name, false);
   if (!isset($deviceSettings['secret'])) { $deviceSettings['secret'] = array('value' => '', 'flag' => 0); }
   $deviceSettings['secret']['value'] = $secret;
   if (isset($deviceSettings['context'])) { $deviceSettings['context']['value'] = $context; }
-  if (isset($deviceSettings['transport'])) { $deviceSettings['transport']['value'] = $transport; }
-  if (isset($deviceSettings['dial'])) { $deviceSettings['dial']['value'] = 'SIP/' . $extension; }
+  if (isset($deviceSettings['transport']) && $transport !== '') { $deviceSettings['transport']['value'] = $transport; }
+  if ($tech === 'pjsip') {
+    $maxContacts = (int) pbxpuls_pick($payload, array('max_contacts', 'maxContacts'), '1');
+    if ($maxContacts < 1) { $maxContacts = 1; }
+    if ($maxContacts > 100) { $maxContacts = 100; }
+    if (!isset($deviceSettings['max_contacts'])) { $deviceSettings['max_contacts'] = array('value' => '1', 'flag' => 0); }
+    $deviceSettings['max_contacts']['value'] = (string) $maxContacts;
+    if (isset($deviceSettings['dial']) && trim((string) ($deviceSettings['dial']['value'] ?? '')) === '') { $deviceSettings['dial']['value'] = 'PJSIP/' . $extension; }
+  } else if (isset($deviceSettings['dial']) && trim((string) ($deviceSettings['dial']['value'] ?? '')) === '') {
+    $deviceSettings['dial']['value'] = 'SIP/' . $extension;
+  }
   if (isset($deviceSettings['user'])) { $deviceSettings['user']['value'] = $extension; }
   if (isset($deviceSettings['description'])) { $deviceSettings['description']['value'] = $name; }
   if (isset($deviceSettings['emergency_cid'])) { $deviceSettings['emergency_cid']['value'] = $emergencyCid; }
   if (isset($deviceSettings['callerid'])) { $deviceSettings['callerid']['value'] = $name . ' <' . $extension . '>'; }
   $deviceCreated = false;
   try {
-    $okDevice = $core->addDevice($extension, 'sip', $deviceSettings, false);
+    $okDevice = $core->addDevice($extension, $tech, $deviceSettings, false);
     if (!$okDevice) { throw new RuntimeException('Core::addDevice returned false.'); }
     $deviceCreated = true;
     $userSettings = $core->generateDefaultUserSettings($extension, $name);
@@ -1172,7 +1189,7 @@ try {
   if (function_exists('needreload')) { needreload(); }
   $afterUser = method_exists($core, 'getUser') ? $core->getUser($extension) : array();
   $afterDevice = method_exists($core, 'getDevice') ? $core->getDevice($extension) : array();
-  echo json_encode(array('success' => true, 'extension' => $extension, 'afterUser' => $afterUser, 'afterDevice' => $afterDevice, 'reload' => array('attempted' => false, 'required' => true, 'message' => 'fwconsole reload was not executed automatically.')), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+  echo json_encode(array('success' => true, 'extension' => $extension, 'tech' => $tech, 'afterUser' => $afterUser, 'afterDevice' => $afterDevice, 'reload' => array('attempted' => false, 'required' => true, 'message' => 'fwconsole reload was not executed automatically.')), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
 } catch (Throwable $e) {
   fwrite(STDERR, $e->getMessage() . PHP_EOL . $e->getTraceAsString() . PHP_EOL);
   echo json_encode(array('success' => false, 'error' => $e->getMessage()), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
@@ -1195,6 +1212,68 @@ try {
   }
   if (body?.success !== true) {
     throw new Error('FreePBX BMO create failed: ' + (body?.error || stderr.trim() || 'unknown error'));
+  }
+  return body;
+}
+
+async function applyBmoExtensionDelete(extension: string): Promise<any> {
+  const phpCode = [
+    "error_reporting(E_ALL);",
+    "ini_set('display_errors', '0');",
+    "try {",
+    "  require_once '/etc/freepbx.conf';",
+    "  if (!class_exists('FreePBX')) { throw new RuntimeException('FreePBX class is not available after bootstrap.'); }",
+    "  $extension = isset($argv[1]) ? (string) $argv[1] : '';",
+    "  if ($extension === '' || !preg_match('/^[0-9]+$/', $extension)) { throw new RuntimeException('Invalid extension delete payload.'); }",
+    "  $freepbx = FreePBX::Create();",
+    "  $core = $freepbx->Core;",
+    "  if (!is_object($core)) { throw new RuntimeException('Core BMO object is not available.'); }",
+    "  if (!method_exists($core, 'getUser') || !method_exists($core, 'getDevice')) { throw new RuntimeException('Core BMO getUser/getDevice methods are not available.'); }",
+    "  $beforeUser = $core->getUser($extension);",
+    "  $beforeDevice = $core->getDevice($extension);",
+    "  if ((!is_array($beforeUser) || empty($beforeUser)) && (!is_array($beforeDevice) || empty($beforeDevice))) { throw new RuntimeException('Extension not found: ' . $extension); }",
+    "  if (!method_exists($core, 'delUser') || !method_exists($core, 'delDevice')) { throw new RuntimeException('Core BMO delUser/delDevice methods are not available.'); }",
+    "  if (is_array($beforeDevice) && !empty($beforeDevice)) { $core->delDevice($extension, true); }",
+    "  if (is_array($beforeUser) && !empty($beforeUser)) { $core->delUser($extension); }",
+    "  if (function_exists('core_users_cleanastdb')) { core_users_cleanastdb($extension); }",
+    "  if (function_exists('findmefollow_del')) { findmefollow_del($extension); }",
+    "  if (function_exists('needreload')) { needreload(); }",
+    "  $afterUser = $core->getUser($extension);",
+    "  $afterDevice = $core->getDevice($extension);",
+    "  $astdb = array('AMPUSER/' . $extension => array(), 'DEVICE/' . $extension => array());",
+    "  $astman = isset($freepbx->astman) ? $freepbx->astman : null;",
+    "  if (is_object($astman) && method_exists($astman, 'connected') && $astman->connected() && method_exists($astman, 'database_show')) {",
+    "    $astdb['AMPUSER/' . $extension] = $astman->database_show('AMPUSER/' . $extension);",
+    "    $astdb['DEVICE/' . $extension] = $astman->database_show('DEVICE/' . $extension);",
+    "  } else { throw new RuntimeException('Asterisk Manager is not connected; cannot verify AstDB deletion.'); }",
+    "  $remaining = array();",
+    "  if (is_array($afterUser) && !empty($afterUser)) { $remaining[] = 'Core user'; }",
+    "  if (is_array($afterDevice) && !empty($afterDevice)) { $remaining[] = 'Core device'; }",
+    "  foreach ($astdb as $family => $entries) { if (is_array($entries) && !empty($entries)) { $remaining[] = 'AstDB ' . $family; } }",
+    "  if (!empty($remaining)) { throw new RuntimeException('Extension delete verification failed: ' . implode(', ', $remaining)); }",
+    "  $reload = array('attempted' => false, 'required' => true, 'message' => 'fwconsole reload was not executed automatically.');",
+    "  echo json_encode(array('success' => true, 'extension' => $extension, 'beforeUser' => $beforeUser, 'beforeDevice' => $beforeDevice, 'afterUser' => $afterUser, 'afterDevice' => $afterDevice, 'astdb' => $astdb, 'reload' => $reload), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);",
+    "} catch (Throwable $e) {",
+    "  fwrite(STDERR, $e->getMessage() . PHP_EOL . $e->getTraceAsString() . PHP_EOL);",
+    "  echo json_encode(array('success' => false, 'error' => $e->getMessage()), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);",
+    "  exit(1);",
+    "}"
+  ].join('\n');
+
+  const result = spawnSync('php', ['-r', phpCode, extension], { encoding: 'utf8', timeout: 120000, maxBuffer: 1024 * 1024 * 10 });
+  const stdout = result.stdout || '';
+  const stderr = result.stderr || '';
+  let body: any;
+  try {
+    body = parseJsonFromProcessOutput(stdout);
+  } catch (err: any) {
+    throw new Error('FreePBX BMO delete failed: ' + err.message + (stderr ? ' STDERR: ' + stderr.trim() : ''));
+  }
+  if (result.error) {
+    throw new Error('FreePBX BMO delete failed: ' + result.error.message + (stderr ? ' STDERR: ' + stderr.trim() : ''));
+  }
+  if (body?.success !== true) {
+    throw new Error('FreePBX BMO delete failed: ' + (body?.error || stderr.trim() || 'unknown error'));
   }
   return body;
 }
@@ -2600,6 +2679,165 @@ export function registerManagementRoutes(app: Express, requireAuth: Function) {
     } catch (e: any) {
       console.warn('[MGMT] Extension recording update failed', { user: authUser?.username || 'admin', extension: req.params.extension, error: e.message });
       res.status(400).json({ ok: false, extension: req.params.extension, error: e.message });
+    }
+  });
+
+  app.post('/api/freepbx/extensions/bulk-delete', requireAuth(), async (req, res) => {
+    const authUser = (req as any).user;
+    try {
+      if (authUser?.role !== 'su' && (!authUser?.permissions?.dangerous_pbx_write || !authUser?.permissions?.bulk_extensions)) {
+        res.status(403).json({ error: 'Доступ заблокирован. Необходимы права bulk_extensions и dangerous_pbx_write.' });
+        return;
+      }
+      const dryRun = req.body?.dryRun !== false;
+      const requestedExtensions = Array.isArray(req.body?.extensions)
+        ? req.body.extensions.map((item: any) => String(item).trim()).filter(Boolean)
+        : [];
+
+      if (dryRun) {
+        const extensions: string[] = Array.from(new Set<string>(requestedExtensions));
+        if (extensions.length === 0) {
+          res.status(400).json({ ok: false, error: 'extensions list is required.' });
+          return;
+        }
+        const liveExtensions = await fetchLiveExtensions();
+        const items: ExtensionPreviewItem[] = extensions.map((extension) => {
+          if (!isNumericExtension(extension)) {
+            return { extension, action: 'error', status: 'ERROR', message: 'Invalid extension.' };
+          }
+          const existing = findExtensionByNumber(liveExtensions, extension);
+          if (!existing) {
+            return { extension, action: 'error', status: 'ERROR', message: 'Extension not found' };
+          }
+          return {
+            extension,
+            action: 'delete',
+            status: 'SUCCESS',
+            before: extensionPublicBefore(existing),
+            after: null,
+            applyPayload: serializeApplyPayload({ extension }),
+            message: 'Extension will be deleted through FreePBX Core BMO delUser/delDevice.'
+          };
+        });
+        const preview: ExtensionPreviewRecord = {
+          previewId: generatePreviewId('delete'),
+          createdAt: new Date().toISOString(),
+          type: 'delete',
+          originalPayload: maskPreviewPayload({ extensions }),
+          items
+        };
+        saveManagementPreview(preview);
+        const deleted = items.filter((item) => item.action === 'delete').length;
+        const failed = items.filter((item) => item.action === 'error').length;
+        res.json({
+          ok: failed === 0,
+          success: failed === 0,
+          previewId: preview.previewId,
+          createdAt: preview.createdAt,
+          type: preview.type,
+          operation: 'Delete Extensions',
+          deleted: 0,
+          failed,
+          reloadRequired: false,
+          results: items.map(({ applyPayload, ...item }) => ({ ...item, ok: item.action === 'delete' })),
+          items: items.map(({ applyPayload, ...item }) => item),
+          counts: { create: 0, update: 0, delete: deleted, skip: 0, conflict: 0, error: failed }
+        });
+        return;
+      }
+
+      const previewId = String(req.body?.previewId || '').trim();
+      if (!previewId) {
+        res.status(400).json({ ok: false, error: 'previewId is required for delete apply. Run dryRun preview first.' });
+        return;
+      }
+      const preview = findManagementPreview(previewId, 'delete');
+      if (!preview) {
+        res.status(404).json({ ok: false, error: 'Preview не найден или устарел. Сформируйте preview повторно.' });
+        return;
+      }
+      const deletable = preview.items.filter((item) => item.action === 'delete');
+      const previewErrors = preview.items.filter((item) => item.action === 'error');
+      const liveExtensions = await fetchLiveExtensions();
+      const results: any[] = previewErrors.map((item) => ({
+        extension: item.extension,
+        ok: false,
+        success: false,
+        action: 'error',
+        before: item.before,
+        message: item.message || 'Preview validation failed'
+      }));
+      for (const item of deletable) {
+        const extension = String(item.extension || '').trim();
+        try {
+          if (!isNumericExtension(extension)) throw new Error('Invalid extension.');
+          const existing = findExtensionByNumber(liveExtensions, extension);
+          if (!existing) throw new Error('Extension not found');
+          const body = await applyBmoExtensionDelete(extension);
+          results.push({
+            extension,
+            ok: true,
+            success: true,
+            action: 'delete',
+            before: item.before,
+            reload: body.reload,
+            message: 'Deleted through FreePBX Core BMO delUser/delDevice.'
+          });
+        } catch (err: any) {
+          results.push({
+            extension,
+            ok: false,
+            success: false,
+            action: 'delete',
+            before: item.before,
+            message: err.message || 'Delete failed'
+          });
+        }
+      }
+      let refreshedAfterDelete: NormalizedExtension[] | null = null;
+      const successfulDeleteResults = results.filter((item) => item.ok && item.action === 'delete');
+      if (successfulDeleteResults.length > 0) {
+        refreshedAfterDelete = await fetchLiveExtensions();
+        for (const result of successfulDeleteResults) {
+          if (findExtensionByNumber(refreshedAfterDelete, result.extension)) {
+            result.ok = false;
+            result.success = false;
+            result.message = 'Delete verification failed: extension still exists in live FreePBX/BMO list.';
+          }
+        }
+      }
+      const deleted = results.filter((item) => item.ok).length;
+      const failed = results.filter((item) => !item.ok).length;
+      if (deleted > 0) {
+        try {
+          const refreshed = refreshedAfterDelete || await fetchLiveExtensions();
+          await updatePBXData((db) => { db.extensions = refreshed; });
+        } catch (syncErr: any) {
+          console.warn('[MGMT] Failed to refresh local extension cache after delete:', syncErr.message);
+        }
+        addChangeLog(
+          authUser?.username || 'admin',
+          'extensions_delete_apply',
+          deleted,
+          'extensions',
+          results.filter((item) => item.ok).map((item) => 'ext-' + item.extension),
+          'Удаление extensions через FreePBX Core BMO delUser/delDevice. Успешно: ' + deleted + ', ошибок: ' + failed + '. Affected: ' + results.filter((item) => item.ok).map((item) => item.extension).join(', '),
+          preview.items.filter((item) => item.action === 'delete').map((item) => item.before).filter(Boolean)
+        );
+      }
+      res.json({
+        ok: failed === 0,
+        success: failed === 0,
+        deleted,
+        failed,
+        reloadRequired: deleted > 0,
+        results,
+        summary: { success: deleted, failed, skipped: 0 },
+        message: deleted > 0 ? 'Deleted through FreePBX BMO. Reload required.' : 'No extensions deleted.'
+      });
+    } catch (e: any) {
+      console.warn('[MGMT] Bulk extension delete failed', { user: authUser?.username || 'admin', error: e.message });
+      res.status(400).json({ ok: false, success: false, deleted: 0, failed: 0, reloadRequired: false, error: e.message, results: [] });
     }
   });
 
