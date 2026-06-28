@@ -194,3 +194,14 @@ Typical flow:
 - Document and implement future Trunks, Routes, Departments, DID and Dial Patterns with the same preview/apply lifecycle.
 - Add formal ARI module only after verified requirements exist.
 
+## Operator Templates Architecture
+
+Operator Templates introduces a Git-backed template library under templates/operators/. These files are shipped with PBXPuls and are the source of truth for generic operator settings.
+
+The frontend module lives in src/modules/management/operatorTemplates/. Until a backend/template loader exists, operatorTemplatesData.ts mirrors template metadata only for display.
+
+Git Templates are anonymized and may include SIP/PJSIP defaults, public server names, codecs, DTMF, NAT hints, number formats and diagnostics notes. They must never include secrets, tokens, personal customer logins, contract numbers or private customer data.
+
+Local Working Configs are planned separately. They may contain installation-specific values and must remain outside Git.
+
+The v5.1.0 migration preview is a pure frontend parser for pasted chan_sip key=value text. It does not read live PBX trunks and does not perform FreePBX mutations. Trunk Lab, test Trunks and live diagnostics are future modules.

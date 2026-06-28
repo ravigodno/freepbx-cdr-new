@@ -3,6 +3,11 @@ export const ui = {
     preview: 'Preview',
     apply: 'Apply',
     reset: 'Reset',
+    clear: 'Очистить',
+    showPreview: 'Показать Preview',
+    view: 'Просмотр',
+    json: 'JSON',
+    notes: 'Notes',
     createExtension: 'Создать Extension',
     createTrunk: 'Создать Trunk',
     createRoute: 'Создать маршрут',
@@ -73,6 +78,77 @@ export const ui = {
       inboundRoutes: 'Inbound Routes',
       departments: 'Отделы',
       templates: 'Шаблоны'
+    },
+    operatorTemplatesModule: {
+      title: 'Шаблоны операторов',
+      description: 'Библиотека Git-шаблонов операторов связи для FreePBX/Asterisk. Шаблоны помогают быстрее подбирать настройки SIP/PJSIP, сохранять проверенные варианты и готовить миграцию chan_sip → PJSIP.',
+      gitWarning: 'Git-шаблон не содержит пароли, токены и клиентские данные. Боевые значения вводятся только локально на конкретной АТС.',
+      chansipWarning: 'chan_sip является устаревшим драйвером. Для новых Trunks рекомендуется использовать PJSIP.',
+      stats: {
+        total: 'Всего шаблонов',
+        verified: 'Verified',
+        tested: 'Tested',
+        draft: 'Draft',
+        pjsip: 'PJSIP',
+        chansip: 'chan_sip',
+        deprecated: 'Deprecated'
+      },
+      filters: {
+        search: 'Поиск по оператору',
+        status: 'Статус',
+        technology: 'Технология',
+        region: 'Регион',
+        country: 'Страна',
+        all: 'Все',
+        allRegions: 'Все регионы',
+        allCountries: 'Все страны'
+      },
+      table: {
+        operator: 'Оператор',
+        template: 'Шаблон',
+        region: 'Регион',
+        technology: 'Технология',
+        status: 'Статус',
+        freepbx: 'FreePBX',
+        asterisk: 'Asterisk',
+        actions: 'Действия',
+        notTested: 'Не указано'
+      },
+      details: {
+        title: 'Карточка шаблона',
+        empty: 'Выберите шаблон в таблице.',
+        main: 'Основные сведения',
+        technology: 'Технология',
+        status: 'Статус',
+        testedWith: 'Tested With',
+        settings: 'Настройки SIP/PJSIP',
+        requiredUserFields: 'Required User Fields',
+        numberFormats: 'Number Formats',
+        diagnostics: 'Diagnostics',
+        notes: 'Notes',
+        security: 'Security',
+        migration: 'Migration',
+        jsonPath: 'JSON path',
+        notesPath: 'Notes path'
+      },
+      migration: {
+        title: 'Миграция chan_sip → PJSIP',
+        description: 'Вставьте chan_sip настройки текстом. PBXPuls покажет распознанные поля, предполагаемые PJSIP значения и предупреждения без сохранения данных.',
+        inputLabel: 'chan_sip config',
+        inputPlaceholder: 'host=sip.example.ru\nusername=123456\nsecret=my-password\nfromuser=123456\nfromdomain=sip.example.ru\ntype=peer\ncontext=from-trunk\nqualify=yes\nnat=force_rport,comedia\ncanreinvite=no\ndtmfmode=rfc2833\ndisallow=all\nallow=alaw&ulaw\ninsecure=port,invite',
+        parsedFields: 'Распознанные chan_sip поля',
+        pjsipPreview: 'Предполагаемые PJSIP поля',
+        warnings: 'Предупреждения',
+        manualReview: 'Требуют ручной проверки',
+        noData: 'Нет данных для отображения',
+        secretsDetected: 'Обнаружены секретные поля. Значения замаскированы и не сохраняются.'
+      },
+      statusLabels: {
+        draft: 'Draft',
+        tested: 'Tested',
+        verified: 'Verified',
+        deprecated: 'Deprecated'
+      }
     }
   },
   operations: {

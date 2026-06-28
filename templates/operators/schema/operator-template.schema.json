@@ -1,0 +1,154 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pbxpuls.local/schemas/operator-template.schema.json",
+  "title": "PBXPuls Operator Template",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "name",
+    "operator",
+    "region",
+    "country",
+    "technology",
+    "status",
+    "testedWith",
+    "fields",
+    "requiredUserFields",
+    "numberFormats",
+    "diagnostics",
+    "notes",
+    "security"
+  ],
+  "properties": {
+    "id": { "type": "string", "minLength": 3 },
+    "name": { "type": "string", "minLength": 3 },
+    "operator": { "type": "string", "minLength": 2 },
+    "region": { "type": "string", "minLength": 2 },
+    "country": { "type": "string", "minLength": 2 },
+    "technology": {
+      "oneOf": [
+        { "enum": ["chan_sip", "pjsip"] },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "driver", "deprecated"],
+          "properties": {
+            "type": { "enum": ["chan_sip", "pjsip"] },
+            "driver": { "enum": ["chan_sip", "asterisk-pjsip"] },
+            "deprecated": { "type": "boolean" }
+          }
+        }
+      ]
+    },
+    "status": { "enum": ["draft", "tested", "verified", "deprecated"] },
+    "testedWith": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["freepbx", "asterisk"],
+      "properties": {
+        "freepbx": { "type": "array", "items": { "type": "string" } },
+        "asterisk": { "type": "array", "items": { "type": "string" } },
+        "notes": { "type": "string" }
+      }
+    },
+    "fields": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "host": { "type": "string" },
+        "port": { "type": ["integer", "string"] },
+        "username": { "type": "string" },
+        "authUser": { "type": "string" },
+        "secretPlaceholder": { "type": "string" },
+        "type": { "type": "string" },
+        "context": { "type": "string" },
+        "fromUser": { "type": "string" },
+        "fromDomain": { "type": "string" },
+        "insecure": { "type": "string" },
+        "qualify": { "type": ["string", "boolean"] },
+        "nat": { "type": "string" },
+        "canreinvite": { "type": "string" },
+        "directrtpsetup": { "type": "string" },
+        "dtmfmode": { "type": "string" },
+        "disallow": { "type": "string" },
+        "allow": { "type": ["string", "array"], "items": { "type": "string" } },
+        "transport": { "type": "string" },
+        "trustrpid": { "type": "string" },
+        "sendrpid": { "type": "string" },
+        "encryption": { "type": "string" },
+        "qualifyfreq": { "type": ["integer", "string"] },
+        "sipServer": { "type": "string" },
+        "sipServerPort": { "type": ["integer", "string"] },
+        "authUsername": { "type": "string" },
+        "passwordPlaceholder": { "type": "string" },
+        "authentication": { "type": "string" },
+        "registration": { "type": "string" },
+        "outboundProxy": { "type": "string" },
+        "contactUser": { "type": "string" },
+        "clientUri": { "type": "string" },
+        "serverUri": { "type": "string" },
+        "match": { "type": "string" },
+        "dtmfMode": { "type": "string" },
+        "directMedia": { "type": "string" },
+        "rewriteContact": { "type": "string" },
+        "rtpSymmetric": { "type": "string" },
+        "forceRport": { "type": "string" },
+        "qualifyFrequency": { "type": ["integer", "string"] },
+        "codecs": { "type": "array", "items": { "type": "string" } },
+        "mediaEncryption": { "type": "string" },
+        "timers": { "type": "string" },
+        "sendRpid": { "type": "string" },
+        "trustRpid": { "type": "string" }
+      },
+      "not": {
+        "anyOf": [
+          { "required": ["secret"] },
+          { "required": ["password"] },
+          { "required": ["token"] },
+          { "required": ["clientSecret"] }
+        ]
+      }
+    },
+    "requiredUserFields": { "type": "array", "items": { "type": "string" } },
+    "numberFormats": {
+      "type": "object",
+      "additionalProperties": {
+        "oneOf": [
+          { "type": "string" },
+          { "type": "array", "items": { "type": "string" } }
+        ]
+      }
+    },
+    "diagnostics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hints", "commonErrors"],
+      "properties": {
+        "hints": { "type": "array", "items": { "type": "string" } },
+        "commonErrors": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "notes": { "type": "array", "items": { "type": "string" } },
+    "security": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["containsSecrets", "secretPolicy"],
+      "properties": {
+        "containsSecrets": { "const": false },
+        "secretPolicy": { "type": "string" }
+      }
+    },
+    "migration": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "canMigrateToPjsip": { "type": "boolean" },
+        "migrationTargetTemplate": { "type": "string" },
+        "mappingProfile": { "type": "string" },
+        "isMigrationTarget": { "type": "boolean" },
+        "notes": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

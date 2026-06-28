@@ -207,3 +207,36 @@ Out of scope for this stage:
 Status: active
 
 PBXPuls now centralizes user-facing UI strings in src/locales/ru.ts. Russian is the active dictionary. Future English, Deutsch, Español and other dictionaries should be added without rewriting Management components.
+
+## v5.1.0 Operator Templates Foundation
+
+Status: in progress
+
+Scope:
+
+- Git-backed operator template library in templates/operators/.
+- JSON Schema and chan_sip to PJSIP mapping profile.
+- Operator Templates screen in Management.
+- Read-only template viewer for Git Templates.
+- Local-only chan_sip to PJSIP migration preview.
+- Explicit separation between Git Templates and future Local Working Configs.
+
+Out of scope:
+
+- real Trunk creation or updates;
+- FreePBX REST/BMO apply calls;
+- reading real trunks from FreePBX;
+- Trunk registration and test calls;
+- fwconsole reload.
+
+Next releases:
+
+- v5.2.0 — Trunk Lab Testing.
+- v5.3.0 — Trunks Management.
+- v5.4.0 — Outbound Routes.
+- v5.5.0 — Inbound Routes.
+- v5.6.0 — Dial Patterns and Number Ranges.
+- v5.7.0 — Departments and RBAC Foundation.
+- v5.8.0 — Management Dashboard.
+
+Management Dashboard remains deferred until modules provide real data.

@@ -1,0 +1,17 @@
+{
+  "id": "beeline-chansip-legacy",
+  "name": "Beeline chan_sip legacy",
+  "operator": "Билайн",
+  "region": "Россия",
+  "country": "RU",
+  "technology": { "type": "chan_sip", "driver": "chan_sip", "deprecated": true },
+  "status": "draft",
+  "testedWith": { "freepbx": [], "asterisk": [], "notes": "Baseline template; verify with operator documentation." },
+  "fields": { "host": "sip.beeline.example", "port": 5060, "username": "${LOCAL_LOGIN}", "authUser": "${LOCAL_LOGIN}", "secretPlaceholder": "Введите SIP-пароль локально", "type": "peer", "context": "from-trunk", "fromUser": "${LOCAL_LOGIN}", "fromDomain": "sip.beeline.example", "insecure": "port,invite", "qualify": "yes", "nat": "force_rport,comedia", "canreinvite": "no", "dtmfmode": "rfc2833", "disallow": "all", "allow": ["alaw", "ulaw"], "transport": "udp", "trustrpid": "yes", "sendrpid": "pai", "encryption": "no", "qualifyfreq": 60 },
+  "requiredUserFields": ["username", "secretPlaceholder", "fromUser"],
+  "numberFormats": { "outbound": ["E.164", "national"], "inbound": ["DID from operator"] },
+  "diagnostics": { "hints": ["Проверить registration mode, Caller ID и NAT.", "chan_sip устарел; для новых Trunks используйте PJSIP."], "commonErrors": ["403", "488", "503", "one-way audio"] },
+  "notes": ["Не использовать без проверки на целевой АТС."],
+  "security": { "containsSecrets": false, "secretPolicy": "Secrets are entered locally and never stored in Git." },
+  "migration": { "canMigrateToPjsip": true, "migrationTargetTemplate": "beeline-pjsip-standard", "mappingProfile": "default-chansip-to-pjsip" }
+}

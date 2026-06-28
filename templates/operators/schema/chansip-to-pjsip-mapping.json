@@ -1,0 +1,31 @@
+{
+  "id": "default-chansip-to-pjsip",
+  "name": "Default chan_sip to PJSIP mapping",
+  "version": "1.0.0",
+  "mappings": [
+    { "from": "host", "to": "sipServer", "type": "direct" },
+    { "from": "port", "to": "sipServerPort", "type": "direct" },
+    { "from": "username", "to": "username", "type": "direct" },
+    { "from": "authUser", "to": "authUsername", "type": "direct" },
+    { "from": "secret", "to": "password", "type": "masked-placeholder" },
+    { "from": "fromUser", "to": "fromUser", "type": "direct" },
+    { "from": "fromDomain", "to": "fromDomain", "type": "direct" },
+    { "from": "context", "to": "context", "type": "direct" },
+    { "from": "qualify=yes", "to": "qualifyFrequency=60", "type": "rule" },
+    { "from": "canreinvite=no", "to": "directMedia=no", "type": "rule" },
+    { "from": "nat=force_rport,comedia", "to": "forceRport=yes + rtpSymmetric=yes", "type": "rule" },
+    { "from": "nat=yes", "to": "forceRport=yes + rtpSymmetric=yes + rewriteContact=yes", "type": "rule" },
+    { "from": "dtmfmode=rfc2833", "to": "dtmfMode=rfc4733", "type": "rule" },
+    { "from": "disallow=all + allow=alaw,ulaw", "to": "codecs=[\"alaw\",\"ulaw\"]", "type": "rule" },
+    { "from": "type=peer", "to": "endpoint + auth + aor model", "type": "model-change" },
+    { "from": "insecure=port,invite", "to": "warning", "type": "manual-review" }
+  ],
+  "notes": [
+    "insecure in chan_sip does not transfer directly to PJSIP.",
+    "match/identify for inbound INVITE must be checked separately.",
+    "from_domain and from_user depend on operator requirements.",
+    "NAT fields require verification on the real network.",
+    "directMedia is usually no behind NAT.",
+    "password is not stored in Git."
+  ]
+}

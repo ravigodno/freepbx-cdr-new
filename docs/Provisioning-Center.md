@@ -239,3 +239,21 @@ User-facing Management strings must come from src/locales/ru.ts. New Management 
 Management now uses the compact PBXPuls module header: Wrench icon, Управление title and all Management section tabs in one horizontal row. There is no separate subtitle row and no left-side navigation, so Extensions and other wide workspaces keep the full available page width.
 
 The selected Management tab is persisted in LocalStorage. The tab strip must remain single-line and horizontally scrollable.
+
+## Operator Templates Foundation
+
+Operator Templates is now a full read-only Management section for v5.1.0. It displays shipped Git Templates from templates/operators/ through a temporary frontend adapter in src/modules/management/operatorTemplates/operatorTemplatesData.ts.
+
+The adapter is not the source of truth. The source of truth remains templates/operators/ until a backend/template loader is implemented.
+
+The section includes:
+
+- template statistics;
+- filters by operator, status, technology, region and country;
+- table columns for operator, template, region, technology, status, FreePBX, Asterisk and actions;
+- template details for settings, required user fields, number formats, diagnostics, notes, security and migration;
+- local-only chan_sip to PJSIP migration preview.
+
+The migration preview parses pasted key=value text only. It masks secret/password/token/clientSecret values and does not save data. It does not read real FreePBX trunks, call REST/BMO, create Trunks, register Trunks or run reload.
+
+Git Templates differ from future Local Working Configs. Git Templates are anonymized and committed. Local Working Configs will be PBX-specific and must not be committed to Git.

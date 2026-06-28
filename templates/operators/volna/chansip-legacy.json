@@ -1,0 +1,43 @@
+{
+  "id": "volna-chansip-legacy",
+  "name": "Volna chan_sip legacy",
+  "operator": "Волна",
+  "region": "Крым",
+  "country": "RU",
+  "technology": { "type": "chan_sip", "driver": "chan_sip", "deprecated": true },
+  "status": "draft",
+  "testedWith": { "freepbx": [], "asterisk": [], "notes": "Baseline template; verify on the target PBX." },
+  "fields": {
+    "host": "sip.volna.example",
+    "port": 5060,
+    "username": "${LOCAL_LOGIN}",
+    "authUser": "${LOCAL_LOGIN}",
+    "secretPlaceholder": "Введите SIP-пароль локально",
+    "type": "peer",
+    "context": "from-trunk",
+    "fromUser": "${LOCAL_LOGIN}",
+    "fromDomain": "sip.volna.example",
+    "insecure": "port,invite",
+    "qualify": "yes",
+    "nat": "force_rport,comedia",
+    "canreinvite": "no",
+    "directrtpsetup": "no",
+    "dtmfmode": "rfc2833",
+    "disallow": "all",
+    "allow": ["alaw", "ulaw"],
+    "transport": "udp",
+    "trustrpid": "yes",
+    "sendrpid": "pai",
+    "encryption": "no",
+    "qualifyfreq": 60
+  },
+  "requiredUserFields": ["username", "secretPlaceholder", "fromUser"],
+  "numberFormats": { "outbound": ["E.164", "local"], "inbound": ["DID from operator"] },
+  "diagnostics": {
+    "hints": ["Проверить регистрацию, исходящий Caller ID и NAT.", "chan_sip устарел; для новых Trunks используйте PJSIP."],
+    "commonErrors": ["403", "488", "503", "one-way audio"]
+  },
+  "notes": ["Не гарантирует рабочую конфигурацию без проверки на конкретной АТС."],
+  "security": { "containsSecrets": false, "secretPolicy": "Secrets are entered locally and never stored in Git." },
+  "migration": { "canMigrateToPjsip": true, "migrationTargetTemplate": "volna-pjsip-standard", "mappingProfile": "default-chansip-to-pjsip" }
+}

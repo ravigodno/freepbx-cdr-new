@@ -1,0 +1,17 @@
+{
+  "id": "beeline-pjsip-standard",
+  "name": "Beeline PJSIP standard",
+  "operator": "Билайн",
+  "region": "Россия",
+  "country": "RU",
+  "technology": { "type": "pjsip", "driver": "asterisk-pjsip", "deprecated": false },
+  "status": "draft",
+  "testedWith": { "freepbx": [], "asterisk": [], "notes": "Baseline PJSIP profile." },
+  "fields": { "transport": "udp", "sipServer": "sip.beeline.example", "sipServerPort": 5060, "username": "${LOCAL_LOGIN}", "authUsername": "${LOCAL_LOGIN}", "passwordPlaceholder": "Введите SIP-пароль локально", "authentication": "outbound", "registration": "send", "fromUser": "${LOCAL_LOGIN}", "fromDomain": "sip.beeline.example", "contactUser": "${LOCAL_LOGIN}", "clientUri": "sip:${LOCAL_LOGIN}@sip.beeline.example", "serverUri": "sip:sip.beeline.example:5060", "context": "from-trunk", "match": "sip.beeline.example", "dtmfMode": "rfc4733", "directMedia": "no", "rewriteContact": "yes", "rtpSymmetric": "yes", "forceRport": "yes", "qualifyFrequency": 60, "codecs": ["alaw", "ulaw"], "mediaEncryption": "no", "timers": "yes", "sendRpid": "pai", "trustRpid": "yes" },
+  "requiredUserFields": ["username", "passwordPlaceholder", "authUsername"],
+  "numberFormats": { "outbound": ["E.164", "national"], "inbound": ["DID from operator"] },
+  "diagnostics": { "hints": ["Проверить identify/match и формат номера."], "commonErrors": ["403", "488", "503", "registration timeout"] },
+  "notes": ["PJSIP предпочтителен для новых Trunks."],
+  "security": { "containsSecrets": false, "secretPolicy": "Passwords are local-only and never stored in Git." },
+  "migration": { "canMigrateToPjsip": false, "isMigrationTarget": true, "mappingProfile": "default-chansip-to-pjsip" }
+}

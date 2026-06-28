@@ -20,6 +20,8 @@ import {
 import { ProvisioningTopNav } from './components/ProvisioningTopNav';
 import { ProvisioningOverview } from './components/ProvisioningOverview';
 import { ProvisioningPlaceholder } from './components/ProvisioningPlaceholder';
+import { OperatorTemplatesView } from './operatorTemplates/OperatorTemplatesView';
+import { operatorTemplates } from './operatorTemplates/operatorTemplatesData';
 import { MANAGEMENT_SECTIONS, ManagementSectionId } from './components/provisioningSections';
 import { ui } from '../../locales/ru';
 
@@ -1958,8 +1960,9 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
 
         {/* ACTIVE SCREEN CONTENTS */}
         <div className="min-w-0 bg-white dark:bg-slate-800 p-4 rounded-lg shadow-xs border border-slate-100 dark:border-slate-750">
-        {activeTab === 'overview' && <ProvisioningOverview extensionsCount={activeExtensions.length} operatorTemplatesCount={trunkTemplates.length} extensionTemplatesCount={extTemplates.length} onNavigate={(section) => setActiveTab(section)} />}
-        {activeTab !== 'overview' && activeTab !== 'extensions' && <ProvisioningPlaceholder section={MANAGEMENT_SECTIONS.find(section => section.id === activeTab)!} />}
+        {activeTab === 'overview' && <ProvisioningOverview extensionsCount={activeExtensions.length} operatorTemplatesCount={operatorTemplates.length} extensionTemplatesCount={extTemplates.length} onNavigate={(section) => setActiveTab(section)} />}
+        {activeTab === 'operator-templates' && <OperatorTemplatesView />}
+        {activeTab !== 'overview' && activeTab !== 'extensions' && activeTab !== 'operator-templates' && <ProvisioningPlaceholder section={MANAGEMENT_SECTIONS.find(section => section.id === activeTab)!} />}
         
         {/* TAB 1: BRANCH CONSTRUCTOR */}
         {activeTab === 'branch' && (

@@ -251,3 +251,15 @@ User-facing text must not be hardcoded in new React components. Use src/locales/
 Do not translate professional terms and platform names such as Extension, SIP, PJSIP, Trunk, Outbound Route, Inbound Route, Dial Pattern, Number Range, REST, API, CSV, Preview, Apply, Reset, Result, Reload, BMO, FreePBX, Asterisk, GraphQL, JSON, UUID, LocalStorage, WebSocket, AMI and ARI.
 
 Large modules must follow the PBXPuls module template: compact Header, Toolbar, Filters, Workspace and Preview → Apply → Result for mutating operations.
+
+## Operator Templates Rules
+
+Operator Git Templates live in templates/operators/ and must not contain secrets or personal/customer-specific data.
+
+Forbidden fields and values include passwords, SIP secrets, tokens, client secrets, contract numbers, personal data and private customer IP addresses. Use placeholders such as passwordPlaceholder or secretPlaceholder.
+
+Migration preview code must mask secret/password/token/clientSecret fields and must not save pasted values.
+
+Operator Templates v5.1.0 is read-only. Do not create Trunks, call FreePBX REST apply endpoints, call BMO, register Trunks, run test calls or run fwconsole reload from this module.
+
+Local Working Configs are future local PBX-specific files and must not be committed to Git.

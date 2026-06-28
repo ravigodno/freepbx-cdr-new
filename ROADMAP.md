@@ -72,7 +72,58 @@ PBXPuls can safely create and update extensions in bulk.
 
 ---
 
-## v5.1.0 — Trunks Management
+## v5.0.10 — Management Workspace Architecture
+
+Status: completed
+
+Goals:
+
+- Management workspace architecture
+- Compact Management navigation
+- Placeholder surfaces for future modules
+- UI text centralization for Management
+
+---
+
+## v5.1.0 — Operator Templates Foundation
+
+Status: in progress
+
+Goals:
+
+- Git library of anonymized operator templates
+- JSON Schema for chan_sip and PJSIP templates
+- chan_sip to PJSIP mapping profile
+- Management UI section for Operator Templates
+- Read-only template viewer
+- Local-only chan_sip to PJSIP migration preview
+- Documentation for Git Templates and future Local Working Configs
+
+Out of scope:
+
+- real Trunk creation or updates
+- FreePBX REST apply calls
+- BMO calls
+- test Trunks, registration or test calls
+- fwconsole reload
+- storing real passwords or customer data
+
+---
+
+## v5.2.0 — Trunk Lab Testing
+
+Status: planned
+
+Goals:
+
+- Trunk diagnostics planning
+- Registration and media checks design
+- Safe read-only diagnostic workflow
+- No automatic live PBX mutation
+
+---
+
+## v5.3.0 — Trunks Management
 
 Status: planned
 
@@ -80,141 +131,73 @@ Goals:
 
 - Load trunks
 - View trunk configuration
-- Create trunk preview
-- Update trunk preview
-- Apply trunk changes
-- Trunk templates by operator
-- SIP/PJSIP trunk profiles
+- Create/update previews
+- Apply only after verified API/BMO path
 - Change log
 
 ---
 
-## v5.1.1 — Routes Management
+## v5.4.0 — Outbound Routes
 
 Status: planned
 
 Goals:
 
-- Outbound routes
-- Inbound routes
-- DID mapping
-- Route patterns
-- Preview/apply
+- Outbound route preview/apply
+- Dial pattern validation
+- Trunk dependency checks
 - Conflict detection
-- Change log
 
 ---
 
-## v5.2.0 — Queues and Ring Groups
+## v5.5.0 — Inbound Routes
 
 Status: planned
 
 Goals:
 
-- Load queues
-- Load ring groups
-- Manage members
-- Bulk member updates
-- Department-based templates
-- Preview/apply
+- DID mapping
+- Destination preview
+- Duplicate DID checks
 - Change log
 
 ---
 
-## v5.3.0 — IVR and Time Conditions
+## v5.6.0 — Dial Patterns and Number Ranges
 
 Status: planned
 
 Goals:
 
-- IVR list
-- IVR preview/update
-- Time groups
-- Time conditions
-- Holiday schedules
-- Preview/apply
-- Change log
+- Reusable Dial Pattern validation
+- Number range ownership metadata
+- Route impact preview
+- Import/export preparation
 
 ---
 
-## v5.4.0 — Diagnostics and Provisioning Health
+## v5.7.0 — Departments and RBAC Foundation
 
 Status: planned
 
 Goals:
 
-- PBX connection health
-- MariaDB health
-- AMI health
-- ARI health
-- REST health
-- OAuth status
-- FreePBX version detection
-- Asterisk version detection
-- Module availability
-- REST endpoint compatibility matrix
+- Department model
+- Extension ranges per department
+- Manager/role mapping
+- RBAC integration foundation
 
 ---
 
-## v5.5.0 — Organization Builder
+## v5.8.0 — Management Dashboard
 
-Status: future
-
-Goals:
-
-- Create departments
-- Assign extension ranges
-- Create queues
-- Create ring groups
-- Assign templates
-- Department managers
-- Access control integration
-- Full preview/apply
-
----
-
-## v5.6.0 — Import/Export Center
-
-Status: future
+Status: planned
 
 Goals:
 
-- Excel import
-- CSV import
-- Export extensions
-- Export trunks
-- Export routes
-- Validation before import
-- Preview before apply
-- Error reports
-
----
-
-## v5.7.0 — Rollback and Snapshots
-
-Status: future
-
-Goals:
-
-- Snapshot before apply
-- Compare snapshot with current PBX
-- Rollback eligible changes
-- Change diff viewer
-- Operation history
-
----
-
-## v5.8.0 — AI Assistant
-
-Status: future
-
-Goals:
-
-- AI-guided diagnostics
-- AI-generated previews
-- Natural language PBX provisioning
-- Safe approval workflow
-- No direct apply without confirmation
+- Management Dashboard based on real module data
+- Cross-module health and provisioning metrics
+- Final-stage overview after Operator Templates, Trunks, Routes, Dial Patterns and Departments provide stable data
 
 ---
 
@@ -241,7 +224,7 @@ Each major feature must include:
 Current active focus:
 
 ```text
-v5.0.8 — Extensions Management Completion
+v5.1.0 — Operator Templates Foundation
 ```
 
-Do not start Trunks, Routes, Queues, or IVR until Extensions Management reaches a stable working state.
+Operator Templates v5.1.0 is read-only foundation work. Do not create real Trunks, call FreePBX apply APIs, call BMO, run test calls, or run fwconsole reload in this release.
