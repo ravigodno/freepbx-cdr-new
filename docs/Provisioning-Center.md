@@ -1,0 +1,211 @@
+# Provisioning Center
+
+## Purpose
+
+Provisioning Center is the Management / Управление area for safe PBX provisioning. It is implemented primarily in src/modules/management/ProvisioningCenter.tsx with backend routes in server-management.ts.
+
+The current completed module is Extensions. Other sections exist as early surfaces or future targets and must follow the same operation model.
+
+## Current Navigation
+
+The Management screen currently includes tabs/areas for:
+
+- Branch / office-style provisioning helper;
+- Numbering capacity;
+- Extensions;
+- Trunks;
+- Routes;
+- DID;
+- Templates;
+- Changelog.
+
+Extensions is the main finalized provisioning workflow. Trunks, Routes and DID have older/early preview/apply surfaces and should be refactored before being treated as complete modules.
+
+## Extensions Workspace
+
+The Extensions workspace uses a common operation area with these tabs:
+
+- Массовое изменение / Bulk Update
+- Массовое создание / Bulk Create
+- Удаление / Delete Preview
+- CSV / Импорт
+
+Each operation is expected to follow the same layout:
+
+1. Operation parameters.
+2. Preview button.
+3. Shared Preview area.
+4. Apply button.
+5. Result area.
+
+There must not be separate preview tables inside individual operation tabs.
+
+## Bulk Create
+
+Bulk Create supports range/manual/CSV-oriented creation modes in the UI and calls backend preview/apply endpoints:
+
+- POST /api/management/extensions/create-preview
+- POST /api/management/extensions/create-apply
+
+The backend checks conflicts against live extensions and creates supported extensions through FreePBX BMO Core addDevice/addUser.
+
+Strict/fill-missing conflict behavior exists in the current backend preview logic.
+
+## Bulk Update
+
+Bulk Update calls:
+
+- POST /api/management/extensions/update-preview
+- POST /api/management/extensions/update-apply
+
+The update workflow:
+
+1. UI builds selectedExtensions and patchFields.
+2. Backend loads live extensions.
+3. Backend normalizes preview fields.
+4. Backend builds applyPayload with only supported BMO fields.
+5. Preview shows old/new/diff.
+6. Apply reuses previewId and applies per item.
+
+Recording is a special case: UI can show normalized Recording, but apply must send only real BMO/AstDB fields:
+
+- recording_in_external
+- recording_out_external
+- recording_in_internal
+- recording_out_internal
+- recording_ondemand
+- recording_priority
+
+## Single Edit
+
+Single extension edit reuses the same update-preview/update-apply backend flow with selectedExtensions containing one extension.
+
+Single edit must not bypass preview. It should continue to use the shared Preview and Result areas.
+
+## Delete Preview
+
+Delete currently builds a frontend preview and requires explicit confirmation language. Backend deletion is not implemented yet.
+
+Status: Future/TODO for actual FreePBX deletion apply.
+
+Rules for future delete implementation:
+
+- must use backend preview;
+- must check dependencies and routing impact;
+- must require explicit confirmation;
+- must return per-item result;
+- must not run fwconsole reload automatically.
+
+## CSV / Import
+
+CSV / Import is prepared as a separate workspace tab. Current CSV create flow is routed through the Bulk Create CSV mode.
+
+Future import work should provide:
+
+- CSV validation;
+- field mapping;
+- duplicate detection;
+- preview before apply;
+- row-level errors;
+- exportable error report.
+
+## Operation Framework
+
+Current frontend model in ProvisioningCenter.tsx defines the initial operation vocabulary:
+
+- OperationType: CREATE, UPDATE, DELETE, IMPORT, EXPORT
+- ActionStatus: SUCCESS, WARNING, ERROR, SKIP, CONFLICT
+- OperationPreviewItem: object, action, status, oldValue, newValue, message, diff
+
+Current shared UI components include:
+
+- OperationToolbar
+- OperationSummary
+- PreviewTable
+
+This framework is still local/early and should be extracted into common frontend/backend modules before adding large new provisioning areas.
+
+## Preview → Apply → Result Lifecycle
+
+All provisioning operations must follow this lifecycle:
+
+1. User fills operation parameters.
+2. User clicks Preview.
+3. Backend loads current PBX state and validates requested changes.
+4. Backend stores preview and returns previewId.
+5. UI displays shared summary and preview table.
+6. User reviews changes and clicks Apply.
+7. Backend applies only supported fields from stored preview payload.
+8. Backend continues per item after item-level errors.
+9. Backend writes changelog.
+10. UI displays Result.
+11. If reloadRequired is true, UI informs the user but does not run reload.
+
+## Backend Endpoints Used by Extensions
+
+Current core endpoints:
+
+- GET /api/management/extensions
+- GET /api/management/extensions/export-csv
+- GET /api/management/extensions/rest-raw
+- GET /api/management/extensions/ui-settings
+- PUT /api/management/extensions/ui-settings
+- POST /api/management/extensions/create-preview
+- POST /api/management/extensions/create-apply
+- POST /api/management/extensions/update-preview
+- POST /api/management/extensions/update-apply
+- GET /api/management/change-log
+
+Additional extension/recording helper endpoints exist under /api/freepbx/extensions and should be kept consistent with the same whitelist and safety rules.
+
+## Recommendations for Future Modules
+
+Departments:
+
+- define department object model first;
+- link extension ranges, templates and managers;
+- use PreviewTable for generated extensions, queues or groups.
+
+Operator Templates:
+
+- model operator-specific trunk defaults;
+- separate template CRUD from live PBX apply;
+- never store unmasked secrets in preview/result output.
+
+Trunks:
+
+- refactor old trunk screen into the Operation Framework;
+- verify REST/BMO capabilities before apply;
+- include registration/health diagnostics separately from provisioning.
+
+Routes:
+
+- split outbound routes and inbound routes if needed;
+- preview pattern conflicts and trunk dependencies;
+- reuse common summary and preview table.
+
+Dial Patterns:
+
+- validate pattern syntax;
+- show generated route impact;
+- detect overlaps/conflicts.
+
+DID:
+
+- validate number ownership/ranges;
+- preview destination mapping;
+- detect duplicate DID assignments.
+
+Number Ranges:
+
+- keep numbering capacity separate from PBX mutation;
+- use it as lookup/enrichment for routes and DID.
+
+## TODO Before Major Expansion
+
+- Extract operation types and preview item types from ProvisioningCenter.tsx.
+- Move operation UI components fully to src/components/ui.
+- Convert older Trunks, Routes and DID sections to the shared lifecycle.
+- Add backend shared preview storage helpers by operation type/module.
+- Add consistent import/export abstractions.
+
