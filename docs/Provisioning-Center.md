@@ -209,3 +209,33 @@ Number Ranges:
 - Add backend shared preview storage helpers by operation type/module.
 - Add consistent import/export abstractions.
 
+
+## v5.1.0 Management Navigation
+
+The Management tab now starts from Overview instead of opening Extensions directly. The internal navigation is a compact single-line header tab strip:
+
+- Overview
+- Extensions
+- Departments
+- Operator Templates
+- Trunks
+- Outbound Routes
+- Inbound Routes
+- Dial Patterns
+- Number Ranges
+
+Overview shows currently available object counts from already loaded frontend data and marks future modules as Coming Soon or Not Implemented. Future sections are separate React components and must be implemented through the shared Operation Framework and Design System.
+
+Trunks, Routes, Departments and number-related modules are intentionally placeholders at this stage. No backend API is connected for these future sections in v5.1.0 foundation work.
+
+## v5.1.0 UX Update
+
+Management uses a compact horizontal top navigation with LocalStorage persistence for the selected section. The old left-side internal navigation was removed so wide workspaces such as Extensions can use the full page width.
+
+User-facing Management strings must come from src/locales/ru.ts. New Management components must not hardcode labels, descriptions, status text or button captions directly in React components.
+
+## Compact Header Standard
+
+Management now uses the compact PBXPuls module header: Wrench icon, Управление title and all Management section tabs in one horizontal row. There is no separate subtitle row and no left-side navigation, so Extensions and other wide workspaces keep the full available page width.
+
+The selected Management tab is persisted in LocalStorage. The tab strip must remain single-line and horizontally scrollable.

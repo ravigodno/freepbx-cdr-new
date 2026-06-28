@@ -4,7 +4,7 @@ import {
   Trash2, RefreshCw, Download, Upload, Play, ArrowLeft, ArrowRight, 
   Lock, Plus, Edit, Undo, Eye, FileSpreadsheet, UserPlus, Users, 
   PhoneForwarded, MapPin, Building2, Server, HelpCircle, ShieldAlert,
-  Database, ListPlus, Activity
+  Database, ListPlus, Activity, Wrench
 } from 'lucide-react';
 import {
   Card,
@@ -17,6 +17,11 @@ import {
   StatusBadge,
   Toolbar
 } from '../../components/ui/DesignSystem';
+import { ProvisioningTopNav } from './components/ProvisioningTopNav';
+import { ProvisioningOverview } from './components/ProvisioningOverview';
+import { ProvisioningPlaceholder } from './components/ProvisioningPlaceholder';
+import { MANAGEMENT_SECTIONS, ManagementSectionId } from './components/provisioningSections';
+import { ui } from '../../locales/ru';
 
 interface ProvisioningCenterProps {
   session: any;
@@ -32,6 +37,7 @@ type ActionStatus = 'SUCCESS' | 'WARNING' | 'ERROR' | 'SKIP' | 'CONFLICT';
 type OperationPreviewItem = { object: string; action: string; status: ActionStatus; oldValue: any; newValue: any; message: string; diff?: any[]; };
 type ProvisioningSectionId = 'extensions' | 'trunks' | 'operator-templates' | 'routes' | 'departments';
 type ProvisioningSectionDef = { id: ProvisioningSectionId; label: string; operationTypes: OperationType[] };
+type ActiveManagementTab = ManagementSectionId | 'branch' | 'numbering' | 'routes' | 'did' | 'templates' | 'changelog';
 
 type ExtensionUiSettings = { profile: ExtensionUiProfile; visibleFields: Record<string, boolean>; editableFields: Record<string, boolean>; defaultValues: Record<string, any>; fieldGroups: Record<string, boolean>; };
 
@@ -91,6 +97,7 @@ const PREVIEW_COUNT_ITEMS = [
   { key: 'error', label: 'Error', tone: 'error' }
 ] as const;
 const EXTENSION_WORKSPACE_TAB_STORAGE_KEY = 'pbxpuls.extensions.workspaceTab';
+const MANAGEMENT_ACTIVE_TAB_STORAGE_KEY = 'pbxpuls.management.activeTab';
 const PROVISIONING_SECTIONS: ProvisioningSectionDef[] = [
   { id: 'extensions', label: 'Extensions', operationTypes: ['CREATE', 'UPDATE', 'DELETE', 'IMPORT', 'EXPORT'] },
   { id: 'trunks', label: 'Trunks', operationTypes: ['CREATE', 'UPDATE', 'DELETE', 'IMPORT', 'EXPORT'] },
@@ -197,7 +204,18 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
   const token = session?.token || '';
   
   // Tab control
-  const [activeTab, setActiveTab] = useState<'branch' | 'numbering' | 'extensions' | 'trunks' | 'routes' | 'did' | 'templates' | 'changelog'>('branch');
+  const [activeTab, setActiveTab] = useState<ActiveManagementTab>(() => {
+    if (typeof window === 'undefined') return 'overview';
+    const saved = window.localStorage.getItem(MANAGEMENT_ACTIVE_TAB_STORAGE_KEY) as ManagementSectionId | null;
+    return MANAGEMENT_SECTIONS.some(section => section.id === saved) ? saved as ManagementSectionId : 'overview';
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (MANAGEMENT_SECTIONS.some(section => section.id === activeTab)) {
+      window.localStorage.setItem(MANAGEMENT_ACTIVE_TAB_STORAGE_KEY, activeTab);
+    }
+  }, [activeTab]);
 
   // Permission Checks (Reactive)
   const canWrite = hasPermission('dangerous_pbx_write');
@@ -1927,38 +1945,21 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
         </div>
       )}
 
-      {/* Tabs navigation */}
-      <div className="flex flex-wrap border-b border-slate-200 dark:border-slate-800 gap-1">
-        {[
-          { id: 'branch', label: 'Конструктор филиала', icon: Building2 },
-          { id: 'numbering', label: 'Номерная ёмкость РФ', icon: MapPin },
-          { id: 'extensions', label: 'Extensions (Абоненты)', icon: UserPlus },
-          { id: 'trunks', label: 'Транки (Внешние)', icon: Wifi },
-          { id: 'routes', label: 'Исходящая связь', icon: PhoneForwarded },
-          { id: 'did', label: 'Входящие DID', icon: Layers },
-          { id: 'templates', label: 'Шаблоны операторов', icon: Settings },
-          { id: 'changelog', label: 'Changelog / Откаты', icon: Activity }
-        ].map(t => {
-          const Icon = t.icon;
-          return (
-            <button
-              key={t.id}
-              onClick={() => setActiveTab(t.id as any)}
-              className={`flex items-center gap-2 px-4 py-3 text-xs font-bold transition-all border-b-2 hover:text-blue-600 dark:hover:text-indigo-400 focus:outline-none cursor-pointer ${
-                activeTab === t.id 
-                  ? 'border-blue-600 dark:border-blue-400 text-blue-600 dark:text-blue-400 bg-slate-50 dark:bg-slate-800/40 rounded-t-lg'
-                  : 'border-transparent text-slate-500 dark:text-slate-400'
-              }`}
-            >
-              <Icon className="w-4 h-4" />
-              {t.label}
-            </button>
-          );
-        })}
-      </div>
+      <div className="space-y-4">
+        <Card className="p-2">
+          <div className="flex h-9 min-w-0 items-center gap-2">
+            <div className="flex shrink-0 items-center gap-2 border-r border-slate-200 px-2 pr-3 dark:border-slate-700">
+              <Wrench className="h-4 w-4 text-blue-600" />
+              <h3 className="text-sm font-black text-slate-850 dark:text-white">{ui.management.title}</h3>
+            </div>
+            <ProvisioningTopNav activeSection={activeTab as ManagementSectionId} onChange={(section) => setActiveTab(section)} />
+          </div>
+        </Card>
 
-      {/* ACTIVE SCREEN CONTENTS */}
-      <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl shadow-xs border border-slate-100 dark:border-slate-750">
+        {/* ACTIVE SCREEN CONTENTS */}
+        <div className="min-w-0 bg-white dark:bg-slate-800 p-4 rounded-lg shadow-xs border border-slate-100 dark:border-slate-750">
+        {activeTab === 'overview' && <ProvisioningOverview extensionsCount={activeExtensions.length} operatorTemplatesCount={trunkTemplates.length} extensionTemplatesCount={extTemplates.length} onNavigate={(section) => setActiveTab(section)} />}
+        {activeTab !== 'overview' && activeTab !== 'extensions' && <ProvisioningPlaceholder section={MANAGEMENT_SECTIONS.find(section => section.id === activeTab)!} />}
         
         {/* TAB 1: BRANCH CONSTRUCTOR */}
         {activeTab === 'branch' && (
@@ -2430,7 +2431,7 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
           </div>
         )}
         {/* TAB 4: TRUNKS WIZARD */}
-        {activeTab === 'trunks' && (
+        {false && activeTab === 'trunks' && (
           <div className="space-y-6 animate-fade-in">
             {/* Steps indicator */}
             <div className="flex justify-between items-center bg-slate-50 dark:bg-slate-750/30 p-3.5 rounded-xl border dark:border-slate-700">
@@ -3024,6 +3025,7 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
           </div>
         )}
 
+        </div>
       </div>
     </div>
   );

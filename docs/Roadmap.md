@@ -183,3 +183,27 @@ Expected work:
 - Strict secret masking and production-safe defaults.
 - No automatic live PBX reloads without explicit operator action.
 
+
+## v5.1.0 Management Foundation
+
+Status: in progress
+
+Scope:
+
+- Management Overview as the first screen.
+- Internal left-side navigation for future provisioning modules.
+- Placeholder pages for Departments, Operator Templates, Trunks, Outbound Routes, Inbound Routes, Dial Patterns and Number Ranges.
+- Shared Design System and Operation Framework surface prepared for future modules.
+
+Out of scope for this stage:
+
+- Trunks implementation.
+- Routes implementation.
+- Departments implementation.
+- New backend APIs.
+
+## UI Text Standard
+
+Status: active
+
+PBXPuls now centralizes user-facing UI strings in src/locales/ru.ts. Russian is the active dictionary. Future English, Deutsch, Español and other dictionaries should be added without rewriting Management components.

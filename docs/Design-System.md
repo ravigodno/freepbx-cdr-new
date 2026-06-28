@@ -228,3 +228,23 @@ Implemented in src/components/ui/DesignSystem.tsx:
 - Replace remaining local button/card/table class strings in legacy screens.
 - Convert Trunks, Routes and DID screens to shared OperationToolbar, OperationSummary and PreviewTable before expanding them.
 
+
+## Compact Module Header
+
+Large PBXPuls modules use a compact single-line header:
+
+- module icon;
+- module title;
+- horizontal section tabs in the same row.
+
+The header must not add a second subtitle row. Tabs stay on one line and use horizontal scrolling when needed. The active tab uses bg-blue-600 with white text; inactive tabs use the neutral Design System button style.
+
+Module layout standard:
+
+1. Header: icon, module name, section tabs.
+2. Toolbar: primary module actions.
+3. Filters: search, filters and sorting.
+4. Workspace: tables, forms, cards and operational panels.
+5. Operation Flow: Preview, Apply, Result for mutating operations.
+
+Russian UI text must come from src/locales/ru.ts. Technical terms such as Extension, Trunk, Outbound Route, API, BMO, FreePBX, AMI and ARI remain untranslated.

@@ -243,3 +243,11 @@ Commit message format when requested:
 - refactor(scope): message
 - docs(scope): message
 
+
+## UI Text and Localization Standard
+
+User-facing text must not be hardcoded in new React components. Use src/locales/ru.ts for labels, descriptions, statuses, button captions and module text. Russian is the active UI language.
+
+Do not translate professional terms and platform names such as Extension, SIP, PJSIP, Trunk, Outbound Route, Inbound Route, Dial Pattern, Number Range, REST, API, CSV, Preview, Apply, Reset, Result, Reload, BMO, FreePBX, Asterisk, GraphQL, JSON, UUID, LocalStorage, WebSocket, AMI and ARI.
+
+Large modules must follow the PBXPuls module template: compact Header, Toolbar, Filters, Workspace and Preview → Apply → Result for mutating operations.
