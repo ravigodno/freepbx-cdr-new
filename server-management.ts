@@ -1795,7 +1795,7 @@ function findExtensionByNumber(extensions: NormalizedExtension[], extension: str
   return extensions.find((item) => String(item.extension) === String(extension));
 }
 
-const EXTENSION_BMO_APPLY_FIELDS = new Set(['name', 'outboundcid', 'callwaiting', 'recording', 'recording_in_external', 'recording_out_external', 'recording_in_internal', 'recording_out_internal', 'recording_ondemand', 'recording_priority']);
+const EXTENSION_BMO_APPLY_FIELDS = new Set(['name', 'outboundcid', 'callwaiting', 'recording_in_external', 'recording_out_external', 'recording_in_internal', 'recording_out_internal', 'recording_ondemand', 'recording_priority']);
 const EXTENSION_UPDATE_PREVIEW_FIELDS = new Set([
   'name', 'displayName', 'outboundCid', 'outboundcid', 'callWaiting', 'callwaiting',
   'recording', 'recording_in_external', 'recording_out_external', 'recording_in_internal', 'recording_out_internal', 'recording_ondemand', 'recording_priority',
@@ -1814,6 +1814,15 @@ function normalizeBmoWritablePatch(patch: Record<string, any>): Record<string, a
     if (!EXTENSION_BMO_APPLY_FIELDS.has(key)) {
       throw new Error('Поле ' + key + ' не входит в whitelist BMO test apply.');
     }
+    safePatch[key] = value;
+  }
+  return safePatch;
+}
+
+function removeExtensionPreviewOnlyApplyFields(patch: Record<string, any>): Record<string, any> {
+  const safePatch: Record<string, any> = {};
+  for (const [key, value] of Object.entries(patch || {})) {
+    if (key === 'recording') continue;
     safePatch[key] = value;
   }
   return safePatch;
@@ -1871,6 +1880,44 @@ function normalizeRecordingPatchValue(value: any): Record<string, any> {
   return { recording: normalized || 'dontcare' };
 }
 
+function normalizeRecordingDirectionValue(value: any): 'always' | 'ondemand' | 'never' | '' {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized || ['nochange', 'no-change', 'unchanged', 'skip', 'none'].includes(normalized)) return '';
+  if (['always', 'force', 'yes'].includes(normalized)) return 'always';
+  if (['ondemand', 'on-demand', 'on demand', 'optional'].includes(normalized)) return 'ondemand';
+  if (['never', 'no', 'disabled'].includes(normalized)) return 'never';
+  throw new Error('Invalid recording value: ' + value);
+}
+
+function recordingDirectionToBmo(value: any): string | undefined {
+  const normalized = normalizeRecordingDirectionValue(value);
+  if (!normalized) return undefined;
+  if (normalized === 'always') return 'force';
+  if (normalized === 'ondemand') return 'dontcare';
+  return 'never';
+}
+
+function buildRecordingPatchFromDirections(input: any): Record<string, any> {
+  const patch: Record<string, any> = {};
+  const inbound = recordingDirectionToBmo(input?.inboundRecording ?? input?.inbound ?? input?.recordingInbound);
+  const outbound = recordingDirectionToBmo(input?.outboundRecording ?? input?.outbound ?? input?.recordingOutbound);
+  const internal = recordingDirectionToBmo(input?.internalRecording ?? input?.internal ?? input?.recordingInternal);
+  if (inbound !== undefined) patch.recording_in_external = inbound;
+  if (outbound !== undefined) patch.recording_out_external = outbound;
+  if (internal !== undefined) {
+    patch.recording_in_internal = internal;
+    patch.recording_out_internal = internal;
+  }
+  const selected = [input?.inboundRecording ?? input?.inbound ?? input?.recordingInbound, input?.outboundRecording ?? input?.outbound ?? input?.recordingOutbound, input?.internalRecording ?? input?.internal ?? input?.recordingInternal]
+    .map(normalizeRecordingDirectionValue)
+    .filter(Boolean);
+  if (selected.includes('ondemand')) patch.recording_ondemand = 'enabled';
+  else if (selected.length === 3) patch.recording_ondemand = 'disabled';
+  if (Object.keys(patch).length === 0) throw new Error('No recording changes requested.');
+  return patch;
+}
+
+
 function normalizeEnabledPatchValue(value: any): string {
   const normalized = String(value ?? '').trim().toLowerCase();
   if (['enabled', 'enable', 'yes', 'true', '1', 'on', 'default'].includes(normalized)) return 'enabled';
@@ -1905,7 +1952,7 @@ function expandExtensionPreviewPatch(patch: Record<string, any>, extension: stri
 
 function expandBmoWritablePatch(patch: Record<string, any>, extension: string, before: NormalizedExtension): Record<string, any> {
   const expanded = expandExtensionPreviewPatch(patch, extension, before);
-  return normalizeBmoWritablePatch(expanded);
+  return normalizeBmoWritablePatch(removeExtensionPreviewOnlyApplyFields(expanded));
 }
 
 function getExtensionPreviewValue(value: any, key: string): any {
@@ -1951,7 +1998,12 @@ function buildBmoUpdateApplyPayload(before: NormalizedExtension, patchFields: an
   const expanded = expandExtensionPreviewPatch(patch, before.extension, before);
   const applyPatch: Record<string, any> = {};
   const previewOnlyFields: string[] = [];
+  const previewDisplayOnlyFields: string[] = [];
   Object.entries(expanded).forEach(([key, value]) => {
+    if (key === 'recording') {
+      previewDisplayOnlyFields.push(key);
+      return;
+    }
     if (EXTENSION_BMO_APPLY_FIELDS.has(key)) applyPatch[key] = value;
     else previewOnlyFields.push(key);
   });
@@ -1962,6 +2014,7 @@ function buildBmoUpdateApplyPayload(before: NormalizedExtension, patchFields: an
     changedFields: Object.keys(expanded),
     applySupportedFields: Object.keys(applyPatch),
     previewOnlyFields,
+    previewDisplayOnlyFields,
     applyWarning: previewOnlyFields.length > 0 ? EXTENSION_PREVIEW_ONLY_MESSAGE : ''
   };
 }
@@ -2517,6 +2570,97 @@ export function registerManagementRoutes(app: Express, requireAuth: Function) {
     }
   });
 
+  app.get('/api/freepbx/extensions', requireAuth(), async (req, res) => {
+    try {
+      const normalizedExtensions = await fetchLiveExtensions();
+      await updatePBXData((db) => { db.extensions = normalizedExtensions; });
+      res.json(normalizedExtensions);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.patch('/api/freepbx/extensions/:extension', requireAuth(), async (req, res) => {
+    const authUser = (req as any).user;
+    try {
+      if (authUser?.role !== 'su' && (!authUser?.permissions?.dangerous_pbx_write || !authUser?.permissions?.bulk_extensions)) {
+        res.status(403).json({ error: 'Доступ заблокирован. Необходимы права bulk_extensions и dangerous_pbx_write.' });
+        return;
+      }
+      const extension = String(req.params.extension || '').trim();
+      if (!extension || !isNumericExtension(extension)) {
+        res.status(400).json({ error: 'Invalid extension.' });
+        return;
+      }
+      const patch = isPlainObject(req.body?.patch) ? req.body.patch : buildRecordingPatchFromDirections(req.body || {});
+      const safePatch = normalizeBmoWritablePatch(patch);
+      const body = await applyBmoExtensionUserUpdate(extension, safePatch);
+      console.log('[MGMT] Extension recording update', { user: authUser?.username || 'admin', extension, fields: Object.keys(safePatch), ok: true });
+      res.json({ ok: true, extension, reloadRequired: true, result: sanitizeExtensionPayload(body), message: 'Updated through FreePBX BMO. Reload required.' });
+    } catch (e: any) {
+      console.warn('[MGMT] Extension recording update failed', { user: authUser?.username || 'admin', extension: req.params.extension, error: e.message });
+      res.status(400).json({ ok: false, extension: req.params.extension, error: e.message });
+    }
+  });
+
+  app.post('/api/freepbx/extensions/bulk-recording', requireAuth(), async (req, res) => {
+    const authUser = (req as any).user;
+    try {
+      if (authUser?.role !== 'su' && (!authUser?.permissions?.dangerous_pbx_write || !authUser?.permissions?.bulk_extensions)) {
+        res.status(403).json({ error: 'Доступ заблокирован. Необходимы права bulk_extensions и dangerous_pbx_write.' });
+        return;
+      }
+      const extensions = Array.isArray(req.body?.extensions) ? req.body.extensions.map((item: any) => String(item).trim()).filter(Boolean) : [];
+      if (extensions.length === 0) {
+        res.status(400).json({ ok: false, error: 'extensions list is required.' });
+        return;
+      }
+      const patch = normalizeBmoWritablePatch(buildRecordingPatchFromDirections(req.body || {}));
+      const dryRun = req.body?.dryRun === true || req.body?.preview === true;
+      const liveExtensions = await fetchLiveExtensions();
+      const results: any[] = [];
+      for (const extension of extensions) {
+        try {
+          if (!isNumericExtension(extension)) throw new Error('Invalid extension.');
+          const existing = findExtensionByNumber(liveExtensions, extension);
+          if (!existing) throw new Error('Extension not found.');
+          if (dryRun) {
+            results.push({ extension, ok: true, dryRun: true, fields: Object.keys(patch) });
+          } else {
+            await applyBmoExtensionUserUpdate(extension, patch);
+            results.push({ extension, ok: true });
+          }
+          console.log('[MGMT] Bulk recording update item', { user: authUser?.username || 'admin', extension, fields: Object.keys(patch), ok: true, dryRun });
+        } catch (err: any) {
+          console.warn('[MGMT] Bulk recording update item failed', { user: authUser?.username || 'admin', extension, error: err.message, dryRun });
+          results.push({ extension, ok: false, error: err.message });
+        }
+      }
+      const updated = results.filter((item) => item.ok).length;
+      const failed = results.filter((item) => !item.ok).length;
+      if (!dryRun && updated > 0) {
+        try {
+          const refreshed = await fetchLiveExtensions();
+          await updatePBXData((db) => { db.extensions = refreshed; });
+        } catch (syncErr: any) {
+          console.warn('[MGMT] Failed to refresh local extension cache after bulk recording:', syncErr.message);
+        }
+      }
+      addChangeLog(
+        authUser?.username || 'admin',
+        dryRun ? 'extensions_bulk_recording_preview' : 'extensions_bulk_recording_apply',
+        updated,
+        'extensions',
+        results.filter((item) => item.ok).map((item) => 'ext-' + item.extension),
+        'Bulk recording ' + (dryRun ? 'preview' : 'apply') + '. Updated: ' + updated + ', failed: ' + failed + ', fields: ' + Object.keys(patch).join(', ')
+      );
+      res.json({ ok: failed === 0, updated, failed, dryRun, reloadRequired: !dryRun && updated > 0, results });
+    } catch (e: any) {
+      console.warn('[MGMT] Bulk recording update failed', { user: authUser?.username || 'admin', error: e.message });
+      res.status(400).json({ ok: false, updated: 0, failed: 0, error: e.message, results: [] });
+    }
+  });
+
   app.get('/api/management/extensions/rest-raw', requireAuth(), async (req, res) => {
     try {
       const endpoints = ['/extensions', '/userman/extensions', '/core/users'];
@@ -2593,14 +2737,29 @@ export function registerManagementRoutes(app: Express, requireAuth: Function) {
       }
 
       const liveExtensions = await fetchLiveExtensions();
+      const conflictMode = String(payload?.conflictMode || payload?.createConflictMode || 'fill-missing').trim().toLowerCase();
+      const strictMode = conflictMode === 'strict';
+      const conflicts = numbers
+        .map((extension) => ({ extension, existing: findExtensionByNumber(liveExtensions, extension) }))
+        .filter((item) => !!item.existing);
+      if (strictMode && conflicts.length > 0) {
+        res.status(409).json({
+          success: false,
+          mode: 'strict',
+          error: 'Strict mode: one or more extensions already exist. Bulk Create cancelled.',
+          conflicts: conflicts.map((item) => item.extension),
+          counts: { create: 0, conflict: conflicts.length, skip: 0, error: 0 }
+        });
+        return;
+      }
       const items: ExtensionPreviewItem[] = numbers.map((extension) => {
         const existing = findExtensionByNumber(liveExtensions, extension);
         if (existing) {
           return {
             extension,
-            action: 'conflict',
+            action: 'skip',
             before: extensionPublicBefore(existing),
-            message: 'Extension уже существует на АТС. Создание будет пропущено.'
+            message: 'Extension уже существует на АТС. Fill Missing: создание будет пропущено.'
           };
         }
 
@@ -2631,8 +2790,9 @@ export function registerManagementRoutes(app: Express, requireAuth: Function) {
         items: preview.items.map(({ applyPayload, ...item }) => item),
         counts: {
           create: items.filter((item) => item.action === 'create').length,
-          conflict: items.filter((item) => item.action === 'conflict').length,
+          conflict: conflicts.length,
           skip: items.filter((item) => item.action === 'skip').length,
+          existing: conflicts.length,
           error: items.filter((item) => item.action === 'error').length
         }
       });

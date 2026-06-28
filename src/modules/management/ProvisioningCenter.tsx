@@ -6,6 +6,17 @@ import {
   PhoneForwarded, MapPin, Building2, Server, HelpCircle, ShieldAlert,
   Database, ListPlus, Activity
 } from 'lucide-react';
+import {
+  Card,
+  InfoCard,
+  OperationSummary,
+  OperationToolbar as DesignOperationToolbar,
+  PreviewTable,
+  PrimaryButton,
+  SecondaryButton,
+  StatusBadge,
+  Toolbar
+} from '../../components/ui/DesignSystem';
 
 interface ProvisioningCenterProps {
   session: any;
@@ -14,6 +25,13 @@ interface ProvisioningCenterProps {
 
 type ExtensionUiProfile = 'simple' | 'admin' | 'engineer' | 'expert';
 type ExtensionFieldGroup = 'basic' | 'sip' | 'recording' | 'followme' | 'voicemail' | 'security' | 'advanced';
+type ExtensionWorkspaceTab = 'bulk-update' | 'bulk-create' | 'delete' | 'csv-import';
+type OperationType = 'CREATE' | 'UPDATE' | 'DELETE' | 'IMPORT' | 'EXPORT';
+type ActionStatus = 'SUCCESS' | 'WARNING' | 'ERROR' | 'SKIP' | 'CONFLICT';
+
+type OperationPreviewItem = { object: string; action: string; status: ActionStatus; oldValue: any; newValue: any; message: string; diff?: any[]; };
+type ProvisioningSectionId = 'extensions' | 'trunks' | 'operator-templates' | 'routes' | 'departments';
+type ProvisioningSectionDef = { id: ProvisioningSectionId; label: string; operationTypes: OperationType[] };
 
 type ExtensionUiSettings = { profile: ExtensionUiProfile; visibleFields: Record<string, boolean>; editableFields: Record<string, boolean>; defaultValues: Record<string, any>; fieldGroups: Record<string, boolean>; };
 
@@ -51,8 +69,129 @@ const SINGLE_VOICEMAIL_OPTIONS = [
   { value: 'default', label: 'Enabled' }
 ];
 const SINGLE_FOLLOW_ME_STRATEGIES = ['ringallv2-prim', 'ringall', 'hunt', 'memoryhunt', 'firstavailable', 'firstnotonphone', 'random'];
+const RECORDING_MODE_OPTIONS = [
+  { value: 'always', label: 'Always' },
+  { value: 'ondemand', label: 'On Demand' },
+  { value: 'never', label: 'Never' }
+];
+const TABLE_HIDDEN_EXTENSION_FIELDS = new Set([
+  'recording_in_external',
+  'recording_out_external',
+  'recording_in_internal',
+  'recording_out_internal',
+  'recording_ondemand',
+  'recording_priority'
+]);
+const PREVIEW_COUNT_ITEMS = [
+  { key: 'create', label: 'Create', tone: 'success' },
+  { key: 'update', label: 'Update', tone: 'info' },
+  { key: 'delete', label: 'Delete', tone: 'error' },
+  { key: 'skip', label: 'Skip', tone: 'neutral' },
+  { key: 'conflict', label: 'Conflict', tone: 'warning' },
+  { key: 'error', label: 'Error', tone: 'error' }
+] as const;
+const EXTENSION_WORKSPACE_TAB_STORAGE_KEY = 'pbxpuls.extensions.workspaceTab';
+const PROVISIONING_SECTIONS: ProvisioningSectionDef[] = [
+  { id: 'extensions', label: 'Extensions', operationTypes: ['CREATE', 'UPDATE', 'DELETE', 'IMPORT', 'EXPORT'] },
+  { id: 'trunks', label: 'Trunks', operationTypes: ['CREATE', 'UPDATE', 'DELETE', 'IMPORT', 'EXPORT'] },
+  { id: 'operator-templates', label: 'Operator Templates', operationTypes: ['CREATE', 'UPDATE', 'DELETE', 'IMPORT', 'EXPORT'] },
+  { id: 'routes', label: 'Routes', operationTypes: ['CREATE', 'UPDATE', 'DELETE', 'IMPORT', 'EXPORT'] },
+  { id: 'departments', label: 'Departments', operationTypes: ['CREATE', 'UPDATE', 'DELETE', 'IMPORT', 'EXPORT'] }
+];
+
 
 const buildExtensionUiSettings = (profile: ExtensionUiProfile = 'admin'): ExtensionUiSettings => { const groups = EXTENSION_UI_PROFILES[profile]; const fieldGroups = Object.fromEntries(Object.keys(EXTENSION_GROUP_LABELS).map(group => [group, groups.includes(group as ExtensionFieldGroup)])); const visibleFields: Record<string, boolean> = {}; const editableFields: Record<string, boolean> = {}; EXTENSION_FIELD_DEFS.forEach(field => { const visible = fieldGroups[field.group] === true; visibleFields[field.key] = visible; editableFields[field.key] = visible && field.locked !== true; }); return { profile, visibleFields, editableFields, defaultValues: {}, fieldGroups }; };
+
+function OperationHeader({ icon: Icon, title, description, meta }: { icon: any; title: string; description: string; meta?: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+      <div>
+        <h4 className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">
+          <Icon className="h-4 w-4 text-blue-600" />
+          {title}
+        </h4>
+        <p className="mt-1 text-xs text-slate-400">{description}</p>
+      </div>
+      {meta}
+    </div>
+  );
+}
+
+function OperationToolbar({ onPreview, onApply, onReset, previewDisabled, applyDisabled, previewLoading, applyLoading }: { onPreview: () => void; onApply: () => void; onReset: () => void; previewDisabled?: boolean; applyDisabled?: boolean; previewLoading?: boolean; applyLoading?: boolean }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <button type="button" onClick={onPreview} disabled={previewDisabled || previewLoading} className="inline-flex h-9 items-center gap-2 rounded-lg bg-blue-600 px-4 text-xs font-black text-white hover:bg-blue-700 disabled:opacity-60">
+        {previewLoading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Eye className="h-4 w-4" />}
+        Preview
+      </button>
+      <button type="button" onClick={onApply} disabled={applyDisabled || applyLoading} className="inline-flex h-9 items-center gap-2 rounded-lg bg-blue-600 px-4 text-xs font-black text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500 dark:disabled:bg-slate-700 dark:disabled:text-slate-400">
+        {applyLoading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+        Apply
+      </button>
+      <button type="button" onClick={onReset} className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-xs font-bold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">
+        <Undo className="h-4 w-4" />
+        Reset
+      </button>
+    </div>
+  );
+}
+
+function OperationSummaryCards({ counts, getBadgeClass }: { counts: Record<string, number>; getBadgeClass: (tone: 'blue' | 'green' | 'slate' | 'amber' | 'rose' | 'indigo') => string }) {
+  return (
+    <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
+      {PREVIEW_COUNT_ITEMS.map(item => (
+        <div key={item.key} className="min-h-[86px] rounded-lg border border-slate-150 bg-white p-3 dark:border-slate-700 dark:bg-slate-900">
+          <StatusBadge tone={item.tone as any}>{item.label}</StatusBadge>
+          <div className="mt-2 text-2xl font-black text-slate-850 dark:text-white">{counts[item.key] || 0}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function OperationPreviewTable({ items, actionClass, summarizeValue, formatDiffValue }: { items: OperationPreviewItem[]; actionClass: (action: string) => string; summarizeValue: (value: any) => string; formatDiffValue: (value: any) => string }) {
+  return (
+    <div className="overflow-hidden rounded-lg border border-slate-100 dark:border-slate-800">
+      <table className="w-full min-w-[920px] text-left text-xs">
+        <thead className="bg-slate-50 text-[10px] uppercase text-slate-400 dark:bg-slate-800">
+          <tr>
+            <th className="p-3">Object</th>
+            <th className="p-3">Action</th>
+            <th className="p-3">Status</th>
+            <th className="p-3">Old</th>
+            <th className="p-3">New</th>
+            <th className="p-3">Message</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+          {items.map((item, idx) => (
+            <tr key={`${item.object || 'row'}-${idx}`} className="hover:bg-slate-50 dark:hover:bg-slate-800/60">
+              <td className="p-3 font-mono font-black text-slate-850 dark:text-white">{item.object || '-'}</td>
+              <td className="p-3"><span className={'rounded-full px-2 py-1 text-[10px] font-black uppercase ' + actionClass(item.action)}>{item.action || '-'}</span></td>
+              <td className="p-3"><span className={'rounded-full px-2 py-1 text-[10px] font-black uppercase ' + actionClass(item.status.toLowerCase())}>{item.status}</span></td>
+              <td className="p-3 font-mono text-[10px] text-slate-500">{summarizeValue(item.oldValue)}</td>
+              <td className="p-3">
+                <div className="font-mono text-[10px] text-slate-500">
+                  {summarizeValue(item.newValue)}
+                  {Array.isArray(item.diff) && item.diff.length > 0 && (
+                    <div className="mt-2 space-y-1">
+                      {item.diff.map((diff: any) => (
+                        <div key={diff.field} className="rounded bg-slate-50 px-2 py-1 dark:bg-slate-800">
+                          <span className="font-black text-slate-700 dark:text-slate-200">{diff.field}</span>: {formatDiffValue(diff.before)} -&gt; {formatDiffValue(diff.after)}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </td>
+              <td className="p-3 text-slate-600 dark:text-slate-300">{item.message || '-'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
 export default function ProvisioningCenter({ session, hasPermission }: ProvisioningCenterProps) {
   const token = session?.token || '';
@@ -140,6 +279,12 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
   const [extensionPreviewLoading, setExtensionPreviewLoading] = useState(false);
   const [extensionApplyLoading, setExtensionApplyLoading] = useState(false);
   const [extensionApplyResult, setExtensionApplyResult] = useState<any>(null);
+  const [extensionWorkspaceTab, setExtensionWorkspaceTabState] = useState<ExtensionWorkspaceTab>(() => {
+    if (typeof window === 'undefined') return 'bulk-update';
+    const saved = window.localStorage.getItem(EXTENSION_WORKSPACE_TAB_STORAGE_KEY);
+    return ['bulk-update', 'bulk-create', 'delete', 'csv-import'].includes(saved || '') ? saved as ExtensionWorkspaceTab : 'bulk-update';
+  });
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
 
   const [createMode, setCreateMode] = useState<'range' | 'manual' | 'csv'>('range');
   const [createStartExt, setCreateStartExt] = useState('200');
@@ -150,6 +295,7 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
   const [createSecretMode, setCreateSecretMode] = useState<'auto' | 'fixed' | 'mask'>('auto');
   const [createFixedSecret, setCreateFixedSecret] = useState('');
   const [createSecretMask, setCreateSecretMask] = useState('pbx{ext}!');
+  const [createConflictMode, setCreateConflictMode] = useState<'fill-missing' | 'strict'>('fill-missing');
   const [createTechnology, setCreateTechnology] = useState<'pjsip' | 'sip'>('pjsip');
   const [createContext, setCreateContext] = useState('from-internal');
   const [createOutboundCid, setCreateOutboundCid] = useState('');
@@ -192,6 +338,12 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
     voicemail: 'novm',
     updateCallWaiting: false,
     callWaiting: 'disabled',
+    updateRecordingInbound: false,
+    recordingInbound: 'always',
+    updateRecordingOutbound: false,
+    recordingOutbound: 'always',
+    updateRecordingInternal: false,
+    recordingInternal: 'always',
     updateRecordingInExternal: false,
     recording_in_external: 'dontcare',
     updateRecordingOutExternal: false,
@@ -231,7 +383,7 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
   const setExtensionUiGroup = (group: ExtensionFieldGroup, enabled: boolean) => setExtensionUiSettings(prev => { const next = normalizeExtensionUiSettings({ ...prev, fieldGroups: { ...prev.fieldGroups, [group]: enabled } }); EXTENSION_FIELD_DEFS.filter(field => field.group === group).forEach(field => { next.visibleFields[field.key] = enabled; if (!enabled) next.editableFields[field.key] = false; else if (next.editableFields[field.key] === undefined) next.editableFields[field.key] = field.locked !== true; }); return next; });
   const setExtensionUiField = (kind: 'visibleFields' | 'editableFields', field: string, enabled: boolean) => setExtensionUiSettings(prev => ({ ...prev, [kind]: { ...prev[kind], [field]: enabled } }));
   const setExtensionDefaultValue = (field: string, value: string) => setExtensionUiSettings(prev => ({ ...prev, defaultValues: { ...prev.defaultValues, [field]: value } }));
-  const getVisibleExtensionFields = () => EXTENSION_FIELD_DEFS.filter(field => extensionUiSettings.fieldGroups[field.group] !== false && extensionUiSettings.visibleFields[field.key] !== false);
+  const getVisibleExtensionFields = () => EXTENSION_FIELD_DEFS.filter(field => !TABLE_HIDDEN_EXTENSION_FIELDS.has(field.key) && extensionUiSettings.fieldGroups[field.group] !== false && extensionUiSettings.visibleFields[field.key] !== false);
   const getFieldsByGroup = (group: ExtensionFieldGroup) => EXTENSION_FIELD_DEFS.filter(field => field.group === group);
   useEffect(() => { if (token) loadExtensionUiSettings(); }, [token]);
 
@@ -497,16 +649,63 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
     return 'unknown';
   };
 
+  const getRecordingFieldKey = (value: any, ondemand: any): 'always' | 'ondemand' | 'never' | 'unknown' => {
+    const normalized = String(value || '').trim().toLowerCase();
+    const ondemandEnabled = ['enabled', 'yes', 'true', '1', 'override', 'optional'].includes(String(ondemand || '').trim().toLowerCase());
+    if (['force', 'yes', 'always', 'enabled'].includes(normalized)) return 'always';
+    if (['never', 'no', 'disabled'].includes(normalized)) return 'never';
+    if (['dontcare', 'optional', 'ondemand'].includes(normalized) && ondemandEnabled) return 'ondemand';
+    return 'unknown';
+  };
+  const getRecordingDirectionKey = (ext: any, direction: 'inbound' | 'outbound' | 'internal'): 'always' | 'ondemand' | 'never' | 'unknown' => {
+    const flags = getExtRecordingFlags(ext);
+    if (direction === 'inbound') return getRecordingFieldKey(flags.inExternal, flags.ondemand);
+    if (direction === 'outbound') return getRecordingFieldKey(flags.outExternal, flags.ondemand);
+    const inKey = getRecordingFieldKey(flags.inInternal, flags.ondemand);
+    const outKey = getRecordingFieldKey(flags.outInternal, flags.ondemand);
+    if (inKey === outKey) return inKey;
+    if (inKey === 'always' || outKey === 'always') return 'always';
+    if (inKey === 'ondemand' || outKey === 'ondemand') return 'ondemand';
+    if (inKey === 'never' && outKey === 'never') return 'never';
+    return 'unknown';
+  };
+  const getRecordingStatusLabel = (key: 'always' | 'ondemand' | 'never' | 'unknown') => {
+    if (key === 'always') return 'Always';
+    if (key === 'ondemand') return 'On Demand';
+    if (key === 'never') return 'Never';
+    return 'Unknown';
+  };
+  const getRecordingDirectionLabel = (ext: any, direction: 'inbound' | 'outbound' | 'internal') => getRecordingStatusLabel(getRecordingDirectionKey(ext, direction));
+  const getRecordingStatusBadgeClass = (key: 'always' | 'ondemand' | 'never' | 'unknown') => {
+    if (key === 'always') return getBadgeClass('green');
+    if (key === 'ondemand') return getBadgeClass('amber');
+    if (key === 'never') return getBadgeClass('slate');
+    return getBadgeClass('blue');
+  };
+  const getRecordingDirectionBadgeClass = (ext: any, direction: 'inbound' | 'outbound' | 'internal') => getRecordingStatusBadgeClass(getRecordingDirectionKey(ext, direction));
+  const getRecordingDirectionKeys = (ext: any) => [getRecordingDirectionKey(ext, 'inbound'), getRecordingDirectionKey(ext, 'outbound'), getRecordingDirectionKey(ext, 'internal')];
+  const recordingModeToBmo = (value: string) => value === 'always' ? 'force' : value === 'ondemand' ? 'dontcare' : value === 'never' ? 'never' : '';
+  const buildRecordingRawPatch = (inbound: string, outbound: string, internal: string) => {
+    const rawPatch: Record<string, any> = {};
+    if (inbound !== 'nochange') rawPatch.recording_in_external = recordingModeToBmo(inbound);
+    if (outbound !== 'nochange') rawPatch.recording_out_external = recordingModeToBmo(outbound);
+    if (internal !== 'nochange') { rawPatch.recording_in_internal = recordingModeToBmo(internal); rawPatch.recording_out_internal = recordingModeToBmo(internal); }
+    const selected = [inbound, outbound, internal].filter((item) => item !== 'nochange');
+    if (selected.includes('ondemand')) rawPatch.recording_ondemand = 'enabled';
+    else if (selected.length === 3) rawPatch.recording_ondemand = 'disabled';
+    return rawPatch;
+  };
+
   const filteredActiveExtensions = useMemo(() => {
     const query = activeExtSearch.trim().toLowerCase();
     const filtered = activeExtensions.filter(ext => {
       const tech = getExtTech(ext);
       const sourceKey = getExtensionSourceKey(ext);
       const statusKey = getExtensionStatusKey(ext);
-      const recordingKey = getRecordingKey(ext);
+      const recordingKeys = getRecordingDirectionKeys(ext);
       const matchesTech = activeExtTechFilter === 'all' || tech === activeExtTechFilter;
       const matchesVoicemail = activeExtVoicemailFilter === 'all' || (activeExtVoicemailFilter === 'enabled' ? !!ext.voicemail : !ext.voicemail);
-      const matchesRecording = activeExtRecordingFilter === 'all' || recordingKey === activeExtRecordingFilter;
+      const matchesRecording = activeExtRecordingFilter === 'all' || recordingKeys.includes(activeExtRecordingFilter);
       const matchesSource = activeExtSourceFilter === 'all' || sourceKey === activeExtSourceFilter;
       const matchesStatus = activeExtStatusFilter === 'all' || statusKey === activeExtStatusFilter;
       const matchesSearch = !query ||
@@ -538,12 +737,45 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
     }, {});
   }, [activeExtensions]);
 
+  const extensionNumberPlan = useMemo(() => {
+    const numbers = activeExtensions
+      .map((ext: any) => Number(String(ext.extension || '').trim()))
+      .filter((value: number) => Number.isInteger(value) && value > 0)
+      .sort((a: number, b: number) => a - b);
+    const used = new Set(numbers);
+    const last = numbers.length ? numbers[numbers.length - 1] : null;
+    const findFirstFreeFrom = (start: number) => {
+      let candidate = Math.max(1, start);
+      while (used.has(candidate)) candidate += 1;
+      return candidate;
+    };
+    const nextFree = last === null ? null : findFirstFreeFrom(last + 1);
+    const firstGap = numbers.length ? (() => {
+      for (let candidate = numbers[0]; candidate <= (last || numbers[0]); candidate += 1) {
+        if (!used.has(candidate)) return candidate;
+      }
+      return null;
+    })() : null;
+    const allocateFreeExtensions = (count: number, start = numbers[0] || 1) => {
+      const result: number[] = [];
+      let candidate = Math.max(1, start);
+      while (result.length < count) {
+        if (!used.has(candidate)) result.push(candidate);
+        candidate += 1;
+      }
+      return result;
+    };
+    return { last, nextFree, firstGap, allocateFreeExtensions };
+  }, [activeExtensions]);
+
   const filteredExtensionIds = useMemo(() => filteredActiveExtensions.map(ext => String(ext.extension || '')).filter(Boolean), [filteredActiveExtensions]);
   const allFilteredSelected = filteredExtensionIds.length > 0 && filteredExtensionIds.every(ext => selectedExtensionIds.includes(ext));
   const toggleExtensionSelection = (extension: string) => setSelectedExtensionIds(prev => prev.includes(extension) ? prev.filter(item => item !== extension) : [...prev, extension]);
-  const selectAllFilteredExtensions = () => setSelectedExtensionIds(prev => Array.from(new Set([...prev, ...filteredExtensionIds])));
-  const clearSelectedExtensions = () => setSelectedExtensionIds([]);
   const toggleAllFilteredExtensions = () => setSelectedExtensionIds(prev => allFilteredSelected ? prev.filter(ext => !filteredExtensionIds.includes(ext)) : Array.from(new Set([...prev, ...filteredExtensionIds])));
+  const setExtensionWorkspaceTab = (tab: ExtensionWorkspaceTab) => {
+    setExtensionWorkspaceTabState(tab);
+    if (typeof window !== 'undefined') window.localStorage.setItem(EXTENSION_WORKSPACE_TAB_STORAGE_KEY, tab);
+  };
   const setUpdateField = (field: string, value: any) => setUpdateFields(prev => ({ ...prev, [field]: value }));
   const setSingleUpdateField = (field: string, value: any) => setSingleUpdateFields(prev => ({ ...prev, [field]: value }));
   const singleValue = (ext: any, fields: string[], fallback = '') => getExtText(ext, fields, fallback);
@@ -563,6 +795,12 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
       voicemail: normalizeSingleVoicemail(ext),
       updateCallWaiting: false,
       callWaiting: getExtBool(ext, ['callWaiting', 'callwaiting', 'call_waiting', 'callwaiting_enable']) ? 'enabled' : 'disabled',
+      updateRecordingInbound: false,
+      recordingInbound: getRecordingDirectionKey(ext, 'inbound') === 'unknown' ? 'always' : getRecordingDirectionKey(ext, 'inbound'),
+      updateRecordingOutbound: false,
+      recordingOutbound: getRecordingDirectionKey(ext, 'outbound') === 'unknown' ? 'always' : getRecordingDirectionKey(ext, 'outbound'),
+      updateRecordingInternal: false,
+      recordingInternal: getRecordingDirectionKey(ext, 'internal') === 'unknown' ? 'always' : getRecordingDirectionKey(ext, 'internal'),
       updateRecordingInExternal: false,
       recording_in_external: singleValue(ext, ['recording_in_external'], 'dontcare').toLowerCase(),
       updateRecordingOutExternal: false,
@@ -615,7 +853,7 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
       slate: 'bg-slate-100 text-slate-600 ring-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700',
       amber: 'bg-amber-50 text-amber-700 ring-amber-100 dark:bg-amber-950/30 dark:text-amber-300 dark:ring-amber-900/40',
       rose: 'bg-rose-50 text-rose-700 ring-rose-100 dark:bg-rose-950/30 dark:text-rose-300 dark:ring-rose-900/40',
-      indigo: 'bg-indigo-50 text-indigo-700 ring-indigo-100 dark:bg-indigo-950/30 dark:text-indigo-300 dark:ring-indigo-900/40'
+      indigo: 'bg-blue-50 text-blue-700 ring-blue-100 dark:bg-blue-950/30 dark:text-blue-300 dark:ring-blue-900/40'
     };
     return 'inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-black uppercase ring-1 ' + tones[tone];
   };
@@ -654,22 +892,33 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
   };
   const getSourceBadgeClass = (ext: any) => getExtensionSourceKey(ext) === 'merged' ? getBadgeClass('indigo') : getExtensionSourceKey(ext) === 'bmo' ? getBadgeClass('green') : getExtensionSourceKey(ext) === 'rest' ? getBadgeClass('blue') : getBadgeClass('slate');
   const getPreviewActionClass = (action: string) => {
-    if (action === 'create') return 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400';
-    if (action === 'update') return 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/30 dark:text-indigo-400';
-    if (action === 'conflict') return 'bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400';
-    if (action === 'error') return 'bg-rose-50 text-rose-700 dark:bg-rose-950/30 dark:text-rose-400';
+    const normalized = String(action || '').toLowerCase();
+    if (['create', 'success'].includes(normalized)) return 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400';
+    if (normalized === 'update') return 'bg-blue-50 text-blue-700 dark:bg-blue-950/30 dark:text-blue-400';
+    if (normalized === 'delete') return 'bg-rose-50 text-rose-700 dark:bg-rose-950/30 dark:text-rose-400';
+    if (normalized === 'skip') return 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300';
+    if (['conflict', 'warning'].includes(normalized)) return 'bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400';
+    if (normalized === 'error') return 'bg-rose-50 text-rose-700 dark:bg-rose-950/30 dark:text-rose-400';
     return 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400';
   };
-  const formatPreviewCounts = (counts: any) => {
+  const getPreviewCounts = (counts: any) => {
     const safeCounts = counts || {};
-    const parts = [
-      ['Create', safeCounts.create || 0],
-      ['Update', safeCounts.update || 0],
-      ['Skip', safeCounts.skip || 0],
-      ['Conflict', safeCounts.conflict || 0],
-      ['Error', safeCounts.error || 0]
-    ];
-    return parts.map(([label, value]) => label + ': ' + value).join(' · ');
+    return {
+      create: Number(safeCounts.create || 0),
+      update: Number(safeCounts.update || 0),
+      delete: Number(safeCounts.delete || 0),
+      skip: Number(safeCounts.skip || 0),
+      conflict: Number(safeCounts.conflict || 0),
+      error: Number(safeCounts.error || 0)
+    };
+  };
+  const formatPreviewCounts = (counts: any) => {
+    const safeCounts = getPreviewCounts(counts);
+    return PREVIEW_COUNT_ITEMS.map(item => item.label + ': ' + safeCounts[item.key]).join(' · ');
+  };
+  const renderPreviewSummary = (counts: any) => {
+    const safeCounts = getPreviewCounts(counts);
+    return <div className="grid grid-cols-2 gap-2 md:grid-cols-6">{PREVIEW_COUNT_ITEMS.map(item => <div key={item.key} className="rounded-lg border border-slate-150 bg-white p-3 dark:border-slate-700 dark:bg-slate-900"><span className={getBadgeClass(item.tone as any)}>{item.label}</span><div className="mt-2 text-2xl font-black text-slate-850 dark:text-white">{safeCounts[item.key]}</div></div>)}</div>;
   };
   const summarizePreviewValue = (value: any) => {
     if (!value) return '-';
@@ -677,14 +926,28 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
     const parts = keys.filter(key => value[key] !== undefined && value[key] !== '').map(key => key + ': ' + String(value[key]));
     return parts.length ? parts.join(' | ') : JSON.stringify(value).slice(0, 160);
   };
-  const canApplyExtensionPreview = () => !!extensionPreviewResult?.previewId && ['create', 'update'].includes(String(extensionPreviewResult?.type || '')) && !extensionApplyLoading;
+  const canApplyExtensionPreview = () => {
+    const type = String(extensionPreviewResult?.type || '');
+    if (!extensionPreviewResult?.previewId || extensionApplyLoading) return false;
+    if (type === 'delete') return deleteConfirmText.trim() === 'DELETE';
+    return ['create', 'update'].includes(type);
+  };
   const formatDiffValue = (value: any) => value === undefined || value === null || value === '' ? '-' : String(value);
   const handleExtensionApply = async () => {
     if (!extensionPreviewResult?.previewId) { showNoti('info', 'Сначала сформируйте preview'); return; }
     const type = String(extensionPreviewResult.type || '');
+    const counts = getPreviewCounts(extensionPreviewResult.counts);
+    if (type === 'delete') {
+      if (deleteConfirmText.trim() !== 'DELETE') { showNoti('info', 'Введите DELETE для подтверждения удаления'); return; }
+      const okDelete = window.confirm(['Вы собираетесь удалить ' + counts.delete + ' extensions. Это действие может повлиять на маршрутизацию, записи, пользователей и устройства.', '', 'Delete backend is not implemented yet. Фактическое удаление не будет выполнено.'].join('\n'));
+      if (!okDelete) return;
+      setExtensionApplyResult({ success: false, results: [], summary: counts, message: 'Delete backend is not implemented yet' });
+      showNoti('error', 'Delete backend is not implemented yet');
+      return;
+    }
     const endpoint = type === 'create' ? '/api/management/extensions/create-apply' : type === 'update' ? '/api/management/extensions/update-apply' : '';
     if (!endpoint) { showNoti('error', 'Неизвестный тип preview для Apply'); return; }
-    const ok = window.confirm('Изменения будут отправлены в FreePBX. Продолжить?');
+    const ok = window.confirm(['Вы действительно хотите применить изменения?', '', 'Create: ' + counts.create, 'Update: ' + counts.update, 'Delete: ' + counts.delete, 'Skip: ' + counts.skip, 'Conflict: ' + counts.conflict, 'Error: ' + counts.error].join('\n'));
     if (!ok) return;
     setExtensionApplyLoading(true);
     try {
@@ -692,7 +955,7 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'Ошибка Apply Extensions');
       setExtensionApplyResult(data);
-      await loadActiveExtensions();
+      await fetchActiveExtensions();
       showNoti(data.success ? 'success' : 'error', data.success ? 'Apply выполнен' : 'Apply завершился с ошибками');
     } catch (err: any) { showNoti('error', err.message || 'Ошибка Apply Extensions'); }
     finally { setExtensionApplyLoading(false); }
@@ -714,9 +977,14 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
   const renderExtensionApplyResult = () => {
     if (!extensionApplyResult) return null;
     const results = Array.isArray(extensionApplyResult.results) ? extensionApplyResult.results : [];
+    const created = results.filter((item: any) => item.success && item.action === 'create').length;
+    const updated = results.filter((item: any) => item.success && item.action === 'update').length;
+    const skipped = results.filter((item: any) => item.action === 'skip').length;
+    const failed = results.filter((item: any) => !item.success).length;
     return <>
+      <div className="mb-3 rounded-lg border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-900/40 dark:bg-emerald-950/20"><div className="text-xs font-black uppercase tracking-wider text-emerald-700 dark:text-emerald-300">Successfully Applied</div><div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4"><div><span className={getBadgeClass('green')}>Created</span><div className="mt-1 text-2xl font-black text-slate-850 dark:text-white">{created}</div></div><div><span className={getBadgeClass('indigo')}>Updated</span><div className="mt-1 text-2xl font-black text-slate-850 dark:text-white">{updated}</div></div><div><span className={getBadgeClass('slate')}>Skipped</span><div className="mt-1 text-2xl font-black text-slate-850 dark:text-white">{skipped}</div></div><div><span className={failed ? getBadgeClass('rose') : getBadgeClass('green')}>Failed</span><div className="mt-1 text-2xl font-black text-slate-850 dark:text-white">{failed}</div></div></div></div>
       {extensionApplyResult.reloadRequired === true && <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs font-bold text-amber-700 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">Изменения применены. Требуется fwconsole reload. Автоматически reload не выполнялся.</div>}
-      <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700"><table className="w-full min-w-[640px] text-left text-xs"><thead className="bg-slate-100 text-[10px] uppercase text-slate-500 dark:bg-slate-900 dark:text-slate-400"><tr><th className="p-2">extension</th><th className="p-2">action</th><th className="p-2">success/error</th><th className="p-2">message</th></tr></thead><tbody className="divide-y divide-slate-200 dark:divide-slate-700">{results.map((item: any, idx: number) => <tr key={(item.extension || 'row') + '-' + idx}><td className="p-2 font-mono font-black text-slate-800 dark:text-white">{item.extension || '-'}</td><td className="p-2 font-mono text-slate-600 dark:text-slate-300">{item.action || '-'}</td><td className="p-2"><span className={item.success ? getBadgeClass('green') : getBadgeClass('rose')}>{item.success ? 'success' : 'error'}</span></td><td className="p-2 text-slate-600 dark:text-slate-300">{item.message || '-'}</td></tr>)}</tbody></table></div>
+      <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700"><table className="w-full min-w-[640px] text-left text-xs"><thead className="bg-slate-100 text-[10px] uppercase text-slate-500 dark:bg-slate-900 dark:text-slate-400"><tr><th className="p-2">extension</th><th className="p-2">action</th><th className="p-2">success/error</th><th className="p-2">message</th></tr></thead><tbody className="divide-y divide-slate-200 dark:divide-slate-700">{results.map((item: any, idx: number) => <tr key={(item.extension || 'row') + '-' + idx}><td className="p-2 font-mono font-black text-slate-800 dark:text-white">{item.extension || '-'}</td><td className="p-2"><span className={getPreviewActionClass(item.action || '')}>{item.action || '-'}</span></td><td className="p-2"><span className={item.success ? getBadgeClass('green') : getBadgeClass('rose')}>{item.success ? 'success' : 'error'}</span></td><td className="p-2 text-slate-600 dark:text-slate-300">{item.message || '-'}</td></tr>)}</tbody></table></div>
     </>;
   };
   const handleCreatePreview = async () => {
@@ -725,7 +993,7 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
       const res = await fetch('/api/management/extensions/create-preview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ mode: createMode, startExt: createStartExt, endExt: createEndExt, manualList: createManualList, csvText: createCsvText, nameMask: createNameMask, secretMode: createSecretMode, fixedSecret: createSecretMode === 'fixed' ? createFixedSecret : undefined, secretMask: createSecretMode === 'mask' ? createSecretMask : undefined, technology: createTechnology, context: createContext, outboundCid: createOutboundCid, emailDomain: createEmailDomain, voicemail: createVoicemail, recording: createRecording, callWaiting: createCallWaiting, emergencyCid: createEmergencyCid, rawJson: { ...extensionUiSettings.defaultValues, ...parseUiRawJson(createRawJson) } })
+        body: JSON.stringify({ mode: createMode, conflictMode: createConflictMode, startExt: createStartExt, endExt: createEndExt, manualList: createManualList, csvText: createCsvText, nameMask: createNameMask, secretMode: createSecretMode, fixedSecret: createSecretMode === 'fixed' ? createFixedSecret : undefined, secretMask: createSecretMode === 'mask' ? createSecretMask : undefined, technology: createTechnology, context: createContext, outboundCid: createOutboundCid, emailDomain: createEmailDomain, voicemail: createVoicemail, recording: createRecording, callWaiting: createCallWaiting, emergencyCid: createEmergencyCid, rawJson: { ...extensionUiSettings.defaultValues, ...parseUiRawJson(createRawJson) } })
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'Ошибка preview создания');
@@ -761,6 +1029,11 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
     const addRaw = (enabledKey: string, fieldKey: string) => {
       if (singleUpdateFields[enabledKey] === true) rawPatch[fieldKey] = singleUpdateFields[fieldKey];
     };
+    Object.assign(rawPatch, buildRecordingRawPatch(
+      singleUpdateFields.updateRecordingInbound === true ? singleUpdateFields.recordingInbound : 'nochange',
+      singleUpdateFields.updateRecordingOutbound === true ? singleUpdateFields.recordingOutbound : 'nochange',
+      singleUpdateFields.updateRecordingInternal === true ? singleUpdateFields.recordingInternal : 'nochange'
+    ));
     addRaw('updateEmergencyCid', 'emergency_cid');
     addRaw('updateVoicemail', 'voicemail');
     addRaw('updateRecordingInExternal', 'recording_in_external');
@@ -799,6 +1072,31 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
       showNoti('success', `Preview изменения ${extension} сформирован: ${data.previewId}`);
     } catch (err: any) { showNoti('error', err.message || 'Ошибка preview изменения'); }
     finally { setExtensionPreviewLoading(false); }
+  };
+  const handleDeletePreview = () => {
+    if (selectedExtensionIds.length === 0) { showNoti('info', 'Выберите extensions в таблице выше'); return; }
+    const selectedSet = new Set(selectedExtensionIds);
+    const items = activeExtensions
+      .filter((ext: any) => selectedSet.has(String(ext.extension || '')))
+      .map((ext: any) => ({
+        extension: String(ext.extension || ''),
+        action: 'delete',
+        status: 'DELETE',
+        before: ext,
+        after: null,
+        message: 'Delete backend is not implemented yet'
+      }));
+    setDeleteConfirmText('');
+    setExtensionPreviewResult({
+      success: true,
+      previewId: 'delete-ui-preview-' + Date.now(),
+      type: 'delete',
+      operation: 'Delete Extensions',
+      counts: { create: 0, update: 0, delete: items.length, skip: 0, conflict: 0, error: 0 },
+      items
+    });
+    setExtensionApplyResult(null);
+    showNoti('info', 'Delete Preview сформирован. Backend удаления пока не реализован.');
   };
 
   // MAC Phone assignment List inside extensions
@@ -1456,6 +1754,167 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
     }
   };
 
+
+  const resetExtensionOperationState = () => {
+    setExtensionPreviewResult(null);
+    setExtensionApplyResult(null);
+    setDeleteConfirmText('');
+  };
+  const normalizePreviewStatus = (item: any): ActionStatus => {
+    const rawStatus = String(item?.status || '').trim().toLowerCase();
+    const rawAction = String(item?.action || '').trim().toLowerCase();
+    if (rawStatus === 'success' || rawAction === 'create' || rawAction === 'update' || rawAction === 'delete') return 'SUCCESS';
+    if (rawStatus === 'warning') return 'WARNING';
+    if (rawStatus === 'error' || rawAction === 'error') return 'ERROR';
+    if (rawStatus === 'conflict' || rawAction === 'conflict') return 'CONFLICT';
+    if (rawStatus === 'skip' || rawAction === 'skip') return 'SKIP';
+    return 'SUCCESS';
+  };
+  const normalizeOperationPreviewItems = (items: any[]): OperationPreviewItem[] => items.map((item) => ({
+    object: String(item.extension || item.object || item.id || '-'),
+    action: String(item.action || '-').toUpperCase(),
+    status: normalizePreviewStatus(item),
+    oldValue: item.before,
+    newValue: item.after,
+    message: String(item.message || ''),
+    diff: item.diff
+  }));
+  const renderOperationResult = () => {
+    if (!extensionApplyResult) return null;
+    return (
+      <div className="space-y-3">
+        <OperationHeader icon={Check} title="Result" description={extensionApplyResult.message || 'Apply result for the latest preview.'} />
+        {renderExtensionApplyResult()}
+      </div>
+    );
+  };
+
+  const renderExtensionsWorkspace = () => {
+    const workspaceTabs: Array<{ id: ExtensionWorkspaceTab; label: string; icon: any; operation: OperationType }> = [
+      { id: 'bulk-update', label: 'Массовое изменение', icon: Edit, operation: 'UPDATE' },
+      { id: 'bulk-create', label: 'Массовое создание', icon: ListPlus, operation: 'CREATE' },
+      { id: 'delete', label: 'Удаление', icon: Trash2, operation: 'DELETE' },
+      { id: 'csv-import', label: 'CSV / Импорт', icon: FileSpreadsheet, operation: 'IMPORT' }
+    ];
+    const currentTab = workspaceTabs.find(tab => tab.id === extensionWorkspaceTab) || workspaceTabs[0];
+    const selectedHint = selectedExtensionIds.length === 0 ? <p className="mt-2 text-xs font-bold text-amber-600 dark:text-amber-300">Выберите extensions в таблице выше</p> : null;
+    const isDeletePreview = String(extensionPreviewResult?.type || '') === 'delete';
+    const previewItems = normalizeOperationPreviewItems(Array.isArray(extensionPreviewResult?.items) ? extensionPreviewResult.items : []);
+    const previewCounts = getPreviewCounts(extensionPreviewResult?.counts);
+    const sectionDef = PROVISIONING_SECTIONS.find(section => section.id === 'extensions');
+    const operationMeta = <StatusBadge tone="info">{currentTab.operation}</StatusBadge>;
+    const inputClass = 'w-full rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white';
+
+    const previewHandler = currentTab.id === 'bulk-create' ? handleCreatePreview : currentTab.id === 'delete' ? handleDeletePreview : currentTab.id === 'csv-import' ? () => { setCreateMode('csv'); setExtensionWorkspaceTab('bulk-create'); showNoti('info', 'CSV Preview выполняется во вкладке Массовое создание.'); } : handleUpdatePreview;
+    const previewDisabled = currentTab.id === 'bulk-update' ? selectedExtensionIds.length === 0 : currentTab.id === 'delete' ? selectedExtensionIds.length === 0 : false;
+
+    const renderOperationParameters = () => {
+      if (currentTab.id === 'bulk-update') {
+        return (
+          <div className="space-y-4">
+            <OperationHeader icon={Edit} title="Параметры операции" description="Отметьте поля, которые будут изменены для выбранных extensions." meta={<StatusBadge tone={selectedExtensionIds.length ? 'success' : 'neutral'}>Selected {selectedExtensionIds.length}</StatusBadge>} />
+            {selectedHint}
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <label className="space-y-1 text-xs"><span><input type="checkbox" checked={updateFields.updateDisplayName} onChange={e => setUpdateField('updateDisplayName', e.target.checked)} /> DisplayName mask</span><input value={updateFields.displayName} onChange={e => setUpdateField('displayName', e.target.value)} className={inputClass} /></label>
+              <label className="space-y-1 text-xs"><span className="font-black uppercase text-slate-500 dark:text-slate-400">Recording</span><select value={updateFields.updateRecording ? updateFields.recording : 'nochange'} onChange={e => { const value = e.target.value; setUpdateFields(prev => ({ ...prev, updateRecording: value !== 'nochange', recording: value === 'nochange' ? prev.recording : value })); }} className={inputClass}><option value="nochange">Не менять</option><option value="always">Always</option><option value="optional">On Demand</option><option value="never">Never</option></select></label>
+              <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={updateFields.updateVoicemail} disabled onChange={e => setUpdateField('updateVoicemail', e.target.checked)} /> Voicemail <input type="checkbox" checked={updateFields.voicemail} disabled onChange={e => setUpdateField('voicemail', e.target.checked)} /></label>
+              <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={updateFields.updateCallWaiting} onChange={e => setUpdateField('updateCallWaiting', e.target.checked)} /> Call Waiting <input type="checkbox" checked={updateFields.callWaiting} onChange={e => setUpdateField('callWaiting', e.target.checked)} /></label>
+              <label className="space-y-1 text-xs"><span><input type="checkbox" checked={updateFields.updateOutboundCid} onChange={e => setUpdateField('updateOutboundCid', e.target.checked)} /> Outbound CID</span><input value={updateFields.outboundCid} onChange={e => setUpdateField('outboundCid', e.target.value)} className={inputClass} /></label>
+              <label className="space-y-1 text-xs"><span><input type="checkbox" checked={updateFields.updateContext} disabled onChange={e => setUpdateField('updateContext', e.target.checked)} /> Context</span><input value={updateFields.context} disabled onChange={e => setUpdateField('context', e.target.value)} className={inputClass} /></label>
+              <label className="space-y-1 text-xs"><span><input type="checkbox" checked={updateFields.updateEmergencyCid} disabled onChange={e => setUpdateField('updateEmergencyCid', e.target.checked)} /> Emergency CID</span><input value={updateFields.emergencyCid} disabled onChange={e => setUpdateField('emergencyCid', e.target.value)} className={inputClass} /></label>
+              <label className="space-y-1 text-xs"><span><input type="checkbox" checked={updateFields.updateEmailDomain} disabled onChange={e => setUpdateField('updateEmailDomain', e.target.checked)} /> Email domain</span><input value={updateFields.emailDomain} disabled onChange={e => setUpdateField('emailDomain', e.target.value)} placeholder="example.com" className={inputClass} /></label>
+            </div>
+            <label className="block space-y-1 text-xs"><span><input type="checkbox" checked={updateFields.updateRaw} disabled onChange={e => setUpdateField('updateRaw', e.target.checked)} /> Raw JSON advanced params</span><textarea value={updateFields.rawJson} disabled onChange={e => setUpdateField('rawJson', e.target.value)} rows={3} className={inputClass + ' font-mono'} /></label>
+          </div>
+        );
+      }
+
+      if (currentTab.id === 'bulk-create') {
+        return (
+          <div className="space-y-4">
+            <OperationHeader icon={ListPlus} title="Параметры операции" description="Range, Manual или CSV с едиными параметрами создания." meta={operationMeta} />
+            <div className="grid grid-cols-1 gap-2 text-xs md:grid-cols-3">
+              <InfoCard label="Последний Extension" value={extensionNumberPlan.last ?? '-'} />
+              <InfoCard label="Следующий свободный" value={extensionNumberPlan.nextFree ?? '-'} tone="success" />
+              <InfoCard label="Первая свободная дырка" value={extensionNumberPlan.firstGap ?? '-'} tone="warning" />
+            </div>
+            <div className="rounded-lg border border-slate-150 bg-slate-50 p-3 text-xs dark:border-slate-800 dark:bg-slate-800/60">Доступно локальных шаблонов: <span className="font-black text-slate-850 dark:text-white">{extTemplates.length}</span>. Выбор шаблона останется отдельным расширением.</div>
+            <div className="flex flex-wrap gap-2"><button type="button" onClick={() => setCreateMode('range')} className={createMode === 'range' ? 'rounded-lg border border-blue-600 bg-blue-600 px-3 py-1.5 text-xs font-bold text-white' : 'rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300'}>Range</button><button type="button" onClick={() => setCreateMode('manual')} className={createMode === 'manual' ? 'rounded-lg border border-blue-600 bg-blue-600 px-3 py-1.5 text-xs font-bold text-white' : 'rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300'}>Manual</button><button type="button" onClick={() => setCreateMode('csv')} className={createMode === 'csv' ? 'rounded-lg border border-blue-600 bg-blue-600 px-3 py-1.5 text-xs font-bold text-white' : 'rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300'}>CSV</button></div>
+            {createMode === 'range' ? <div className="grid grid-cols-2 gap-3"><input value={createStartExt} onChange={e => setCreateStartExt(e.target.value)} placeholder="Start" className={inputClass} /><input value={createEndExt} onChange={e => setCreateEndExt(e.target.value)} placeholder="End" className={inputClass} /></div> : createMode === 'manual' ? <textarea value={createManualList} onChange={e => setCreateManualList(e.target.value)} rows={4} placeholder={['200', '201', '202'].join('\n')} className={inputClass + ' font-mono'} /> : <textarea value={createCsvText} onChange={e => setCreateCsvText(e.target.value)} rows={4} placeholder={['extension,name', '200,User 200', '201,User 201'].join('\n')} className={inputClass + ' font-mono'} />}
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2"><input value={createNameMask} onChange={e => setCreateNameMask(e.target.value)} placeholder="Name mask: User {ext}" className={inputClass} /><select value={createSecretMode} onChange={e => setCreateSecretMode(e.target.value as any)} className={inputClass}><option value="auto">Secret auto</option><option value="fixed">Secret fixed</option><option value="mask">Secret mask</option></select>{createSecretMode === 'fixed' && <input value={createFixedSecret} onChange={e => setCreateFixedSecret(e.target.value)} type="password" placeholder="Fixed secret" className={inputClass} />}{createSecretMode === 'mask' && <input value={createSecretMask} onChange={e => setCreateSecretMask(e.target.value)} placeholder="pbx{ext}!" className={inputClass} />}<select value={createConflictMode} onChange={e => setCreateConflictMode(e.target.value as any)} className={inputClass}><option value="fill-missing">Fill Missing</option><option value="strict">Strict</option></select><select value={createTechnology} onChange={e => setCreateTechnology(e.target.value as any)} className={inputClass}><option value="pjsip">PJSIP</option><option value="sip">SIP</option></select><input value={createContext} onChange={e => setCreateContext(e.target.value)} placeholder="Context" className={inputClass} /><input value={createOutboundCid} onChange={e => setCreateOutboundCid(e.target.value)} placeholder="Outbound CID" className={inputClass} /><input value={createEmailDomain} onChange={e => setCreateEmailDomain(e.target.value)} placeholder="Email domain" className={inputClass} /><select value={createRecording} onChange={e => setCreateRecording(e.target.value)} className={inputClass}><option value="always">Recording always</option><option value="optional">Recording on demand</option><option value="never">Recording never</option></select><input value={createEmergencyCid} onChange={e => setCreateEmergencyCid(e.target.value)} placeholder="Emergency CID" className={inputClass} /></div>
+            <div className="flex flex-wrap gap-4 text-xs text-slate-600 dark:text-slate-300"><label className="flex items-center gap-2"><input type="checkbox" checked={createVoicemail} onChange={e => setCreateVoicemail(e.target.checked)} /> Voicemail</label><label className="flex items-center gap-2"><input type="checkbox" checked={createCallWaiting} onChange={e => setCreateCallWaiting(e.target.checked)} /> Call Waiting</label></div>
+            <textarea value={createRawJson} onChange={e => setCreateRawJson(e.target.value)} rows={3} placeholder="Raw JSON advanced params" className={inputClass + ' font-mono'} />
+          </div>
+        );
+      }
+
+      if (currentTab.id === 'delete') {
+        return (
+          <div className="space-y-4">
+            <OperationHeader icon={Trash2} title="Параметры операции" description="Preview удаления готовит единый список объектов. Backend удаления пока не подключён." meta={<StatusBadge tone={selectedExtensionIds.length ? 'error' : 'neutral'}>Selected {selectedExtensionIds.length}</StatusBadge>} />
+            {selectedHint}
+            <div className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-xs text-rose-800 dark:border-rose-900/40 dark:bg-rose-950/20 dark:text-rose-300">Вы собираетесь удалить {selectedExtensionIds.length} extensions. Это действие может повлиять на маршрутизацию, записи, пользователей и устройства. Фактическое удаление пока не выполняется.</div>
+            {isDeletePreview && <label className="block max-w-sm space-y-1 text-xs"><span className="font-black uppercase text-slate-500 dark:text-slate-400">Введите DELETE для Apply</span><input value={deleteConfirmText} onChange={e => setDeleteConfirmText(e.target.value)} placeholder="DELETE" className={inputClass + ' font-mono'} /></label>}
+          </div>
+        );
+      }
+
+      return (
+        <div className="space-y-4">
+          <OperationHeader icon={FileSpreadsheet} title="Параметры операции" description="CSV / Импорт подготовлен как отдельная операция; текущий CSV create использует общий Preview вкладки Массовое создание." meta={operationMeta} />
+          <div className="rounded-lg border border-dashed border-slate-200 p-5 text-xs text-slate-500 dark:border-slate-700 dark:text-slate-300">Центр CSV / Импорт подготовлен для будущей проверки CSV перед Apply. Для текущего create-preview переключитесь в CSV режим массового создания.</div>
+          <Toolbar><PrimaryButton onClick={() => { setCreateMode('csv'); setExtensionWorkspaceTab('bulk-create'); }}><Upload className="h-4 w-4" />CSV Create</PrimaryButton><SecondaryButton onClick={downloadCsvTemplate}><Download className="h-4 w-4" />CSV Template</SecondaryButton></Toolbar>
+        </div>
+      );
+    };
+
+    return (
+      <div className="space-y-4">
+        <Card>
+          <div className="flex flex-col gap-3 border-b border-slate-200 p-3 dark:border-slate-800 xl:flex-row xl:items-center xl:justify-between">
+            <div className="flex flex-wrap gap-1">
+              {workspaceTabs.map(tab => {
+                const Icon = tab.icon;
+                return (
+                  <button key={tab.id} type="button" onClick={() => setExtensionWorkspaceTab(tab.id)} className={extensionWorkspaceTab === tab.id ? 'inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-xs font-black text-white' : 'inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800'}>
+                    <Icon className="h-4 w-4" />
+                    {tab.label}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="flex flex-wrap gap-1 text-[10px] font-black uppercase text-slate-400">
+              {sectionDef?.operationTypes.map(type => <span key={type} className="rounded-full border border-slate-200 px-2 py-1 dark:border-slate-700">{type}</span>)}
+            </div>
+          </div>
+          <div className="space-y-5 p-5">
+            {renderOperationParameters()}
+            <DesignOperationToolbar onPreview={previewHandler} onApply={handleExtensionApply} onReset={resetExtensionOperationState} previewDisabled={previewDisabled} applyDisabled={!canApplyExtensionPreview()} previewLoading={extensionPreviewLoading} applyLoading={extensionApplyLoading} />
+          </div>
+        </Card>
+
+        <Card className="p-5">
+          <OperationHeader icon={FileText} title="Preview" description="Единый Preview для Create, Update, Delete, Import и будущих модулей." />
+          {extensionPreviewResult ? (
+            <div className="mt-4 space-y-4">
+              <OperationSummary items={PREVIEW_COUNT_ITEMS.map(item => ({ key: item.key, label: item.label, value: previewCounts[item.key], tone: item.tone as any }))} />
+              <div className="grid grid-cols-1 gap-3 text-xs md:grid-cols-3">
+                <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-800"><span className="font-black uppercase text-slate-400">previewId</span><div className="mt-1 break-all font-mono text-slate-800 dark:text-white">{extensionPreviewResult.previewId}</div></div>
+                <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-800"><span className="font-black uppercase text-slate-400">Operation</span><div className="mt-1 font-black text-slate-800 dark:text-white">{extensionPreviewResult.operation || extensionPreviewResult.type}</div></div>
+                <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-800"><span className="font-black uppercase text-slate-400">State</span><div className="mt-1 font-black text-slate-800 dark:text-white">{extensionApplyResult ? 'Result ready' : 'Preview ready'}</div></div>
+              </div>
+              {isDeletePreview && <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs font-bold text-rose-800 dark:border-rose-900/40 dark:bg-rose-950/20 dark:text-rose-300">Вы собираетесь удалить {previewCounts.delete} extensions. Это действие может повлиять на маршрутизацию, записи, пользователей и устройства.</div>}
+              <PreviewTable items={previewItems} actionClass={getPreviewActionClass} summarizeValue={summarizePreviewValue} formatDiffValue={formatDiffValue} />
+            </div>
+          ) : <div className="mt-4 rounded-lg border border-dashed border-slate-200 py-10 text-center text-xs text-slate-400 dark:border-slate-700">Preview ещё не сформирован.</div>}
+        </Card>
+
+        {extensionApplyResult && <Card className="p-5">{renderOperationResult()}</Card>}
+      </div>
+    );
+  };
+
+
   return (
     <div className="space-y-6">
       {/* Permissions Guard Banner */}
@@ -1473,7 +1932,7 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
         <div className={`p-4 rounded-xl border flex items-center gap-2.5 shadow-md animate-fade-in text-xs ${
           noti.type === 'success' ? 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-800 dark:text-emerald-400 border-emerald-200 dark:border-emerald-900/30' :
           noti.type === 'error' ? 'bg-rose-50 dark:bg-rose-950/30 text-rose-800 dark:text-rose-400 border-rose-200 dark:border-rose-900/30' :
-          'bg-indigo-50 dark:bg-indigo-950/35 text-indigo-800 dark:text-indigo-400 border-indigo-200 dark:border-indigo-900/30'
+          'bg-blue-50 dark:bg-indigo-950/35 text-indigo-800 dark:text-blue-400 border-indigo-200 dark:border-indigo-900/30'
         }`}>
           {noti.type === 'success' && <Check className="w-4 h-4 text-emerald-500" />}
           {noti.type === 'error' && <AlertTriangle className="w-4 h-4 text-rose-500" />}
@@ -1499,9 +1958,9 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
             <button
               key={t.id}
               onClick={() => setActiveTab(t.id as any)}
-              className={`flex items-center gap-2 px-4 py-3 text-xs font-bold transition-all border-b-2 hover:text-indigo-600 dark:hover:text-indigo-400 focus:outline-none cursor-pointer ${
+              className={`flex items-center gap-2 px-4 py-3 text-xs font-bold transition-all border-b-2 hover:text-blue-600 dark:hover:text-indigo-400 focus:outline-none cursor-pointer ${
                 activeTab === t.id 
-                  ? 'border-indigo-600 dark:border-indigo-400 text-indigo-600 dark:text-indigo-400 bg-slate-50 dark:bg-slate-800/40 rounded-t-lg'
+                  ? 'border-blue-600 dark:border-blue-400 text-blue-600 dark:text-blue-400 bg-slate-50 dark:bg-slate-800/40 rounded-t-lg'
                   : 'border-transparent text-slate-500 dark:text-slate-400'
               }`}
             >
@@ -1521,7 +1980,7 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="text-sm font-bold text-slate-850 dark:text-white flex items-center gap-2">
-                  <Building2 className="w-5 h-5 text-indigo-600" /> Комплексный запуск новой площадки
+                  <Building2 className="w-5 h-5 text-blue-600" /> Комплексный запуск новой площадки
                 </h3>
                 <p className="text-[11px] text-slate-500">Автоматически заведите полный стек телефонии (абонентский пул, очереди, маршруты и транк) за 1 минуту</p>
               </div>
@@ -1635,7 +2094,7 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
                 <div className="pt-2">
                   <button
                     onClick={handleBranchPreview}
-                    className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs px-5 py-2.5 rounded-lg transition shrink-0 flex items-center gap-2 cursor-pointer focus:outline-none"
+                    className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs px-5 py-2.5 rounded-lg transition shrink-0 flex items-center gap-2 cursor-pointer focus:outline-none"
                   >
                     <Eye className="w-4 h-4" /> Построить проект филиала
                   </button>
@@ -1711,7 +2170,7 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
               <div>
                 <h3 className="text-sm font-bold text-slate-850 dark:text-white flex items-center gap-2">
-                  <MapPin className="w-5 h-5 text-indigo-600" /> Реестр Российской Номерной Ёмкости РФ (Мининформсвязь)
+                  <MapPin className="w-5 h-5 text-blue-600" /> Реестр Российской Номерной Ёмкости РФ (Мининформсвязь)
                 </h3>
                 <p className="text-[11px] text-slate-500">Автоматически парсит телефонные DEF-коды мобильных и городских линий для точной маршрутизации звонков</p>
               </div>
@@ -1720,7 +2179,7 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
                 <button
                   onClick={syncNumberingDb}
                   disabled={isSyncing}
-                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs px-3.5 py-2.5 rounded-lg transition flex items-center gap-2 focus:outline-none"
+                  className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs px-3.5 py-2.5 rounded-lg transition flex items-center gap-2 focus:outline-none"
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
                   {isSyncing ? 'Загрузка...' : 'Синхронизировать по API'}
@@ -1767,7 +2226,7 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
                         </div>
                         <div className="flex justify-between items-center pb-2 border-b dark:border-slate-700">
                           <span className="text-slate-500">Оператор связи:</span>
-                          <span className="font-extrabold text-indigo-600 dark:text-indigo-400">{numSearchResult.operator}</span>
+                          <span className="font-extrabold text-blue-600 dark:text-blue-400">{numSearchResult.operator}</span>
                         </div>
                         <div className="flex justify-between items-center pb-2 border-b dark:border-slate-700">
                           <span className="text-slate-500">Класс связи:</span>
@@ -1782,7 +2241,7 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
                         <div className="pt-2">
                           <button
                             onClick={() => loadNumRangeIntoRoute(numSearchResult)}
-                            className="w-full text-center bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 text-[10.5px] font-extrabold py-2 rounded-lg transition"
+                            className="w-full text-center bg-blue-50 hover:bg-indigo-100 dark:bg-indigo-950/40 text-blue-600 dark:text-blue-400 text-[10.5px] font-extrabold py-2 rounded-lg transition"
                           >
                             Создать Outbound Route по паттерну
                           </button>
@@ -1854,12 +2313,12 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
                           <td className="p-2.5 font-bold text-slate-700 dark:text-white font-mono">{r.def}</td>
                           <td className="p-2.5 font-mono text-slate-500 text-[11px]">{r.start} - {r.end}</td>
                           <td className="p-2.5 font-mono text-slate-700 dark:text-slate-300">{(r.capacity / 1000).toFixed(0)}k</td>
-                          <td className="p-2.5 font-semibold text-indigo-600 dark:text-indigo-400">{r.operator}</td>
+                          <td className="p-2.5 font-semibold text-blue-600 dark:text-blue-400">{r.operator}</td>
                           <td className="p-2.5 text-slate-500 text-[11px]">{r.region}</td>
                           <td className="p-2.5 text-right">
                             <button
                               onClick={() => loadNumRangeIntoRoute(r)}
-                              className="text-slate-400 hover:text-indigo-600 focus:outline-none"
+                              className="text-slate-400 hover:text-blue-600 focus:outline-none"
                               title="Выбрать паттерн"
                             >
                               <ArrowRight className="w-4 h-4" />
@@ -1911,19 +2370,13 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
                   <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">FreePBX REST inventory, selection and safe preview workspace.</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <button type="button" onClick={fetchActiveExtensions} disabled={activeExtLoading} className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3.5 py-2 text-xs font-black text-white transition hover:bg-indigo-700 disabled:opacity-60"><Download className="h-4 w-4" /> Загрузить с АТС</button>
+                  <button type="button" onClick={fetchActiveExtensions} disabled={activeExtLoading} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3.5 py-2 text-xs font-black text-white transition hover:bg-blue-700 disabled:opacity-60"><Download className="h-4 w-4" /> Загрузить с АТС</button>
                   <button type="button" onClick={fetchActiveExtensions} disabled={activeExtLoading} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3.5 py-2 text-xs font-bold text-slate-700 transition hover:bg-slate-100 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"><RefreshCw className={`h-4 w-4 ${activeExtLoading ? 'animate-spin' : ''}`} /> Обновить</button>
+                  <span className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"><span className={activeExtError ? 'h-2.5 w-2.5 rounded-full bg-rose-500' : activeExtensions.length > 0 ? 'h-2.5 w-2.5 rounded-full bg-emerald-500' : 'h-2.5 w-2.5 rounded-full bg-slate-400'} />{activeExtLoading ? 'Loading' : activeExtError ? 'Disconnected' : activeExtensions.length > 0 ? 'Connected' : 'Disconnected'}{activeExtLoadedAt && <span className="font-normal text-slate-400">{activeExtLoadedAt}</span>}</span>
                   <button type="button" onClick={downloadCurrentExtensions} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-xs font-bold text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"><FileSpreadsheet className="h-4 w-4" /> Экспорт CSV</button>
                   <button type="button" onClick={fetchRawExtensionsRest} disabled={activeExtRawLoading} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-xs font-bold text-slate-600 transition hover:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"><Database className="h-4 w-4" /> Raw REST</button>
                   {activeExtRawData && <button type="button" onClick={() => setActiveExtRawOpen(prev => !prev)} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-xs font-bold text-slate-600 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800">{activeExtRawOpen ? 'Свернуть Raw' : 'Показать Raw'}</button>}
                 </div>
-              </div>
-              <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-7">
-                <div className="rounded-lg border border-slate-150 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/60"><span className="text-[10px] font-black uppercase text-slate-400">Всего extensions</span><div className="mt-1 text-2xl font-black text-slate-850 dark:text-white">{activeExtensions.length}</div></div>
-                <div className="rounded-lg border border-slate-150 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/60"><span className="text-[10px] font-black uppercase text-slate-400">После фильтра</span><div className="mt-1 text-2xl font-black text-indigo-600 dark:text-indigo-300">{filteredActiveExtensions.length}</div></div>
-                <div className="rounded-lg border border-slate-150 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/60"><span className="text-[10px] font-black uppercase text-slate-400">Выбрано</span><div className="mt-1 text-2xl font-black text-emerald-600 dark:text-emerald-300">{selectedExtensionIds.length}</div></div>
-                <div className="col-span-2 rounded-lg border border-slate-150 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/60 xl:col-span-2"><span className="text-[10px] font-black uppercase text-slate-400">REST Endpoint</span><div className="mt-2 truncate font-mono text-xs text-slate-750 dark:text-slate-200" title={activeExtEndpoint || 'Не определён'}>{activeExtEndpoint || 'Не определён'}</div></div>
-                <div className="col-span-2 rounded-lg border border-slate-150 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/60"><span className="text-[10px] font-black uppercase text-slate-400">Статус подключения</span><div className="mt-2 flex items-center gap-2"><span className={activeExtError ? getBadgeClass('rose') : activeExtensions.length > 0 ? getBadgeClass('green') : getBadgeClass('slate')}>{activeExtLoading ? 'Loading' : activeExtError ? 'Error' : activeExtensions.length > 0 ? 'Connected' : 'Idle'}</span>{activeExtLoadedAt && <span className="text-[10px] text-slate-400">{activeExtLoadedAt}</span>}</div></div>
               </div>
             </div>
             {activeExtError && <div className="flex gap-2 rounded-lg border border-rose-200 bg-rose-50 p-4 text-xs text-rose-800 dark:border-rose-900/40 dark:bg-rose-950/30 dark:text-rose-300"><AlertTriangle className="h-4 w-4 shrink-0 text-rose-500" /><span>{activeExtError}</span></div>}
@@ -1939,10 +2392,9 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
                 <select value={activeExtStatusFilter} onChange={(e) => setActiveExtStatusFilter(e.target.value as any)} className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white"><option value="all">Status</option><option value="loaded">Loaded</option><option value="warning">Warning</option><option value="error">Error</option></select>
                 <div className="flex gap-2"><select value={activeExtSortField} onChange={(e) => setActiveExtSortField(e.target.value as any)} className="h-9 min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white"><option value="extension">Extension</option><option value="name">Name</option><option value="tech">Tech</option></select><button type="button" onClick={() => setActiveExtSortDir(activeExtSortDir === 'asc' ? 'desc' : 'asc')} className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-3 text-xs font-black text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">{activeExtSortDir === 'asc' ? 'ASC' : 'DESC'}</button></div>
               </div>
-              <div className="mt-3 flex flex-wrap items-center gap-2 text-xs"><button type="button" onClick={selectAllFilteredExtensions} className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 font-bold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">Выбрать все</button><button type="button" onClick={clearSelectedExtensions} className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 font-bold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">Снять выбор</button><span className="text-slate-400">Выбрано: <strong className="text-slate-750 dark:text-white">{selectedExtensionIds.length}</strong></span></div>
             </div>
             <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900">
-              <div className="max-h-[560px] overflow-auto"><table className="w-full min-w-[1480px] text-left text-xs"><thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50 text-[10px] font-black uppercase tracking-wide text-slate-400 dark:border-slate-700 dark:bg-slate-800"><tr><th className="w-10 p-3"><input type="checkbox" checked={allFilteredSelected} onChange={toggleAllFilteredExtensions} className="h-4 w-4 rounded" /></th>{getVisibleExtensionFields().map(field => <th key={field.key} className="p-3">{field.label}</th>)}<th className="p-3">Source</th><th className="p-3">Status</th></tr></thead><tbody className="divide-y divide-slate-100 dark:divide-slate-800">{activeExtLoading ? <tr><td colSpan={getVisibleExtensionFields().length + 3} className="p-12 text-center text-slate-400"><RefreshCw className="mx-auto mb-3 h-8 w-8 animate-spin text-indigo-500" />Загрузка extensions с АТС...</td></tr> : filteredActiveExtensions.length > 0 ? filteredActiveExtensions.map((ext, idx) => { const extId = String(ext.extension || ''); const selected = selectedExtensionIds.includes(extId); return <tr key={ext.extension || idx} onClick={() => openSingleExtensionEditor(ext)} className={'cursor-pointer transition ' + (singleExtensionEdit?.extension === extId ? 'bg-amber-50/70 dark:bg-amber-950/20' : selected ? 'bg-indigo-50/70 dark:bg-indigo-950/20' : 'hover:bg-slate-50 dark:hover:bg-slate-800/60')}><td className="p-3"><input type="checkbox" checked={selected} onChange={() => toggleExtensionSelection(extId)} onClick={(e) => e.stopPropagation()} className="h-4 w-4 rounded" /></td>{getVisibleExtensionFields().map(field => <td key={field.key} className="p-3"><span className={field.key === 'tech' ? getTechBadgeClass(ext) : 'font-mono text-slate-600 dark:text-slate-300'}>{getExtensionFieldValue(ext, field)}</span></td>)}<td className="p-3"><span className={getSourceBadgeClass(ext)}>{getExtensionSourceLabel(ext)}</span></td><td className="p-3"><span className={getStatusBadgeClass(ext)}>{getExtensionStatusLabel(ext)}</span></td></tr>; }) : <tr><td colSpan={getVisibleExtensionFields().length + 3} className="p-12 text-center text-slate-400"><Users className="mx-auto mb-3 h-10 w-10 text-slate-300 dark:text-slate-600" />{activeExtensions.length === 0 ? 'Загрузите extensions с АТС.' : 'Нет extensions под выбранные условия.'}</td></tr>}</tbody></table></div>
+              <div className="max-h-[560px] overflow-auto"><table className="w-full min-w-[1320px] text-left text-xs"><thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50 text-[10px] font-black uppercase tracking-wide text-slate-400 dark:border-slate-700 dark:bg-slate-800"><tr><th className="w-10 p-3"><input type="checkbox" checked={allFilteredSelected} onChange={toggleAllFilteredExtensions} className="h-4 w-4 rounded" /></th>{getVisibleExtensionFields().map(field => <th key={field.key} className="p-3">{field.label}</th>)}<th className="p-3">Inbound Recording</th><th className="p-3">Outbound Recording</th><th className="p-3">Internal Recording</th><th className="p-3">Source</th><th className="p-3">Status</th></tr></thead><tbody className="divide-y divide-slate-100 dark:divide-slate-800">{activeExtLoading ? <tr><td colSpan={getVisibleExtensionFields().length + 6} className="p-12 text-center text-slate-400"><RefreshCw className="mx-auto mb-3 h-8 w-8 animate-spin text-indigo-500" />Загрузка extensions с АТС...</td></tr> : filteredActiveExtensions.length > 0 ? filteredActiveExtensions.map((ext, idx) => { const extId = String(ext.extension || ''); const selected = selectedExtensionIds.includes(extId); return <tr key={ext.extension || idx} onClick={() => openSingleExtensionEditor(ext)} className={'cursor-pointer transition ' + (singleExtensionEdit?.extension === extId ? 'bg-amber-50/70 dark:bg-amber-950/20' : selected ? 'bg-blue-50/70 dark:bg-indigo-950/20' : 'hover:bg-slate-50 dark:hover:bg-slate-800/60')}><td className="p-3"><input type="checkbox" checked={selected} onChange={() => toggleExtensionSelection(extId)} onClick={(e) => e.stopPropagation()} className="h-4 w-4 rounded" /></td>{getVisibleExtensionFields().map(field => <td key={field.key} className="p-3"><span className={field.key === 'tech' ? getTechBadgeClass(ext) : 'font-mono text-slate-600 dark:text-slate-300'}>{getExtensionFieldValue(ext, field)}</span></td>)}<td className="p-3"><span className={getRecordingDirectionBadgeClass(ext, 'inbound')}>{getRecordingDirectionLabel(ext, 'inbound')}</span></td><td className="p-3"><span className={getRecordingDirectionBadgeClass(ext, 'outbound')}>{getRecordingDirectionLabel(ext, 'outbound')}</span></td><td className="p-3"><span className={getRecordingDirectionBadgeClass(ext, 'internal')}>{getRecordingDirectionLabel(ext, 'internal')}</span></td><td className="p-3"><span className={getSourceBadgeClass(ext)}>{getExtensionSourceLabel(ext)}</span></td><td className="p-3"><span className={getStatusBadgeClass(ext)}>{getExtensionStatusLabel(ext)}</span></td></tr>; }) : <tr><td colSpan={getVisibleExtensionFields().length + 6} className="p-12 text-center text-slate-400"><Users className="mx-auto mb-3 h-10 w-10 text-slate-300 dark:text-slate-600" />{activeExtensions.length === 0 ? 'Загрузите extensions с АТС.' : 'Нет extensions под выбранные условия.'}</td></tr>}</tbody></table></div>
             </div>
             {singleExtensionEdit && (
               <div className="rounded-xl border border-amber-200 bg-white p-5 shadow-sm dark:border-amber-900/50 dark:bg-slate-900">
@@ -1951,7 +2403,7 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
                     <h4 className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400"><Edit className="h-4 w-4 text-amber-500" /> Редактировать extension</h4>
                     <div className="mt-2 flex flex-wrap items-center gap-2"><span className="font-mono text-lg font-black text-slate-850 dark:text-white">{singleExtensionEdit.extension}</span><span className={getTechBadgeClass(singleExtensionEdit)}>{getTechLabel(singleExtensionEdit)}</span><span className={getSourceBadgeClass(singleExtensionEdit)}>{getExtensionSourceLabel(singleExtensionEdit)}</span></div>
                   </div>
-                  <div className="flex gap-2"><button type="button" onClick={() => setSingleExtensionEdit(null)} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">Закрыть</button><button type="button" onClick={handleExtensionApply} disabled={!canApplyExtensionPreview()} className={canApplyExtensionPreview() ? "inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-black text-white hover:bg-emerald-700 disabled:opacity-60" : "rounded-lg bg-slate-200 px-3 py-2 text-xs font-bold text-slate-500 cursor-not-allowed dark:bg-slate-700 dark:text-slate-400"}>{extensionApplyLoading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Apply</button></div>
+                  <Toolbar><SecondaryButton onClick={() => setSingleExtensionEdit(null)}>Закрыть</SecondaryButton><PrimaryButton onClick={handleExtensionApply} disabled={!canApplyExtensionPreview()}>{extensionApplyLoading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}Apply</PrimaryButton></Toolbar>
                 </div>
                 <div className="mt-4 space-y-4">
                   <div className="rounded-lg border border-slate-100 p-3 dark:border-slate-800">
@@ -1967,11 +2419,9 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
                   <div className="rounded-lg border border-slate-100 p-3 dark:border-slate-800">
                     <div className="mb-3 text-[10px] font-black uppercase tracking-wider text-slate-400">Recording Options</div>
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-                      {renderSingleField('updateRecordingInExternal', 'recording_in_external', 'recording_in_external', singleSelect('recording_in_external', SINGLE_RECORDING_OPTIONS))}
-                      {renderSingleField('updateRecordingOutExternal', 'recording_out_external', 'recording_out_external', singleSelect('recording_out_external', SINGLE_RECORDING_OPTIONS))}
-                      {renderSingleField('updateRecordingInInternal', 'recording_in_internal', 'recording_in_internal', singleSelect('recording_in_internal', SINGLE_RECORDING_OPTIONS))}
-                      {renderSingleField('updateRecordingOutInternal', 'recording_out_internal', 'recording_out_internal', singleSelect('recording_out_internal', SINGLE_RECORDING_OPTIONS))}
-                      {renderSingleField('updateRecordingOndemand', 'recording_ondemand', 'On Demand Recording', singleSelect('recording_ondemand', SINGLE_ON_DEMAND_OPTIONS))}
+                      {renderSingleField('updateRecordingInbound', 'recordingInbound', 'Inbound Recording', singleSelect('recordingInbound', RECORDING_MODE_OPTIONS))}
+                      {renderSingleField('updateRecordingOutbound', 'recordingOutbound', 'Outbound Recording', singleSelect('recordingOutbound', RECORDING_MODE_OPTIONS))}
+                      {renderSingleField('updateRecordingInternal', 'recordingInternal', 'Internal Recording', singleSelect('recordingInternal', RECORDING_MODE_OPTIONS))}
                       {renderSingleField('updateRecordingPriority', 'recording_priority', 'Record Priority', <input type="number" min="0" value={singleUpdateFields.recording_priority || ''} onChange={e => setSingleUpdateField('recording_priority', e.target.value)} className={singleInputClass} />)}
                     </div>
                   </div>
@@ -1987,16 +2437,10 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
                     <datalist id="single-followme-strategies">{SINGLE_FOLLOW_ME_STRATEGIES.map(item => <option key={item} value={item} />)}</datalist>
                   </div>
                 </div>
-                <div className="mt-4 flex flex-wrap items-center gap-2"><button type="button" onClick={handleSingleUpdatePreview} disabled={extensionPreviewLoading || !hasSingleCheckedFields()} className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-xs font-black text-white hover:bg-indigo-700 disabled:opacity-60"><Eye className="h-4 w-4" /> Preview изменения</button><span className="text-xs text-slate-400">Preview использует update-preview с selectedExtensions=[{singleExtensionEdit.extension}]</span></div>
+                <div className="mt-4 flex flex-wrap items-center gap-2"><PrimaryButton onClick={handleSingleUpdatePreview} disabled={extensionPreviewLoading || !hasSingleCheckedFields()}><Eye className="h-4 w-4" />Preview</PrimaryButton><span className="text-xs text-slate-400">Preview использует update-preview с selectedExtensions=[{singleExtensionEdit.extension}]</span></div>
               </div>
             )}
-            <div className="grid grid-cols-1 gap-4 xl:grid-cols-4">
-              <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-900 xl:col-span-2"><div className="mb-4 flex items-start justify-between gap-3"><div><h4 className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400"><ListPlus className="h-4 w-4 text-indigo-500" /> Массовое создание</h4><p className="mt-1 text-xs text-slate-400">Range, manual list or CSV. Только preview.</p></div><span className={getBadgeClass('indigo')}>Preview</span></div><div className="space-y-4"><div className="flex flex-wrap gap-2"><button type="button" onClick={() => setCreateMode('range')} className={`rounded-lg border px-3 py-1.5 text-xs font-bold ${createMode === 'range' ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300'}`}>Диапазон</button><button type="button" onClick={() => setCreateMode('manual')} className={`rounded-lg border px-3 py-1.5 text-xs font-bold ${createMode === 'manual' ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300'}`}>Manual</button><button type="button" onClick={() => setCreateMode('csv')} className={`rounded-lg border px-3 py-1.5 text-xs font-bold ${createMode === 'csv' ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300'}`}>CSV</button></div>{createMode === 'range' ? <div className="grid grid-cols-2 gap-3"><input value={createStartExt} onChange={e => setCreateStartExt(e.target.value)} placeholder="Start" className="rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs dark:border-slate-700 dark:bg-slate-800" /><input value={createEndExt} onChange={e => setCreateEndExt(e.target.value)} placeholder="End" className="rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs dark:border-slate-700 dark:bg-slate-800" /></div> : createMode === 'manual' ? <textarea value={createManualList} onChange={e => setCreateManualList(e.target.value)} rows={4} placeholder={'200\n201\n202'} className="w-full rounded-lg border border-slate-200 bg-slate-50 p-2 font-mono text-xs dark:border-slate-700 dark:bg-slate-800" /> : <textarea value={createCsvText} onChange={e => setCreateCsvText(e.target.value)} rows={4} placeholder={'extension,name\n200,User 200\n201,User 201'} className="w-full rounded-lg border border-slate-200 bg-slate-50 p-2 font-mono text-xs dark:border-slate-700 dark:bg-slate-800" />}<div className="grid grid-cols-1 gap-3 md:grid-cols-2"><input value={createNameMask} onChange={e => setCreateNameMask(e.target.value)} placeholder="Name mask: User {ext}" className="rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs dark:border-slate-700 dark:bg-slate-800" /><select value={createSecretMode} onChange={e => setCreateSecretMode(e.target.value as any)} className="rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs dark:border-slate-700 dark:bg-slate-800"><option value="auto">Secret auto</option><option value="fixed">Secret fixed</option><option value="mask">Secret mask</option></select>{createSecretMode === 'fixed' && <input value={createFixedSecret} onChange={e => setCreateFixedSecret(e.target.value)} type="password" placeholder="Fixed secret" className="rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs dark:border-slate-700 dark:bg-slate-800" />}{createSecretMode === 'mask' && <input value={createSecretMask} onChange={e => setCreateSecretMask(e.target.value)} placeholder="pbx{ext}!" className="rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs dark:border-slate-700 dark:bg-slate-800" />}<select value={createTechnology} onChange={e => setCreateTechnology(e.target.value as any)} className="rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs dark:border-slate-700 dark:bg-slate-800"><option value="pjsip">PJSIP</option><option value="sip">SIP</option></select><input value={createContext} onChange={e => setCreateContext(e.target.value)} placeholder="Context" className="rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs dark:border-slate-700 dark:bg-slate-800" /><input value={createOutboundCid} onChange={e => setCreateOutboundCid(e.target.value)} placeholder="Outbound CID" className="rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs dark:border-slate-700 dark:bg-slate-800" /><input value={createEmailDomain} onChange={e => setCreateEmailDomain(e.target.value)} placeholder="Email domain" className="rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs dark:border-slate-700 dark:bg-slate-800" /><select value={createRecording} onChange={e => setCreateRecording(e.target.value)} className="rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs dark:border-slate-700 dark:bg-slate-800"><option value="always">Recording always</option><option value="optional">Recording on demand</option><option value="never">Recording never</option></select><input value={createEmergencyCid} onChange={e => setCreateEmergencyCid(e.target.value)} placeholder="Emergency CID" className="rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs dark:border-slate-700 dark:bg-slate-800" /></div><div className="flex flex-wrap gap-4 text-xs text-slate-600 dark:text-slate-300"><label className="flex items-center gap-2"><input type="checkbox" checked={createVoicemail} onChange={e => setCreateVoicemail(e.target.checked)} /> Voicemail</label><label className="flex items-center gap-2"><input type="checkbox" checked={createCallWaiting} onChange={e => setCreateCallWaiting(e.target.checked)} /> Call Waiting</label></div><textarea value={createRawJson} onChange={e => setCreateRawJson(e.target.value)} rows={3} placeholder='Raw JSON advanced params' className="w-full rounded-lg border border-slate-200 bg-slate-50 p-2 font-mono text-xs dark:border-slate-700 dark:bg-slate-800" /><button type="button" onClick={handleCreatePreview} disabled={extensionPreviewLoading} className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-xs font-black text-white hover:bg-indigo-700 disabled:opacity-60"><Eye className="h-4 w-4" /> Preview создания</button></div></div>
-              <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-900 xl:col-span-2"><div className="mb-4 flex items-start justify-between gap-3"><div><h4 className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400"><Edit className="h-4 w-4 text-indigo-500" /> Массовое изменение</h4><p className="mt-1 text-xs text-slate-400">1. Выберите extensions в таблице. 2. Отметьте параметры. 3. Нажмите Preview изменения.</p>{selectedExtensionIds.length === 0 && <p className="mt-2 text-xs font-bold text-amber-600 dark:text-amber-300">Сначала выберите один или несколько extensions</p>}</div><span className={selectedExtensionIds.length ? getBadgeClass('green') : getBadgeClass('slate')}>{selectedExtensionIds.length}</span></div><div className="grid grid-cols-1 gap-3 md:grid-cols-2"><label className="space-y-1 text-xs"><span><input type="checkbox" checked={updateFields.updateDisplayName} onChange={e => setUpdateField('updateDisplayName', e.target.checked)} /> DisplayName mask</span><input value={updateFields.displayName} onChange={e => setUpdateField('displayName', e.target.value)} className="w-full rounded-lg border border-slate-200 bg-slate-50 p-2 dark:border-slate-700 dark:bg-slate-800" /></label><label className="space-y-1 text-xs"><span><input type="checkbox" checked={updateFields.updateRecording} onChange={e => setUpdateField('updateRecording', e.target.checked)} /> Recording</span><select value={updateFields.recording} onChange={e => setUpdateField('recording', e.target.value)} className="w-full rounded-lg border border-slate-200 bg-slate-50 p-2 dark:border-slate-700 dark:bg-slate-800"><option value="always">always</option><option value="optional">on demand</option><option value="never">never</option></select></label><label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={updateFields.updateVoicemail} disabled onChange={e => setUpdateField('updateVoicemail', e.target.checked)} /> Voicemail <input type="checkbox" checked={updateFields.voicemail} disabled onChange={e => setUpdateField('voicemail', e.target.checked)} /></label><label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={updateFields.updateCallWaiting} onChange={e => setUpdateField('updateCallWaiting', e.target.checked)} /> Call Waiting <input type="checkbox" checked={updateFields.callWaiting} onChange={e => setUpdateField('callWaiting', e.target.checked)} /></label><label className="space-y-1 text-xs"><span><input type="checkbox" checked={updateFields.updateOutboundCid} onChange={e => setUpdateField('updateOutboundCid', e.target.checked)} /> Outbound CID</span><input value={updateFields.outboundCid} onChange={e => setUpdateField('outboundCid', e.target.value)} className="w-full rounded-lg border border-slate-200 bg-slate-50 p-2 dark:border-slate-700 dark:bg-slate-800" /></label><label className="space-y-1 text-xs"><span><input type="checkbox" checked={updateFields.updateContext} disabled onChange={e => setUpdateField('updateContext', e.target.checked)} /> Context</span><input value={updateFields.context} disabled onChange={e => setUpdateField('context', e.target.value)} className="w-full rounded-lg border border-slate-200 bg-slate-50 p-2 dark:border-slate-700 dark:bg-slate-800" /></label><label className="space-y-1 text-xs"><span><input type="checkbox" checked={updateFields.updateEmergencyCid} disabled onChange={e => setUpdateField('updateEmergencyCid', e.target.checked)} /> Emergency CID</span><input value={updateFields.emergencyCid} disabled onChange={e => setUpdateField('emergencyCid', e.target.value)} className="w-full rounded-lg border border-slate-200 bg-slate-50 p-2 dark:border-slate-700 dark:bg-slate-800" /></label><label className="space-y-1 text-xs"><span><input type="checkbox" checked={updateFields.updateEmailDomain} disabled onChange={e => setUpdateField('updateEmailDomain', e.target.checked)} /> Email domain</span><input value={updateFields.emailDomain} disabled onChange={e => setUpdateField('emailDomain', e.target.value)} placeholder="example.com" className="w-full rounded-lg border border-slate-200 bg-slate-50 p-2 dark:border-slate-700 dark:bg-slate-800" /></label></div><label className="mt-3 block space-y-1 text-xs"><span><input type="checkbox" checked={updateFields.updateRaw} disabled onChange={e => setUpdateField('updateRaw', e.target.checked)} /> Raw JSON advanced params</span><textarea value={updateFields.rawJson} disabled onChange={e => setUpdateField('rawJson', e.target.value)} rows={3} className="w-full rounded-lg border border-slate-200 bg-slate-50 p-2 font-mono dark:border-slate-700 dark:bg-slate-800" /></label><button type="button" onClick={handleUpdatePreview} disabled={extensionPreviewLoading || selectedExtensionIds.length === 0} className="mt-4 inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-xs font-black text-white hover:bg-indigo-700 disabled:opacity-60"><Eye className="h-4 w-4" /> Preview изменения</button></div>
-              <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-900"><h4 className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400"><Layers className="h-4 w-4 text-indigo-500" /> Шаблоны</h4><p className="mt-2 text-xs text-slate-400">Локальные шаблоны будут подключены в следующем этапе.</p><div className="mt-4 text-2xl font-black text-slate-850 dark:text-white">{extTemplates.length}</div></div>
-              <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-900"><h4 className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400"><FileText className="h-4 w-4 text-indigo-500" /> Preview</h4><p className="mt-2 text-xs text-slate-400">Последний preview: {extensionPreviewResult?.previewId || 'нет'}</p><div className="mt-4 font-mono text-xs text-slate-500 dark:text-slate-300">{extensionPreviewResult ? formatPreviewCounts(extensionPreviewResult.counts) : 'Preview ещё не сформирован'}</div></div>
-            </div>
-            <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-900"><div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between"><div><h4 className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400"><FileText className="h-4 w-4" /> Preview</h4><p className="mt-1 text-xs text-slate-400">Create, update, skip, conflict and error review.</p></div><button type="button" onClick={handleExtensionApply} disabled={!canApplyExtensionPreview()} className={canApplyExtensionPreview() ? "inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-xs font-black text-white hover:bg-emerald-700 disabled:opacity-60" : "rounded-lg bg-slate-200 px-4 py-2 text-xs font-bold text-slate-500 cursor-not-allowed dark:bg-slate-700 dark:text-slate-400"}>{extensionApplyLoading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Apply BMO</button></div>{extensionPreviewResult ? <><div className="mt-4 space-y-4"><div className="grid grid-cols-1 gap-3 text-xs md:grid-cols-3"><div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-800"><span className="font-black uppercase text-slate-400">previewId</span><div className="mt-1 break-all font-mono text-slate-800 dark:text-white">{extensionPreviewResult.previewId}</div></div><div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-800"><span className="font-black uppercase text-slate-400">type</span><div className="mt-1 font-black text-slate-800 dark:text-white">{extensionPreviewResult.type}</div></div><div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-800"><span className="font-black uppercase text-slate-400">counts</span><div className="mt-1 font-mono text-slate-800 dark:text-white">{formatPreviewCounts(extensionPreviewResult.counts)}</div></div></div><div className="overflow-hidden rounded-lg border border-slate-100 dark:border-slate-800"><table className="w-full min-w-[880px] text-left text-xs"><thead className="bg-slate-50 text-[10px] uppercase text-slate-400 dark:bg-slate-800"><tr><th className="p-3">Extension</th><th className="p-3">Имя</th><th className="p-3">Action</th><th className="p-3">Message</th><th className="p-3">Old</th><th className="p-3">New</th></tr></thead><tbody className="divide-y divide-slate-100 dark:divide-slate-800">{(extensionPreviewResult.items || []).map((item: any, idx: number) => <tr key={`${item.extension}-${idx}`} className="hover:bg-slate-50 dark:hover:bg-slate-800/60"><td className="p-3 font-mono font-black text-slate-850 dark:text-white">{item.extension}</td><td className="p-3 font-bold text-slate-700 dark:text-slate-200">{item.after?.displayName || item.after?.name || item.before?.displayName || item.before?.name || '-'}</td><td className="p-3"><span className={`px-2 py-1 rounded-full text-[10px] font-black uppercase ${getPreviewActionClass(item.action)}`}>{item.action}</span></td><td className="p-3 text-slate-600 dark:text-slate-300">{item.message}</td><td className="p-3 font-mono text-[10px] text-slate-500">{summarizePreviewValue(item.before)}</td><td className="p-3"><div className="font-mono text-[10px] text-slate-500"><div className="text-slate-300">↓</div>{summarizePreviewValue(item.after)}{Array.isArray(item.diff) && item.diff.length > 0 && <div className="mt-2 space-y-1">{item.diff.map((diff: any) => <div key={diff.field} className="rounded bg-slate-50 px-2 py-1 dark:bg-slate-800"><span className="font-black text-slate-700 dark:text-slate-200">{diff.field}</span>: {formatDiffValue(diff.before)} → {formatDiffValue(diff.after)}</div>)}</div>}</div></td></tr>)}</tbody></table></div></div>{extensionApplyResult && <div className="mt-4 rounded-lg border border-slate-100 bg-slate-50 p-3 text-xs dark:border-slate-800 dark:bg-slate-800"><div className="mb-2 font-black uppercase text-slate-400">Apply result</div>{renderExtensionApplyResult()}</div>}</> : <div className="mt-4 rounded-lg border border-dashed border-slate-200 py-10 text-center text-xs text-slate-400 dark:border-slate-700">Preview ещё не сформирован.</div>}</div>
+            {renderExtensionsWorkspace()}
           </div>
         )}
         {/* TAB 4: TRUNKS WIZARD */}
@@ -2015,7 +2459,7 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
                     key={s.step} 
                     className={`text-[10.5px] px-2.5 py-1 rounded-full font-bold ${
                       trunkStep === s.step 
-                        ? 'bg-indigo-600 text-white' 
+                        ? 'bg-blue-600 text-white' 
                         : 'bg-white dark:bg-slate-800 text-slate-400 border dark:border-slate-700'
                     }`}
                   >
@@ -2037,7 +2481,7 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
                       onClick={() => handleTrunkOperatorChange(op)}
                       className={`w-full text-left p-2.5 text-xs font-bold rounded-lg border transition ${
                         trunkOperator === op 
-                          ? 'bg-indigo-600 text-white border-indigo-650' 
+                          ? 'bg-blue-600 text-white border-indigo-650' 
                           : 'bg-white dark:bg-slate-800 border-slate-100 hover:bg-slate-50 text-slate-700 dark:text-slate-300 dark:border-slate-700'
                       }`}
                     >
@@ -2145,7 +2589,7 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
                     <button
                       onClick={handleTrunkPreview}
                       disabled={trunkIsLoading}
-                      className="bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs px-5 py-3 rounded-lg flex items-center gap-2"
+                      className="bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs px-5 py-3 rounded-lg flex items-center gap-2"
                     >
                       {trunkIsLoading ? 'Диагностика...' : 'Собрать спецификацию транка'}
                       <ArrowRight className="w-4 h-4" />
@@ -2224,7 +2668,7 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                     <div>
                       <span className="text-slate-450 block text-[10px] uppercase font-bold">Trunk Name</span>
-                      <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400 text-xs">{trunkPreviewData.generated[0].name}</span>
+                      <span className="font-mono font-bold text-blue-600 dark:text-blue-400 text-xs">{trunkPreviewData.generated[0].name}</span>
                     </div>
                     <div>
                       <span className="text-slate-450 block text-[10px] uppercase font-bold">Хост связи</span>
@@ -2253,7 +2697,7 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
                   <p className="text-xs text-slate-450 mt-1">Опрос OPTIONS подтвердил успешное соединение с внешним SIP proxy.</p>
                 </div>
                 <div className="pt-2">
-                  <button onClick={() => setTrunkStep('draft')} className="bg-indigo-600 px-5 py-2 text-xs text-white rounded-lg">Завести еще один</button>
+                  <button onClick={() => setTrunkStep('draft')} className="bg-blue-600 px-5 py-2 text-xs text-white rounded-lg">Завести еще один</button>
                 </div>
               </div>
             )}
@@ -2267,7 +2711,7 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
               <span className="text-xs font-bold text-slate-705 dark:text-slate-350 uppercase tracking-wide">Массовое Создание Исходящих Маршрутов</span>
               <div className="flex gap-2">
                 {[{ step: 'draft', label: '1. Настройки' }, { step: 'preview', label: '2. Спецификация' }, { step: 'success', label: '3. Применено' }].map(s => (
-                  <span key={s.step} className={`text-[10.5px] px-2.5 py-1 rounded-full font-bold ${routeStep === s.step ? 'bg-indigo-600 text-white' : 'bg-white dark:bg-slate-800 text-slate-400 border dark:border-slate-700'}`}>{s.label}</span>
+                  <span key={s.step} className={`text-[10.5px] px-2.5 py-1 rounded-full font-bold ${routeStep === s.step ? 'bg-blue-600 text-white' : 'bg-white dark:bg-slate-800 text-slate-400 border dark:border-slate-700'}`}>{s.label}</span>
                 ))}
               </div>
             </div>
@@ -2334,7 +2778,7 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
                     <button
                       onClick={handleRoutePreview}
                       disabled={routeIsLoading}
-                      className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs py-3 rounded-lg"
+                      className="w-full bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs py-3 rounded-lg"
                     >
                       Посмотреть исходящий план
                     </button>
@@ -2368,7 +2812,7 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
                   </div>
                   <div>
                     <span className="text-slate-400 block text-[10px] uppercase font-bold">Связанные транки вызова</span>
-                    <span className="font-mono font-bold text-indigo-650 dark:text-indigo-400">{routePreviewData.generated[0].trunks.join(' ➔ ') || 'Нет связанных транков (внутренний)'}</span>
+                    <span className="font-mono font-bold text-indigo-650 dark:text-blue-400">{routePreviewData.generated[0].trunks.join(' ➔ ') || 'Нет связанных транков (внутренний)'}</span>
                   </div>
                 </div>
               </div>
@@ -2382,7 +2826,7 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
                   <p className="text-xs text-slate-400">Правила набора в FreePBX успешно перестроены.</p>
                 </div>
                 <div className="pt-2">
-                  <button onClick={() => setRouteStep('draft')} className="bg-indigo-600 px-5 py-2 text-xs text-white rounded-lg">Выйти</button>
+                  <button onClick={() => setRouteStep('draft')} className="bg-blue-600 px-5 py-2 text-xs text-white rounded-lg">Выйти</button>
                 </div>
               </div>
             )}
@@ -2396,7 +2840,7 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
               <span className="text-xs font-bold text-slate-705 dark:text-slate-350 uppercase tracking-wide">Пакетное заведение входящих линий DID</span>
               <div className="flex gap-2">
                 {[{ step: 'draft', label: '1. Настройки' }, { step: 'preview', label: '2. Спецификация' }, { step: 'success', label: '3. Применено' }].map(s => (
-                  <span key={s.step} className={`text-[10.5px] px-2.5 py-1 rounded-full font-bold ${didStep === s.step ? 'bg-indigo-600 text-white' : 'bg-white dark:bg-slate-800 text-slate-400 border dark:border-slate-700'}`}>{s.label}</span>
+                  <span key={s.step} className={`text-[10.5px] px-2.5 py-1 rounded-full font-bold ${didStep === s.step ? 'bg-blue-600 text-white' : 'bg-white dark:bg-slate-800 text-slate-400 border dark:border-slate-700'}`}>{s.label}</span>
                 ))}
               </div>
             </div>
@@ -2430,7 +2874,7 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
                     <button
                       onClick={handleDidPreview}
                       disabled={didIsLoading}
-                      className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs py-3 rounded-lg"
+                      className="w-full bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs py-3 rounded-lg"
                     >
                       Построить Спецификацию DID
                     </button>
@@ -2463,7 +2907,7 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
                     <tbody className="divide-y divide-slate-100 dark:divide-slate-700 font-mono">
                       {didPreviewData.generated.map((g: any, i: number) => (
                         <tr key={i} className="hover:bg-slate-50/50 dark:hover:bg-slate-755/20">
-                          <td className="p-2.5 text-indigo-650 dark:text-indigo-400 font-bold">{g.did}</td>
+                          <td className="p-2.5 text-indigo-650 dark:text-blue-400 font-bold">{g.did}</td>
                           <td className="p-2.5 font-sans uppercase font-bold text-[10px]">{g.destinationType}</td>
                           <td className="p-2.5 text-slate-700 dark:text-slate-300">{g.destination}</td>
                           <td className="p-2.5 font-sans">{g.description}</td>
@@ -2486,7 +2930,7 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
                   <p className="text-xs text-slate-450 mt-1">FreePBX INBOUND-ROUTES успешно скоординированы.</p>
                 </div>
                 <div className="pt-2">
-                  <button onClick={() => setDidStep('draft')} className="bg-indigo-600 px-5 py-2 text-xs text-white rounded-lg">Выйти</button>
+                  <button onClick={() => setDidStep('draft')} className="bg-blue-600 px-5 py-2 text-xs text-white rounded-lg">Выйти</button>
                 </div>
               </div>
             )}
@@ -2499,11 +2943,11 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="text-sm font-bold text-slate-850 dark:text-white flex items-center gap-2">
-                  <Settings className="w-5 h-5 text-indigo-600" /> Конструктор и Шаблоны операторов связи
+                  <Settings className="w-5 h-5 text-blue-600" /> Конструктор и Шаблоны операторов связи
                 </h3>
                 <p className="text-[11px] text-slate-500">Управляйте типовыми техническими конфигурациями для ускорения заведения линий</p>
               </div>
-              <button className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-3.5 py-2 rounded-lg flex items-center gap-1.5 focus:outline-none">
+              <button className="bg-blue-600 hover:bg-blue-700 text-white font-bold px-3.5 py-2 rounded-lg flex items-center gap-1.5 focus:outline-none">
                 <Plus className="w-4 h-4" /> Новый Шаблон
               </button>
             </div>
@@ -2512,7 +2956,7 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
               {trunkTemplates.map(t => (
                 <div key={t.id} className="p-4 border dark:border-slate-700 rounded-xl space-y-2.5 bg-slate-50/50 dark:bg-slate-755/10">
                   <div className="flex justify-between items-center">
-                    <span className="font-extrabold text-sm text-indigo-650 dark:text-indigo-400">{t.operator}</span>
+                    <span className="font-extrabold text-sm text-indigo-650 dark:text-blue-400">{t.operator}</span>
                     <span className="bg-white dark:bg-slate-800 text-slate-500 text-[10px] px-2 py-0.5 rounded font-mono uppercase border dark:border-slate-700">{t.tech}</span>
                   </div>
                   <p className="text-xs font-semibold text-slate-700 dark:text-slate-300">{t.name}</p>
@@ -2538,7 +2982,7 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
           <div className="space-y-6 animate-fade-in text-xs font-sans">
             <div>
               <h3 className="text-sm font-bold text-slate-850 dark:text-white flex items-center gap-2">
-                <Activity className="w-5 h-5 text-indigo-600 animate-pulse" /> Системный журнал изменений и План Отката (Rollback Center)
+                <Activity className="w-5 h-5 text-blue-600 animate-pulse" /> Системный журнал изменений и План Отката (Rollback Center)
               </h3>
               <p className="text-[11px] text-slate-500">Пошаговый аудит всех массовых операций с полной возможностью мгновенного удаления ошибочных пулов</p>
             </div>
@@ -2562,7 +3006,7 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
                       <td className="p-3 text-slate-450 font-sans">{new Date(l.timestamp).toLocaleString()}</td>
                       <td className="p-3 font-bold font-sans text-slate-800 dark:text-white">{l.user}</td>
                       <td className="p-3">
-                        <span className="bg-slate-100 dark:bg-slate-700 px-1 py-0.5 rounded text-indigo-650 dark:text-indigo-400 font-bold">{l.action}</span>
+                        <span className="bg-slate-100 dark:bg-slate-700 px-1 py-0.5 rounded text-indigo-650 dark:text-blue-400 font-bold">{l.action}</span>
                       </td>
                       <td className="p-3 font-bold text-slate-800 dark:text-slate-300">{l.itemCount} шт.</td>
                       <td className="p-3 font-sans max-w-sm leading-normal text-slate-500">{l.details}</td>

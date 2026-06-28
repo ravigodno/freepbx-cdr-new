@@ -55,7 +55,8 @@ import {
   Landmark,
   Ban,
   Wallet,
-  Cpu
+  Cpu,
+  Wrench
 } from 'lucide-react';
 import { CallEntry, DashboardStats, AppSettings, UserRole, DirectoryEntry } from './types';
 import packageJson from '../package.json';
@@ -2847,7 +2848,7 @@ export default function App() {
                   }`}
                   title={isSidebarExpanded ? "" : "Управление"}
                 >
-                  <Settings className="h-5 w-5 shrink-0" />
+                  <Wrench className="h-5 w-5 shrink-0" />
                   {isSidebarExpanded && (
                     <span className="text-xs font-semibold truncate animate-fade-in text-slate-705 dark:text-slate-200">
                       Управление
@@ -2995,7 +2996,7 @@ export default function App() {
                   {activeView === 'directory' && <BookOpen className="h-5 w-5" />}
                   {activeView === 'reports' && <BarChart3 className="h-5 w-5 animate-pulse" />}
                   {activeView === 'monitoring' && <Activity className="h-5 w-5 animate-pulse" />}
-                  {activeView === 'management' && <Settings className="h-5 w-5" />}
+                  {activeView === 'management' && <Wrench className="h-5 w-5" />}
                   {activeView === 'balance' && <Wallet className="h-5 w-5" />}
                   {activeView === 'settings' && <Settings className="h-5 w-5" />}
                 </div>

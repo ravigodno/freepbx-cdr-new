@@ -77,6 +77,7 @@ export interface AppSettings {
   dbUser: string;
   dbPass: string;
   demoMode?: boolean;
+  freepbxApiWorkingEndpoint?: string;
   
   // AMI / Click-to-Call Settings
   amiHost?: string;
