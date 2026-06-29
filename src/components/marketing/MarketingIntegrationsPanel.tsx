@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Bell, CheckCircle2, Code2, LineChart, Loader2, Megaphone, PlugZap, XCircle } from 'lucide-react';
-import { CalltrackingSite, YandexMetrikaCounter, YandexMetrikaGoals, YandexMetrikaIntegration } from './types';
+import { CalltrackingSite, YandexDirectSettings, YandexMetrikaCounter, YandexMetrikaGoals, YandexMetrikaIntegration } from './types';
 
 const baseIntegrations = [
-  { title: 'Яндекс Директ', description: 'Импорт расходов, кампаний и ключевых связок.', icon: Megaphone, action: 'Скоро' },
   { title: 'CRM / Bitrix24', description: 'Передача звонков и лидов в CRM на следующих этапах.', icon: PlugZap, action: 'Скоро' },
   { title: 'Уведомления', description: 'Оповещения о потерянных рекламных обращениях.', icon: Bell, action: 'Скоро' }
 ];
@@ -56,12 +55,35 @@ function metrikaStatusClass(integration?: YandexMetrikaIntegration, countersLoad
   return 'bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-300';
 }
 
+function normalizeDirectSettings(direct?: YandexDirectSettings | null): YandexDirectSettings {
+  return {
+    enabled: direct?.enabled === true,
+    clientLogins: Array.isArray(direct?.clientLogins) ? direct.clientLogins : [],
+    lastSyncAt: direct?.lastSyncAt || null,
+    lastError: direct?.lastError || null
+  };
+}
+
 function goalsStatusLabel(goals?: YandexMetrikaGoals | null): string {
   const normalized = normalizeGoals(goals);
   const count = Object.values(normalized).filter(Boolean).length;
   if (count === 0) return 'Цели Метрики не настроены';
   if (count === 4) return 'Цели настроены';
   return 'Цели Метрики настроены частично';
+}
+
+function directStatusLabel(integration?: YandexMetrikaIntegration): string {
+  if (!integration) return 'Сначала подключите Метрику';
+  const direct = normalizeDirectSettings(integration.direct);
+  if (direct.lastError) return 'Ошибка';
+  return direct.enabled ? 'Подключено' : 'Не подключено';
+}
+
+function directStatusClass(integration?: YandexMetrikaIntegration): string {
+  if (!integration) return 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-300';
+  const direct = normalizeDirectSettings(integration.direct);
+  if (direct.lastError) return 'bg-rose-50 text-rose-700 dark:bg-rose-950/30 dark:text-rose-300';
+  return direct.enabled ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300' : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-300';
 }
 
 interface MarketingIntegrationsPanelProps {
@@ -71,9 +93,11 @@ interface MarketingIntegrationsPanelProps {
 }
 
 export function MarketingIntegrationsPanel({ sites = [], metrikaIntegrations = [], onMetrikaChanged }: MarketingIntegrationsPanelProps) {
-  const primarySite = sites[0];
+  const safeSites = Array.isArray(sites) ? sites : [];
+  const safeMetrikaIntegrations = Array.isArray(metrikaIntegrations) ? metrikaIntegrations : [];
+  const primarySite = safeSites[0];
   const siteKey = primarySite?.publicKey || 'SITE_PUBLIC_KEY';
-  const activeMetrika = metrikaIntegrations[0];
+  const activeMetrika = safeMetrikaIntegrations[0];
   const scriptExample = '<script src="https://PBXPULS_HOST/calltracking.js" data-site-key="' + siteKey + '"></script>';
   const debugScriptExample = '<script src="https://PBXPULS_HOST/calltracking.js" data-site-key="' + siteKey + '" data-debug="true"></script>';
   const metrikaScriptExample = '<script src="https://PBXPULS_HOST/calltracking.js" data-site-key="' + siteKey + '" data-ym-counter-id="12345678"></script>';
@@ -93,12 +117,18 @@ export function MarketingIntegrationsPanel({ sites = [], metrikaIntegrations = [
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [message, setMessage] = useState('');
+  const [directEnabled, setDirectEnabled] = useState(normalizeDirectSettings(activeMetrika?.direct).enabled);
+  const [directClientLogins, setDirectClientLogins] = useState(normalizeDirectSettings(activeMetrika?.direct).clientLogins.join('\n'));
+  const [savingDirect, setSavingDirect] = useState(false);
+  const [testingDirect, setTestingDirect] = useState(false);
+  const [directMessage, setDirectMessage] = useState('');
 
   const selectedIntegration = useMemo(() => {
-    return metrikaIntegrations.find(item => item.siteId === siteId && item.counterId === counterId) || activeMetrika;
-  }, [activeMetrika, counterId, metrikaIntegrations, siteId]);
+    return safeMetrikaIntegrations.find(item => item.siteId === siteId && item.counterId === counterId) || activeMetrika;
+  }, [activeMetrika, counterId, safeMetrikaIntegrations, siteId]);
   const countersLoaded = counters.length > 0;
   const hasAnyGoal = Object.values(goals).some(Boolean);
+  const activeDirect = normalizeDirectSettings(activeMetrika?.direct);
 
   useEffect(() => {
     if (!siteId && primarySite?.id) setSiteId(primarySite.id);
@@ -106,7 +136,10 @@ export function MarketingIntegrationsPanel({ sites = [], metrikaIntegrations = [
     if (!domain && activeMetrika?.domain) setDomain(activeMetrika.domain);
     if (!name && (activeMetrika?.name || primarySite?.name)) setName(activeMetrika?.name || primarySite?.name || 'Основной сайт');
     setGoals(normalizeGoals(activeMetrika?.goals));
-  }, [activeMetrika?.counterId, activeMetrika?.domain, activeMetrika?.goals, activeMetrika?.name, counterId, domain, name, primarySite?.id, primarySite?.name, siteId]);
+    const direct = normalizeDirectSettings(activeMetrika?.direct);
+    setDirectEnabled(direct.enabled);
+    setDirectClientLogins(direct.clientLogins.join('\n'));
+  }, [activeMetrika?.counterId, activeMetrika?.direct, activeMetrika?.domain, activeMetrika?.goals, activeMetrika?.name, counterId, domain, name, primarySite?.id, primarySite?.name, siteId]);
 
   const loadCounters = async () => {
     setLoadingCounters(true);
@@ -187,6 +220,58 @@ export function MarketingIntegrationsPanel({ sites = [], metrikaIntegrations = [
     }
   };
 
+  const saveDirectSettings = async () => {
+    if (!activeMetrika?.id) {
+      setDirectMessage('Сначала подключите Яндекс.Метрику.');
+      return;
+    }
+    setSavingDirect(true);
+    setDirectMessage('');
+    try {
+      const clientLogins = directClientLogins.split(/[\n,]+/).map(value => value.trim()).filter(Boolean);
+      const token = getAuthToken();
+      const response = await fetch('/api/marketing/direct/settings', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ integrationId: activeMetrika.id, enabled: directEnabled, clientLogins })
+      });
+      const json = await response.json().catch(() => ({}));
+      if (!response.ok || !json.ok) throw new Error(json.error || 'Не удалось сохранить настройки Директа.');
+      setDirectMessage('Настройки Директа сохранены.');
+      onMetrikaChanged?.();
+    } catch (error: any) {
+      setDirectMessage(error?.message || 'Не удалось сохранить настройки Директа.');
+    } finally {
+      setSavingDirect(false);
+    }
+  };
+
+  const testDirect = async () => {
+    if (!activeMetrika?.id) {
+      setDirectMessage('Сначала подключите Яндекс.Метрику.');
+      return;
+    }
+    setTestingDirect(true);
+    setDirectMessage('');
+    try {
+      const token = getAuthToken();
+      const response = await fetch('/api/marketing/direct/test', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ integrationId: activeMetrika.id })
+      });
+      const json = await response.json().catch(() => ({}));
+      if (!response.ok || !json.ok) throw new Error(json.error || 'Не удалось проверить расходы Директа.');
+      setDirectMessage('Расходы доступны. Пример: ' + safeText(json.sample?.cost) + ' ₽, кликов: ' + safeText(json.sample?.clicks));
+      onMetrikaChanged?.();
+    } catch (error: any) {
+      setDirectMessage(error?.message || 'Не удалось проверить расходы Директа.');
+      onMetrikaChanged?.();
+    } finally {
+      setTestingDirect(false);
+    }
+  };
+
   const canSave = Boolean(siteId && counterId && (/^\d+$/.test(counterId)) && (accessToken || selectedIntegration?.id));
 
   return (
@@ -253,7 +338,7 @@ export function MarketingIntegrationsPanel({ sites = [], metrikaIntegrations = [
                 <label className="block text-[11px] font-black uppercase tracking-wide text-slate-500">Сайт PBXPuls</label>
                 <select value={siteId} onChange={event => setSiteId(event.target.value)} className="mt-1 h-9 w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200">
                   <option value="">Выберите сайт</option>
-                  {sites.map(site => <option key={site.id} value={site.id}>{site.name || site.domain || site.id}</option>)}
+                  {safeSites.map(site => <option key={site.id} value={site.id}>{site.name || site.domain || site.id}</option>)}
                 </select>
               </div>
 
@@ -320,6 +405,41 @@ export function MarketingIntegrationsPanel({ sites = [], metrikaIntegrations = [
                 <button onClick={testMetrika} disabled={testing || !selectedIntegration?.id} className="inline-flex h-9 max-w-full items-center rounded-xl border border-slate-200 bg-white px-3 text-xs font-black text-slate-600 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300">{testing ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : selectedIntegration?.tokenStatus === 'valid' ? <CheckCircle2 className="mr-2 h-3.5 w-3.5" /> : <XCircle className="mr-2 h-3.5 w-3.5" />}Проверить подключение</button>
               </div>
               {message && <div className="break-words rounded-xl bg-slate-50 p-2 text-xs font-bold text-slate-600 dark:bg-slate-950 dark:text-slate-300">{message}</div>}
+            </div>
+          )}
+        </div>
+
+        <div className="min-w-0 rounded-2xl border border-slate-100 bg-slate-50/70 p-4 dark:border-slate-800 dark:bg-slate-950/30">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-purple-50 text-purple-600 ring-1 ring-purple-100 dark:bg-purple-950/30 dark:text-purple-300 dark:ring-purple-900/40">
+              <Megaphone className="h-5 w-5" />
+            </div>
+            <span className={['rounded-full px-2 py-1 text-[10px] font-black', directStatusClass(activeMetrika)].join(' ')}>{directStatusLabel(activeMetrika)}</span>
+          </div>
+          <div className="mt-4 text-sm font-black text-slate-900 dark:text-white">Яндекс Директ / расходы</div>
+          <div className="mt-1 text-xs font-semibold leading-relaxed text-slate-500 dark:text-slate-400">Расходы берутся через API Яндекс.Метрики по связанным кампаниям Директа. Если данных нет, проверьте доступы и client logins.</div>
+          {!activeMetrika ? (
+            <div className="mt-3 rounded-xl bg-slate-100 p-3 text-xs font-bold text-slate-600 dark:bg-slate-800 dark:text-slate-300">Сначала подключите Яндекс.Метрику</div>
+          ) : (
+            <div className="mt-3 space-y-3">
+              <label className="flex min-w-0 items-center gap-2 text-xs font-black text-slate-700 dark:text-slate-200">
+                <input type="checkbox" checked={directEnabled} onChange={event => setDirectEnabled(event.target.checked)} className="h-4 w-4 rounded border-slate-300" />
+                <span className="min-w-0 break-words">Учитывать расходы Яндекс Директа</span>
+              </label>
+              <div>
+                <label className="block text-[11px] font-black uppercase tracking-wide text-slate-500">client logins</label>
+                <textarea value={directClientLogins} onChange={event => setDirectClientLogins(event.target.value)} rows={3} placeholder="client-login-1
+client-login-2" className="mt-1 w-full min-w-0 resize-y rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200" />
+              </div>
+              <div className="space-y-1 break-words text-xs font-semibold text-slate-500 dark:text-slate-400">
+                <div>Последняя проверка: <span className="text-slate-700 dark:text-slate-200">{formatDateTime(activeDirect.lastSyncAt)}</span></div>
+                {activeDirect.lastError && <div className="rounded-xl bg-rose-50 p-2 text-rose-700 dark:bg-rose-950/30 dark:text-rose-300">{safeText(activeDirect.lastError)}</div>}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button onClick={saveDirectSettings} disabled={savingDirect} className="inline-flex h-9 max-w-full items-center rounded-xl bg-blue-600 px-3 text-xs font-black text-white disabled:opacity-50">{savingDirect && <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />}Сохранить настройки Директа</button>
+                <button onClick={testDirect} disabled={testingDirect || !directEnabled} className="inline-flex h-9 max-w-full items-center rounded-xl border border-slate-200 bg-white px-3 text-xs font-black text-slate-600 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300">{testingDirect && <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />}Проверить расходы</button>
+              </div>
+              {directMessage && <div className="break-words rounded-xl bg-slate-50 p-2 text-xs font-bold text-slate-600 dark:bg-slate-950 dark:text-slate-300">{directMessage}</div>}
             </div>
           )}
         </div>

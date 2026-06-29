@@ -2239,9 +2239,9 @@ const CALLTRACKING_ALLOWED_EVENT_TYPES = new Set([
 
 const CALLTRACKING_MAX_PAYLOAD_BYTES = 16 * 1024;
 
-const cleanMarketingString = (value: any, max = 500): string => {
-  return String(value || '').trim().slice(0, max);
-};
+function cleanMarketingString(value: unknown, maxLength = 500): string {
+  return String(value || '').trim().slice(0, maxLength);
+}
 
 const getClientIp = (req: Request): string => {
   const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
@@ -2568,12 +2568,24 @@ function hasYandexMetrikaGoals(goals: any): boolean {
   return Boolean(goals?.phoneClickGoalId || goals?.whatsappClickGoalId || goals?.telegramClickGoalId || goals?.emailClickGoalId);
 }
 
+function normalizeYandexDirectSettings(raw: any) {
+  const direct = raw && typeof raw === 'object' ? raw : {};
+  const rawLogins = Array.isArray(direct.clientLogins) ? direct.clientLogins : [];
+  return {
+    enabled: direct.enabled === true,
+    clientLogins: Array.from(new Set(rawLogins.map((value: any) => cleanMarketingString(value, 120)).filter(Boolean))).slice(0, 50),
+    lastSyncAt: direct.lastSyncAt || null,
+    lastError: direct.lastError || null
+  };
+}
+
 function normalizeStoredYandexMetrikaIntegration(integration: any) {
   if (!integration || typeof integration !== 'object') return integration;
   return {
     ...integration,
     domain: integration.domain ?? null,
-    goals: normalizeYandexMetrikaGoals(integration.goals)
+    goals: normalizeYandexMetrikaGoals(integration.goals),
+    direct: normalizeYandexDirectSettings(integration.direct)
   };
 }
 
@@ -2590,6 +2602,7 @@ function safeYandexMetrikaIntegration(integration: any) {
     lastSyncAt: integration.lastSyncAt || null,
     lastError: integration.lastError || null,
     goals: normalizeYandexMetrikaGoals(integration.goals),
+    direct: normalizeYandexDirectSettings(integration.direct),
     createdAt: integration.createdAt || null,
     updatedAt: integration.updatedAt || null
   };
@@ -2781,6 +2794,130 @@ async function fetchYandexMetrikaSources(integration: any, startDate: string, en
       avgVisitDurationSeconds: numberOrNull(metrics[3])
     };
   });
+}
+
+function finiteNumberOrNull(value: any): number | null {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+function roundMoney(value: any): number | null {
+  const num = finiteNumberOrNull(value);
+  return num === null ? null : Math.round(num * 100) / 100;
+}
+
+function safeDivideMoney(numerator: any, denominator: any): number | null {
+  const top = Number(numerator);
+  const bottom = Number(denominator);
+  if (!Number.isFinite(top) || !Number.isFinite(bottom) || bottom <= 0) return null;
+  return roundMoney(top / bottom);
+}
+
+function getYandexDirectCostsParams(integration: any, startDate: string, endDate: string) {
+  const direct = normalizeYandexDirectSettings(integration.direct);
+  const params: Record<string, string> = {
+    date1: startDate,
+    date2: endDate,
+    dimensions: 'ym:s:date,ym:s:lastsignUTMSource,ym:s:lastsignUTMMedium,ym:s:lastsignUTMCampaign,ym:s:directClickOrder',
+    metrics: 'ym:s:directClicks,ym:s:directExpenses',
+    limit: '100000'
+  };
+  if (direct.clientLogins.length) params.direct_client_logins = direct.clientLogins.join(',');
+  return params;
+}
+
+function directDimensionName(dimensions: any[], index: number): string {
+  const item = dimensions[index];
+  return cleanMarketingString(item?.name ?? item, 240) || '';
+}
+
+function directDimensionId(dimensions: any[], index: number): string {
+  const item = dimensions[index];
+  return cleanMarketingString(item?.id ?? item?.name ?? item, 120) || '';
+}
+
+async function fetchYandexDirectCostsViaMetrika(integration: any, startDate: string, endDate: string) {
+  const direct = normalizeYandexDirectSettings(integration.direct);
+  if (!direct.enabled) return [];
+  const json = await fetchYandexMetrikaData(integration, getYandexDirectCostsParams(integration, startDate, endDate));
+  const rows = Array.isArray(json?.data) ? json.data : [];
+  return rows.map((row: any) => {
+    const dimensions = Array.isArray(row?.dimensions) ? row.dimensions : [];
+    const metrics = Array.isArray(row?.metrics) ? row.metrics : [];
+    const campaignName = directDimensionName(dimensions, 4) || directDimensionName(dimensions, 3);
+    return {
+      date: directDimensionName(dimensions, 0) || startDate,
+      source: directDimensionName(dimensions, 1) || 'yandex',
+      medium: directDimensionName(dimensions, 2) || 'cpc',
+      campaignId: directDimensionId(dimensions, 4) || null,
+      campaignName: campaignName || '',
+      clicks: Math.round(numberOrZero(metrics[0])),
+      cost: roundMoney(metrics[1]) || 0,
+      currency: 'RUB'
+    };
+  }).filter((item: any) => item.clicks > 0 || item.cost > 0);
+}
+
+function summarizeYandexDirectCosts(items: any[]) {
+  const cost = roundMoney(items.reduce((sum, item) => sum + Number(item.cost || 0), 0)) || 0;
+  const clicks = items.reduce((sum, item) => sum + Math.round(numberOrZero(item.clicks)), 0);
+  const campaigns = new Set(items.map(item => item.campaignId || item.campaignName).filter(Boolean)).size;
+  return { cost, clicks, avgCpc: safeDivideMoney(cost, clicks), campaigns };
+}
+
+function aggregateYandexDirectSources(items: any[]) {
+  const groups = new Map<string, any>();
+  items.forEach(item => {
+    const key = [item.source || 'yandex', item.medium || 'cpc', item.campaignId || item.campaignName || ''].join('||');
+    if (!groups.has(key)) groups.set(key, {
+      source: item.source || 'yandex',
+      medium: item.medium || 'cpc',
+      campaignId: item.campaignId || null,
+      campaignName: item.campaignName || '',
+      clicks: 0,
+      cost: 0
+    });
+    const group = groups.get(key);
+    group.clicks += Math.round(numberOrZero(item.clicks));
+    group.cost += Number(item.cost || 0);
+  });
+  return Array.from(groups.values()).map(group => ({
+    ...group,
+    cost: roundMoney(group.cost) || 0,
+    avgCpc: safeDivideMoney(group.cost, group.clicks)
+  })).sort((a, b) => Number(b.cost || 0) - Number(a.cost || 0));
+}
+
+function attachCostMetrics(row: any) {
+  const cost = row.cost === null || row.cost === undefined ? null : roundMoney(row.cost);
+  const calls = Number(row.calls || 0);
+  const answeredCalls = Number(row.answeredCalls || 0);
+  const trueLostLeads = Number(row.trueLostLeads || 0);
+  return {
+    ...row,
+    cost,
+    avgCpc: cost === null ? null : safeDivideMoney(cost, row.directClicks || row.clicks || 0),
+    costPerCall: cost === null ? null : safeDivideMoney(cost, calls),
+    costPerAnsweredCall: cost === null ? null : safeDivideMoney(cost, answeredCalls),
+    costPerLostLead: cost === null ? null : safeDivideMoney(cost, trueLostLeads),
+    lostBudgetEstimate: cost === null ? null : (trueLostLeads > 0 && calls > 0 ? roundMoney(cost * (trueLostLeads / calls)) : 0)
+  };
+}
+
+function findYandexDirectIntegration(localDb: any, siteId?: string) {
+  const integration = findYandexMetrikaIntegration(localDb, siteId);
+  if (!integration) return null;
+  integration.direct = normalizeYandexDirectSettings(integration.direct);
+  return integration;
+}
+
+async function markYandexDirectIntegration(localDb: any, integrationId: string, patch: any) {
+  if (!Array.isArray(localDb.yandexMetrikaIntegrations)) return;
+  const integration = localDb.yandexMetrikaIntegrations.find((item: any) => item.id === integrationId);
+  if (!integration) return;
+  integration.direct = { ...normalizeYandexDirectSettings(integration.direct), ...patch };
+  integration.updatedAt = new Date().toISOString();
+  await writeLocalDb(localDb);
 }
 
 async function fetchYandexMetrikaPages(integration: any, startDate: string, endDate: string) {
@@ -3048,12 +3185,13 @@ app.get('/api/calltracking/sources', requireAuth(), async (req, res) => {
   const dataset = await getCalltrackingMatchDataset(localDb, req.query);
   const matchesByEventId = new Map(dataset.matches.map((match: any) => [match.eventId, match]));
   const groups = new Map<string, any>();
+  const keyOf = (source: any, medium: any, campaign: any) => [source || 'direct', medium || '', campaign || ''].join('||');
   events.forEach((event: any) => {
     const source = event.utmSource || event.referrer || 'direct';
     const medium = event.utmMedium || '';
     const campaign = event.utmCampaign || '';
-    const key = [source, medium, campaign].join('||');
-    if (!groups.has(key)) groups.set(key, { source, medium, campaign, sessions: new Set<string>(), phoneClicks: 0, formSubmits: 0, calls: 0, answeredCalls: 0, missedCalls: 0, recoveredByCallback: 0, notCalledBack: 0, lostCalls: 0, trueLostLeads: 0 });
+    const key = keyOf(source, medium, campaign);
+    if (!groups.has(key)) groups.set(key, { source, medium, campaign, sessions: new Set<string>(), phoneClicks: 0, formSubmits: 0, calls: 0, answeredCalls: 0, missedCalls: 0, recoveredByCallback: 0, notCalledBack: 0, lostCalls: 0, trueLostLeads: 0, cost: null, directClicks: null });
     const group = groups.get(key);
     if (event.sessionId) group.sessions.add(event.sessionId);
     if (event.eventType === 'phone_click') {
@@ -3074,10 +3212,30 @@ app.get('/api/calltracking/sources', requireAuth(), async (req, res) => {
     if (event.eventType === 'form_submit') group.formSubmits++;
   });
 
-  const sources = Array.from(groups.values()).map(group => ({
+  const { startDate, endDate } = getYandexMetrikaDateRange(req.query);
+  const directIntegration = findYandexDirectIntegration(localDb, siteId);
+  if (directIntegration?.direct?.enabled) {
+    try {
+      const directRows = aggregateYandexDirectSources(await fetchYandexDirectCostsViaMetrika(directIntegration, startDate, endDate));
+      directRows.forEach(row => {
+        const key = keyOf(row.source || 'yandex', row.medium || 'cpc', row.campaignName || row.campaignId || '');
+        if (!groups.has(key)) groups.set(key, { source: row.source || 'yandex', medium: row.medium || 'cpc', campaign: row.campaignName || row.campaignId || '', sessions: new Set<string>(), phoneClicks: 0, formSubmits: 0, calls: 0, answeredCalls: 0, missedCalls: 0, recoveredByCallback: 0, notCalledBack: 0, lostCalls: 0, trueLostLeads: 0, cost: null, directClicks: null });
+        const group = groups.get(key);
+        group.cost = roundMoney(Number(group.cost || 0) + Number(row.cost || 0));
+        group.directClicks = Math.round(numberOrZero(group.directClicks) + numberOrZero(row.clicks));
+        group.campaignId = row.campaignId || group.campaignId || null;
+      });
+      await markYandexDirectIntegration(localDb, directIntegration.id, { lastSyncAt: new Date().toISOString(), lastError: null });
+    } catch (error: any) {
+      await markYandexDirectIntegration(localDb, directIntegration.id, { lastError: normalizeYandexMetrikaError(error) });
+    }
+  }
+
+  const sources = Array.from(groups.values()).map(group => attachCostMetrics({
     source: group.source,
     medium: group.medium,
     campaign: group.campaign,
+    campaignId: group.campaignId || null,
     visits: group.sessions.size,
     phoneClicks: group.phoneClicks,
     formSubmits: group.formSubmits,
@@ -3091,13 +3249,103 @@ app.get('/api/calltracking/sources', requireAuth(), async (req, res) => {
     matchRate: group.phoneClicks ? Math.round((group.calls / group.phoneClicks) * 1000) / 10 : 0,
     clickToCallConversion: group.phoneClicks ? Math.round((group.calls / group.phoneClicks) * 1000) / 10 : 0,
     callbackRecoveryRate: group.missedCalls ? Math.round((group.recoveredByCallback / group.missedCalls) * 1000) / 10 : 0,
-    cost: null,
-    costPerCall: null
-  })).sort((a, b) => b.phoneClicks - a.phoneClicks || b.visits - a.visits);
+    cost: group.cost,
+    directClicks: group.directClicks
+  })).sort((a, b) => Number(b.cost || 0) - Number(a.cost || 0) || Number(b.phoneClicks || 0) - Number(a.phoneClicks || 0) || Number(b.visits || 0) - Number(a.visits || 0));
 
   res.json({ sources, usedSettings: dataset.usedSettings });
 });
 
+app.post('/api/marketing/direct/settings', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
+  const payloadSize = Buffer.byteLength(JSON.stringify(req.body || {}), 'utf8');
+  if (payloadSize > CALLTRACKING_MAX_PAYLOAD_BYTES) return res.status(413).json({ error: 'payload_too_large' });
+
+  const integrationId = cleanMarketingString(req.body?.integrationId, 120);
+  if (!integrationId) return res.status(400).json({ error: 'integrationId_required' });
+  const rawLogins = Array.isArray(req.body?.clientLogins) ? req.body.clientLogins : [];
+  const clientLogins = Array.from(new Set(rawLogins.map((value: any) => cleanMarketingString(value, 120)).filter(Boolean))).slice(0, 50);
+
+  const localDb = await readLocalDb();
+  const integrations = Array.isArray(localDb.yandexMetrikaIntegrations) ? localDb.yandexMetrikaIntegrations : [];
+  const integration = integrations.find((item: any) => item.id === integrationId);
+  if (!integration) return res.status(404).json({ error: 'integration_not_found' });
+
+  integration.direct = {
+    ...normalizeYandexDirectSettings(integration.direct),
+    enabled: req.body?.enabled === true,
+    clientLogins,
+    lastError: null
+  };
+  integration.updatedAt = new Date().toISOString();
+  await writeLocalDb(localDb);
+  res.json({ ok: true, integration: safeYandexMetrikaIntegration(integration) });
+});
+
+app.post('/api/marketing/direct/test', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
+  const integrationId = cleanMarketingString(req.body?.integrationId, 120);
+  if (!integrationId) return res.status(400).json({ ok: false, status: 'error', error: 'integrationId_required' });
+
+  const localDb = await readLocalDb();
+  const integration = (Array.isArray(localDb.yandexMetrikaIntegrations) ? localDb.yandexMetrikaIntegrations : []).find((item: any) => item.id === integrationId);
+  if (!integration) return res.status(404).json({ ok: false, status: 'not_configured', error: 'integration_not_found' });
+  integration.direct = normalizeYandexDirectSettings(integration.direct);
+  if (!integration.accessToken || !integration.counterId) return res.status(400).json({ ok: false, status: 'error', error: 'metrika_integration_incomplete' });
+  if (!integration.direct.enabled) return res.json({ ok: false, status: 'disabled', error: 'direct_disabled' });
+
+  const { startDate, endDate } = getYandexMetrikaDateRange({});
+  try {
+    const items = await fetchYandexDirectCostsViaMetrika(integration, startDate, endDate);
+    const summary = summarizeYandexDirectCosts(items);
+    await markYandexDirectIntegration(localDb, integration.id, { lastSyncAt: new Date().toISOString(), lastError: null });
+    res.json({ ok: true, status: 'connected', sample: summary });
+  } catch (error: any) {
+    const message = normalizeYandexMetrikaError(error);
+    const hint = /direct_client_logins|client.*login|login/i.test(message) ? message + '. Укажите логины клиентов Директа или проверьте доступ к кампаниям.' : message;
+    await markYandexDirectIntegration(localDb, integration.id, { lastError: hint });
+    res.json({ ok: false, status: 'error', error: hint });
+  }
+});
+
+app.get('/api/marketing/direct/summary', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
+  const localDb = await readLocalDb();
+  const siteId = cleanMarketingString(req.query.siteId, 120);
+  const integration = findYandexDirectIntegration(localDb, siteId);
+  if (!integration) return res.json({ status: 'not_configured', lastError: null, summary: { cost: 0, clicks: 0, avgCpc: null, campaigns: 0 } });
+  if (!integration.direct.enabled) return res.json({ status: 'disabled', lastError: integration.direct.lastError || null, summary: { cost: 0, clicks: 0, avgCpc: null, campaigns: 0 } });
+  const { startDate, endDate } = getYandexMetrikaDateRange(req.query);
+  try {
+    const items = await fetchYandexDirectCostsViaMetrika(integration, startDate, endDate);
+    const summary = summarizeYandexDirectCosts(items);
+    await markYandexDirectIntegration(localDb, integration.id, { lastSyncAt: new Date().toISOString(), lastError: null });
+    res.json({ status: 'connected', lastError: null, summary });
+  } catch (error: any) {
+    const message = normalizeYandexMetrikaError(error);
+    await markYandexDirectIntegration(localDb, integration.id, { lastError: message });
+    res.json({ status: 'error', lastError: message, summary: { cost: 0, clicks: 0, avgCpc: null, campaigns: 0 } });
+  }
+});
+
+app.get('/api/marketing/direct/sources', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
+  const localDb = await readLocalDb();
+  const siteId = cleanMarketingString(req.query.siteId, 120);
+  const integration = findYandexDirectIntegration(localDb, siteId);
+  if (!integration) return res.json({ status: 'not_configured', lastError: null, items: [] });
+  if (!integration.direct.enabled) return res.json({ status: 'disabled', lastError: integration.direct.lastError || null, items: [] });
+  const { startDate, endDate } = getYandexMetrikaDateRange(req.query);
+  try {
+    const items = aggregateYandexDirectSources(await fetchYandexDirectCostsViaMetrika(integration, startDate, endDate));
+    await markYandexDirectIntegration(localDb, integration.id, { lastSyncAt: new Date().toISOString(), lastError: null });
+    res.json({ status: 'connected', lastError: null, items });
+  } catch (error: any) {
+    const message = normalizeYandexMetrikaError(error);
+    await markYandexDirectIntegration(localDb, integration.id, { lastError: message });
+    res.json({ status: 'error', lastError: message, items: [] });
+  }
+});
 
 app.get('/api/marketing/metrika/integrations', requireAuth(), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
@@ -3170,6 +3418,7 @@ app.post('/api/marketing/metrika/integrations', requireAuth(), async (req, res) 
       lastSyncAt: null,
       lastError: '',
       goals,
+      direct: normalizeYandexDirectSettings(null),
       createdAt: now,
       updatedAt: now
     };

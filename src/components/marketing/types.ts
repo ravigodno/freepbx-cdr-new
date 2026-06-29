@@ -6,6 +6,10 @@ export interface MarketingOverviewSummary {
   missedSiteCalls: number | null;
   lostLeads: number | null;
   adCost: number | null;
+  adClicks?: number | null;
+  avgCpc?: number | null;
+  costPerCall?: number | null;
+  costPerAnsweredCall?: number | null;
   lostBudgetEstimate: number | null;
 }
 
@@ -85,7 +89,12 @@ export interface TrafficSourceSummary {
   matchRate?: number;
   clickToCallConversion?: number;
   cost?: number | null;
+  directClicks?: number | null;
+  avgCpc?: number | null;
   costPerCall?: number | null;
+  costPerAnsweredCall?: number | null;
+  costPerLostLead?: number | null;
+  lostBudgetEstimate?: number | null;
 }
 
 export interface CampaignSummary {
@@ -139,6 +148,35 @@ export interface CalltrackingSummaryResponse {
   averageCallbackSeconds?: number | null;
 }
 
+export interface YandexDirectSettings {
+  enabled: boolean;
+  clientLogins: string[];
+  lastSyncAt?: string | null;
+  lastError?: string | null;
+}
+
+export interface YandexDirectSummary {
+  status: 'connected' | 'not_configured' | 'disabled' | 'error' | string;
+  lastError: string | null;
+  summary: {
+    cost: number | null;
+    clicks: number | null;
+    avgCpc: number | null;
+    campaigns: number;
+  };
+}
+
+export interface YandexDirectSourceRow {
+  source: string;
+  medium: string;
+  campaignId?: string | null;
+  campaignName: string;
+  clicks: number | null;
+  cost: number | null;
+  currency?: string | null;
+  avgCpc: number | null;
+}
+
 export interface YandexMetrikaGoals {
   phoneClickGoalId?: string | null;
   whatsappClickGoalId?: string | null;
@@ -164,6 +202,7 @@ export interface YandexMetrikaIntegration {
   lastSyncAt?: string | null;
   lastError?: string | null;
   goals?: YandexMetrikaGoals | null;
+  direct?: YandexDirectSettings | null;
   createdAt?: string | null;
   updatedAt?: string | null;
 }

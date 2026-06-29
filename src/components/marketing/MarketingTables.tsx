@@ -18,8 +18,19 @@ function safeText(value: unknown): string {
 }
 
 function safeNumber(value: unknown): string {
-  const num = Number(value || 0);
-  return Number.isFinite(num) ? num.toLocaleString('ru-RU') : '0';
+  if (value === null || value === undefined || value === '') return '—';
+  const num = Number(value);
+  return Number.isFinite(num) ? num.toLocaleString('ru-RU') : '—';
+}
+
+function safeMoney(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '—';
+  const num = Number(value);
+  return Number.isFinite(num) ? num.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) + ' ₽' : '—';
+}
+
+function safeArray<T>(value: T[] | null | undefined): T[] {
+  return Array.isArray(value) ? value : [];
 }
 
 function safePercent(value: unknown): string {
@@ -111,7 +122,8 @@ function EmptyTableCard({ title, description, columns, emptyTitle, emptyDescript
   );
 }
 
-export function PhoneClicksTable({ events = [] }: { events?: PhoneClickEvent[] }) {
+export function PhoneClicksTable({ events = [] }: { events?: PhoneClickEvent[] | null }) {
+  const rows = safeArray(events);
   return (
     <EmptyTableCard
       title="Клики по телефонам"
@@ -119,9 +131,9 @@ export function PhoneClicksTable({ events = [] }: { events?: PhoneClickEvent[] }
       columns={['Дата/время клика', 'Сайт', 'Страница', 'Номер на сайте', 'ymClientId', 'utm_source', 'utm_medium', 'utm_campaign', 'Связь со звонком', 'Статус лида', 'Перезвон', 'Звонок', 'Диспозиция', 'Время до звонка', 'Время до перезвона']}
       emptyTitle="Событий пока нет"
       emptyDescription="Создайте сайт и установите JS-скрипт PBXPuls на сайт."
-      hasRows={events.length > 0}
+      hasRows={rows.length > 0}
     >
-      {events.map(event => (
+      {rows.map(event => (
         <tr key={event.eventId || event.id || event.eventTime + event.phoneText} className="transition hover:bg-slate-50 dark:hover:bg-slate-800/40">
           <td className="px-3 py-3 font-semibold text-slate-700 dark:text-slate-200">{formatDateTime(event.eventTime)}</td>
           <td className="px-3 py-3 font-bold text-slate-700 dark:text-slate-200">{safeText(event.siteName || event.siteNameFallback)}</td>
@@ -144,17 +156,18 @@ export function PhoneClicksTable({ events = [] }: { events?: PhoneClickEvent[] }
   );
 }
 
-export function TrafficSourcesTable({ sources = [] }: { sources?: TrafficSourceSummary[] }) {
+export function TrafficSourcesTable({ sources = [] }: { sources?: TrafficSourceSummary[] | null }) {
+  const rows = safeArray(sources);
   return (
     <EmptyTableCard
       title="Источники звонков"
       description="Атрибуция звонков по рекламным и органическим источникам"
-      columns={['Источник', 'Medium', 'Кампания', 'Визиты', 'Пользователи', 'Отказы', 'Клики', 'Формы', 'Звонки', 'Отвечено', 'Пропущено', 'Спасено', 'Потеряно', 'Конверсия', '% спасенных']}
+      columns={['Источник', 'Medium', 'Кампания', 'Визиты', 'Пользователи', 'Отказы', 'Клики', 'Формы', 'Звонки', 'Отвечено', 'Пропущено', 'Спасено', 'Потеряно', 'Расход', 'Клики Директа', 'CPC', 'Цена звонка', 'Цена отвеченного звонка', 'Потерянный бюджет', 'Конверсия', '% спасенных']}
       emptyTitle="Нет данных по источникам"
       emptyDescription="Данные появятся после подключения коллтрекинга и рекламных интеграций."
-      hasRows={sources.length > 0}
+      hasRows={rows.length > 0}
     >
-      {sources.map(source => (
+      {rows.map(source => (
         <tr key={[source.source, source.medium, source.campaign].join('|')} className="transition hover:bg-slate-50 dark:hover:bg-slate-800/40">
           <td className="px-3 py-3 font-black text-slate-800 dark:text-slate-100">{safeText(source.source)}</td>
           <td className="px-3 py-3 text-slate-500">{safeText(source.medium)}</td>
@@ -169,6 +182,12 @@ export function TrafficSourcesTable({ sources = [] }: { sources?: TrafficSourceS
           <td className="px-3 py-3 font-mono font-black text-amber-700 dark:text-amber-300">{safeNumber(source.missedCalls)}</td>
           <td className="px-3 py-3 font-mono font-black text-blue-700 dark:text-blue-300">{safeNumber(source.recoveredByCallback)}</td>
           <td className="px-3 py-3 font-mono font-black text-rose-700 dark:text-rose-300">{safeNumber(source.trueLostLeads ?? source.lostCalls)}</td>
+          <td className="px-3 py-3 font-mono font-black text-blue-700 dark:text-blue-300">{safeMoney(source.cost)}</td>
+          <td className="px-3 py-3 font-mono font-black text-purple-700 dark:text-purple-300">{safeNumber(source.directClicks)}</td>
+          <td className="px-3 py-3 font-mono font-black text-slate-700 dark:text-slate-200">{safeMoney(source.avgCpc)}</td>
+          <td className="px-3 py-3 font-mono font-black text-slate-700 dark:text-slate-200">{safeMoney(source.costPerCall)}</td>
+          <td className="px-3 py-3 font-mono font-black text-slate-700 dark:text-slate-200">{safeMoney(source.costPerAnsweredCall)}</td>
+          <td className="px-3 py-3 font-mono font-black text-rose-700 dark:text-rose-300">{safeMoney(source.lostBudgetEstimate)}</td>
           <td className="px-3 py-3 font-mono font-black text-slate-700 dark:text-slate-200">{safePercent(source.clickToCallConversion)}</td>
           <td className="px-3 py-3 font-mono font-black text-slate-700 dark:text-slate-200">{safePercent(source.callbackRecoveryRate)}</td>
         </tr>
@@ -177,7 +196,8 @@ export function TrafficSourcesTable({ sources = [] }: { sources?: TrafficSourceS
   );
 }
 
-export function MetrikaPagesTable({ pages = [], connected = false }: { pages?: YandexMetrikaPageSummary[]; connected?: boolean }) {
+export function MetrikaPagesTable({ pages = [], connected = false }: { pages?: YandexMetrikaPageSummary[] | null; connected?: boolean }) {
+  const rows = safeArray(pages);
   return (
     <EmptyTableCard
       title="Страницы"
@@ -185,9 +205,9 @@ export function MetrikaPagesTable({ pages = [], connected = false }: { pages?: Y
       columns={['Страница', 'Визиты', 'Пользователи', 'Просмотры', 'Клики по телефону']}
       emptyTitle={connected ? 'Данных по страницам пока нет' : 'Яндекс.Метрика не подключена'}
       emptyDescription={connected ? 'Данные появятся после накопления статистики Метрики.' : 'Подключите Яндекс.Метрику, чтобы видеть страницы входа и поведение посетителей.'}
-      hasRows={pages.length > 0}
+      hasRows={rows.length > 0}
     >
-      {pages.map(page => (
+      {rows.map(page => (
         <tr key={page.pageUrl} className="transition hover:bg-slate-50 dark:hover:bg-slate-800/40">
           <td className="max-w-[520px] truncate px-3 py-3 font-semibold text-slate-700 dark:text-slate-200" title={page.pageUrl}>{safeText(page.pageUrl)}</td>
           <td className="px-3 py-3 font-mono font-black text-slate-700 dark:text-slate-200">{safeNumber(page.visits)}</td>
@@ -212,7 +232,8 @@ export function CampaignsReportTable() {
   );
 }
 
-export function LostLeadsTable({ events = [] }: { events?: PhoneClickEvent[] }) {
+export function LostLeadsTable({ events = [] }: { events?: PhoneClickEvent[] | null }) {
+  const rows = safeArray(events);
   return (
     <EmptyTableCard
       title="Потерянные лиды"
@@ -220,9 +241,9 @@ export function LostLeadsTable({ events = [] }: { events?: PhoneClickEvent[] }) 
       columns={['Источник', 'Кампания', 'Страница', 'Время клика', 'Время звонка', 'Номер', 'Статус', 'Перезвон', 'Ответственный', 'Потерянный бюджет']}
       emptyTitle="Потерянных лидов по коллтрекингу пока нет"
       emptyDescription="Здесь появятся сопоставленные обращения без ответа, по которым не было успешного перезвона."
-      hasRows={events.length > 0}
+      hasRows={rows.length > 0}
     >
-      {events.map(event => (
+      {rows.map(event => (
         <tr key={event.eventId || event.id || event.eventTime + event.phoneText} className="transition hover:bg-slate-50 dark:hover:bg-slate-800/40">
           <td className="px-3 py-3 font-black text-slate-800 dark:text-slate-100">{safeText(event.utmSource || event.referrer)}</td>
           <td className="px-3 py-3 text-slate-500">{safeText(event.utmCampaign)}</td>

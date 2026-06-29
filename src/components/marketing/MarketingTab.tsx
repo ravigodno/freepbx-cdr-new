@@ -5,7 +5,7 @@ import { MarketingIntegrationsPanel } from './MarketingIntegrationsPanel';
 import { MarketingKpiCard } from './MarketingKpiCard';
 import { CampaignsReportTable, LostLeadsTable, MetrikaPagesTable, PhoneClicksTable, TrafficSourcesTable } from './MarketingTables';
 import { MarketingEmptyState } from './MarketingEmptyState';
-import { CalltrackingSite, CalltrackingSummaryResponse, MarketingOverviewSummary, PhoneClickEvent, TrafficSourceSummary, UsedCallQualitySettings, YandexMetrikaIntegration, YandexMetrikaPageSummary, YandexMetrikaSourceSummary, YandexMetrikaSummary } from './types';
+import { CalltrackingSite, CalltrackingSummaryResponse, MarketingOverviewSummary, PhoneClickEvent, TrafficSourceSummary, UsedCallQualitySettings, YandexDirectSourceRow, YandexDirectSummary, YandexMetrikaIntegration, YandexMetrikaPageSummary, YandexMetrikaSourceSummary, YandexMetrikaSummary } from './types';
 
 type MarketingTabId = 'overview' | 'phone-clicks' | 'sources' | 'campaigns' | 'pages' | 'utm' | 'lost-leads' | 'analytics' | 'integrations';
 
@@ -27,9 +27,45 @@ function getAuthToken(): string {
   try { return JSON.parse(sessionSaved)?.token || ''; } catch { return ''; }
 }
 
-function formatMetric(value: number | null, suffix = ''): string {
-  if (value === null || value === undefined || !Number.isFinite(Number(value))) return '—';
+const DEFAULT_DIRECT_SUMMARY: YandexDirectSummary = {
+  status: 'not_configured',
+  lastError: null,
+  summary: { cost: null, clicks: null, avgCpc: null, campaigns: 0 }
+};
+
+function isFiniteNumber(value: unknown): value is number {
+  return value !== null && value !== undefined && Number.isFinite(Number(value));
+}
+
+function numberOrNull(value: unknown): number | null {
+  return isFiniteNumber(value) ? Number(value) : null;
+}
+
+function roundMoney(value: number | null): number | null {
+  return value === null ? null : Math.round(value * 100) / 100;
+}
+
+function safeDivide(numerator: number | null, denominator: number | null): number | null {
+  if (numerator === null || denominator === null || denominator <= 0) return null;
+  return roundMoney(numerator / denominator);
+}
+
+function formatMetric(value: number | null | undefined, suffix = ''): string {
+  if (!isFiniteNumber(value)) return '—';
   return Number(value).toLocaleString('ru-RU') + suffix;
+}
+
+function formatMoney(value: number | null | undefined): string {
+  if (!isFiniteNumber(value)) return '—';
+  return Number(value).toLocaleString('ru-RU', { maximumFractionDigits: 2 }) + ' ₽';
+}
+
+function asArray<T>(value: unknown): T[] {
+  return Array.isArray(value) ? value : [];
+}
+
+async function readJsonSafe(response: Response): Promise<any> {
+  try { return await response.json(); } catch { return {}; }
 }
 
 export default function MarketingTab() {
@@ -43,6 +79,8 @@ export default function MarketingTab() {
   const [metrikaSources, setMetrikaSources] = useState<YandexMetrikaSourceSummary[]>([]);
   const [metrikaPages, setMetrikaPages] = useState<YandexMetrikaPageSummary[]>([]);
   const [metrikaStatus, setMetrikaStatus] = useState<'connected' | 'not_configured' | 'error'>('not_configured');
+  const [directSummary, setDirectSummary] = useState<YandexDirectSummary>(DEFAULT_DIRECT_SUMMARY);
+  const [directSources, setDirectSources] = useState<YandexDirectSourceRow[]>([]);
   const [usedSettings, setUsedSettings] = useState<UsedCallQualitySettings | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -56,7 +94,12 @@ export default function MarketingTab() {
         setError('');
         const token = getAuthToken();
         const headers = { Authorization: 'Bearer ' + token };
-        const [summaryRes, eventsRes, sourcesRes, sitesRes, metrikaIntegrationsRes, metrikaSummaryRes, metrikaSourcesRes, metrikaPagesRes] = await Promise.all([
+        const today = new Date();
+        const endDate = today.toISOString().slice(0, 10);
+        const start = new Date(today);
+        start.setDate(start.getDate() - 30);
+        const startDate = start.toISOString().slice(0, 10);
+        const [summaryRes, eventsRes, sourcesRes, sitesRes, metrikaIntegrationsRes, metrikaSummaryRes, metrikaSourcesRes, metrikaPagesRes, directSummaryRes, directSourcesRes] = await Promise.all([
           fetch('/api/calltracking/summary', { headers }),
           fetch('/api/calltracking/matches?limit=100', { headers }),
           fetch('/api/calltracking/sources', { headers }),
@@ -64,24 +107,37 @@ export default function MarketingTab() {
           fetch('/api/marketing/metrika/integrations', { headers }),
           fetch('/api/marketing/metrika/summary', { headers }),
           fetch('/api/marketing/metrika/sources', { headers }),
-          fetch('/api/marketing/metrika/pages', { headers })
+          fetch('/api/marketing/metrika/pages', { headers }),
+          fetch('/api/marketing/direct/summary?startDate=' + startDate + '&endDate=' + endDate, { headers }),
+          fetch('/api/marketing/direct/sources?startDate=' + startDate + '&endDate=' + endDate, { headers })
         ]);
         if (!summaryRes.ok || !eventsRes.ok || !sourcesRes.ok || !sitesRes.ok || !metrikaIntegrationsRes.ok || !metrikaSummaryRes.ok || !metrikaSourcesRes.ok || !metrikaPagesRes.ok) {
           throw new Error('Не удалось загрузить данные маркетинга.');
         }
-        const [summaryJson, eventsJson, sourcesJson, sitesJson, metrikaIntegrationsJson, metrikaSummaryJson, metrikaSourcesJson, metrikaPagesJson] = await Promise.all([
-          summaryRes.json(), eventsRes.json(), sourcesRes.json(), sitesRes.json(), metrikaIntegrationsRes.json(), metrikaSummaryRes.json(), metrikaSourcesRes.json(), metrikaPagesRes.json()
+        const [summaryJson, eventsJson, sourcesJson, sitesJson, metrikaIntegrationsJson, metrikaSummaryJson, metrikaSourcesJson, metrikaPagesJson, directSummaryJson, directSourcesJson] = await Promise.all([
+          readJsonSafe(summaryRes), readJsonSafe(eventsRes), readJsonSafe(sourcesRes), readJsonSafe(sitesRes), readJsonSafe(metrikaIntegrationsRes), readJsonSafe(metrikaSummaryRes), readJsonSafe(metrikaSourcesRes), readJsonSafe(metrikaPagesRes), readJsonSafe(directSummaryRes), readJsonSafe(directSourcesRes)
         ]);
         if (!active) return;
         setSummaryData(summaryJson.summary || null);
-        setPhoneClicks(Array.isArray(eventsJson.matches) ? eventsJson.matches : []);
-        setSources(Array.isArray(sourcesJson.sources) ? sourcesJson.sources : []);
-        setSites(Array.isArray(sitesJson.sites) ? sitesJson.sites : []);
-        setMetrikaIntegrations(Array.isArray(metrikaIntegrationsJson.integrations) ? metrikaIntegrationsJson.integrations : []);
+        setPhoneClicks(asArray<PhoneClickEvent>(eventsJson.matches));
+        setSources(asArray<TrafficSourceSummary>(sourcesJson.sources));
+        setSites(asArray<CalltrackingSite>(sitesJson.sites));
+        setMetrikaIntegrations(asArray<YandexMetrikaIntegration>(metrikaIntegrationsJson.integrations));
         setMetrikaSummary(metrikaSummaryJson.summary || null);
-        setMetrikaSources(Array.isArray(metrikaSourcesJson.sources) ? metrikaSourcesJson.sources : []);
-        setMetrikaPages(Array.isArray(metrikaPagesJson.pages) ? metrikaPagesJson.pages : []);
+        setMetrikaSources(asArray<YandexMetrikaSourceSummary>(metrikaSourcesJson.sources));
+        setMetrikaPages(asArray<YandexMetrikaPageSummary>(metrikaPagesJson.pages));
         setMetrikaStatus(metrikaSummaryJson.status || 'not_configured');
+        setDirectSummary(directSummaryRes.ok && directSummaryJson?.summary ? {
+          status: directSummaryJson.status || 'not_configured',
+          lastError: directSummaryJson.lastError || null,
+          summary: {
+            cost: numberOrNull(directSummaryJson.summary.cost),
+            clicks: numberOrNull(directSummaryJson.summary.clicks),
+            avgCpc: numberOrNull(directSummaryJson.summary.avgCpc),
+            campaigns: numberOrNull(directSummaryJson.summary.campaigns) || 0
+          }
+        } : { ...DEFAULT_DIRECT_SUMMARY, status: directSummaryRes.ok ? 'not_configured' : 'error', lastError: directSummaryJson?.error || directSummaryJson?.lastError || null });
+        setDirectSources(directSourcesRes.ok ? asArray<YandexDirectSourceRow>(directSourcesJson.items) : []);
         setUsedSettings(summaryJson.usedSettings || eventsJson.usedSettings || sourcesJson.usedSettings || null);
       } catch (err: any) {
         if (active) setError(err?.message || 'Не удалось загрузить данные коллтрекинга.');
@@ -100,8 +156,8 @@ export default function MarketingTab() {
   const mergedSources = useMemo(() => {
     const map = new Map<string, TrafficSourceSummary>();
     const keyOf = (source: string, medium?: string | null, campaign?: string | null) => [source || 'direct', medium || '', campaign || ''].join('||');
-    sources.forEach(source => map.set(keyOf(source.source, source.medium, source.campaign), { ...source }));
-    metrikaSources.forEach(source => {
+    asArray<TrafficSourceSummary>(sources).forEach(source => map.set(keyOf(source.source, source.medium, source.campaign), { ...source }));
+    asArray<YandexMetrikaSourceSummary>(metrikaSources).forEach(source => {
       const key = keyOf(source.source, source.medium, source.campaign);
       const existing = map.get(key);
       if (existing) {
@@ -110,8 +166,42 @@ export default function MarketingTab() {
         map.set(key, { source: source.source, medium: source.medium || '', campaign: source.campaign || '', visits: source.visits || 0, users: source.users, bounceRate: source.bounceRate, avgVisitDurationSeconds: source.avgVisitDurationSeconds, phoneClicks: 0, formSubmits: 0, calls: 0, answeredCalls: 0, missedCalls: 0, recoveredByCallback: 0, trueLostLeads: 0, clickToCallConversion: 0, callbackRecoveryRate: 0, cost: null, costPerCall: null });
       }
     });
+    asArray<YandexDirectSourceRow>(directSources).forEach(source => {
+      const cost = numberOrNull(source.cost);
+      const directClicks = numberOrNull(source.clicks);
+      const campaign = source.campaignName || source.campaignId || '';
+      const key = keyOf(source.source || 'yandex', source.medium || 'cpc', campaign);
+      const existing = map.get(key) || {
+        source: source.source || 'yandex',
+        medium: source.medium || 'cpc',
+        campaign,
+        visits: 0,
+        phoneClicks: 0,
+        formSubmits: 0,
+        calls: 0,
+        answeredCalls: 0,
+        missedCalls: 0,
+        recoveredByCallback: 0,
+        trueLostLeads: 0,
+        clickToCallConversion: 0,
+        callbackRecoveryRate: 0
+      };
+      const calls = numberOrNull(existing.calls) || 0;
+      const answeredCalls = numberOrNull(existing.answeredCalls) || 0;
+      const trueLostLeads = numberOrNull(existing.trueLostLeads ?? existing.lostCalls) || 0;
+      map.set(key, {
+        ...existing,
+        cost,
+        directClicks,
+        avgCpc: cost === null ? null : safeDivide(cost, directClicks),
+        costPerCall: cost === null ? null : safeDivide(cost, calls),
+        costPerAnsweredCall: cost === null ? null : safeDivide(cost, answeredCalls),
+        costPerLostLead: cost === null ? null : safeDivide(cost, trueLostLeads),
+        lostBudgetEstimate: cost === null ? null : (trueLostLeads > 0 && calls > 0 ? roundMoney(cost * (trueLostLeads / calls)) : 0)
+      });
+    });
     return Array.from(map.values()).sort((a, b) => Number(b.phoneClicks || 0) - Number(a.phoneClicks || 0) || Number(b.visits || 0) - Number(a.visits || 0));
-  }, [metrikaSources, sources]);
+  }, [directSources, metrikaSources, sources]);
 
   const summary: MarketingOverviewSummary = useMemo(() => ({
     visits: useMetrikaVisits ? Number(metrikaSummary?.visits || 0) : (summaryData ? Number(summaryData.uniqueSessions || summaryData.visits || 0) : null),
@@ -120,9 +210,15 @@ export default function MarketingTab() {
     clickToCallConversion: summaryData ? Number(summaryData.clickToCallConversion ?? 0) : null,
     missedSiteCalls: summaryData ? Number(summaryData.missedSiteCalls ?? 0) : null,
     lostLeads: summaryData ? Number(summaryData.trueLostLeads ?? summaryData.lostSiteCalls ?? 0) : null,
-    adCost: null,
-    lostBudgetEstimate: null
-  }), [metrikaSummary?.visits, summaryData, useMetrikaVisits]);
+    adCost: directSummary.status === 'connected' || directSummary.status === 'disabled' ? directSummary.summary.cost : null,
+    adClicks: directSummary.status === 'connected' || directSummary.status === 'disabled' ? directSummary.summary.clicks : null,
+    avgCpc: directSummary.status === 'connected' || directSummary.status === 'disabled' ? directSummary.summary.avgCpc : null,
+    costPerCall: safeDivide(directSummary.summary.cost, summaryData ? Number(summaryData.siteCalls ?? summaryData.matchedCalls ?? 0) : null),
+    costPerAnsweredCall: safeDivide(directSummary.summary.cost, summaryData ? Number(summaryData.answeredSiteCalls ?? 0) : null),
+    lostBudgetEstimate: directSummary.summary.cost !== null && summaryData && Number(summaryData.trueLostLeads ?? summaryData.lostSiteCalls ?? 0) > 0 && Number(summaryData.siteCalls ?? summaryData.matchedCalls ?? 0) > 0
+      ? roundMoney(Number(directSummary.summary.cost) * (Number(summaryData.trueLostLeads ?? summaryData.lostSiteCalls ?? 0) / Number(summaryData.siteCalls ?? summaryData.matchedCalls ?? 0)))
+      : null
+  }), [directSummary, metrikaSummary?.visits, summaryData, useMetrikaVisits]);
 
   const kpis = useMemo(() => [
     { label: 'Визиты', value: formatMetric(summary.visits), hint: useMetrikaVisits ? 'Из Яндекс.Метрики' : (summaryData ? 'Fallback: события PBXPuls' : 'Данные появятся после подключения скрипта коллтрекинга'), icon: BarChart3, tone: 'blue' as const },
@@ -131,9 +227,13 @@ export default function MarketingTab() {
     { label: 'Конверсия клик → звонок', value: formatMetric(summary.clickToCallConversion, '%'), hint: 'Доля кликов, сопоставленных со звонками', icon: Target, tone: 'purple' as const },
     { label: 'Пропущенные звонки с сайта', value: formatMetric(summary.missedSiteCalls), hint: 'Сопоставленные звонки без успешного ответа', icon: PhoneMissed, tone: 'orange' as const },
     { label: 'Потерянные лиды', value: formatMetric(summary.lostLeads), hint: 'С учетом успешных перезвонов в течение ' + callbackSlaHours + ' ч', icon: TrendingDown, tone: 'red' as const },
-    { label: 'Рекламный расход', value: formatMetric(summary.adCost, ' ₽'), hint: 'Интеграция с рекламными кабинетами позже', icon: CircleDollarSign, tone: 'blue' as const },
-    { label: 'Потерянный бюджет', value: formatMetric(summary.lostBudgetEstimate, ' ₽'), hint: 'Оценка появится после импорта расходов', icon: Banknote, tone: 'red' as const }
-  ], [summary, summaryData, callbackSlaHours, useMetrikaVisits]);
+    { label: 'Расходы', value: formatMoney(summary.adCost), hint: directSummary.status === 'connected' ? 'Расходы Яндекс Директа через Метрику' : 'Расходы Директа не подключены', icon: CircleDollarSign, tone: 'blue' as const },
+    { label: 'Клики', value: formatMetric(summary.adClicks), hint: directSummary.status === 'connected' ? 'Клики Директа' : 'Расходы Директа не подключены', icon: MousePointerClick, tone: 'purple' as const },
+    { label: 'Средняя цена клика', value: formatMoney(summary.avgCpc), hint: directSummary.status === 'connected' ? 'CPC по Direct costs' : 'Расходы Директа не подключены', icon: Target, tone: 'blue' as const },
+    { label: 'Цена звонка', value: formatMoney(summary.costPerCall), hint: 'Расход / звонки с сайта', icon: PhoneCall, tone: 'green' as const },
+    { label: 'Цена отвеченного звонка', value: formatMoney(summary.costPerAnsweredCall), hint: 'Расход / отвеченные звонки', icon: CheckCircle2, tone: 'green' as const },
+    { label: 'Потерянный бюджет', value: formatMoney(summary.lostBudgetEstimate), hint: directSummary.lastError || (directSummary.status === 'connected' ? 'Оценка расхода на потерянные лиды' : 'Расходы Директа не подключены'), icon: Banknote, tone: 'red' as const }
+  ], [summary, summaryData, callbackSlaHours, directSummary, useMetrikaVisits]);
 
   const renderTab = () => {
     if (activeTab === 'phone-clicks') return <PhoneClicksTable events={phoneClicks} />;
