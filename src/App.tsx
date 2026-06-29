@@ -63,6 +63,7 @@ import packageJson from '../package.json';
 import SngrepTab from './modules/monitoring/tabs/monitoring/SngrepTab';
 import TcpdumpTab from './modules/monitoring/tabs/monitoring/TcpdumpTab';
 import ReportsTab from './components/reports/ReportsTab';
+import MarketingTab from './components/marketing/MarketingTab';
 import ActiveCallsTab from './modules/monitoring/tabs/monitoring/ActiveCallsTab';
 import CommandCenterTab from './modules/monitoring/tabs/monitoring/CommandCenterTab';
 const DbExplorerTab = lazy(() => import('./modules/monitoring/tabs/monitoring/DbExplorerTab'));
@@ -425,8 +426,8 @@ export default function App() {
   const [timeToNextRefresh, setTimeToNextRefresh] = useState<number>(30);
 
   // --- TELEPHONE DIRECTORY STATE & HANDLERS ---
-  const [activeView, setActiveView] = useState<'calls' | 'directory' | 'reports' | 'monitoring' | 'management' | 'balance' | 'settings'>(() => {
-    const saved = localStorage.getItem('asterisk_cdr_active_view') as 'calls' | 'directory' | 'reports' | 'monitoring' | 'management' | 'balance' | null;
+  const [activeView, setActiveView] = useState<'calls' | 'directory' | 'reports' | 'marketing' | 'monitoring' | 'management' | 'balance' | 'settings'>(() => {
+    const saved = localStorage.getItem('asterisk_cdr_active_view') as 'calls' | 'directory' | 'reports' | 'marketing' | 'monitoring' | 'management' | 'balance' | null;
     return saved || 'calls';
   });
   const [liveSessionsData, setLiveSessionsData] = useState<any>(null);
@@ -2817,6 +2818,30 @@ export default function App() {
                 )}
               </button>
             )}
+
+            {hasPermission('view_reports') && (
+              <button
+                onClick={() => setActiveView('marketing')}
+                className={`flex items-center ${isSidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl transition-all relative group cursor-pointer ${
+                  activeView === 'marketing'
+                    ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-900/30 shadow-inner'
+                    : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent'
+                }`}
+                title={isSidebarExpanded ? "" : "Маркетинг"}
+              >
+                <Target className="h-5 w-5 shrink-0" />
+                {isSidebarExpanded && (
+                  <span className="text-xs font-semibold truncate animate-fade-in text-slate-705 dark:text-slate-200">
+                    Маркетинг
+                  </span>
+                )}
+                {!isSidebarExpanded && (
+                  <span className="absolute left-full ml-3 px-2 py-1 rounded bg-slate-950 text-white text-[10px] font-bold opacity-0 group-hover:opacity-100 transition-opacity z-50 whitespace-nowrap shadow-md pointer-events-none">
+                    Маркетинг
+                  </span>
+                )}
+              </button>
+            )}
           
               {/* SIDEBAR_MONITORING */}
               {hasPermission('view_reports') && (
@@ -2995,6 +3020,7 @@ export default function App() {
                   {activeView === 'calls' && <Phone className="h-5 w-5" />}
                   {activeView === 'directory' && <BookOpen className="h-5 w-5" />}
                   {activeView === 'reports' && <BarChart3 className="h-5 w-5 animate-pulse" />}
+                  {activeView === 'marketing' && <Target className="h-5 w-5" />}
                   {activeView === 'monitoring' && <Activity className="h-5 w-5 animate-pulse" />}
                   {activeView === 'management' && <Wrench className="h-5 w-5" />}
                   {activeView === 'balance' && <Wallet className="h-5 w-5" />}
@@ -3005,6 +3031,7 @@ export default function App() {
                     {activeView === 'calls' && 'Реестр звонков'}
                     {activeView === 'directory' && 'Телефонный справочник'}
                     {activeView === 'reports' && 'Отчеты и Аналитика'}
+                    {activeView === 'marketing' && 'Маркетинг'}
                     {activeView === 'monitoring' && 'Мониторинг звонков'}
                     {activeView === 'management' && 'Управление АТС'}
                     {activeView === 'balance' && 'Баланс операторов'}
@@ -4076,6 +4103,8 @@ export default function App() {
       )}
 
     {activeView === 'reports' && renderReportsView()}
+
+    {activeView === 'marketing' && <MarketingTab />}
 
     {activeView === 'monitoring' && renderMonitoringView()}
 
