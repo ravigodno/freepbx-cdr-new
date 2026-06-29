@@ -807,6 +807,184 @@ const getAnalyticsStatus = (slaPercent: number | null, missedCalls: number, lost
   return 'ok';
 };
 
+
+type TrunkQualityLabel = 'ok' | 'warning' | 'problem' | 'unknown';
+
+type TrunkSummaryItem = {
+  trunkName: string;
+  trunkType: 'chan_sip' | 'pjsip' | 'unknown';
+  inboundCalls: number;
+  outboundCalls: number;
+  totalCalls: number;
+  answeredCalls: number;
+  missedCalls: number;
+  failedCalls: number;
+  busyCalls: number;
+  noAnswerCalls: number;
+  averageDurationSeconds: number;
+  acd: number;
+  asr: number;
+  loadPercent: number;
+  qualityLabel: TrunkQualityLabel;
+  statusText: string;
+  lastCallAt: string | null;
+  liveStatus: 'unknown';
+};
+
+const UNKNOWN_TRUNK_NAME = 'Не определен';
+
+const cleanTrunkCandidate = (value: any): string | null => {
+  let candidate = String(value || '').trim();
+  if (!candidate) return null;
+  candidate = candidate.replace(/^['"]|['"]$/g, '');
+  candidate = candidate.split('@')[0];
+  candidate = candidate.split(';')[0];
+  candidate = candidate.split(',')[0];
+  candidate = candidate.split('&')[0];
+  candidate = candidate.replace(/-[0-9a-f]{6,}$/i, '');
+  candidate = candidate.replace(/^trunk[-_]/i, 'trunk-');
+  if (!candidate || candidate === 's' || candidate === UNKNOWN_TRUNK_NAME) return null;
+  if (/^[0-9]{2,5}$/.test(candidate) || /^[0-9]{2,5}\/[0-9]{2,5}$/.test(candidate)) return null;
+  return candidate;
+};
+
+const extractTrunkNameFromText = (text: any): string | null => {
+  const value = String(text || '');
+  if (!value) return null;
+
+  const dialMatch = value.match(/\b(?:SIP|PJSIP)\/([^\/\s,;&]+)\//i);
+  if (dialMatch?.[1]) {
+    const cleaned = cleanTrunkCandidate(dialMatch[1]);
+    if (cleaned) return cleaned;
+  }
+
+  const channelMatches = Array.from(value.matchAll(/\b(?:SIP|PJSIP)\/([^\s,;&]+)/gi));
+  for (const match of channelMatches) {
+    const cleaned = cleanTrunkCandidate(match[1]);
+    if (cleaned) return cleaned;
+  }
+
+  return null;
+};
+
+const extractTrunkName = (cdrRow: any): string | null => {
+  const orderedFields = isOutgoing(cdrRow)
+    ? [cdrRow?.dstchannel, cdrRow?.lastdata, cdrRow?.channel]
+    : [cdrRow?.channel, cdrRow?.dstchannel, cdrRow?.lastdata];
+
+  for (const field of orderedFields) {
+    const trunk = extractTrunkNameFromText(field);
+    if (trunk) return trunk;
+  }
+
+  return null;
+};
+
+const detectTrunkType = (_trunkName: string | null, cdrRow: any): 'chan_sip' | 'pjsip' | 'unknown' => {
+  const haystack = [cdrRow?.channel, cdrRow?.dstchannel, cdrRow?.lastdata].map(v => String(v || '')).join(' ');
+  if (/\bPJSIP\//i.test(haystack)) return 'pjsip';
+  if (/\bSIP\//i.test(haystack)) return 'chan_sip';
+  return 'unknown';
+};
+
+const determineTrunkQuality = (entry: any): { qualityLabel: TrunkQualityLabel; statusText: string } => {
+  const total = Number(entry.totalCalls || 0);
+  if (total <= 0) return { qualityLabel: 'unknown', statusText: 'Нет данных' };
+
+  const asr = total ? (Number(entry.answeredCalls || 0) / total) * 100 : 0;
+  const failedRate = total ? (Number(entry.failedCalls || 0) / total) * 100 : 0;
+  const missedRate = total ? (Number(entry.missedCalls || 0) / total) * 100 : 0;
+  const loadPercent = Number(entry.loadPercent || 0);
+
+  if ((entry.failedCalls > 0 && failedRate >= 10) || asr < 60 || Number(entry.answeredCalls || 0) === 0) {
+    return { qualityLabel: 'problem', statusText: entry.failedCalls > 0 ? 'Ошибки' : 'Проверить' };
+  }
+
+  if ((asr >= 60 && asr < 80) || missedRate >= 25 || loadPercent >= 35) {
+    return { qualityLabel: 'warning', statusText: loadPercent >= 35 ? 'Нагрузка' : 'Проверить' };
+  }
+
+  return { qualityLabel: 'ok', statusText: 'OK' };
+};
+
+const calculateTrunkMetrics = (rows: any[]): TrunkSummaryItem[] => {
+  const byTrunk = new Map<string, any>();
+  const totalRows = rows.length || 0;
+
+  rows.forEach(row => {
+    const trunkName = extractTrunkName(row) || UNKNOWN_TRUNK_NAME;
+    let entry = byTrunk.get(trunkName);
+    if (!entry) {
+      entry = {
+        trunkName,
+        trunkType: detectTrunkType(trunkName, row),
+        inboundCalls: 0,
+        outboundCalls: 0,
+        totalCalls: 0,
+        answeredCalls: 0,
+        missedCalls: 0,
+        failedCalls: 0,
+        busyCalls: 0,
+        noAnswerCalls: 0,
+        answeredDurationTotal: 0,
+        lastCallAt: null
+      };
+      byTrunk.set(trunkName, entry);
+    }
+
+    const disposition = String(row?.disposition || '').toUpperCase();
+    const answered = disposition === 'ANSWERED' && Number(row?.billsec || 0) > 0;
+    const callMs = getCallDateMs(row?.calldate);
+
+    entry.totalCalls++;
+    if (isIncoming(row)) entry.inboundCalls++;
+    if (isOutgoing(row)) entry.outboundCalls++;
+    if (answered) {
+      entry.answeredCalls++;
+      entry.answeredDurationTotal += Number(row?.billsec || 0);
+    }
+    if (isMissedDisposition(disposition)) entry.missedCalls++;
+    if (disposition === 'FAILED') entry.failedCalls++;
+    if (disposition === 'BUSY') entry.busyCalls++;
+    if (disposition === 'NO ANSWER' || disposition === 'CANCEL' || disposition === 'CANCELLED') entry.noAnswerCalls++;
+    if (Number.isFinite(callMs) && (!entry.lastCallAt || callMs > getCallDateMs(entry.lastCallAt))) entry.lastCallAt = row?.calldate || null;
+
+    if (entry.trunkType === 'unknown') {
+      entry.trunkType = detectTrunkType(trunkName, row);
+    }
+  });
+
+  return Array.from(byTrunk.values()).map(entry => {
+    const totalCalls = Number(entry.totalCalls || 0);
+    const answeredCalls = Number(entry.answeredCalls || 0);
+    const acd = answeredCalls ? Math.round(Number(entry.answeredDurationTotal || 0) / answeredCalls) : 0;
+    const loadPercent = totalRows ? Math.round((totalCalls / totalRows) * 100) : 0;
+    const asr = totalCalls ? Math.round((answeredCalls / totalCalls) * 100) : 0;
+    const quality = determineTrunkQuality({ ...entry, loadPercent });
+
+    return {
+      trunkName: entry.trunkName,
+      trunkType: entry.trunkType || 'unknown',
+      inboundCalls: Number(entry.inboundCalls || 0),
+      outboundCalls: Number(entry.outboundCalls || 0),
+      totalCalls,
+      answeredCalls,
+      missedCalls: Number(entry.missedCalls || 0),
+      failedCalls: Number(entry.failedCalls || 0),
+      busyCalls: Number(entry.busyCalls || 0),
+      noAnswerCalls: Number(entry.noAnswerCalls || 0),
+      averageDurationSeconds: acd,
+      acd,
+      asr,
+      loadPercent,
+      qualityLabel: quality.qualityLabel,
+      statusText: quality.statusText,
+      lastCallAt: entry.lastCallAt || null,
+      liveStatus: 'unknown'
+    };
+  }).sort((a, b) => b.totalCalls - a.totalCalls || a.trunkName.localeCompare(b.trunkName)).slice(0, 50);
+};
+
 const buildLostCallAnalytics = (calls: any[], options: { startMs: number; endMs: number; callbackWindowHours?: number; directory?: any[]; ownerMap?: Map<string, ExtensionOwner> }): LostCallAnalytics => {
   const callbackWindowMs = Math.max(1, Math.min(168, Number(options.callbackWindowHours || 24))) * 60 * 60 * 1000;
   const directory = options.directory || [];
@@ -4711,6 +4889,7 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
     const department = req.query.department as string || 'all';
     const employee = req.query.employee as string || 'all';
     const requestedExtensionFilter = String(req.query.extension || '').trim();
+    const trunkFilter = String(req.query.trunk || 'all').trim();
     const slaThresholdSeconds = normalizeSlaThresholdSeconds(req.query.slaThresholdSeconds);
 
     let calls: CallEntry[] = [];
@@ -5058,16 +5237,7 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
     const departmentSummaryMap = new Map<string, any>();
     const employeeSummaryMap = new Map<string, any>();
 
-    const getTrunkName = (channelStr: string): string | null => {
-      if (!channelStr) return null;
-      const m = channelStr.match(/^(?:SIP|PJSIP)\/([A-Za-z0-0_-]+)-/i);
-      if (m) {
-        const name = m[1];
-        if (/^[0-9]{2,5}$/.test(name)) return null;
-        return name;
-      }
-      return null;
-    };
+    const getTrunkName = (channelStr: string): string | null => extractTrunkNameFromText(channelStr);
 
     const reportStartMs = startDate ? getDateTimeFilterMs(startDate, startTime) : -Infinity;
     const reportEndMs = endDate ? getDateTimeFilterMs(endDate, endTime, true) : Infinity;
@@ -5082,9 +5252,11 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
       if (extensionFilter && ![responsibleExt, getCallerInternalExt(c), getCalleeInternalExt(c)].some(ext => onlyDigits(ext) === extensionFilter)) return false;
       if (employee && employee !== 'all' && employeeFilter && ![responsibleExt, getCallerInternalExt(c), getCalleeInternalExt(c)].some(ext => onlyDigits(ext) === employeeFilter)) return false;
       if (department && department !== 'all' && !checkCallDepartmentMatch(c, department, localDb.directory || [])) return false;
+      if (trunkFilter && trunkFilter !== 'all' && (extractTrunkName(c) || UNKNOWN_TRUNK_NAME) !== trunkFilter) return false;
       return true;
     });
     const slaSummary = calculateSlaMetrics(reportFilteredCalls, slaThresholdSeconds);
+    const trunkSummary = calculateTrunkMetrics(reportFilteredCalls);
     const lostCallAnalytics = buildLostCallAnalytics(calls, {
       startMs: reportStartMs,
       endMs: reportEndMs,
@@ -5391,6 +5563,7 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
       slaSummary,
       departmentSummary,
       employeeSummary,
+      trunkSummary,
       dbError: (req as any).dbError || undefined,
       demoModeActive: isDemo
     });

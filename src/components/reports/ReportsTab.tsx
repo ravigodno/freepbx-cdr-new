@@ -8,7 +8,7 @@ import { CallHeatmap } from './dashboard/CallHeatmap';
 import { CallFunnelWidget } from './dashboard/CallFunnelWidget';
 import { ProblemDepartmentsTable, DepartmentSummaryRow } from './dashboard/ProblemDepartmentsTable';
 import { LostCallsTable, LostCallDetail } from './dashboard/LostCallsTable';
-import { TrunkHealthWidget } from './dashboard/TrunkHealthWidget';
+import { TrunkHealthWidget, TrunkSummaryRow } from './dashboard/TrunkHealthWidget';
 
 type Props = {
   startDate: string;
@@ -157,6 +157,7 @@ export default function ReportsTab({
   const [slaSummary, setSlaSummary] = useState<SlaSummary | null>(null);
   const [departmentSummary, setDepartmentSummary] = useState<DepartmentSummaryRow[]>([]);
   const [employeeSummary, setEmployeeSummary] = useState<EmployeeSummaryRow[]>([]);
+  const [trunkSummary, setTrunkSummary] = useState<TrunkSummaryRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [refreshes, setRefreshes] = useState(0);
@@ -181,6 +182,7 @@ export default function ReportsTab({
           employee,
           extension: internalExt,
           operatorExt: internalExt || operatorExt,
+          trunk: trunkFilter,
           onlyMyCalls: String(onlyMyCalls),
           callbackWindowHours: '24',
           slaThresholdSeconds: '20'
@@ -201,6 +203,7 @@ export default function ReportsTab({
         setSlaSummary(json.slaSummary || null);
         setDepartmentSummary(Array.isArray(json.departmentSummary) ? json.departmentSummary : []);
         setEmployeeSummary(Array.isArray(json.employeeSummary) ? json.employeeSummary : []);
+        setTrunkSummary(Array.isArray(json.trunkSummary) ? json.trunkSummary : []);
         setError(json.dbError || '');
       } catch (err: any) {
         if (active) setError(err?.message || 'Не удалось загрузить данные аналитики.');
@@ -210,7 +213,7 @@ export default function ReportsTab({
     };
     fetchDynamics();
     return () => { active = false; };
-  }, [startDate, endDate, startTime, endTime, groupType, department, internalExt, operatorExt, onlyMyCalls, refreshes]);
+  }, [startDate, endDate, startTime, endTime, groupType, department, employee, internalExt, operatorExt, trunkFilter, onlyMyCalls, refreshes]);
 
   const visibleData = useMemo(() => {
     if (!onlyProblems && statusFilter === 'all') return data;
@@ -242,7 +245,19 @@ export default function ReportsTab({
 
   const departments = departmentSummary.length ? departmentSummary : (detailingData?.queues?.length ? detailingData.queues : (detailingData?.groups || []));
   const departmentOptions = useMemo(() => Array.from(new Set(departmentSummary.map(item => String(item.department || '').trim()).filter(Boolean))), [departmentSummary]);
-  const trunks = detailingData?.trunks || [];
+  const legacyTrunks = detailingData?.trunks || [];
+  const trunks: TrunkSummaryRow[] = trunkSummary.length ? trunkSummary : legacyTrunks.map(item => ({
+    trunkName: item.name,
+    totalCalls: item.totalCalls,
+    answeredCalls: item.answeredCalls,
+    acd: item.answeredCalls ? Math.round(item.duration / item.answeredCalls) : 0,
+    asr: item.totalCalls ? Math.round((item.answeredCalls / item.totalCalls) * 100) : 0,
+    loadPercent: 0,
+    qualityLabel: item.totalCalls && (item.answeredCalls / item.totalCalls) >= 0.8 ? 'ok' : 'warning',
+    statusText: item.totalCalls ? 'Проверить' : 'Нет данных',
+    trunkType: 'unknown'
+  }));
+  const trunkOptions = useMemo(() => Array.from(new Set(trunks.map(item => String(item.trunkName || '').trim()).filter(Boolean))), [trunks]);
   const employees = useMemo(() => {
     const fromSummary = employeeSummary.map(item => ({ value: String(item.extension || ''), label: String(item.employeeName || item.extension || 'Сотрудник') })).filter(item => item.value);
     const fromAccess = accessUsers.map(user => ({ value: String(user.extension || user.username || ''), label: String(user.name || user.username || user.extension || 'Сотрудник') })).filter(item => item.value);
@@ -340,7 +355,7 @@ export default function ReportsTab({
             <div className="space-y-1"><label className={compactLabelClass()}>Отдел</label><select value={department} onChange={e => setDepartment(e.target.value)} className={controlClass()}><option value="all">Все отделы</option>{departmentOptions.map(item => <option key={item} value={item}>{item}</option>)}<option value="sales">Продажи</option><option value="support">Поддержка</option><option value="accounting">Бухгалтерия</option><option value="logistics">Логистика</option></select></div>
             <div className="space-y-1"><label className={compactLabelClass()}>Сотрудник</label><select value={employee} onChange={e => setEmployee(e.target.value)} className={controlClass()}><option value="all">Все сотрудники</option>{employees.map(item => <option key={item.value + item.label} value={item.value}>{item.label}</option>)}</select></div>
             <div className="space-y-1"><label className={compactLabelClass()}>Внутренний номер</label><input value={internalExt} onChange={e => setInternalExt(e.target.value.replace(/[^0-9]/g, ''))} placeholder="Все" className={controlClass()} /></div>
-            <div className="space-y-1"><label className={compactLabelClass()}>Транк</label><select value={trunkFilter} onChange={e => setTrunkFilter(e.target.value)} className={controlClass()}><option value="all">Все транки</option>{trunks.map(item => <option key={item.name} value={item.name}>{item.name}</option>)}</select></div>
+            <div className="space-y-1"><label className={compactLabelClass()}>Транк</label><select value={trunkFilter} onChange={e => setTrunkFilter(e.target.value)} className={controlClass()}><option value="all">Все транки</option>{trunkOptions.map(item => <option key={item} value={item}>{item}</option>)}</select></div>
             <div className="space-y-1"><label className={compactLabelClass()}>Статус</label><select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className={controlClass()}><option value="all">Все статусы</option><option value="answered">Отвеченные</option><option value="missed">Пропущенные</option><option value="lost">Потерянные</option></select></div>
             <label className="flex h-9 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-xs font-black text-slate-700 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">
               <span className={['relative h-4 w-7 rounded-full transition', onlyProblems ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-700'].join(' ')}><span className={['absolute top-0.5 h-3 w-3 rounded-full bg-white transition', onlyProblems ? 'left-3.5' : 'left-0.5'].join(' ')} /></span>
@@ -382,7 +397,7 @@ export default function ReportsTab({
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
         <ProblemDepartmentsTable rows={departments} />
         <LostCallsTable data={visibleData} items={lostCallDetails} />
-        <TrunkHealthWidget rows={trunkFilter === 'all' ? trunks : trunks.filter(item => item.name === trunkFilter)} />
+        <TrunkHealthWidget rows={trunkFilter === 'all' || trunkSummary.length ? trunks : trunks.filter(item => item.trunkName === trunkFilter)} />
       </div>
 
       {visibleData.length === 0 && !loading && <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-8 text-center text-sm font-bold text-slate-400 shadow-sm dark:border-slate-800 dark:bg-slate-900">Нет данных за выбранный период</div>}
