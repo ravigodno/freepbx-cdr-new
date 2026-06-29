@@ -6,7 +6,7 @@ import { TrunkDiagnosticDetails } from './TrunkDiagnosticDetails';
 import { TrunkDiagnosticsTable } from './TrunkDiagnosticsTable';
 import { TrunkLabFilters } from './TrunkLabFilters';
 import { TrunkLabSummaryCards } from './TrunkLabSummaryCards';
-import { TrunkDiagnostic, TrunkLabResponse } from './trunkLabTypes';
+import { TrunkDiagnostic, TrunkLabResponse, TrunkLabTestResponse, TrunkLabTestResult, TrunkLabTestType } from './trunkLabTypes';
 import { filterTrunkDiagnostics, initialTrunkLabFilters } from './trunkLabUtils';
 
 export function TrunkLabView({ token }: { token?: string }) {
@@ -18,6 +18,9 @@ export function TrunkLabView({ token }: { token?: string }) {
   const [error, setError] = useState('');
   const [generatedAt, setGeneratedAt] = useState('');
   const [sourceStatus, setSourceStatus] = useState<TrunkLabResponse['sourceStatus']>({});
+  const [testHistory, setTestHistory] = useState<TrunkLabTestResult[]>(() => {
+    try { return JSON.parse(localStorage.getItem('pbxpuls.trunkLab.testHistory') || '[]'); } catch { return []; }
+  });
 
   const loadDiagnostics = async () => {
     setLoading(true);
@@ -44,9 +47,24 @@ export function TrunkLabView({ token }: { token?: string }) {
     loadDiagnostics();
   }, []);
 
+  useEffect(() => {
+    localStorage.setItem('pbxpuls.trunkLab.testHistory', JSON.stringify(testHistory.slice(0, 30)));
+  }, [testHistory]);
+
+  const runTrunkTest = async (testType: TrunkLabTestType, diagnostic: TrunkDiagnostic, extraPayload: Record<string, unknown> = {}) => {
+    const res = await fetch('/api/management/trunks/preview', { method: 'POST', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify({ operationType: testType, payload: { operationType: testType, trunkId: diagnostic.trunkid, trunkName: diagnostic.name, ...extraPayload } }) });
+    const data: TrunkLabTestResponse = await res.json().catch(() => ({ success: false, type: testType, generatedAt: new Date().toISOString(), error: t.empty.cliUnavailable } as TrunkLabTestResponse));
+    if (!res.ok || data.success === false) throw new Error(data.message || data.error || t.empty.cliUnavailable);
+    const result = data.result || {};
+    const entry: TrunkLabTestResult = { id: `${Date.now()}-${testType}`, trunkId: diagnostic.trunkid, trunkName: diagnostic.name, testType, timestamp: data.generatedAt || new Date().toISOString(), status: 'ok', riskLevel: result.riskLevel || 'unknown', summary: result.summary || '', problems: data.problems || [], recommendations: data.recommendations || [], raw: data.raw, uniqueid: result.uniqueid, linkedid: result.linkedid, result };
+    setTestHistory(prev => [entry, ...prev].slice(0, 30));
+    return entry;
+  };
+
   const filtered = useMemo(() => filterTrunkDiagnostics(diagnostics, filters), [diagnostics, filters]);
   const sourceEntries = Object.entries(sourceStatus || {});
   const sourceWarnings = sourceEntries.filter(([, value]) => value.status !== 'ok');
+  const lastTests = Object.fromEntries(testHistory.map(item => [String(item.trunkId || item.trunkName), item.summary || item.status]));
 
   return (
     <Section>
@@ -79,8 +97,8 @@ export function TrunkLabView({ token }: { token?: string }) {
       <TrunkLabSummaryCards diagnostics={diagnostics} />
       <TrunkLabFilters filters={filters} onChange={setFilters} />
       <div className="grid gap-4 2xl:grid-cols-[minmax(0,1.35fr)_minmax(360px,0.85fr)]">
-        <TrunkDiagnosticsTable diagnostics={filtered} selectedId={selected?.id} onSelect={setSelected} />
-        <TrunkDiagnosticDetails diagnostic={selected} />
+        <TrunkDiagnosticsTable diagnostics={filtered} selectedId={selected?.id} onSelect={setSelected} lastTests={lastTests} />
+        <TrunkDiagnosticDetails diagnostic={selected} testHistory={testHistory.filter(item => item.trunkName === selected?.name || String(item.trunkId) === String(selected?.trunkid))} onRunTest={runTrunkTest} />
       </div>
     </Section>
   );

@@ -278,3 +278,6 @@ Trunk Lab filters extension-looking SIP/PJSIP objects before creating diagnostic
 
 
 Trunk Lab v5.2.0 uses FreePBX DB `asterisk.trunks` as the primary read-only Trunk inventory and uses Asterisk CLI only as runtime enrichment. CLI-only peers/endpoints are not shown as Trunks unless they match a DB trunk record.
+
+
+Trunk Lab v5.3.0 adds controlled testing operations through the same Management preview endpoint. Registration and Peer/Contact tests are read-only. Outbound call test requires explicit confirmation, may be billed by the operator, and uses current FreePBX Outbound Routes without changing configuration.

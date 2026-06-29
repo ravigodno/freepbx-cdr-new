@@ -275,3 +275,6 @@ Next releases:
 
 
 Trunk Lab v5.2.0 uses FreePBX DB `asterisk.trunks` as the primary read-only Trunk inventory and uses Asterisk CLI only as runtime enrichment. CLI-only peers/endpoints are not shown as Trunks unless they match a DB trunk record.
+
+
+Roadmap update: v5.2.0 — Trunk Lab Read-only Diagnostics — done; v5.3.0 — Trunk Lab Testing; v5.4.0 — Trunk Setup Assistant; v5.5.0 — Routes Assistant; v5.6.0 — Dial Patterns and Number Ranges; v5.7.0 — Departments and RBAC Foundation; v5.8.0 — Management Dashboard. Dashboard remains last. Mass Trunk creation is not a priority because it is rare in real operations.

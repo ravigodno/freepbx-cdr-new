@@ -216,3 +216,6 @@ The frontend module lives in src/modules/management/trunkLab/. It renders read-o
 
 
 Trunk Lab filters extension-looking SIP/PJSIP objects before creating diagnostics. Numeric SIP peers, numeric/numeric peers, numeric PJSIP endpoints, numeric AORs and numeric-auth endpoint patterns are excluded. AMI/CLI source failures are reported as source status, not fake diagnostics rows.
+
+
+Trunk Lab Testing v5.3.0 extends the Management Operation Framework with preview-only operation types for registration, peer/contact and controlled outbound call tests. No Apply endpoint is added. FreePBX DB `trunks` remains the primary inventory source; CLI/AMI/CDR are runtime enrichment and test result sources.

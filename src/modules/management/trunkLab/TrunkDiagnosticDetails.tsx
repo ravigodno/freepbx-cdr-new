@@ -1,6 +1,8 @@
-import { Card, StatusBadge } from '../../../components/ui/DesignSystem';
+import { useState } from 'react';
+import { PhoneCall, RefreshCw, ShieldCheck, Wifi } from 'lucide-react';
+import { Card, PrimaryButton, SecondaryButton, StatusBadge } from '../../../components/ui/DesignSystem';
 import { ui } from '../../../locales/ru';
-import { TrunkDiagnostic } from './trunkLabTypes';
+import { TrunkDiagnostic, TrunkLabTestResult, TrunkLabTestType } from './trunkLabTypes';
 import { formatRawSnippet } from './trunkLabUtils';
 import { TrunkRegistrationBadge, TrunkRiskBadge, TrunkTechnologyBadge } from './TrunkDiagnosticBadges';
 
@@ -21,9 +23,26 @@ function FieldGrid({ items }: { items: Record<string, string> }) {
   );
 }
 
-export function TrunkDiagnosticDetails({ diagnostic }: { diagnostic?: TrunkDiagnostic }) {
+export function TrunkDiagnosticDetails({ diagnostic, testHistory = [], onRunTest }: { diagnostic?: TrunkDiagnostic; testHistory?: TrunkLabTestResult[]; onRunTest?: (testType: TrunkLabTestType, diagnostic: TrunkDiagnostic, payload?: Record<string, unknown>) => Promise<TrunkLabTestResult>; }) {
   const t = ui.management.trunkLab.details;
+  const tt = ui.management.trunkLab.testing;
+  const [running, setRunning] = useState('');
+  const [testError, setTestError] = useState('');
+  const [showCallForm, setShowCallForm] = useState(false);
+  const [sourceExtension, setSourceExtension] = useState('');
+  const [testNumber, setTestNumber] = useState('');
+  const [timeoutSeconds, setTimeoutSeconds] = useState('30');
+  const [confirmed, setConfirmed] = useState(false);
   if (!diagnostic) return <Card className="p-4 text-xs font-semibold text-slate-400">{t.empty}</Card>;
+
+  const run = async (type: TrunkLabTestType, payload: Record<string, unknown> = {}) => {
+    if (!onRunTest) return;
+    setRunning(type);
+    setTestError('');
+    try { await onRunTest(type, diagnostic, payload); }
+    catch (err: any) { setTestError(err?.message || tt.failed); }
+    finally { setRunning(''); }
+  };
 
   return (
     <Card className="p-4">
@@ -80,6 +99,46 @@ export function TrunkDiagnosticDetails({ diagnostic }: { diagnostic?: TrunkDiagn
             <TextList items={diagnostic.notes} empty="-" />
           </section>
         )}
+        <section className="space-y-2">
+          <h5 className="text-xs font-black text-slate-850 dark:text-white">{tt.title}</h5>
+          <div className="flex flex-wrap gap-2">
+            <SecondaryButton onClick={() => run('trunk_lab_registration_test')} disabled={!!running}><ShieldCheck className="h-4 w-4" />{tt.registration}</SecondaryButton>
+            <SecondaryButton onClick={() => run('trunk_lab_peer_test')} disabled={!!running}><Wifi className="h-4 w-4" />{tt.peer}</SecondaryButton>
+            <PrimaryButton onClick={() => setShowCallForm(value => !value)} disabled={!!running}><PhoneCall className="h-4 w-4" />{tt.outbound}</PrimaryButton>
+          </div>
+          {running && <div className="text-xs font-semibold text-blue-700 dark:text-blue-300"><RefreshCw className="mr-2 inline h-4 w-4 animate-spin" />{tt.running}</div>}
+          {testError && <div className="rounded-lg border border-rose-200 bg-rose-50 p-2 text-xs font-semibold text-rose-700 dark:border-rose-900/40 dark:bg-rose-950/20 dark:text-rose-200">{testError}</div>}
+          {showCallForm && (
+            <div className="space-y-3 rounded-lg border border-amber-100 bg-amber-50 p-3 dark:border-amber-900/40 dark:bg-amber-950/20">
+              <div className="text-xs font-semibold text-amber-800 dark:text-amber-200">{tt.callWarning}</div>
+              <div className="grid gap-2 md:grid-cols-3">
+                <input className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-900" placeholder={tt.sourceExtension} value={sourceExtension} onChange={event => setSourceExtension(event.target.value)} />
+                <input className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-900" placeholder={tt.testNumber} value={testNumber} onChange={event => setTestNumber(event.target.value)} />
+                <input className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-900" placeholder={tt.timeout} value={timeoutSeconds} onChange={event => setTimeoutSeconds(event.target.value)} />
+              </div>
+              <label className="flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-200"><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} />{tt.confirm}</label>
+              <PrimaryButton disabled={!confirmed || !!running} onClick={() => run('trunk_lab_outbound_call_test', { sourceExtension, testNumber, timeoutSeconds: Number(timeoutSeconds) || 30, confirmed })}><PhoneCall className="h-4 w-4" />{tt.startCall}</PrimaryButton>
+            </div>
+          )}
+        </section>
+
+        <section className="space-y-2">
+          <h5 className="text-xs font-black text-slate-850 dark:text-white">{tt.results}</h5>
+          <div className="space-y-2">
+            {testHistory.length ? testHistory.map(item => (
+              <div key={item.id} className="rounded-lg border border-slate-100 bg-slate-50 p-2 text-xs dark:border-slate-800 dark:bg-slate-800/60">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-mono font-black text-slate-700 dark:text-slate-200">{item.testType}</span>
+                  <span className="text-[11px] text-slate-400">{item.timestamp}</span>
+                </div>
+                <div className="mt-1 font-semibold text-slate-700 dark:text-slate-200">{item.summary || '-'}</div>
+                <TextList items={item.problems} empty={ui.management.trunkLab.empty.noProblems} />
+                <TextList items={item.recommendations} empty={ui.management.trunkLab.empty.noRecommendations} />
+                {item.raw && <pre className="mt-2 max-h-36 overflow-auto rounded-lg bg-slate-950 p-2 text-[11px] text-slate-100">{formatRawSnippet(JSON.stringify(item.raw))}</pre>}
+              </div>
+            )) : <div className="text-xs font-semibold text-slate-400">{tt.noResults}</div>}
+          </div>
+        </section>
         <section className="space-y-2">
           <div className="flex items-center gap-2">
             <h5 className="text-xs font-black text-slate-850 dark:text-white">{t.raw}</h5>

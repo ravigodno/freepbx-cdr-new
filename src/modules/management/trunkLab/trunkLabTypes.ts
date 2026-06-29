@@ -73,3 +73,35 @@ export type TrunkLabFiltersState = {
   risk: 'all' | TrunkLabRiskLevel;
   registration: 'all' | TrunkLabRegistrationStatus;
 };
+
+export type TrunkLabTestType = 'trunk_lab_registration_test' | 'trunk_lab_peer_test' | 'trunk_lab_outbound_call_test';
+
+export type TrunkLabTestResult = {
+  id: string;
+  trunkId?: string | number;
+  trunkName: string;
+  testType: TrunkLabTestType;
+  timestamp: string;
+  status: string;
+  riskLevel: TrunkLabRiskLevel;
+  summary: string;
+  problems: string[];
+  recommendations: string[];
+  raw?: Record<string, unknown>;
+  uniqueid?: string;
+  linkedid?: string;
+  result?: Record<string, unknown>;
+};
+
+export type TrunkLabTestResponse = {
+  success: boolean;
+  type: TrunkLabTestType;
+  generatedAt: string;
+  trunk?: Record<string, unknown>;
+  result?: Record<string, unknown> & { riskLevel?: TrunkLabRiskLevel; summary?: string; uniqueid?: string; linkedid?: string };
+  problems?: string[];
+  recommendations?: string[];
+  raw?: Record<string, unknown>;
+  error?: string;
+  message?: string;
+};

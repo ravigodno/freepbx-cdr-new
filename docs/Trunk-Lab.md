@@ -162,3 +162,12 @@ For example DB trunk `name=74990000002`, `tech=sip`, `channelid=841282-in` match
 PJSIP enrichment uses the DB `channelid` as endpoint/registration/contact identity. A CLI endpoint such as `299/299` is ignored when there is no matching row in FreePBX DB `trunks`.
 
 Source-level AMI/CLI/DB errors, timeouts and unavailable commands are reported in the separate `sourceStatus` block. They must not create fake Trunk rows such as AMI, CLI, timeout, unknown, unavailable, error, failed, command or response.
+
+
+## v5.3.0 Trunk Lab Testing
+
+Trunk Lab Testing adds three Management preview operations: `trunk_lab_registration_test`, `trunk_lab_peer_test` and `trunk_lab_outbound_call_test`. Diagnostics still use FreePBX DB `asterisk.trunks` as primary inventory. Registration and Peer/Contact tests are read-only CLI checks. Outbound call test is a controlled AMI Originate operation and runs only after explicit user confirmation.
+
+The outbound call test does not create Trunks, does not change routes, does not change dialplan and does not run `fwconsole reload`. It uses current FreePBX Outbound Routes. Forced Trunk selection is intentionally deferred to a later stage. The call can be billed by the operator.
+
+Test history in v5.3.0 is frontend-side only and may be stored in `localStorage`; secrets are not stored. Errors such as 403, 404, 408, 480, 486, 488 and 503 are interpreted as recommendations around CID, number format, NAT/firewall, codecs, registration and operator availability.

@@ -215,7 +215,7 @@ interface NormalizedExtension {
 }
 
 
-type ExtensionPreviewType = 'create' | 'update' | 'delete' | 'trunk_lab_diagnostics';
+type ExtensionPreviewType = 'create' | 'update' | 'delete' | 'trunk_lab_diagnostics' | 'trunk_lab_registration_test' | 'trunk_lab_peer_test' | 'trunk_lab_outbound_call_test';
 type ExtensionPreviewAction = 'create' | 'update' | 'delete' | 'skip' | 'conflict' | 'error' | 'diagnostic';
 
 interface ExtensionPreviewItem {
@@ -2290,10 +2290,15 @@ type TrunkLabDiagnostic = {
 };
 
 const TRUNK_LAB_OPERATION_TYPE = 'trunk_lab_diagnostics';
+const TRUNK_LAB_REGISTRATION_TEST_OPERATION_TYPE = 'trunk_lab_registration_test';
+const TRUNK_LAB_PEER_TEST_OPERATION_TYPE = 'trunk_lab_peer_test';
+const TRUNK_LAB_OUTBOUND_CALL_TEST_OPERATION_TYPE = 'trunk_lab_outbound_call_test';
 const TRUNK_LAB_CLI_TIMEOUT_MS = 2500;
+const TRUNK_LAB_TEST_TIMEOUT_MS = 5000;
+const TRUNK_LAB_MAX_CALL_TIMEOUT_SECONDS = 60;
 const TRUNK_LAB_PJSIP_COMMANDS = ['pjsip show registrations', 'pjsip show endpoints', 'pjsip show contacts', 'pjsip show auths', 'pjsip show aors'];
 const TRUNK_LAB_CHANSIP_COMMANDS = ['sip show registry', 'sip show peers', 'sip show users', 'sip show settings'];
-const TRUNK_LAB_SECRET_PATTERN = /(secret|password|passwd|token|client_secret|auth_password)(\s*[:=]\s*)([^\s,;]+)/ig;
+const TRUNK_LAB_SECRET_PATTERN = /(secret|password|passwd|token|client_secret|auth_password|authorization|bearer)(\s*[:=]\s*)([^\s,;]+)/ig;
 
 function maskTrunkLabSecrets(value: string): string {
   return String(value || '').replace(TRUNK_LAB_SECRET_PATTERN, (_m, key, sep) => key + sep + '********');
@@ -2770,6 +2775,175 @@ async function readTrunkLabPayload(settings: any, includePjsip = true, includeCh
   const pjsipRegistrations = parsePjsipRegistrations(commandOutput(pjsip, 'pjsip show registrations')).length;
   return { generatedAt: new Date().toISOString(), inventory: inventoryResult.trunks, pjsip, chansip, diagnostics, sourceStatus, summary: summarizeTrunkLab(diagnostics, sourceStatus, pjsipRegistrations) };
 }
+function findTrunkFromInventory(inventory: TrunkLabInventoryTrunk[], payload: any): TrunkLabInventoryTrunk | undefined {
+  const trunkId = String(payload?.trunkId || payload?.trunkid || '').trim();
+  const trunkName = String(payload?.trunkName || payload?.name || '').trim();
+  return inventory.find(item => trunkId && String(item.trunkid) === trunkId) || inventory.find(item => trunkName && item.name === trunkName);
+}
+
+function buildSingleSourceStatus(key: string, result: TrunkLabCommandResult): TrunkLabSourceStatus {
+  return { [key]: { status: result.status, message: result.message, command: result.command } };
+}
+
+function trunkLabTestProblemRules(rawText: string): { problems: string[]; recommendations: string[] } {
+  const raw = String(rawText || '').toLowerCase();
+  const problems: string[] = [];
+  const recommendations: string[] = [];
+  const add = (problem: string, recs: string[]) => { problems.push(problem); recommendations.push(...recs); };
+  if (raw.includes('403') || raw.includes('forbidden')) add('Оператор вернул 403 Forbidden.', ['Проверьте Outbound CID, разрешенный номер у оператора, формат номера, from_user/from_domain и разрешенный IP.']);
+  if (raw.includes('404')) add('Оператор вернул 404 Not Found.', ['Проверьте формат номера, маршрут у оператора и используемый план набора.']);
+  if (raw.includes('408') || raw.includes('timeout')) add('Вызов или регистрация завершились timeout.', ['Проверьте доступность оператора, firewall/NAT, SIP server и маршрут.']);
+  if (raw.includes('480') || raw.includes('486') || raw.includes('busy')) add('Конечный абонент недоступен или занят.', ['Оператор мог корректно обработать вызов, но номер не ответил или занят.']);
+  if (raw.includes('488')) add('Оператор вернул 488 Not Acceptable Here.', ['Проверьте codecs alaw/ulaw/g729, SDP, media encryption и direct media.']);
+  if (raw.includes('503')) add('Оператор вернул 503 Service Unavailable.', ['Проверьте регистрацию trunk, лимит каналов, доступность оператора и маршрутизацию.']);
+  if (raw.includes('rtp') || raw.includes('one-way')) add('Есть риск No RTP / one-way audio.', ['Проверьте NAT, RTP ports, External Address, Local Networks, direct media и firewall.']);
+  return { problems: Array.from(new Set(problems)), recommendations: Array.from(new Set(recommendations)) };
+}
+
+async function buildTrunkLabRegistrationTest(settings: any, payload: any) {
+  const inventoryResult = await loadFreePbxTrunkInventory(settings);
+  const trunk = findTrunkFromInventory(inventoryResult.trunks, payload);
+  if (!trunk) throw new Error('Trunk не найден в FreePBX DB inventory.');
+  const technology = mapFreePbxTrunkTechnology(trunk.tech);
+  const commands = technology === 'pjsip'
+    ? ['pjsip show registrations', 'pjsip show endpoint ' + trunk.channelId, 'pjsip show contacts']
+    : ['sip show registry', 'sip show peer ' + trunk.channelId, 'sip show peers'];
+  const commandResults = await runTrunkLabCommands(settings, commands);
+  const enrichment = technology === 'pjsip'
+    ? buildPjsipDiagnosticFromInventory(trunk, { ...commandResults, 'pjsip show endpoints': commandResults['pjsip show endpoint ' + trunk.channelId] || commandResults['pjsip show endpoints'] })
+    : buildChanSipDiagnosticFromInventory(trunk, commandResults);
+  const rawText = Object.values(commandResults).map(item => item.output || item.message || '').join('\n');
+  const rules = trunkLabTestProblemRules(rawText + '\n' + enrichment.summary);
+  return {
+    success: true,
+    type: TRUNK_LAB_REGISTRATION_TEST_OPERATION_TYPE,
+    generatedAt: new Date().toISOString(),
+    trunk,
+    result: { registrationStatus: enrichment.registrationStatus, peerStatus: enrichment.endpointStatus, riskLevel: enrichment.riskLevel, summary: enrichment.registrationStatus === 'registered' ? 'Trunk зарегистрирован.' : enrichment.summary },
+    problems: [...enrichment.problems, ...rules.problems],
+    recommendations: [...enrichment.recommendations, ...rules.recommendations],
+    raw: commandResults,
+    sourceStatus: { freepbxDb: inventoryResult.status, ...Object.fromEntries(Object.entries(commandResults).map(([key, value]) => [key.replace(/\s+/g, '_'), { status: value.status, message: value.message, command: value.command }])) },
+    readOnly: true
+  };
+}
+
+async function buildTrunkLabPeerTest(settings: any, payload: any) {
+  const inventoryResult = await loadFreePbxTrunkInventory(settings);
+  const trunk = findTrunkFromInventory(inventoryResult.trunks, payload);
+  if (!trunk) throw new Error('Trunk не найден в FreePBX DB inventory.');
+  const technology = mapFreePbxTrunkTechnology(trunk.tech);
+  const commands = technology === 'pjsip'
+    ? ['pjsip show endpoint ' + trunk.channelId, 'pjsip show contacts', 'pjsip show aor ' + trunk.channelId]
+    : ['sip show peer ' + trunk.channelId, 'sip show peers', 'sip show registry'];
+  const commandResults = await runTrunkLabCommands(settings, commands);
+  const enrichment = technology === 'pjsip'
+    ? buildPjsipDiagnosticFromInventory(trunk, { ...commandResults, 'pjsip show endpoints': commandResults['pjsip show endpoint ' + trunk.channelId] || commandResults['pjsip show endpoints'], 'pjsip show aors': commandResults['pjsip show aor ' + trunk.channelId] || commandResults['pjsip show aors'] })
+    : buildChanSipDiagnosticFromInventory(trunk, commandResults);
+  const rules = trunkLabTestProblemRules(Object.values(commandResults).map(item => item.output || item.message || '').join('\n'));
+  return {
+    success: true,
+    type: TRUNK_LAB_PEER_TEST_OPERATION_TYPE,
+    generatedAt: new Date().toISOString(),
+    trunk,
+    result: { endpointStatus: enrichment.endpointStatus, contactStatus: enrichment.contactStatus, rtt: enrichment.rtt || '', host: enrichment.peerHost || '', port: enrichment.peerPort || '', qualifyStatus: enrichment.endpointStatus, riskLevel: enrichment.riskLevel, summary: enrichment.endpointStatus === 'available' ? 'Peer/Contact доступен, отвечает ' + (enrichment.rtt || 'OK') + '.' : enrichment.summary },
+    problems: [...enrichment.problems, ...rules.problems],
+    recommendations: [...enrichment.recommendations, ...rules.recommendations],
+    raw: commandResults,
+    sourceStatus: { freepbxDb: inventoryResult.status, ...Object.fromEntries(Object.entries(commandResults).map(([key, value]) => [key.replace(/\s+/g, '_'), { status: value.status, message: value.message, command: value.command }])) },
+    readOnly: true
+  };
+}
+
+function runTrunkLabOriginate(settings: any, sourceExtension: string, testNumber: string, timeoutSeconds: number): Promise<{ success: boolean; message: string; raw: string }> {
+  return new Promise((resolve) => {
+    const host = settings?.amiHost || 'localhost';
+    const port = settings?.amiPort || 5038;
+    const user = settings?.amiUser || '';
+    const pass = settings?.amiPass || '';
+    const safeSource = String(sourceExtension || '').replace(/[^0-9]/g, '');
+    const safeNumber = String(testNumber || '').replace(/[^0-9+#*]/g, '');
+    const timeoutMs = Math.max(5, Math.min(timeoutSeconds || 30, TRUNK_LAB_MAX_CALL_TIMEOUT_SECONDS)) * 1000;
+    if (!host || !user || !pass || !safeSource || !safeNumber) {
+      resolve({ success: false, message: 'AMI/source/test number не настроены для outbound call test.', raw: '' });
+      return;
+    }
+    const socket = new net.Socket();
+    socket.setTimeout(Math.min(timeoutMs, 10000));
+    let buffer = '';
+    let stage = 'greeting';
+    let settled = false;
+    const finish = (success: boolean, message: string, raw = buffer) => {
+      if (settled) return;
+      settled = true;
+      try { socket.destroy(); } catch {}
+      resolve({ success, message, raw: maskTrunkLabSecrets(raw) });
+    };
+    socket.connect(Number(port), host);
+    socket.on('data', data => {
+      buffer += data.toString();
+      if (stage === 'greeting' && buffer.includes('\n')) {
+        buffer = '';
+        socket.write('Action: Login\r\nUsername: ' + user + '\r\nSecret: ' + pass + '\r\nEvents: off\r\n\r\n');
+        stage = 'login';
+      } else if (stage === 'login' && (buffer.includes('\r\n\r\n') || buffer.includes('\n\n'))) {
+        if (!buffer.toLowerCase().includes('success')) return finish(false, 'AMI login failed');
+        buffer = '';
+        socket.write('Action: Originate\r\nChannel: Local/' + safeSource + '@from-internal\r\nExten: ' + safeNumber + '\r\nContext: from-internal\r\nPriority: 1\r\nCallerID: "' + safeSource + '" <' + safeSource + '>\r\nVariable: __PBXPULS_TRUNK_LAB_TEST=1\r\nVariable: __PBXPULS_TRUNK_LAB_SRC=' + safeSource + '\r\nVariable: __PBXPULS_TRUNK_LAB_DST=' + safeNumber + '\r\nTimeout: ' + timeoutMs + '\r\nAsync: true\r\n\r\n');
+        stage = 'originate';
+      } else if (stage === 'originate' && (buffer.includes('\r\n\r\n') || buffer.includes('\n\n'))) {
+        const ok = buffer.toLowerCase().includes('success');
+        try { socket.write('Action: Logoff\r\n\r\n'); } catch {}
+        finish(ok, ok ? 'Originate accepted by AMI.' : 'Originate rejected by AMI.', buffer);
+      }
+    });
+    socket.on('error', err => finish(false, err.message));
+    socket.on('timeout', () => finish(false, 'Outbound call test AMI timeout'));
+  });
+}
+
+async function loadTrunkLabRecentCdr(settings: any, sourceExtension: string, testNumber: string, startedAt: Date) {
+  let connection: any;
+  try {
+    connection = await mysql.createConnection({ host: settings?.dbHost || process.env.DB_HOST || 'localhost', port: Number(settings?.dbPort || process.env.DB_PORT || 3306), user: settings?.dbUser || process.env.DB_USER || 'freepbxuser', password: settings?.dbPass || process.env.DB_PASS || '', database: settings?.dbName || process.env.DB_NAME || 'asteriskcdrdb', connectTimeout: TRUNK_LAB_TEST_TIMEOUT_MS, dateStrings: true });
+    const since = new Date(startedAt.getTime() - 5000).toISOString().replace('T', ' ').substring(0, 19);
+    const [rows] = await connection.execute('SELECT uniqueid, linkedid, calldate, src, dst, dcontext, channel, dstchannel, lastapp, lastdata, duration, billsec, disposition, cnum, outbound_cnum FROM asteriskcdrdb.cdr WHERE calldate >= ? AND (src = ? OR cnum = ? OR dst = ? OR lastdata LIKE ?) ORDER BY calldate DESC LIMIT 20', [since, sourceExtension, sourceExtension, testNumber, '%' + testNumber + '%']);
+    return Array.isArray(rows) ? rows : [];
+  } catch {
+    return [];
+  } finally {
+    if (connection) await connection.end().catch(() => undefined);
+  }
+}
+
+async function buildTrunkLabOutboundCallTest(settings: any, payload: any) {
+  const confirmed = payload?.confirmed === true;
+  if (!confirmed) throw new Error('Тестовый звонок требует явного подтверждения пользователя.');
+  const inventoryResult = await loadFreePbxTrunkInventory(settings);
+  const trunk = findTrunkFromInventory(inventoryResult.trunks, payload);
+  if (!trunk) throw new Error('Trunk не найден в FreePBX DB inventory.');
+  const sourceExtension = String(payload?.sourceExtension || '').replace(/[^0-9]/g, '');
+  const testNumber = String(payload?.testNumber || '').replace(/[^0-9+#*]/g, '');
+  const timeoutSeconds = Math.max(5, Math.min(Number(payload?.timeoutSeconds || 30), TRUNK_LAB_MAX_CALL_TIMEOUT_SECONDS));
+  if (!sourceExtension || !testNumber) throw new Error('Укажите Extension-источник и тестовый номер.');
+  const startedAt = new Date();
+  const originate = await runTrunkLabOriginate(settings, sourceExtension, testNumber, timeoutSeconds);
+  await new Promise(resolve => setTimeout(resolve, Math.min(timeoutSeconds * 1000, 5000)));
+  const cdrRows = await loadTrunkLabRecentCdr(settings, sourceExtension, testNumber, startedAt);
+  const primary = cdrRows[0] || null;
+  const rawText = [originate.raw, JSON.stringify(cdrRows)].join('\n');
+  const rules = trunkLabTestProblemRules(rawText);
+  const disposition = String(primary?.disposition || '').toUpperCase();
+  const answered = disposition === 'ANSWERED' && Number(primary?.billsec || 0) > 0;
+  const failed = !originate.success || ['FAILED', 'BUSY', 'NO ANSWER'].includes(disposition);
+  const riskLevel: TrunkLabRisk = answered ? 'ok' : failed ? 'warning' : originate.success ? 'unknown' : 'critical';
+  const result = { callStarted: originate.success, callAnswered: answered, callFailed: failed, disposition: primary?.disposition || '', hangupCause: '', duration: Number(primary?.duration || 0), billsec: Number(primary?.billsec || 0), dialedNumber: testNumber, sourceExtension, trunkCandidate: trunk.name, routeUsed: primary?.lastdata || '', uniqueid: primary?.uniqueid || '', linkedid: primary?.linkedid || '', riskLevel, summary: answered ? 'Тестовый звонок отвечен.' : originate.success ? 'Тестовый звонок инициирован. Используются текущие Outbound Routes FreePBX.' : 'Тестовый звонок не был инициирован.' };
+  const recommendations = ['Тест использует текущие Outbound Routes FreePBX. Принудительный выбор Trunk будет добавлен позже.'];
+  if (!primary) recommendations.push('PBXPuls не смог найти CDR запись тестового вызова за отведенное время.');
+  if (primary && !String(primary.dstchannel || primary.lastdata || '').includes(trunk.channelId)) recommendations.push('PBXPuls не смог надёжно определить использованный Trunk. Проверьте dstchannel/lastdata в CDR.');
+  return { success: true, type: TRUNK_LAB_OUTBOUND_CALL_TEST_OPERATION_TYPE, generatedAt: new Date().toISOString(), trunk, result, problems: rules.problems, recommendations: [...recommendations, ...rules.recommendations], raw: { originate: maskTrunkLabSecrets(originate.raw || originate.message), cdr: maskTrunkLabSecrets(JSON.stringify(cdrRows)) }, sourceStatus: { freepbxDb: inventoryResult.status, amiOriginate: { status: originate.success ? 'ok' : 'error', message: originate.message }, cdrRead: { status: cdrRows.length ? 'ok' : 'unavailable', message: cdrRows.length ? 'Loaded CDR rows for test call.' : 'No matching CDR rows yet.' } }, readOnly: false, controlledTest: true, routeWarning: 'Тест использует текущие Outbound Routes FreePBX. Принудительный выбор Trunk будет добавлен позже.' };
+}
+
 function buildTrunkLabPreviewItems(diagnostics: TrunkLabDiagnostic[]) {
   return diagnostics.map((diag) => ({
     extension: diag.id,
@@ -4038,6 +4212,26 @@ export function registerManagementRoutes(app: Express, requireAuth: Function) {
   app.post('/api/management/trunks/preview', requireAuth(), async (req, res) => {
     try {
       const operationType = String(req.body?.operationType || req.body?.payload?.operationType || '').trim();
+      if ([TRUNK_LAB_REGISTRATION_TEST_OPERATION_TYPE, TRUNK_LAB_PEER_TEST_OPERATION_TYPE, TRUNK_LAB_OUTBOUND_CALL_TEST_OPERATION_TYPE].includes(operationType)) {
+        const db = fs.existsSync(DB_FILE) ? JSON.parse(fs.readFileSync(DB_FILE, 'utf8')) : {};
+        const opPayload = req.body?.payload || req.body || {};
+        const result = operationType === TRUNK_LAB_REGISTRATION_TEST_OPERATION_TYPE
+          ? await buildTrunkLabRegistrationTest(db.settings || {}, opPayload)
+          : operationType === TRUNK_LAB_PEER_TEST_OPERATION_TYPE
+            ? await buildTrunkLabPeerTest(db.settings || {}, opPayload)
+            : await buildTrunkLabOutboundCallTest(db.settings || {}, opPayload);
+        const preview: ExtensionPreviewRecord = {
+          previewId: generatePreviewId(operationType as ExtensionPreviewType),
+          createdAt: result.generatedAt,
+          type: operationType as ExtensionPreviewType,
+          originalPayload: { operationType, payload: { ...opPayload, confirmed: !!opPayload.confirmed } },
+          items: [{ extension: String(result.trunk?.trunkid || ''), object: result.trunk?.name || '', action: 'diagnostic' as ExtensionPreviewAction, status: result.result?.riskLevel || 'unknown', before: null, after: result.result, oldValue: null, newValue: result.result, message: result.result?.summary || '', diff: [] }] as any
+        };
+        saveManagementPreview(preview);
+        res.json({ ...result, previewId: preview.previewId, createdAt: preview.createdAt, operationType, reloadRequired: false });
+        return;
+      }
+
       if (operationType === TRUNK_LAB_OPERATION_TYPE) {
         const db = fs.existsSync(DB_FILE) ? JSON.parse(fs.readFileSync(DB_FILE, 'utf8')) : {};
         const payload = await readTrunkLabPayload(db.settings || {}, true, true);

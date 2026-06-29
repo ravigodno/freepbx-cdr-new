@@ -288,3 +288,6 @@ Backend responses must mask secret/password/passwd/token/client_secret/auth_pass
 
 
 Trunk Lab filters extension-looking SIP/PJSIP objects before creating diagnostics. Numeric SIP peers, numeric/numeric peers, numeric PJSIP endpoints, numeric AORs and numeric-auth endpoint patterns are excluded. AMI/CLI source failures are reported as source status, not fake diagnostics rows.
+
+
+For Trunk Lab Testing, registration and peer/contact tests must remain read-only. Outbound call tests must require explicit user confirmation, use existing FreePBX routing, avoid dialplan/route/trunk changes, avoid reloads and mask all secrets in raw results.

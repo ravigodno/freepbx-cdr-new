@@ -187,6 +187,7 @@ export const ui = {
         contact: 'Contact',
         risk: 'Риск',
         summary: 'Кратко',
+        lastTest: 'Последний тест',
         actions: 'Действия'
       },
       details: {
@@ -202,6 +203,22 @@ export const ui = {
         raw: 'Raw command snippets',
         masked: 'masked secrets',
         templateSuggestion: 'Возможный шаблон'
+      },
+      testing: {
+        title: 'Тестирование Trunk',
+        registration: 'Проверить регистрацию',
+        peer: 'Проверить Peer/Contact',
+        outbound: 'Проверить исходящий звонок',
+        running: 'Тест выполняется...',
+        failed: 'Тест не выполнен.',
+        callWarning: 'Тестовый звонок может быть тарифицирован оператором. PBXPuls не изменяет настройки FreePBX, но инициирует реальный вызов. Тест использует текущие Outbound Routes FreePBX.',
+        sourceExtension: 'Extension-источник',
+        testNumber: 'Тестовый номер',
+        timeout: 'Timeout seconds',
+        confirm: 'Я понимаю, что будет инициирован реальный тестовый звонок.',
+        startCall: 'Запустить тестовый звонок',
+        results: 'Результаты тестов',
+        noResults: 'Тесты ещё не запускались.'
       },
       empty: {
         noTrunks: 'Trunks не найдены или команды недоступны.',

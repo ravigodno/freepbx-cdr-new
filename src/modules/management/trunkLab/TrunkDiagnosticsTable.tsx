@@ -7,11 +7,13 @@ import { TrunkRegistrationBadge, TrunkRiskBadge, TrunkTechnologyBadge } from './
 export function TrunkDiagnosticsTable({
   diagnostics,
   selectedId,
-  onSelect
+  onSelect,
+  lastTests = {}
 }: {
   diagnostics: TrunkDiagnostic[];
   selectedId?: string;
   onSelect: (diagnostic: TrunkDiagnostic) => void;
+  lastTests?: Record<string, string>;
 }) {
   const t = ui.management.trunkLab.table;
 
@@ -27,6 +29,7 @@ export function TrunkDiagnosticsTable({
             <th className="p-3">{t.contact}</th>
             <th className="p-3">{t.risk}</th>
             <th className="p-3">{t.summary}</th>
+            <th className="p-3">{t.lastTest}</th>
             <th className="p-3 text-right">{t.actions}</th>
           </tr>
         </thead>
@@ -40,6 +43,7 @@ export function TrunkDiagnosticsTable({
               <td className="p-3 text-slate-600 dark:text-slate-300">{item.contactStatus}</td>
               <td className="p-3"><TrunkRiskBadge risk={item.riskLevel} /></td>
               <td className="p-3 text-slate-600 dark:text-slate-300">{item.summary}</td>
+              <td className="p-3 text-slate-500 dark:text-slate-400">{lastTests[String(item.trunkid || item.id)] || '-'}</td>
               <td className="p-3">
                 <div className="flex justify-end">
                   <IconButton title={ui.buttons.view} onClick={event => { event.stopPropagation(); onSelect(item); }}><Eye className="h-4 w-4" /></IconButton>
@@ -48,7 +52,7 @@ export function TrunkDiagnosticsTable({
             </tr>
           ))}
           {diagnostics.length === 0 && (
-            <tr><td colSpan={8} className="p-6 text-center text-xs font-semibold text-slate-400">{ui.management.trunkLab.empty.noTrunks}</td></tr>
+            <tr><td colSpan={9} className="p-6 text-center text-xs font-semibold text-slate-400">{ui.management.trunkLab.empty.noTrunks}</td></tr>
           )}
         </tbody>
       </table>
