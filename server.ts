@@ -591,8 +591,115 @@ type LostCallAnalytics = {
   items: LostCallAnalyticsItem[];
 };
 
+
+type SlaWaitBuckets = {
+  under10: number;
+  from10to20: number;
+  from20to30: number;
+  over30: number;
+  unknown: number;
+};
+
+type SlaMetrics = {
+  slaThresholdSeconds: number;
+  inboundCalls: number;
+  answeredInboundCalls: number;
+  missedInboundCalls: number;
+  slaAnsweredCalls: number;
+  slaPercent: number;
+  averageWaitSeconds: number | null;
+  maxWaitSeconds: number | null;
+  waitBuckets: SlaWaitBuckets;
+};
+
+const normalizeSlaThresholdSeconds = (value: any): number => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 20;
+  return Math.max(1, Math.min(300, Math.round(parsed)));
+};
+
+const calculateWaitSeconds = (cdrRow: any): number | null => {
+  const duration = Number(cdrRow?.duration);
+  const billsec = Number(cdrRow?.billsec);
+  const disposition = String(cdrRow?.disposition || '').toUpperCase();
+
+  // Asterisk CDR usually stores total call duration in duration and talk time in billsec.
+  // When a dedicated ring/wait field is unavailable, duration - billsec is the safest
+  // approximation for answered inbound waiting time. For missed inbound calls billsec is
+  // normally 0, so duration approximates how long the caller waited before hangup/failure.
+  if (disposition === 'ANSWERED' && Number.isFinite(duration) && Number.isFinite(billsec) && duration >= billsec) {
+    return Math.max(0, Math.round(duration - billsec));
+  }
+
+  if (isMissedDisposition(disposition) && Number.isFinite(duration) && duration >= 0) {
+    return Math.round(duration);
+  }
+
+  return null;
+};
+
+const emptyWaitBuckets = (): SlaWaitBuckets => ({ under10: 0, from10to20: 0, from20to30: 0, over30: 0, unknown: 0 });
+
+const addWaitBucket = (buckets: SlaWaitBuckets, waitSeconds: number | null) => {
+  if (waitSeconds === null || !Number.isFinite(waitSeconds)) {
+    buckets.unknown++;
+  } else if (waitSeconds < 10) {
+    buckets.under10++;
+  } else if (waitSeconds <= 20) {
+    buckets.from10to20++;
+  } else if (waitSeconds <= 30) {
+    buckets.from20to30++;
+  } else {
+    buckets.over30++;
+  }
+};
+
+const calculateSlaMetrics = (rows: any[], slaThresholdSeconds: number): SlaMetrics => {
+  const waitBuckets = emptyWaitBuckets();
+  let inboundCalls = 0;
+  let answeredInboundCalls = 0;
+  let missedInboundCalls = 0;
+  let slaAnsweredCalls = 0;
+  let waitSum = 0;
+  let waitCount = 0;
+  let maxWaitSeconds: number | null = null;
+
+  rows.forEach(row => {
+    if (!isIncoming(row)) return;
+    inboundCalls++;
+
+    const disposition = String(row.disposition || '').toUpperCase();
+    const answered = disposition === 'ANSWERED' && Number(row.billsec || 0) > 0;
+    const missed = isMissedDisposition(disposition);
+    const waitSeconds = calculateWaitSeconds(row);
+
+    if (answered) answeredInboundCalls++;
+    if (missed) missedInboundCalls++;
+    if (answered && waitSeconds !== null && waitSeconds <= slaThresholdSeconds) slaAnsweredCalls++;
+
+    addWaitBucket(waitBuckets, waitSeconds);
+    if (waitSeconds !== null && Number.isFinite(waitSeconds)) {
+      waitSum += waitSeconds;
+      waitCount++;
+      maxWaitSeconds = maxWaitSeconds === null ? waitSeconds : Math.max(maxWaitSeconds, waitSeconds);
+    }
+  });
+
+  return {
+    slaThresholdSeconds,
+    inboundCalls,
+    answeredInboundCalls,
+    missedInboundCalls,
+    slaAnsweredCalls,
+    slaPercent: inboundCalls ? Math.round((slaAnsweredCalls / inboundCalls) * 100) : 0,
+    averageWaitSeconds: waitCount ? Math.round(waitSum / waitCount) : null,
+    maxWaitSeconds,
+    waitBuckets
+  };
+};
+
 const normalizePhoneNumberForAnalytics = (phone: any): string => {
-  let digits = String(phone || '').replace(/D/g, '');
+  let digits = String(phone || '').replace(/\D/g, '');
   if (!digits) return '';
   if (digits.length === 11 && digits.startsWith('8')) {
     digits = '7' + digits.slice(1);
@@ -4526,6 +4633,7 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
     const operatorExt = getEffectiveOperatorExt(localDb, req, requestedOperatorExt);
     const onlyMyCalls = requestedOnlyMyCalls || isOperatorForcedOwnCalls(localDb, req);
     const department = req.query.department as string || 'all';
+    const slaThresholdSeconds = normalizeSlaThresholdSeconds(req.query.slaThresholdSeconds);
 
     let calls: CallEntry[] = [];
     if (isDemo) {
@@ -4877,6 +4985,15 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
 
     const reportStartMs = startDate ? getDateTimeFilterMs(startDate, startTime) : -Infinity;
     const reportEndMs = endDate ? getDateTimeFilterMs(endDate, endTime, true) : Infinity;
+    const reportFilteredCalls = calls.filter(c => {
+      const callMs = getCallDateMs(c.calldate);
+      if (startDate && callMs < reportStartMs) return false;
+      if (endDate && callMs > reportEndMs) return false;
+      if (onlyMyCalls && operatorExt && !callHasExactNumber(c, operatorExt)) return false;
+      if (department && department !== 'all' && !checkCallDepartmentMatch(c, department, localDb.directory || [])) return false;
+      return true;
+    });
+    const slaSummary = calculateSlaMetrics(reportFilteredCalls, slaThresholdSeconds);
     const lostCallAnalytics = buildLostCallAnalytics(calls, {
       startMs: reportStartMs,
       endMs: reportEndMs,
@@ -4886,7 +5003,7 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
     const lostByUniqueId = new Map(lostCallAnalytics.items.map(item => [item.uniqueid, item]));
 
     // Classify calls into bins
-    calls.forEach(c => {
+    reportFilteredCalls.forEach(c => {
       // Date filter
       if (startDate) {
         const sVal = getDateTimeFilterMs(startDate, startTime);
@@ -4956,6 +5073,26 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
       if (disposition === 'ANSWERED') {
         bin.answeredDuration += Number(c.billsec || 0);
         bin.answeredCount++;
+      }
+
+      if (isIncomingCall) {
+        const waitSeconds = calculateWaitSeconds(c);
+        bin.answeredInboundCalls = Number(bin.answeredInboundCalls || 0);
+        bin.answeredWithinSla = Number(bin.answeredWithinSla || 0);
+        bin.waitSecondsTotal = Number(bin.waitSecondsTotal || 0);
+        bin.waitSecondsCount = Number(bin.waitSecondsCount || 0);
+
+        if (disposition === 'ANSWERED' && Number(c.billsec || 0) > 0) {
+          bin.answeredInboundCalls++;
+          if (waitSeconds !== null && waitSeconds <= slaThresholdSeconds) {
+            bin.answeredWithinSla++;
+          }
+        }
+
+        if (waitSeconds !== null && Number.isFinite(waitSeconds)) {
+          bin.waitSecondsTotal += waitSeconds;
+          bin.waitSecondsCount++;
+        }
       }
 
       // Detailing load accumulation
@@ -5060,7 +5197,20 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
       }
     });
 
-    const resultList = Array.from(bins.values()).sort((a, b) => a.sortKey - b.sortKey);
+    const resultList = Array.from(bins.values()).sort((a, b) => a.sortKey - b.sortKey).map(bin => {
+      const waitCount = Number(bin.waitSecondsCount || 0);
+      const answeredWithinSla = Number(bin.answeredWithinSla || 0);
+      const inboundCalls = Number(bin.inboundCalls || 0);
+      return {
+        ...bin,
+        answeredInboundCalls: Number(bin.answeredInboundCalls || 0),
+        answeredWithinSla,
+        averageWaitSeconds: waitCount ? Math.round(Number(bin.waitSecondsTotal || 0) / waitCount) : null,
+        slaPercent: inboundCalls ? Math.round((answeredWithinSla / inboundCalls) * 100) : 0,
+        waitSecondsTotal: undefined,
+        waitSecondsCount: undefined
+      };
+    });
 
     const detailingResults = {
       extensions: Array.from(detailing.extensions.values()).sort((a, b) => b.totalCalls - a.totalCalls).slice(0, 30),
@@ -5082,6 +5232,7 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
         callbackWindowHours: Math.max(1, Math.min(168, Number(req.query.callbackWindowHours || 24)))
       },
       lostCallDetails: lostCallAnalytics.items.slice(0, 200),
+      slaSummary,
       dbError: (req as any).dbError || undefined,
       demoModeActive: isDemo
     });

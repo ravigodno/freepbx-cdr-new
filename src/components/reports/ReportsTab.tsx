@@ -37,6 +37,10 @@ interface DynamicDatapoint {
   totalDuration: number;
   answeredDuration: number;
   answeredCount: number;
+  averageWaitSeconds?: number | null;
+  slaPercent?: number;
+  answeredWithinSla?: number;
+  answeredInboundCalls?: number;
   extCalls?: Record<string, number>;
 }
 
@@ -55,6 +59,33 @@ interface DetailingData {
   outboundRules: DetailingItem[];
 }
 
+interface SlaSummary {
+  slaThresholdSeconds: number;
+  inboundCalls: number;
+  answeredInboundCalls: number;
+  missedInboundCalls: number;
+  slaAnsweredCalls: number;
+  slaPercent: number;
+  averageWaitSeconds: number | null;
+  maxWaitSeconds: number | null;
+  waitBuckets?: {
+    under10: number;
+    from10to20: number;
+    from20to30: number;
+    over30: number;
+    unknown: number;
+  };
+}
+
+interface LostCallSummary {
+  missedCalls: number;
+  lostCalls: number;
+  callbackAfterMissed: number;
+  callbackRate: number;
+  notCalledBack: number;
+  callbackWindowHours: number;
+}
+
 function safeNumber(value: unknown): number {
   const n = Number(value || 0);
   return Number.isFinite(n) ? n : 0;
@@ -65,6 +96,11 @@ function formatDuration(seconds: number): string {
   const minutes = Math.floor(safe / 60);
   const rest = Math.round(safe % 60);
   return String(minutes).padStart(2, '0') + ':' + String(rest).padStart(2, '0');
+}
+
+function formatNullableDuration(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined || !Number.isFinite(Number(seconds))) return '—';
+  return formatDuration(Number(seconds));
 }
 
 function controlClass() {
@@ -99,6 +135,8 @@ export default function ReportsTab({
   const [data, setData] = useState<DynamicDatapoint[]>([]);
   const [detailingData, setDetailingData] = useState<DetailingData | null>(null);
   const [lostCallDetails, setLostCallDetails] = useState<LostCallDetail[]>([]);
+  const [lostCallSummary, setLostCallSummary] = useState<LostCallSummary | null>(null);
+  const [slaSummary, setSlaSummary] = useState<SlaSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [refreshes, setRefreshes] = useState(0);
@@ -121,7 +159,9 @@ export default function ReportsTab({
           groupType,
           department,
           operatorExt: internalExt || operatorExt,
-          onlyMyCalls: String(onlyMyCalls)
+          onlyMyCalls: String(onlyMyCalls),
+          callbackWindowHours: '24',
+          slaThresholdSeconds: '20'
         });
         const sessionSaved = localStorage.getItem('asterisk_cdr_session');
         let token = '';
@@ -135,6 +175,8 @@ export default function ReportsTab({
         setData(Array.isArray(json.dynamics) ? json.dynamics : []);
         setDetailingData(json.detailing || null);
         setLostCallDetails(Array.isArray(json.lostCallDetails) ? json.lostCallDetails : []);
+        setLostCallSummary(json.lostCallSummary || null);
+        setSlaSummary(json.slaSummary || null);
         setError(json.dbError || '');
       } catch (err: any) {
         if (active) setError(err?.message || 'Не удалось загрузить данные аналитики.');
@@ -182,20 +224,27 @@ export default function ReportsTab({
     return [...fromAccess, ...fromDirectory].slice(0, 80);
   }, [accessUsers, directory]);
 
+  const slaPercentValue = slaSummary && Number.isFinite(Number(slaSummary.slaPercent)) ? Number(slaSummary.slaPercent) : summary.sla;
+  const averageWaitValue = slaSummary ? slaSummary.averageWaitSeconds : summary.avgWait;
+  const callbackAfterMissedValue = lostCallSummary && Number.isFinite(Number(lostCallSummary.callbackAfterMissed)) ? Number(lostCallSummary.callbackAfterMissed) : summary.processed;
+  const lostCallsValue = lostCallSummary && Number.isFinite(Number(lostCallSummary.lostCalls)) ? Number(lostCallSummary.lostCalls) : summary.lost;
+  const slaOutsideCount = slaSummary ? Math.max(0, safeNumber(slaSummary.answeredInboundCalls) - safeNumber(slaSummary.slaAnsweredCalls)) : 0;
+
   const insights = [
     summary.total > 0 ? 'За период обработано ' + summary.total.toLocaleString('ru-RU') + ' звонков.' : 'За выбранный период звонков не найдено.',
-    'SLA по пропущенным: ' + summary.sla + '%',
-    summary.outbound > summary.inbound ? 'Исходящая активность выше входящей.' : 'Входящий поток не ниже исходящего.'
+    slaSummary ? 'SLA входящих: ' + slaPercentValue + '% при цели ответа до ' + slaSummary.slaThresholdSeconds + ' сек.' : 'SLA по пропущенным: ' + summary.sla + '%',
+    slaSummary ? 'Среднее время ожидания: ' + formatNullableDuration(averageWaitValue) : (summary.outbound > summary.inbound ? 'Исходящая активность выше входящей.' : 'Входящий поток не ниже исходящего.')
   ];
   const anomalies = [
-    summary.lost > 0 ? 'Есть потерянные звонки: ' + summary.lost.toLocaleString('ru-RU') : '',
-    summary.missed > summary.processed ? 'Не все пропущенные закрыты обратным звонком.' : '',
+    lostCallsValue > 0 ? 'Есть потерянные звонки: ' + lostCallsValue.toLocaleString('ru-RU') : '',
+    slaSummary && slaPercentValue < 90 ? 'SLA ниже целевого значения 90%.' : '',
+    slaSummary && slaOutsideCount > 0 ? 'Звонков вне SLA: ' + slaOutsideCount.toLocaleString('ru-RU') : '',
     error ? 'Источник данных вернул предупреждение.' : ''
   ].filter(Boolean);
   const recommendations = [
-    summary.lost > 0 ? 'Проверьте ответственных за обратные звонки и очередь обработки пропусков.' : 'Критичных потерь по данным периода не видно.',
-    trunks.length === 0 ? 'Данных по транкам нет: показан безопасный empty state.' : 'Проверьте транки с низкой долей ответов.',
-    'Для точной оценки используйте одинаковый период сравнения.'
+    lostCallsValue > 0 ? 'Проверьте ответственных за обратные звонки и очередь обработки пропусков.' : 'Критичных потерь по данным периода не видно.',
+    slaSummary && slaPercentValue < 80 ? 'Разберите маршруты входящих и распределение нагрузки: SLA находится в красной зоне.' : 'Контролируйте интервалы ожидания и пики входящего потока.',
+    trunks.length === 0 ? 'Данных по транкам нет: показан безопасный empty state.' : 'Проверьте транки с низкой долей ответов.'
   ];
 
   const handleExportCSV = () => {
@@ -287,10 +336,10 @@ export default function ReportsTab({
         <StatsKpiCard label="Входящие" value={summary.inbound.toLocaleString('ru-RU')} hint="Клиентский поток" icon={PhoneIncoming} tone="green" />
         <StatsKpiCard label="Исходящие" value={summary.outbound.toLocaleString('ru-RU')} hint="Активность операторов" icon={PhoneOutgoing} tone="blue" />
         <StatsKpiCard label="Пропущенные" value={summary.missed.toLocaleString('ru-RU')} hint="Требуют контроля" icon={PhoneMissed} tone="orange" />
-        <StatsKpiCard label="Потерянные" value={summary.lost.toLocaleString('ru-RU')} hint="Без обратного звонка" icon={XCircle} tone="red" />
-        <StatsKpiCard label="SLA" value={summary.sla + '%'} hint="Закрытие пропусков" icon={ShieldCheck} tone="purple" />
-        <StatsKpiCard label="Среднее ожидание" value={formatDuration(summary.avgWait)} hint="По отвеченным" icon={Clock} tone="orange" />
-        <StatsKpiCard label="Перезвонили после пропуска" value={summary.processed.toLocaleString('ru-RU')} hint="Обработанные" icon={TrendingUp} tone="green" />
+        <StatsKpiCard label="Потерянные" value={lostCallsValue.toLocaleString('ru-RU')} hint="Без обратного звонка" icon={XCircle} tone="red" />
+        <StatsKpiCard label="SLA" value={slaPercentValue + '%'} hint="Закрытие пропусков" icon={ShieldCheck} tone="purple" />
+        <StatsKpiCard label="Среднее ожидание" value={formatNullableDuration(averageWaitValue)} hint="По отвеченным" icon={Clock} tone="orange" />
+        <StatsKpiCard label="Перезвонили после пропуска" value={callbackAfterMissedValue.toLocaleString('ru-RU')} hint="Обработанные" icon={TrendingUp} tone="green" />
       </div>
 
       <div className="grid gap-4 xl:grid-cols-12">
@@ -300,7 +349,7 @@ export default function ReportsTab({
 
       <div className="grid gap-4 xl:grid-cols-2">
         <CallHeatmap data={visibleData} />
-        <CallFunnelWidget inbound={summary.inbound} missed={summary.missed} processed={summary.processed} lost={summary.lost} />
+        <CallFunnelWidget inbound={slaSummary?.inboundCalls ?? summary.inbound} missed={slaSummary?.missedInboundCalls ?? summary.missed} processed={callbackAfterMissedValue} lost={lostCallsValue} />
       </div>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
