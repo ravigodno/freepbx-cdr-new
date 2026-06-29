@@ -2239,6 +2239,174 @@ const isWithinDateRange = (isoDate: any, startDate?: any, endDate?: any): boolea
 
 const calltrackingSiteMap = (sites: any[]) => new Map((sites || []).map(site => [site.id, site]));
 
+type CalltrackingMatchConfidence = 'high' | 'medium' | 'low' | 'none';
+type CalltrackingMatchStatus = 'matched' | 'unmatched' | 'ambiguous';
+type CalltrackingMatchReason = 'phone_number_match' | 'time_window_inbound' | 'nearest_inbound_time' | 'multiple_candidates' | 'no_candidate';
+
+const normalizeCalltrackingPhoneNumber = (value: any): string | null => {
+  let digits = String(value || '').replace(/D/g, '');
+  if (!digits) return null;
+  if (digits.length === 11 && digits.startsWith('8')) digits = '7' + digits.slice(1);
+  if (digits.length === 10 && digits.startsWith('9')) digits = '7' + digits;
+  if (digits.length === 11 && digits.startsWith('7')) return digits;
+  return digits || null;
+};
+
+const extractClickedPhone = (event: any): string | null => {
+  return normalizeCalltrackingPhoneNumber([event?.phoneHref, event?.phoneText].filter(Boolean).join(' '));
+};
+
+const extractCdrNumbers = (cdrRow: any): string[] => {
+  const values = [cdrRow?.src, cdrRow?.dst, cdrRow?.did, cdrRow?.cnum, cdrRow?.outbound_cnum, cdrRow?.lastdata];
+  const numbers = values.flatMap(value => String(value || '').match(/+?d[ds().-]{5,}d/g) || [value]);
+  return Array.from(new Set(numbers.map(normalizeCalltrackingPhoneNumber).filter((item): item is string => Boolean(item))));
+};
+
+const parseCalltrackingMs = (value: any): number => {
+  if (!value) return NaN;
+  const raw = String(value).trim();
+  const normalized = /^d{4}-d{2}-d{2}s+d{2}:d{2}/.test(raw) ? raw.replace(' ', 'T') : raw;
+  const ms = new Date(normalized).getTime();
+  return Number.isFinite(ms) ? ms : NaN;
+};
+
+const formatCdrDateParam = (date: Date): string => {
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return [date.getFullYear(), pad(date.getMonth() + 1), pad(date.getDate())].join('-') + ' ' + [pad(date.getHours()), pad(date.getMinutes()), pad(date.getSeconds())].join(':');
+};
+
+const isAnsweredCdr = (cdrRow: any): boolean => String(cdrRow?.disposition || '').toUpperCase() === 'ANSWERED' && Number(cdrRow?.billsec || 0) > 0;
+const isLostSiteCall = (match: any): boolean => {
+  const disposition = String(match?.matchedDisposition || '').toUpperCase();
+  return Boolean(match?.matchedCallUniqueid) && (disposition !== 'ANSWERED' || Number(match?.matchedBillsec || 0) <= 0 || isMissedDisposition(disposition));
+};
+
+async function loadCalltrackingCdrRows(settings: AppSettings, phoneClicks: any[], matchWindowMinutes: number, query: any): Promise<any[]> {
+  if (phoneClicks.length === 0) return [];
+  const eventTimes = phoneClicks.map(event => parseCalltrackingMs(event.eventTime || event.createdAt)).filter(Number.isFinite) as number[];
+  if (eventTimes.length === 0) return [];
+  const startFromQuery = query.startDate ? new Date(String(query.startDate) + 'T00:00:00') : new Date(Math.min(...eventTimes));
+  const endFromQuery = query.endDate ? new Date(String(query.endDate) + 'T23:59:59') : new Date(Math.max(...eventTimes));
+  const endWithWindow = new Date(endFromQuery.getTime() + matchWindowMinutes * 60 * 1000);
+  const sql = 'SELECT uniqueid, linkedid, calldate, clid, src, dst, dcontext, channel, dstchannel, lastapp, lastdata, duration, billsec, disposition, recordingfile, did, cnum, cnam, outbound_cnum FROM cdr WHERE calldate >= ? AND calldate <= ? ORDER BY calldate ASC LIMIT 20000';
+  const rows = await queryFreePBXCDR(settings, isDemoMode(settings), sql, [formatCdrDateParam(startFromQuery), formatCdrDateParam(endWithWindow)]);
+  return rows.filter(row => {
+    const ms = parseCalltrackingMs(row?.calldate);
+    return Number.isFinite(ms) && ms >= startFromQuery.getTime() && ms <= endWithWindow.getTime();
+  });
+}
+
+function buildCalltrackingMatch(event: any, site: any, cdrRow: any | null, status: CalltrackingMatchStatus, confidence: CalltrackingMatchConfidence, reason: CalltrackingMatchReason, secondsToCall: number | null) {
+  return {
+    eventId: event.id,
+    id: event.id,
+    eventTime: event.eventTime || event.createdAt || '',
+    siteId: event.siteId || '',
+    siteName: site?.name || '—',
+    pageUrl: event.pageUrl || '',
+    phoneText: event.phoneText || '',
+    phoneHref: event.phoneHref || '',
+    ymClientId: event.ymClientId || '',
+    utmSource: event.utmSource || '',
+    utmMedium: event.utmMedium || '',
+    utmCampaign: event.utmCampaign || '',
+    matchStatus: status,
+    matchConfidence: confidence,
+    matchReason: reason,
+    matchedCallUniqueid: cdrRow?.uniqueid || null,
+    matchedLinkedid: cdrRow?.linkedid || null,
+    matchedCallDate: cdrRow?.calldate || null,
+    matchedExternalNumber: cdrRow ? (normalizeCalltrackingPhoneNumber(cdrRow.src) || cdrRow.src || null) : null,
+    matchedDestinationNumber: cdrRow ? (normalizeCalltrackingPhoneNumber(cdrRow.did || cdrRow.dst) || cdrRow.did || cdrRow.dst || null) : null,
+    matchedDisposition: cdrRow?.disposition || null,
+    matchedDuration: cdrRow ? Number(cdrRow.duration || 0) : null,
+    matchedBillsec: cdrRow ? Number(cdrRow.billsec || 0) : null,
+    matchedRecordingFile: cdrRow?.recordingfile || null,
+    responsibleExtension: cdrRow ? getResponsibleExtension(cdrRow) : null,
+    secondsToCall
+  };
+}
+
+function calculateCalltrackingMatches(events: any[], cdrRows: any[], options: { matchWindowMinutes: number; sites: Map<any, any> }) {
+  const inboundRows = cdrRows
+    .filter(row => isIncoming(row))
+    .map(row => ({ row, ms: parseCalltrackingMs(row.calldate), numbers: extractCdrNumbers(row) }))
+    .filter(item => Number.isFinite(item.ms))
+    .sort((a, b) => a.ms - b.ms);
+  const windowMs = Math.max(1, options.matchWindowMinutes) * 60 * 1000;
+
+  return events.map(event => {
+    const eventMs = parseCalltrackingMs(event.eventTime || event.createdAt);
+    const site = options.sites.get(event.siteId);
+    if (!Number.isFinite(eventMs)) {
+      return buildCalltrackingMatch(event, site, null, 'unmatched', 'none', 'no_candidate', null);
+    }
+
+    const clickedPhone = extractClickedPhone(event);
+    const candidates = inboundRows.filter(item => item.ms >= eventMs && item.ms <= eventMs + windowMs);
+    if (candidates.length === 0) {
+      return buildCalltrackingMatch(event, site, null, 'unmatched', 'none', 'no_candidate', null);
+    }
+
+    if (clickedPhone) {
+      const exact = candidates.find(item => item.numbers.includes(clickedPhone));
+      if (exact) {
+        return buildCalltrackingMatch(event, site, exact.row, 'matched', 'high', 'phone_number_match', Math.max(0, Math.round((exact.ms - eventMs) / 1000)));
+      }
+    }
+
+    const nearest = candidates[0];
+    const sameSecond = candidates.filter(item => Math.abs(item.ms - nearest.ms) <= 1000);
+    if (sameSecond.length > 1) {
+      return buildCalltrackingMatch(event, site, nearest.row, 'ambiguous', 'low', 'multiple_candidates', Math.max(0, Math.round((nearest.ms - eventMs) / 1000)));
+    }
+
+    const confidence: CalltrackingMatchConfidence = candidates.length === 1 ? 'medium' : 'low';
+    const reason: CalltrackingMatchReason = candidates.length === 1 ? 'time_window_inbound' : 'nearest_inbound_time';
+    return buildCalltrackingMatch(event, site, nearest.row, 'matched', confidence, reason, Math.max(0, Math.round((nearest.ms - eventMs) / 1000)));
+  });
+}
+
+function summarizeCalltrackingMatches(phoneClicks: any[], matches: any[]) {
+  const reliable = matches.filter(match => match.matchStatus === 'matched');
+  const answeredCalls = reliable.filter(match => String(match.matchedDisposition || '').toUpperCase() === 'ANSWERED' && Number(match.matchedBillsec || 0) > 0).length;
+  const lostCalls = reliable.filter(isLostSiteCall).length;
+  const matchedCalls = reliable.length;
+  const seconds = reliable.map(match => Number(match.secondsToCall)).filter(Number.isFinite) as number[];
+  const matchRate = phoneClicks.length ? Math.round((matchedCalls / phoneClicks.length) * 1000) / 10 : 0;
+  return {
+    phoneClicks: phoneClicks.length,
+    matchedCalls,
+    siteCalls: matchedCalls,
+    answeredCalls,
+    answeredSiteCalls: answeredCalls,
+    missedCalls: Math.max(0, matchedCalls - answeredCalls),
+    missedSiteCalls: Math.max(0, matchedCalls - answeredCalls),
+    lostCalls,
+    lostSiteCalls: lostCalls,
+    matchRate,
+    clickToCallConversion: matchRate,
+    averageSecondsToCall: seconds.length ? Math.round(seconds.reduce((sum, value) => sum + value, 0) / seconds.length) : null
+  };
+}
+
+async function getCalltrackingMatchDataset(localDb: any, query: any) {
+  const settings = (localDb.settings || {}) as AppSettings;
+  const sites = calltrackingSiteMap(localDb.calltrackingSites || []);
+  const siteId = cleanMarketingString(query.siteId, 120);
+  const matchWindowMinutes = Math.max(1, Math.min(240, Number(query.matchWindowMinutes || 30)));
+  const phoneClicks = (Array.isArray(localDb.calltrackingEvents) ? localDb.calltrackingEvents : [])
+    .filter((event: any) => event.eventType === 'phone_click')
+    .filter((event: any) => {
+      if (siteId && event.siteId !== siteId) return false;
+      return isWithinDateRange(event.eventTime || event.createdAt, query.startDate, query.endDate);
+    })
+    .sort((a: any, b: any) => parseCalltrackingMs(a.eventTime || a.createdAt) - parseCalltrackingMs(b.eventTime || b.createdAt));
+  const cdrRows = await loadCalltrackingCdrRows(settings, phoneClicks, matchWindowMinutes, query);
+  const matches = calculateCalltrackingMatches(phoneClicks, cdrRows, { matchWindowMinutes, sites });
+  return { sites, phoneClicks, matches, summary: summarizeCalltrackingMatches(phoneClicks, matches), matchWindowMinutes };
+}
+
 // API ROUTER START
 const app = express();
 app.use(express.json());
@@ -2394,6 +2562,25 @@ app.get('/api/calltracking/events', requireAuth(), async (req, res) => {
   res.json({ events: page, total });
 });
 
+app.get('/api/calltracking/matches', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
+  try {
+    const localDb = await readLocalDb();
+    const limit = Math.max(1, Math.min(500, Number(req.query.limit || 100)));
+    const offset = Math.max(0, Number(req.query.offset || 0));
+    const dataset = await getCalltrackingMatchDataset(localDb, req.query);
+    const sorted = dataset.matches.sort((a: any, b: any) => parseCalltrackingMs(b.eventTime) - parseCalltrackingMs(a.eventTime));
+    res.json({
+      matches: sorted.slice(offset, offset + limit),
+      total: sorted.length,
+      summary: dataset.summary,
+      matchWindowMinutes: dataset.matchWindowMinutes
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'internal_error' });
+  }
+});
+
 app.get('/api/calltracking/summary', requireAuth(), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
   const localDb = await readLocalDb();
@@ -2404,6 +2591,7 @@ app.get('/api/calltracking/summary', requireAuth(), async (req, res) => {
   });
   const sessions = new Set(events.map((event: any) => event.sessionId).filter(Boolean));
   const count = (type: string) => events.filter((event: any) => event.eventType === type).length;
+  const dataset = await getCalltrackingMatchDataset(localDb, req.query);
   res.json({
     summary: {
       visits: sessions.size,
@@ -2414,7 +2602,15 @@ app.get('/api/calltracking/summary', requireAuth(), async (req, res) => {
       whatsappClicks: count('whatsapp_click'),
       telegramClicks: count('telegram_click'),
       emailClicks: count('email_click'),
-      uniqueSessions: sessions.size
+      uniqueSessions: sessions.size,
+      siteCalls: dataset.summary.siteCalls,
+      matchedCalls: dataset.summary.matchedCalls,
+      answeredSiteCalls: dataset.summary.answeredSiteCalls,
+      missedSiteCalls: dataset.summary.missedSiteCalls,
+      lostSiteCalls: dataset.summary.lostSiteCalls,
+      matchRate: dataset.summary.matchRate,
+      clickToCallConversion: dataset.summary.clickToCallConversion,
+      averageSecondsToCall: dataset.summary.averageSecondsToCall
     }
   });
 });
@@ -2427,16 +2623,27 @@ app.get('/api/calltracking/sources', requireAuth(), async (req, res) => {
     if (siteId && event.siteId !== siteId) return false;
     return isWithinDateRange(event.eventTime || event.createdAt, req.query.startDate, req.query.endDate);
   });
+  const dataset = await getCalltrackingMatchDataset(localDb, req.query);
+  const matchesByEventId = new Map(dataset.matches.map((match: any) => [match.eventId, match]));
   const groups = new Map<string, any>();
   events.forEach((event: any) => {
     const source = event.utmSource || event.referrer || 'direct';
     const medium = event.utmMedium || '';
     const campaign = event.utmCampaign || '';
     const key = [source, medium, campaign].join('||');
-    if (!groups.has(key)) groups.set(key, { source, medium, campaign, sessions: new Set<string>(), phoneClicks: 0, formSubmits: 0 });
+    if (!groups.has(key)) groups.set(key, { source, medium, campaign, sessions: new Set<string>(), phoneClicks: 0, formSubmits: 0, calls: 0, answeredCalls: 0, missedCalls: 0, lostCalls: 0 });
     const group = groups.get(key);
     if (event.sessionId) group.sessions.add(event.sessionId);
-    if (event.eventType === 'phone_click') group.phoneClicks++;
+    if (event.eventType === 'phone_click') {
+      group.phoneClicks++;
+      const match = matchesByEventId.get(event.id);
+      if (match?.matchStatus === 'matched') {
+        group.calls++;
+        if (String(match.matchedDisposition || '').toUpperCase() === 'ANSWERED' && Number(match.matchedBillsec || 0) > 0) group.answeredCalls++;
+        else group.missedCalls++;
+        if (isLostSiteCall(match)) group.lostCalls++;
+      }
+    }
     if (event.eventType === 'form_submit') group.formSubmits++;
   });
 
@@ -2446,7 +2653,15 @@ app.get('/api/calltracking/sources', requireAuth(), async (req, res) => {
     campaign: group.campaign,
     visits: group.sessions.size,
     phoneClicks: group.phoneClicks,
-    formSubmits: group.formSubmits
+    formSubmits: group.formSubmits,
+    calls: group.calls,
+    answeredCalls: group.answeredCalls,
+    missedCalls: group.missedCalls,
+    lostCalls: group.lostCalls,
+    matchRate: group.phoneClicks ? Math.round((group.calls / group.phoneClicks) * 1000) / 10 : 0,
+    clickToCallConversion: group.phoneClicks ? Math.round((group.calls / group.phoneClicks) * 1000) / 10 : 0,
+    cost: null,
+    costPerCall: null
   })).sort((a, b) => b.phoneClicks - a.phoneClicks || b.visits - a.visits);
 
   res.json({ sources });

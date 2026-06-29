@@ -17,11 +17,44 @@ function safeText(value: unknown): string {
   return text || '—';
 }
 
+function safeNumber(value: unknown): string {
+  const num = Number(value || 0);
+  return Number.isFinite(num) ? num.toLocaleString('ru-RU') : '0';
+}
+
+function safePercent(value: unknown): string {
+  const num = Number(value);
+  return Number.isFinite(num) ? num.toLocaleString('ru-RU') + '%' : '—';
+}
+
 function formatDateTime(value: unknown): string {
   if (!value) return '—';
   const date = new Date(String(value));
   if (Number.isNaN(date.getTime())) return '—';
   return date.toLocaleString('ru-RU');
+}
+
+function formatSeconds(value: unknown): string {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds)) return '—';
+  if (seconds < 60) return Math.round(seconds) + ' сек';
+  return Math.floor(seconds / 60) + ' мин ' + Math.round(seconds % 60) + ' сек';
+}
+
+function matchLabel(event: PhoneClickEvent): string {
+  if (event.matchStatus === 'ambiguous') return 'Неоднозначно';
+  if (event.matchConfidence === 'high') return 'Точно';
+  if (event.matchConfidence === 'medium') return 'Вероятно';
+  if (event.matchConfidence === 'low') return 'Слабо';
+  return 'Не сопоставлено';
+}
+
+function matchClass(event: PhoneClickEvent): string {
+  if (event.matchStatus === 'ambiguous') return 'bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-300';
+  if (event.matchConfidence === 'high') return 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300';
+  if (event.matchConfidence === 'medium') return 'bg-blue-50 text-blue-700 dark:bg-blue-950/30 dark:text-blue-300';
+  if (event.matchConfidence === 'low') return 'bg-purple-50 text-purple-700 dark:bg-purple-950/30 dark:text-purple-300';
+  return 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300';
 }
 
 function EmptyTableCard({ title, description, columns, emptyTitle, emptyDescription, children, hasRows = false }: EmptyTableProps) {
@@ -35,7 +68,7 @@ function EmptyTableCard({ title, description, columns, emptyTitle, emptyDescript
         <button className="w-fit rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-500 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">Экспорт</button>
       </div>
       <div className="mt-4 overflow-x-auto rounded-xl border border-slate-100 dark:border-slate-800">
-        <table className="w-full min-w-[860px] text-left text-xs">
+        <table className="w-full min-w-[1040px] text-left text-xs">
           <thead className="bg-slate-50 text-[10px] font-black uppercase tracking-wide text-slate-500 dark:bg-slate-950/40 dark:text-slate-400">
             <tr>{columns.map(column => <th key={column} className="px-3 py-3">{column}</th>)}</tr>
           </thead>
@@ -51,23 +84,26 @@ export function PhoneClicksTable({ events = [] }: { events?: PhoneClickEvent[] }
   return (
     <EmptyTableCard
       title="Клики по телефонам"
-      description="События кликов по телефонным номерам на сайте"
-      columns={['Дата/время', 'Сайт', 'Страница', 'Номер на сайте', 'ymClientId', 'utm_source', 'utm_medium', 'utm_campaign', 'Статус связи со звонком']}
+      description="Сопоставление кликов по телефонным номерам с CDR-звонками"
+      columns={['Дата/время клика', 'Сайт', 'Страница', 'Номер на сайте', 'ymClientId', 'utm_source', 'utm_medium', 'utm_campaign', 'Статус связи со звонком', 'Звонок', 'Диспозиция', 'Время до звонка']}
       emptyTitle="Событий пока нет"
       emptyDescription="Создайте сайт и установите JS-скрипт PBXPuls на сайт."
       hasRows={events.length > 0}
     >
       {events.map(event => (
-        <tr key={event.id || event.eventTime + event.phoneText} className="transition hover:bg-slate-50 dark:hover:bg-slate-800/40">
+        <tr key={event.eventId || event.id || event.eventTime + event.phoneText} className="transition hover:bg-slate-50 dark:hover:bg-slate-800/40">
           <td className="px-3 py-3 font-semibold text-slate-700 dark:text-slate-200">{formatDateTime(event.eventTime)}</td>
           <td className="px-3 py-3 font-bold text-slate-700 dark:text-slate-200">{safeText(event.siteName || event.siteNameFallback)}</td>
           <td className="max-w-[220px] truncate px-3 py-3 text-slate-500" title={event.pageUrl}>{safeText(event.pageUrl)}</td>
-          <td className="px-3 py-3 font-mono font-black text-slate-800 dark:text-slate-100">{safeText(event.phoneText)}</td>
+          <td className="px-3 py-3 font-mono font-black text-slate-800 dark:text-slate-100">{safeText(event.phoneText || event.phoneHref)}</td>
           <td className="px-3 py-3 font-mono text-slate-500">{safeText(event.ymClientId)}</td>
           <td className="px-3 py-3 text-slate-500">{safeText(event.utmSource)}</td>
           <td className="px-3 py-3 text-slate-500">{safeText(event.utmMedium)}</td>
           <td className="px-3 py-3 text-slate-500">{safeText(event.utmCampaign)}</td>
-          <td className="px-3 py-3"><span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-black text-slate-600 dark:bg-slate-800 dark:text-slate-300">Не сопоставлено</span></td>
+          <td className="px-3 py-3"><span className={['rounded-full px-2 py-1 text-[10px] font-black', matchClass(event)].join(' ')}>{matchLabel(event)}</span></td>
+          <td className="px-3 py-3 font-mono text-slate-600 dark:text-slate-300">{safeText(event.matchedCallUniqueid)}</td>
+          <td className="px-3 py-3 font-black text-slate-600 dark:text-slate-300">{safeText(event.matchedDisposition)}</td>
+          <td className="px-3 py-3 text-slate-500">{formatSeconds(event.secondsToCall)}</td>
         </tr>
       ))}
     </EmptyTableCard>
@@ -79,7 +115,7 @@ export function TrafficSourcesTable({ sources = [] }: { sources?: TrafficSourceS
     <EmptyTableCard
       title="Источники звонков"
       description="Атрибуция звонков по рекламным и органическим источникам"
-      columns={['Источник', 'Medium', 'Кампания', 'Визиты', 'Клики по телефону', 'Формы', 'Звонки', 'Конверсия']}
+      columns={['Источник', 'Medium', 'Кампания', 'Визиты', 'Клики по телефону', 'Формы', 'Звонки', 'Отвечено', 'Пропущено', 'Потеряно', 'Конверсия', 'Расход', 'Цена звонка']}
       emptyTitle="Нет данных по источникам"
       emptyDescription="Данные появятся после подключения коллтрекинга и рекламных интеграций."
       hasRows={sources.length > 0}
@@ -89,9 +125,14 @@ export function TrafficSourcesTable({ sources = [] }: { sources?: TrafficSourceS
           <td className="px-3 py-3 font-black text-slate-800 dark:text-slate-100">{safeText(source.source)}</td>
           <td className="px-3 py-3 text-slate-500">{safeText(source.medium)}</td>
           <td className="px-3 py-3 text-slate-500">{safeText(source.campaign)}</td>
-          <td className="px-3 py-3 font-mono font-black text-slate-700 dark:text-slate-200">{Number(source.visits || 0).toLocaleString('ru-RU')}</td>
-          <td className="px-3 py-3 font-mono font-black text-purple-700 dark:text-purple-300">{Number(source.phoneClicks || 0).toLocaleString('ru-RU')}</td>
-          <td className="px-3 py-3 font-mono font-black text-slate-700 dark:text-slate-200">{Number(source.formSubmits || 0).toLocaleString('ru-RU')}</td>
+          <td className="px-3 py-3 font-mono font-black text-slate-700 dark:text-slate-200">{safeNumber(source.visits)}</td>
+          <td className="px-3 py-3 font-mono font-black text-purple-700 dark:text-purple-300">{safeNumber(source.phoneClicks)}</td>
+          <td className="px-3 py-3 font-mono font-black text-slate-700 dark:text-slate-200">{safeNumber(source.formSubmits)}</td>
+          <td className="px-3 py-3 font-mono font-black text-blue-700 dark:text-blue-300">{safeNumber(source.calls)}</td>
+          <td className="px-3 py-3 font-mono font-black text-emerald-700 dark:text-emerald-300">{safeNumber(source.answeredCalls)}</td>
+          <td className="px-3 py-3 font-mono font-black text-amber-700 dark:text-amber-300">{safeNumber(source.missedCalls)}</td>
+          <td className="px-3 py-3 font-mono font-black text-rose-700 dark:text-rose-300">{safeNumber(source.lostCalls)}</td>
+          <td className="px-3 py-3 font-mono font-black text-slate-700 dark:text-slate-200">{safePercent(source.clickToCallConversion)}</td>
           <td className="px-3 py-3 text-slate-400">—</td>
           <td className="px-3 py-3 text-slate-400">—</td>
         </tr>
@@ -112,14 +153,29 @@ export function CampaignsReportTable() {
   );
 }
 
-export function LostLeadsTable() {
+export function LostLeadsTable({ events = [] }: { events?: PhoneClickEvent[] }) {
   return (
     <EmptyTableCard
       title="Потерянные лиды"
-      description="Будущая оценка пропущенных обращений и потерянного рекламного бюджета"
+      description="Сопоставленные звонки с сайта без успешного ответа"
       columns={['Источник', 'Кампания', 'Страница', 'Время клика', 'Время звонка', 'Номер', 'Статус', 'Ответственный', 'Потерянный бюджет']}
       emptyTitle="Потерянных лидов по коллтрекингу пока нет"
-      emptyDescription="После matching phone_click -> CDR здесь появятся обращения без успешной обработки."
-    />
+      emptyDescription="Здесь появятся сопоставленные phone_click -> CDR обращения без успешного ответа."
+      hasRows={events.length > 0}
+    >
+      {events.map(event => (
+        <tr key={event.eventId || event.id || event.eventTime + event.phoneText} className="transition hover:bg-slate-50 dark:hover:bg-slate-800/40">
+          <td className="px-3 py-3 font-black text-slate-800 dark:text-slate-100">{safeText(event.utmSource || event.referrer)}</td>
+          <td className="px-3 py-3 text-slate-500">{safeText(event.utmCampaign)}</td>
+          <td className="max-w-[220px] truncate px-3 py-3 text-slate-500" title={event.pageUrl}>{safeText(event.pageUrl)}</td>
+          <td className="px-3 py-3 text-slate-600 dark:text-slate-300">{formatDateTime(event.eventTime)}</td>
+          <td className="px-3 py-3 text-slate-600 dark:text-slate-300">{formatDateTime(event.matchedCallDate)}</td>
+          <td className="px-3 py-3 font-mono font-black text-slate-800 dark:text-slate-100">{safeText(event.matchedExternalNumber || event.phoneText)}</td>
+          <td className="px-3 py-3"><span className="rounded-full bg-rose-50 px-2 py-1 text-[10px] font-black text-rose-700 dark:bg-rose-950/30 dark:text-rose-300">{safeText(event.matchedDisposition || 'Не отвечен')}</span></td>
+          <td className="px-3 py-3 text-slate-500">{safeText(event.responsibleExtension)}</td>
+          <td className="px-3 py-3 text-slate-400">—</td>
+        </tr>
+      ))}
+    </EmptyTableCard>
   );
 }

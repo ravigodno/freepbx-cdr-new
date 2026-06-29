@@ -22,6 +22,7 @@ export interface CalltrackingSite {
 
 export interface PhoneClickEvent {
   id?: string;
+  eventId?: string;
   eventTime: string;
   siteId?: string;
   siteName?: string;
@@ -34,7 +35,20 @@ export interface PhoneClickEvent {
   utmSource: string;
   utmMedium: string;
   utmCampaign: string;
-  matchStatus?: string;
+  matchStatus?: 'matched' | 'unmatched' | 'ambiguous' | string;
+  matchConfidence?: 'high' | 'medium' | 'low' | 'none' | string;
+  matchReason?: string;
+  matchedCallUniqueid?: string | null;
+  matchedLinkedid?: string | null;
+  matchedCallDate?: string | null;
+  matchedExternalNumber?: string | null;
+  matchedDestinationNumber?: string | null;
+  matchedDisposition?: string | null;
+  matchedDuration?: number | null;
+  matchedBillsec?: number | null;
+  matchedRecordingFile?: string | null;
+  responsibleExtension?: string | null;
+  secondsToCall?: number | null;
 }
 
 export interface TrafficSourceSummary {
@@ -44,6 +58,14 @@ export interface TrafficSourceSummary {
   visits: number;
   phoneClicks: number;
   formSubmits: number;
+  calls?: number;
+  answeredCalls?: number;
+  missedCalls?: number;
+  lostCalls?: number;
+  matchRate?: number;
+  clickToCallConversion?: number;
+  cost?: number | null;
+  costPerCall?: number | null;
 }
 
 export interface CampaignSummary {
@@ -81,4 +103,12 @@ export interface CalltrackingSummaryResponse {
   telegramClicks: number;
   emailClicks: number;
   uniqueSessions: number;
+  siteCalls?: number;
+  matchedCalls?: number;
+  answeredSiteCalls?: number;
+  missedSiteCalls?: number;
+  lostSiteCalls?: number;
+  matchRate?: number;
+  clickToCallConversion?: number;
+  averageSecondsToCall?: number | null;
 }

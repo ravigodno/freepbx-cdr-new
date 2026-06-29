@@ -15,9 +15,10 @@ function safeText(value: unknown): string {
 
 export function MarketingIntegrationsPanel({ sites = [] }: { sites?: CalltrackingSite[] }) {
   const primarySite = sites[0];
-  const scriptExample = primarySite
-    ? `<script src="https://PBXPULS_HOST/calltracking.js" data-site-key="${primarySite.publicKey}"></script>`
-    : '<script src="https://PBXPULS_HOST/calltracking.js" data-site-key="SITE_PUBLIC_KEY"></script>';
+  const siteKey = primarySite?.publicKey || 'SITE_PUBLIC_KEY';
+  const scriptExample = '<script src="https://PBXPULS_HOST/calltracking.js" data-site-key="' + siteKey + '"></script>';
+  const debugScriptExample = '<script src="https://PBXPULS_HOST/calltracking.js" data-site-key="' + siteKey + '" data-debug="true"></script>';
+  const metrikaScriptExample = '<script src="https://PBXPULS_HOST/calltracking.js" data-site-key="' + siteKey + '" data-ym-counter-id="12345678"></script>';
 
   return (
     <div className="rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
@@ -36,14 +37,27 @@ export function MarketingIntegrationsPanel({ sites = [] }: { sites?: Calltrackin
             </span>
           </div>
           <div className="mt-4 text-sm font-black text-slate-900 dark:text-white">JS-скрипт сайта</div>
-          <div className="mt-1 text-xs font-semibold leading-relaxed text-slate-500 dark:text-slate-400">Сбор кликов по телефонным номерам и UTM-меток. Файл calltracking.js будет добавлен позже.</div>
+          <div className="mt-1 text-xs font-semibold leading-relaxed text-slate-500 dark:text-slate-400">Скрипт собирает просмотры страниц, показы телефонов и клики по телефону. Подмена номеров будет подключена отдельным этапом.</div>
           {primarySite && (
             <div className="mt-3 rounded-xl border border-purple-100 bg-white p-3 dark:border-purple-900/40 dark:bg-slate-900">
               <div className="text-[10px] font-black uppercase tracking-wide text-slate-500">siteKey</div>
               <div className="mt-1 break-all font-mono text-[11px] font-bold text-slate-700 dark:text-slate-200">{safeText(primarySite.publicKey)}</div>
             </div>
           )}
-          <pre className="mt-3 overflow-x-auto rounded-xl bg-slate-950 p-3 text-[10px] font-semibold text-slate-100"><code>{scriptExample}</code></pre>
+          <div className="mt-3 space-y-2">
+            <div>
+              <div className="mb-1 text-[10px] font-black uppercase tracking-wide text-slate-500">Установка</div>
+              <pre className="overflow-x-auto rounded-xl bg-slate-950 p-3 text-[10px] font-semibold text-slate-100"><code>{scriptExample}</code></pre>
+            </div>
+            <div>
+              <div className="mb-1 text-[10px] font-black uppercase tracking-wide text-slate-500">Debug-режим</div>
+              <pre className="overflow-x-auto rounded-xl bg-slate-950 p-3 text-[10px] font-semibold text-slate-100"><code>{debugScriptExample}</code></pre>
+            </div>
+            <div>
+              <div className="mb-1 text-[10px] font-black uppercase tracking-wide text-slate-500">С Яндекс.Метрикой</div>
+              <pre className="overflow-x-auto rounded-xl bg-slate-950 p-3 text-[10px] font-semibold text-slate-100"><code>{metrikaScriptExample}</code></pre>
+            </div>
+          </div>
         </div>
 
         {baseIntegrations.map(item => {
