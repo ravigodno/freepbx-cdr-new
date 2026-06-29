@@ -563,6 +563,157 @@ const isInternal = (c: any): boolean => {
 };
 
 
+type LostCallCallbackStatus = 'not_called_back' | 'called_back' | 'repeated_inbound';
+
+type LostCallAnalyticsItem = {
+  externalNumber: string | null;
+  normalizedNumber: string;
+  missedAt: string;
+  did: string | null;
+  direction: 'inbound';
+  department: string | null;
+  responsibleExtension: string | null;
+  responsibleName: string | null;
+  attempts: number;
+  callbackStatus: LostCallCallbackStatus;
+  lastRelatedCallAt: string | null;
+  recordingAvailable: boolean;
+  uniqueid: string;
+  linkedid: string | null;
+};
+
+type LostCallAnalytics = {
+  missedCalls: number;
+  lostCalls: number;
+  callbackAfterMissed: number;
+  notCalledBack: number;
+  callbackRate: number;
+  items: LostCallAnalyticsItem[];
+};
+
+const normalizePhoneNumberForAnalytics = (phone: any): string => {
+  let digits = String(phone || '').replace(/D/g, '');
+  if (!digits) return '';
+  if (digits.length === 11 && digits.startsWith('8')) {
+    digits = '7' + digits.slice(1);
+  }
+  if (digits.length === 11 && digits.startsWith('7')) {
+    return digits;
+  }
+  return digits;
+};
+
+const isMissedDisposition = (disposition: any): boolean => {
+  const value = String(disposition || '').toUpperCase();
+  return value === 'NO ANSWER' || value === 'BUSY' || value === 'FAILED' || value === 'CANCEL' || value === 'CANCELLED';
+};
+
+const getResponsibleExtension = (call: any): string | null => {
+  const answered = Array.isArray(call.answeredExts) ? call.answeredExts : [];
+  const missed = Array.isArray(call.missedExts) ? call.missedExts : [];
+  const candidates = [...answered, ...missed, getCalleeInternalExt(call), getCallerInternalExt(call)]
+    .map(value => onlyDigits(value))
+    .filter(value => isInternalExt(value));
+  return candidates[0] || null;
+};
+
+const getDirectoryNameByExtension = (directory: any[], extension: string | null): string | null => {
+  if (!extension) return null;
+  const entry = (directory || []).find(item => {
+    const phones = [item?.number, item?.phone, ...(Array.isArray(item?.phones) ? item.phones : [])];
+    return phones.some(phone => onlyDigits(phone) === extension);
+  });
+  return entry?.name || null;
+};
+
+const buildLostCallAnalytics = (calls: any[], options: { startMs: number; endMs: number; callbackWindowHours?: number; directory?: any[] }): LostCallAnalytics => {
+  const callbackWindowMs = Math.max(1, Math.min(168, Number(options.callbackWindowHours || 24))) * 60 * 60 * 1000;
+  const directory = options.directory || [];
+  const missedCalls = calls
+    .filter(call => {
+      const callMs = getCallDateMs(call.calldate);
+      return callMs >= options.startMs && callMs <= options.endMs && isIncoming(call) && isMissedDisposition(call.disposition);
+    })
+    .map(call => ({ call, normalizedNumber: normalizePhoneNumberForAnalytics(call.src), missedMs: getCallDateMs(call.calldate) }))
+    .filter(item => item.normalizedNumber && item.normalizedNumber.length >= 7 && Number.isFinite(item.missedMs));
+
+  const outboundByNumber = new Map<string, any[]>();
+  const inboundByNumber = new Map<string, any[]>();
+
+  calls.forEach(call => {
+    const callMs = getCallDateMs(call.calldate);
+    if (!Number.isFinite(callMs)) return;
+
+    if (isOutgoing(call)) {
+      const normalized = normalizePhoneNumberForAnalytics(call.dst);
+      const answered = String(call.disposition || '').toUpperCase() === 'ANSWERED' && Number(call.billsec || 0) > 0;
+      if (normalized && answered) {
+        if (!outboundByNumber.has(normalized)) outboundByNumber.set(normalized, []);
+        outboundByNumber.get(normalized)!.push(call);
+      }
+    }
+
+    if (isIncoming(call)) {
+      const normalized = normalizePhoneNumberForAnalytics(call.src);
+      if (normalized) {
+        if (!inboundByNumber.has(normalized)) inboundByNumber.set(normalized, []);
+        inboundByNumber.get(normalized)!.push(call);
+      }
+    }
+  });
+
+  outboundByNumber.forEach(list => list.sort((a, b) => getCallDateMs(a.calldate) - getCallDateMs(b.calldate)));
+  inboundByNumber.forEach(list => list.sort((a, b) => getCallDateMs(a.calldate) - getCallDateMs(b.calldate)));
+
+  let callbackAfterMissed = 0;
+  let notCalledBack = 0;
+  const items: LostCallAnalyticsItem[] = missedCalls.map(({ call, normalizedNumber, missedMs }) => {
+    const deadline = missedMs + callbackWindowMs;
+    const outbound = (outboundByNumber.get(normalizedNumber) || []).filter(candidate => {
+      const candidateMs = getCallDateMs(candidate.calldate);
+      return candidateMs > missedMs && candidateMs <= deadline;
+    });
+    const repeatedInbound = (inboundByNumber.get(normalizedNumber) || []).filter(candidate => {
+      const candidateMs = getCallDateMs(candidate.calldate);
+      return candidate.uniqueid !== call.uniqueid && candidateMs > missedMs && candidateMs <= deadline;
+    });
+
+    const callbackStatus: LostCallCallbackStatus = outbound.length ? 'called_back' : repeatedInbound.length ? 'repeated_inbound' : 'not_called_back';
+    if (callbackStatus === 'called_back') callbackAfterMissed++;
+    if (callbackStatus === 'not_called_back') notCalledBack++;
+
+    const related = outbound[0] || repeatedInbound[0] || null;
+    const responsibleExtension = getResponsibleExtension(call);
+
+    return {
+      externalNumber: call.src || null,
+      normalizedNumber,
+      missedAt: call.calldate,
+      did: call.did || null,
+      direction: 'inbound',
+      department: null,
+      responsibleExtension,
+      responsibleName: getDirectoryNameByExtension(directory, responsibleExtension),
+      attempts: outbound.length,
+      callbackStatus,
+      lastRelatedCallAt: related?.calldate || null,
+      recordingAvailable: Boolean(call.recordingfile),
+      uniqueid: call.uniqueid,
+      linkedid: call.linkedid || null
+    };
+  });
+
+  return {
+    missedCalls: missedCalls.length,
+    lostCalls: notCalledBack,
+    callbackAfterMissed,
+    notCalledBack,
+    callbackRate: missedCalls.length ? Math.round((callbackAfterMissed / missedCalls.length) * 100) : 0,
+    items: items.sort((a, b) => getCallDateMs(b.missedAt) - getCallDateMs(a.missedAt))
+  };
+};
+
+
 const getDirectoryPhones = (entry: any): string[] => {
   const values = [
     ...(Array.isArray(entry?.phones) ? entry.phones : []),
@@ -4390,8 +4541,9 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
         sql += ' AND calldate >= DATE_SUB(NOW(), INTERVAL 30 DAY)'; // default of last 30 days for reports
       }
       if (endDate) {
-        sql += ' AND calldate <= ?';
+        sql += ' AND calldate <= DATE_ADD(?, INTERVAL ? HOUR)';
         sqlParams.push(buildDateTimeFilter(endDate, endTime, true));
+        sqlParams.push(Math.max(1, Math.min(168, Number(req.query.callbackWindowHours || 24))));
       }
 
       sql += ' ORDER BY calldate DESC LIMIT 10000'; // Higher limit for wider analytical trend queries
@@ -4723,6 +4875,16 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
       return null;
     };
 
+    const reportStartMs = startDate ? getDateTimeFilterMs(startDate, startTime) : -Infinity;
+    const reportEndMs = endDate ? getDateTimeFilterMs(endDate, endTime, true) : Infinity;
+    const lostCallAnalytics = buildLostCallAnalytics(calls, {
+      startMs: reportStartMs,
+      endMs: reportEndMs,
+      callbackWindowHours: Number(req.query.callbackWindowHours || 24),
+      directory: localDb.directory || []
+    });
+    const lostByUniqueId = new Map(lostCallAnalytics.items.map(item => [item.uniqueid, item]));
+
     // Classify calls into bins
     calls.forEach(c => {
       // Date filter
@@ -4782,18 +4944,10 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
 
       if (isIncomingMissed) {
         bin.missedCalls++;
-        const isHandledInSla = c.wasKpiResolved === true;
-        const isLateCallback = c.wasCallbacked === true && c.wasKpiResolved !== true;
-        
-        const kpiMinutes = localDb.settings && localDb.settings.callbackKpiMinutes !== undefined
-          ? Number(localDb.settings.callbackKpiMinutes)
-          : 60;
-        const callTime = new Date(c.calldate).getTime();
-        const slaExpired = Number.isFinite(callTime) && (Date.now() - callTime) > kpiMinutes * 60 * 1000;
-
-        if (isHandledInSla) {
+        const lostItem = lostByUniqueId.get(c.uniqueid);
+        if (lostItem?.callbackStatus === 'called_back') {
           bin.processedCalls++;
-        } else if (isLateCallback || slaExpired) {
+        } else if (lostItem?.callbackStatus === 'not_called_back') {
           bin.lostCalls++;
         }
       }
@@ -4919,6 +5073,15 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
     res.json({
       dynamics: resultList,
       detailing: detailingResults,
+      lostCallSummary: {
+        missedCalls: lostCallAnalytics.missedCalls,
+        lostCalls: lostCallAnalytics.lostCalls,
+        callbackAfterMissed: lostCallAnalytics.callbackAfterMissed,
+        callbackRate: lostCallAnalytics.callbackRate,
+        notCalledBack: lostCallAnalytics.notCalledBack,
+        callbackWindowHours: Math.max(1, Math.min(168, Number(req.query.callbackWindowHours || 24)))
+      },
+      lostCallDetails: lostCallAnalytics.items.slice(0, 200),
       dbError: (req as any).dbError || undefined,
       demoModeActive: isDemo
     });
