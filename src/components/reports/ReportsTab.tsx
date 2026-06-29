@@ -86,6 +86,12 @@ interface LostCallSummary {
   callbackWindowHours: number;
 }
 
+interface UsedCallQualitySettings {
+  answerSlaSeconds: number;
+  missedCallCallbackSlaHours: number;
+  calltrackingMatchWindowMinutes: number;
+}
+
 interface EmployeeSummaryRow {
   extension?: string | null;
   employeeName?: string | null;
@@ -138,6 +144,7 @@ export default function ReportsTab({
   onlyMyCalls,
   accessUsers,
   directory,
+  settings,
   onStartDateChange,
   onEndDateChange
 }: Props) {
@@ -155,6 +162,7 @@ export default function ReportsTab({
   const [lostCallDetails, setLostCallDetails] = useState<LostCallDetail[]>([]);
   const [lostCallSummary, setLostCallSummary] = useState<LostCallSummary | null>(null);
   const [slaSummary, setSlaSummary] = useState<SlaSummary | null>(null);
+  const [usedSettings, setUsedSettings] = useState<UsedCallQualitySettings | null>(null);
   const [departmentSummary, setDepartmentSummary] = useState<DepartmentSummaryRow[]>([]);
   const [employeeSummary, setEmployeeSummary] = useState<EmployeeSummaryRow[]>([]);
   const [trunkSummary, setTrunkSummary] = useState<TrunkSummaryRow[]>([]);
@@ -183,9 +191,7 @@ export default function ReportsTab({
           extension: internalExt,
           operatorExt: internalExt || operatorExt,
           trunk: trunkFilter,
-          onlyMyCalls: String(onlyMyCalls),
-          callbackWindowHours: '24',
-          slaThresholdSeconds: '20'
+          onlyMyCalls: String(onlyMyCalls)
         });
         const sessionSaved = localStorage.getItem('asterisk_cdr_session');
         let token = '';
@@ -204,6 +210,7 @@ export default function ReportsTab({
         setDepartmentSummary(Array.isArray(json.departmentSummary) ? json.departmentSummary : []);
         setEmployeeSummary(Array.isArray(json.employeeSummary) ? json.employeeSummary : []);
         setTrunkSummary(Array.isArray(json.trunkSummary) ? json.trunkSummary : []);
+        setUsedSettings(json.usedSettings || null);
         setError(json.dbError || '');
       } catch (err: any) {
         if (active) setError(err?.message || 'Не удалось загрузить данные аналитики.');
@@ -266,6 +273,8 @@ export default function ReportsTab({
     return [...fromSummary, ...fromAccess, ...fromDirectory].filter(item => { if (seen.has(item.value)) return false; seen.add(item.value); return true; }).slice(0, 80);
   }, [accessUsers, directory, employeeSummary]);
 
+  const effectiveAnswerSlaSeconds = usedSettings?.answerSlaSeconds ?? settings?.answerSlaSeconds ?? slaSummary?.slaThresholdSeconds ?? 20;
+  const effectiveCallbackSlaHours = usedSettings?.missedCallCallbackSlaHours ?? settings?.missedCallCallbackSlaHours ?? lostCallSummary?.callbackWindowHours ?? 24;
   const slaPercentValue = slaSummary && Number.isFinite(Number(slaSummary.slaPercent)) ? Number(slaSummary.slaPercent) : summary.sla;
   const averageWaitValue = slaSummary ? slaSummary.averageWaitSeconds : summary.avgWait;
   const callbackAfterMissedValue = lostCallSummary && Number.isFinite(Number(lostCallSummary.callbackAfterMissed)) ? Number(lostCallSummary.callbackAfterMissed) : summary.processed;
@@ -274,7 +283,7 @@ export default function ReportsTab({
 
   const insights = [
     summary.total > 0 ? 'За период обработано ' + summary.total.toLocaleString('ru-RU') + ' звонков.' : 'За выбранный период звонков не найдено.',
-    slaSummary ? 'SLA входящих: ' + slaPercentValue + '% при цели ответа до ' + slaSummary.slaThresholdSeconds + ' сек.' : 'SLA по пропущенным: ' + summary.sla + '%',
+    slaSummary ? 'SLA входящих: ' + slaPercentValue + '% при цели ответа до ' + effectiveAnswerSlaSeconds + ' сек.' : 'SLA по пропущенным: ' + summary.sla + '%',
     slaSummary ? 'Среднее время ожидания: ' + formatNullableDuration(averageWaitValue) : (summary.outbound > summary.inbound ? 'Исходящая активность выше входящей.' : 'Входящий поток не ниже исходящего.')
   ];
   const anomalies = [
@@ -284,7 +293,7 @@ export default function ReportsTab({
     error ? 'Источник данных вернул предупреждение.' : ''
   ].filter(Boolean);
   const recommendations = [
-    lostCallsValue > 0 ? 'Проверьте ответственных за обратные звонки и очередь обработки пропусков.' : 'Критичных потерь по данным периода не видно.',
+    lostCallsValue > 0 ? 'Проверьте обратные звонки: SLA перезвона ' + effectiveCallbackSlaHours + ' ч.' : 'Критичных потерь по данным периода не видно.',
     slaSummary && slaPercentValue < 80 ? 'Разберите маршруты входящих и распределение нагрузки: SLA находится в красной зоне.' : 'Контролируйте интервалы ожидания и пики входящего потока.',
     trunks.length === 0 ? 'Данных по транкам нет: показан безопасный empty state.' : 'Проверьте транки с низкой долей ответов.'
   ];
@@ -378,8 +387,8 @@ export default function ReportsTab({
         <StatsKpiCard label="Входящие" value={summary.inbound.toLocaleString('ru-RU')} hint="Клиентский поток" icon={PhoneIncoming} tone="green" />
         <StatsKpiCard label="Исходящие" value={summary.outbound.toLocaleString('ru-RU')} hint="Активность операторов" icon={PhoneOutgoing} tone="blue" />
         <StatsKpiCard label="Пропущенные" value={summary.missed.toLocaleString('ru-RU')} hint="Требуют контроля" icon={PhoneMissed} tone="orange" />
-        <StatsKpiCard label="Потерянные" value={lostCallsValue.toLocaleString('ru-RU')} hint="Без обратного звонка" icon={XCircle} tone="red" />
-        <StatsKpiCard label="SLA" value={slaPercentValue + '%'} hint="Закрытие пропусков" icon={ShieldCheck} tone="purple" />
+        <StatsKpiCard label="Потерянные" value={lostCallsValue.toLocaleString('ru-RU')} hint={'Без перезвона за ' + effectiveCallbackSlaHours + ' ч'} icon={XCircle} tone="red" />
+        <StatsKpiCard label="SLA" value={slaPercentValue + '%'} hint={'Ответ до ' + effectiveAnswerSlaSeconds + ' сек'} icon={ShieldCheck} tone="purple" />
         <StatsKpiCard label="Среднее ожидание" value={formatNullableDuration(averageWaitValue)} hint="По отвеченным" icon={Clock} tone="orange" />
         <StatsKpiCard label="Перезвонили после пропуска" value={callbackAfterMissedValue.toLocaleString('ru-RU')} hint="Обработанные" icon={TrendingUp} tone="green" />
       </div>

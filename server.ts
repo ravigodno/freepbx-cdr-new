@@ -618,7 +618,47 @@ type SlaMetrics = {
 const normalizeSlaThresholdSeconds = (value: any): number => {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return 20;
-  return Math.max(1, Math.min(300, Math.round(parsed)));
+  return Math.max(5, Math.min(300, Math.round(parsed)));
+};
+
+type CallQualitySettings = {
+  answerSlaSeconds: number;
+  missedCallCallbackSlaHours: number;
+  calltrackingMatchWindowMinutes: number;
+};
+
+const clampCallQualityNumber = (value: any, fallback: number, min: number, max: number): number => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(parsed)));
+};
+
+const getCallQualitySettings = (settingsOrDb: any): CallQualitySettings => {
+  const settings = settingsOrDb?.settings ? settingsOrDb.settings : (settingsOrDb || {});
+  return {
+    answerSlaSeconds: clampCallQualityNumber(settings.answerSlaSeconds, 20, 5, 300),
+    missedCallCallbackSlaHours: clampCallQualityNumber(settings.missedCallCallbackSlaHours, 24, 1, 168),
+    calltrackingMatchWindowMinutes: clampCallQualityNumber(settings.calltrackingMatchWindowMinutes, 30, 1, 240)
+  };
+};
+
+const applyCallQualitySettingsDefaults = (settings: any): boolean => {
+  if (!settings) return false;
+  const before = JSON.stringify({
+    answerSlaSeconds: settings.answerSlaSeconds,
+    missedCallCallbackSlaHours: settings.missedCallCallbackSlaHours,
+    calltrackingMatchWindowMinutes: settings.calltrackingMatchWindowMinutes
+  });
+  const normalized = getCallQualitySettings(settings);
+  settings.answerSlaSeconds = normalized.answerSlaSeconds;
+  settings.missedCallCallbackSlaHours = normalized.missedCallCallbackSlaHours;
+  settings.calltrackingMatchWindowMinutes = normalized.calltrackingMatchWindowMinutes;
+  const after = JSON.stringify({
+    answerSlaSeconds: settings.answerSlaSeconds,
+    missedCallCallbackSlaHours: settings.missedCallCallbackSlaHours,
+    calltrackingMatchWindowMinutes: settings.calltrackingMatchWindowMinutes
+  });
+  return before !== after;
 };
 
 const calculateWaitSeconds = (cdrRow: any): number | null => {
@@ -1633,6 +1673,9 @@ function getDefaultLocalDb(): any {
       amiPass: process.env.AMI_PASS || '',
       amiContext: process.env.AMI_CONTEXT || 'from-internal',
       callbackKpiMinutes: 60,
+      answerSlaSeconds: 20,
+      missedCallCallbackSlaHours: 24,
+      calltrackingMatchWindowMinutes: 30,
       freepbxExtensionProvider: 'auto',
       normEnabled: true,
       normReplace8With7: true,
@@ -1698,6 +1741,10 @@ async function readLocalDb(): Promise<{
 
     if (data.settings && !data.settings.hasOwnProperty('callbackKpiMinutes')) {
       data.settings.callbackKpiMinutes = 60;
+      changed = true;
+    }
+
+    if (applyCallQualitySettingsDefaults(data.settings)) {
       changed = true;
     }
 
@@ -2242,9 +2289,11 @@ const calltrackingSiteMap = (sites: any[]) => new Map((sites || []).map(site => 
 type CalltrackingMatchConfidence = 'high' | 'medium' | 'low' | 'none';
 type CalltrackingMatchStatus = 'matched' | 'unmatched' | 'ambiguous';
 type CalltrackingMatchReason = 'phone_number_match' | 'time_window_inbound' | 'nearest_inbound_time' | 'multiple_candidates' | 'no_candidate';
+type CalltrackingCallbackStatus = 'not_required' | 'called_back' | 'not_called_back' | 'unknown';
+type CalltrackingLeadStatus = 'answered' | 'recovered_by_callback' | 'lost' | 'unmatched' | 'ambiguous';
 
 const normalizeCalltrackingPhoneNumber = (value: any): string | null => {
-  let digits = String(value || '').replace(/D/g, '');
+  let digits = String(value || '').replace(/\D/g, '');
   if (!digits) return null;
   if (digits.length === 11 && digits.startsWith('8')) digits = '7' + digits.slice(1);
   if (digits.length === 10 && digits.startsWith('9')) digits = '7' + digits;
@@ -2257,15 +2306,20 @@ const extractClickedPhone = (event: any): string | null => {
 };
 
 const extractCdrNumbers = (cdrRow: any): string[] => {
-  const values = [cdrRow?.src, cdrRow?.dst, cdrRow?.did, cdrRow?.cnum, cdrRow?.outbound_cnum, cdrRow?.lastdata];
-  const numbers = values.flatMap(value => String(value || '').match(/+?d[ds().-]{5,}d/g) || [value]);
-  return Array.from(new Set(numbers.map(normalizeCalltrackingPhoneNumber).filter((item): item is string => Boolean(item))));
+  const values = [cdrRow?.src, cdrRow?.dst, cdrRow?.did, cdrRow?.cnum, cdrRow?.outbound_cnum, cdrRow?.lastdata, cdrRow?.channel, cdrRow?.dstchannel];
+  const candidates: string[] = [];
+  values.forEach(value => {
+    const text = String(value || '');
+    if (text) candidates.push(text);
+    (text.match(/\+?\d[\d\s().-]{5,}\d/g) || []).forEach(match => candidates.push(match));
+  });
+  return Array.from(new Set(candidates.map(normalizeCalltrackingPhoneNumber).filter((item): item is string => Boolean(item))));
 };
 
 const parseCalltrackingMs = (value: any): number => {
   if (!value) return NaN;
   const raw = String(value).trim();
-  const normalized = /^d{4}-d{2}-d{2}s+d{2}:d{2}/.test(raw) ? raw.replace(' ', 'T') : raw;
+  const normalized = /^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}/.test(raw) ? raw.replace(' ', 'T') : raw;
   const ms = new Date(normalized).getTime();
   return Number.isFinite(ms) ? ms : NaN;
 };
@@ -2276,18 +2330,20 @@ const formatCdrDateParam = (date: Date): string => {
 };
 
 const isAnsweredCdr = (cdrRow: any): boolean => String(cdrRow?.disposition || '').toUpperCase() === 'ANSWERED' && Number(cdrRow?.billsec || 0) > 0;
-const isLostSiteCall = (match: any): boolean => {
+const isProblemSiteMatch = (match: any): boolean => {
   const disposition = String(match?.matchedDisposition || '').toUpperCase();
-  return Boolean(match?.matchedCallUniqueid) && (disposition !== 'ANSWERED' || Number(match?.matchedBillsec || 0) <= 0 || isMissedDisposition(disposition));
+  return Boolean(match?.matchedCallUniqueid) && (!isAnsweredCdr({ disposition, billsec: match?.matchedBillsec }) || isMissedDisposition(disposition) || disposition === 'CONGESTION');
 };
+const isLostSiteCall = (match: any): boolean => match?.leadStatus === 'lost';
 
-async function loadCalltrackingCdrRows(settings: AppSettings, phoneClicks: any[], matchWindowMinutes: number, query: any): Promise<any[]> {
+async function loadCalltrackingCdrRows(settings: AppSettings, phoneClicks: any[], matchWindowMinutes: number, callbackWindowHours: number, query: any): Promise<any[]> {
   if (phoneClicks.length === 0) return [];
   const eventTimes = phoneClicks.map(event => parseCalltrackingMs(event.eventTime || event.createdAt)).filter(Number.isFinite) as number[];
   if (eventTimes.length === 0) return [];
   const startFromQuery = query.startDate ? new Date(String(query.startDate) + 'T00:00:00') : new Date(Math.min(...eventTimes));
   const endFromQuery = query.endDate ? new Date(String(query.endDate) + 'T23:59:59') : new Date(Math.max(...eventTimes));
-  const endWithWindow = new Date(endFromQuery.getTime() + matchWindowMinutes * 60 * 1000);
+  const extraMinutes = Math.max(matchWindowMinutes, callbackWindowHours * 60);
+  const endWithWindow = new Date(endFromQuery.getTime() + extraMinutes * 60 * 1000);
   const sql = 'SELECT uniqueid, linkedid, calldate, clid, src, dst, dcontext, channel, dstchannel, lastapp, lastdata, duration, billsec, disposition, recordingfile, did, cnum, cnam, outbound_cnum FROM cdr WHERE calldate >= ? AND calldate <= ? ORDER BY calldate ASC LIMIT 20000';
   const rows = await queryFreePBXCDR(settings, isDemoMode(settings), sql, [formatCdrDateParam(startFromQuery), formatCdrDateParam(endWithWindow)]);
   return rows.filter(row => {
@@ -2297,6 +2353,7 @@ async function loadCalltrackingCdrRows(settings: AppSettings, phoneClicks: any[]
 }
 
 function buildCalltrackingMatch(event: any, site: any, cdrRow: any | null, status: CalltrackingMatchStatus, confidence: CalltrackingMatchConfidence, reason: CalltrackingMatchReason, secondsToCall: number | null) {
+  const leadStatus: CalltrackingLeadStatus = status === 'ambiguous' ? 'ambiguous' : status === 'unmatched' ? 'unmatched' : isAnsweredCdr(cdrRow) ? 'answered' : 'lost';
   return {
     eventId: event.id,
     id: event.id,
@@ -2316,14 +2373,21 @@ function buildCalltrackingMatch(event: any, site: any, cdrRow: any | null, statu
     matchedCallUniqueid: cdrRow?.uniqueid || null,
     matchedLinkedid: cdrRow?.linkedid || null,
     matchedCallDate: cdrRow?.calldate || null,
-    matchedExternalNumber: cdrRow ? (normalizeCalltrackingPhoneNumber(cdrRow.src) || cdrRow.src || null) : null,
+    matchedExternalNumber: cdrRow ? (normalizeCalltrackingPhoneNumber(cdrRow.src) || normalizeCalltrackingPhoneNumber(cdrRow.cnum) || cdrRow.src || null) : null,
     matchedDestinationNumber: cdrRow ? (normalizeCalltrackingPhoneNumber(cdrRow.did || cdrRow.dst) || cdrRow.did || cdrRow.dst || null) : null,
     matchedDisposition: cdrRow?.disposition || null,
     matchedDuration: cdrRow ? Number(cdrRow.duration || 0) : null,
     matchedBillsec: cdrRow ? Number(cdrRow.billsec || 0) : null,
     matchedRecordingFile: cdrRow?.recordingfile || null,
     responsibleExtension: cdrRow ? getResponsibleExtension(cdrRow) : null,
-    secondsToCall
+    secondsToCall,
+    callbackStatus: leadStatus === 'answered' ? 'not_required' as CalltrackingCallbackStatus : status === 'matched' ? 'not_called_back' as CalltrackingCallbackStatus : 'unknown' as CalltrackingCallbackStatus,
+    callbackCallUniqueid: null,
+    callbackCallDate: null,
+    callbackSecondsAfterMissed: null,
+    callbackDisposition: null,
+    callbackBillsec: null,
+    leadStatus
   };
 }
 
@@ -2367,12 +2431,56 @@ function calculateCalltrackingMatches(events: any[], cdrRows: any[], options: { 
   });
 }
 
+function findSuccessfulSiteCallback(match: any, cdrRows: any[], callbackWindowHours: number): any | null {
+  const externalNumber = normalizeCalltrackingPhoneNumber(match?.matchedExternalNumber);
+  const missedMs = parseCalltrackingMs(match?.matchedCallDate);
+  if (!externalNumber || !Number.isFinite(missedMs)) return null;
+  const maxMs = missedMs + Math.max(1, callbackWindowHours) * 60 * 60 * 1000;
+  return cdrRows
+    .map(row => ({ row, ms: parseCalltrackingMs(row.calldate), numbers: extractCdrNumbers(row) }))
+    .filter(item => Number.isFinite(item.ms) && item.ms > missedMs && item.ms <= maxMs)
+    .filter(item => isOutgoing(item.row) && isAnsweredCdr(item.row) && item.numbers.includes(externalNumber))
+    .sort((a, b) => a.ms - b.ms)[0]?.row || null;
+}
+
+function applyCalltrackingCallbackAnalysis(matches: any[], cdrRows: any[], callbackWindowHours: number) {
+  return matches.map(match => {
+    if (match.matchStatus === 'unmatched') return { ...match, leadStatus: 'unmatched', callbackStatus: 'unknown' };
+    if (match.matchStatus === 'ambiguous') return { ...match, leadStatus: 'ambiguous', callbackStatus: 'unknown' };
+    if (!isProblemSiteMatch(match)) return { ...match, leadStatus: 'answered', callbackStatus: 'not_required' };
+    const missedMs = parseCalltrackingMs(match.matchedCallDate);
+    const externalNumber = normalizeCalltrackingPhoneNumber(match.matchedExternalNumber);
+    if (!externalNumber || !Number.isFinite(missedMs)) {
+      return { ...match, leadStatus: 'lost', callbackStatus: 'unknown' };
+    }
+    const callback = findSuccessfulSiteCallback(match, cdrRows, callbackWindowHours);
+    if (!callback) {
+      return { ...match, leadStatus: 'lost', callbackStatus: 'not_called_back' };
+    }
+    const callbackMs = parseCalltrackingMs(callback.calldate);
+    return {
+      ...match,
+      leadStatus: 'recovered_by_callback',
+      callbackStatus: 'called_back',
+      callbackCallUniqueid: callback.uniqueid || null,
+      callbackCallDate: callback.calldate || null,
+      callbackSecondsAfterMissed: Number.isFinite(callbackMs) ? Math.max(0, Math.round((callbackMs - missedMs) / 1000)) : null,
+      callbackDisposition: callback.disposition || null,
+      callbackBillsec: Number(callback.billsec || 0)
+    };
+  });
+}
+
 function summarizeCalltrackingMatches(phoneClicks: any[], matches: any[]) {
   const reliable = matches.filter(match => match.matchStatus === 'matched');
-  const answeredCalls = reliable.filter(match => String(match.matchedDisposition || '').toUpperCase() === 'ANSWERED' && Number(match.matchedBillsec || 0) > 0).length;
-  const lostCalls = reliable.filter(isLostSiteCall).length;
+  const answeredCalls = reliable.filter(match => match.leadStatus === 'answered').length;
+  const preliminaryLost = reliable.filter(isProblemSiteMatch).length;
+  const recoveredByCallback = reliable.filter(match => match.leadStatus === 'recovered_by_callback').length;
+  const notCalledBack = reliable.filter(match => match.callbackStatus === 'not_called_back').length;
+  const trueLostLeads = reliable.filter(match => match.leadStatus === 'lost').length;
   const matchedCalls = reliable.length;
   const seconds = reliable.map(match => Number(match.secondsToCall)).filter(Number.isFinite) as number[];
+  const callbackSeconds = reliable.map(match => Number(match.callbackSecondsAfterMissed)).filter(Number.isFinite) as number[];
   const matchRate = phoneClicks.length ? Math.round((matchedCalls / phoneClicks.length) * 1000) / 10 : 0;
   return {
     phoneClicks: phoneClicks.length,
@@ -2380,13 +2488,19 @@ function summarizeCalltrackingMatches(phoneClicks: any[], matches: any[]) {
     siteCalls: matchedCalls,
     answeredCalls,
     answeredSiteCalls: answeredCalls,
-    missedCalls: Math.max(0, matchedCalls - answeredCalls),
-    missedSiteCalls: Math.max(0, matchedCalls - answeredCalls),
-    lostCalls,
-    lostSiteCalls: lostCalls,
+    missedCalls: preliminaryLost,
+    missedSiteCalls: preliminaryLost,
+    preliminaryLostSiteCalls: preliminaryLost,
+    lostCalls: trueLostLeads,
+    lostSiteCalls: trueLostLeads,
+    trueLostLeads,
+    recoveredByCallback,
+    notCalledBack,
+    callbackRecoveryRate: preliminaryLost ? Math.round((recoveredByCallback / preliminaryLost) * 1000) / 10 : 0,
     matchRate,
     clickToCallConversion: matchRate,
-    averageSecondsToCall: seconds.length ? Math.round(seconds.reduce((sum, value) => sum + value, 0) / seconds.length) : null
+    averageSecondsToCall: seconds.length ? Math.round(seconds.reduce((sum, value) => sum + value, 0) / seconds.length) : null,
+    averageCallbackSeconds: callbackSeconds.length ? Math.round(callbackSeconds.reduce((sum, value) => sum + value, 0) / callbackSeconds.length) : null
   };
 }
 
@@ -2394,7 +2508,18 @@ async function getCalltrackingMatchDataset(localDb: any, query: any) {
   const settings = (localDb.settings || {}) as AppSettings;
   const sites = calltrackingSiteMap(localDb.calltrackingSites || []);
   const siteId = cleanMarketingString(query.siteId, 120);
-  const matchWindowMinutes = Math.max(1, Math.min(240, Number(query.matchWindowMinutes || 30)));
+  const qualitySettings = getCallQualitySettings(settings);
+  const matchWindowMinutes = query.matchWindowMinutes !== undefined
+    ? clampCallQualityNumber(query.matchWindowMinutes, qualitySettings.calltrackingMatchWindowMinutes, 1, 240)
+    : qualitySettings.calltrackingMatchWindowMinutes;
+  const callbackWindowHours = query.callbackWindowHours !== undefined
+    ? clampCallQualityNumber(query.callbackWindowHours, qualitySettings.missedCallCallbackSlaHours, 1, 168)
+    : qualitySettings.missedCallCallbackSlaHours;
+  const usedSettings = {
+    ...qualitySettings,
+    missedCallCallbackSlaHours: callbackWindowHours,
+    calltrackingMatchWindowMinutes: matchWindowMinutes
+  };
   const phoneClicks = (Array.isArray(localDb.calltrackingEvents) ? localDb.calltrackingEvents : [])
     .filter((event: any) => event.eventType === 'phone_click')
     .filter((event: any) => {
@@ -2402,9 +2527,10 @@ async function getCalltrackingMatchDataset(localDb: any, query: any) {
       return isWithinDateRange(event.eventTime || event.createdAt, query.startDate, query.endDate);
     })
     .sort((a: any, b: any) => parseCalltrackingMs(a.eventTime || a.createdAt) - parseCalltrackingMs(b.eventTime || b.createdAt));
-  const cdrRows = await loadCalltrackingCdrRows(settings, phoneClicks, matchWindowMinutes, query);
-  const matches = calculateCalltrackingMatches(phoneClicks, cdrRows, { matchWindowMinutes, sites });
-  return { sites, phoneClicks, matches, summary: summarizeCalltrackingMatches(phoneClicks, matches), matchWindowMinutes };
+  const cdrRows = await loadCalltrackingCdrRows(settings, phoneClicks, matchWindowMinutes, callbackWindowHours, query);
+  const initialMatches = calculateCalltrackingMatches(phoneClicks, cdrRows, { matchWindowMinutes, sites });
+  const matches = applyCalltrackingCallbackAnalysis(initialMatches, cdrRows, callbackWindowHours);
+  return { sites, phoneClicks, matches, summary: summarizeCalltrackingMatches(phoneClicks, matches), matchWindowMinutes, callbackWindowHours, usedSettings };
 }
 
 // API ROUTER START
@@ -2568,13 +2694,22 @@ app.get('/api/calltracking/matches', requireAuth(), async (req, res) => {
     const localDb = await readLocalDb();
     const limit = Math.max(1, Math.min(500, Number(req.query.limit || 100)));
     const offset = Math.max(0, Number(req.query.offset || 0));
+    const leadStatus = cleanMarketingString(req.query.leadStatus, 60);
+    const matchConfidence = cleanMarketingString(req.query.matchConfidence, 60);
+    const callbackStatus = cleanMarketingString(req.query.callbackStatus, 60);
     const dataset = await getCalltrackingMatchDataset(localDb, req.query);
-    const sorted = dataset.matches.sort((a: any, b: any) => parseCalltrackingMs(b.eventTime) - parseCalltrackingMs(a.eventTime));
+    let filtered = dataset.matches;
+    if (leadStatus) filtered = filtered.filter((match: any) => match.leadStatus === leadStatus);
+    if (matchConfidence) filtered = filtered.filter((match: any) => match.matchConfidence === matchConfidence);
+    if (callbackStatus) filtered = filtered.filter((match: any) => match.callbackStatus === callbackStatus);
+    const sorted = filtered.sort((a: any, b: any) => parseCalltrackingMs(b.eventTime) - parseCalltrackingMs(a.eventTime));
     res.json({
       matches: sorted.slice(offset, offset + limit),
       total: sorted.length,
       summary: dataset.summary,
-      matchWindowMinutes: dataset.matchWindowMinutes
+      matchWindowMinutes: dataset.matchWindowMinutes,
+      callbackWindowHours: dataset.callbackWindowHours,
+      usedSettings: dataset.usedSettings
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'internal_error' });
@@ -2607,11 +2742,18 @@ app.get('/api/calltracking/summary', requireAuth(), async (req, res) => {
       matchedCalls: dataset.summary.matchedCalls,
       answeredSiteCalls: dataset.summary.answeredSiteCalls,
       missedSiteCalls: dataset.summary.missedSiteCalls,
+      preliminaryLostSiteCalls: dataset.summary.preliminaryLostSiteCalls,
       lostSiteCalls: dataset.summary.lostSiteCalls,
+      trueLostLeads: dataset.summary.trueLostLeads,
+      recoveredByCallback: dataset.summary.recoveredByCallback,
+      notCalledBack: dataset.summary.notCalledBack,
+      callbackRecoveryRate: dataset.summary.callbackRecoveryRate,
       matchRate: dataset.summary.matchRate,
       clickToCallConversion: dataset.summary.clickToCallConversion,
-      averageSecondsToCall: dataset.summary.averageSecondsToCall
-    }
+      averageSecondsToCall: dataset.summary.averageSecondsToCall,
+      averageCallbackSeconds: dataset.summary.averageCallbackSeconds
+    },
+    usedSettings: dataset.usedSettings
   });
 });
 
@@ -2631,7 +2773,7 @@ app.get('/api/calltracking/sources', requireAuth(), async (req, res) => {
     const medium = event.utmMedium || '';
     const campaign = event.utmCampaign || '';
     const key = [source, medium, campaign].join('||');
-    if (!groups.has(key)) groups.set(key, { source, medium, campaign, sessions: new Set<string>(), phoneClicks: 0, formSubmits: 0, calls: 0, answeredCalls: 0, missedCalls: 0, lostCalls: 0 });
+    if (!groups.has(key)) groups.set(key, { source, medium, campaign, sessions: new Set<string>(), phoneClicks: 0, formSubmits: 0, calls: 0, answeredCalls: 0, missedCalls: 0, recoveredByCallback: 0, notCalledBack: 0, lostCalls: 0, trueLostLeads: 0 });
     const group = groups.get(key);
     if (event.sessionId) group.sessions.add(event.sessionId);
     if (event.eventType === 'phone_click') {
@@ -2639,9 +2781,14 @@ app.get('/api/calltracking/sources', requireAuth(), async (req, res) => {
       const match = matchesByEventId.get(event.id);
       if (match?.matchStatus === 'matched') {
         group.calls++;
-        if (String(match.matchedDisposition || '').toUpperCase() === 'ANSWERED' && Number(match.matchedBillsec || 0) > 0) group.answeredCalls++;
-        else group.missedCalls++;
-        if (isLostSiteCall(match)) group.lostCalls++;
+        if (match.leadStatus === 'answered') group.answeredCalls++;
+        if (isProblemSiteMatch(match)) group.missedCalls++;
+        if (match.leadStatus === 'recovered_by_callback') group.recoveredByCallback++;
+        if (match.callbackStatus === 'not_called_back') group.notCalledBack++;
+        if (isLostSiteCall(match)) {
+          group.lostCalls++;
+          group.trueLostLeads++;
+        }
       }
     }
     if (event.eventType === 'form_submit') group.formSubmits++;
@@ -2657,14 +2804,18 @@ app.get('/api/calltracking/sources', requireAuth(), async (req, res) => {
     calls: group.calls,
     answeredCalls: group.answeredCalls,
     missedCalls: group.missedCalls,
+    recoveredByCallback: group.recoveredByCallback,
+    notCalledBack: group.notCalledBack,
     lostCalls: group.lostCalls,
+    trueLostLeads: group.trueLostLeads,
     matchRate: group.phoneClicks ? Math.round((group.calls / group.phoneClicks) * 1000) / 10 : 0,
     clickToCallConversion: group.phoneClicks ? Math.round((group.calls / group.phoneClicks) * 1000) / 10 : 0,
+    callbackRecoveryRate: group.missedCalls ? Math.round((group.recoveredByCallback / group.missedCalls) * 1000) / 10 : 0,
     cost: null,
     costPerCall: null
   })).sort((a, b) => b.phoneClicks - a.phoneClicks || b.visits - a.visits);
 
-  res.json({ sources });
+  res.json({ sources, usedSettings: dataset.usedSettings });
 });
 
 // Auth endpoint
@@ -3065,6 +3216,12 @@ app.post('/api/settings', requireAuth(), async (req, res) => {
   }
 
   const localDb = await readLocalDb();
+  if ('answerSlaSeconds' in settingsUpdate || 'missedCallCallbackSlaHours' in settingsUpdate || 'calltrackingMatchWindowMinutes' in settingsUpdate) {
+    const normalizedQuality = getCallQualitySettings({ ...localDb.settings, ...settingsUpdate });
+    settingsUpdate.answerSlaSeconds = normalizedQuality.answerSlaSeconds;
+    settingsUpdate.missedCallCallbackSlaHours = normalizedQuality.missedCallCallbackSlaHours;
+    settingsUpdate.calltrackingMatchWindowMinutes = normalizedQuality.calltrackingMatchWindowMinutes;
+  }
   
   localDb.settings = {
     ...localDb.settings,
@@ -5440,7 +5597,18 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
     const employee = req.query.employee as string || 'all';
     const requestedExtensionFilter = String(req.query.extension || '').trim();
     const trunkFilter = String(req.query.trunk || 'all').trim();
-    const slaThresholdSeconds = normalizeSlaThresholdSeconds(req.query.slaThresholdSeconds);
+    const qualitySettings = getCallQualitySettings(localDb.settings);
+    const slaThresholdSeconds = req.query.slaThresholdSeconds !== undefined
+      ? normalizeSlaThresholdSeconds(req.query.slaThresholdSeconds)
+      : qualitySettings.answerSlaSeconds;
+    const callbackWindowHours = req.query.callbackWindowHours !== undefined
+      ? clampCallQualityNumber(req.query.callbackWindowHours, qualitySettings.missedCallCallbackSlaHours, 1, 168)
+      : qualitySettings.missedCallCallbackSlaHours;
+    const usedSettings = {
+      ...qualitySettings,
+      answerSlaSeconds: slaThresholdSeconds,
+      missedCallCallbackSlaHours: callbackWindowHours
+    };
 
     let calls: CallEntry[] = [];
     if (isDemo) {
@@ -5458,7 +5626,7 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
       if (endDate) {
         sql += ' AND calldate <= DATE_ADD(?, INTERVAL ? HOUR)';
         sqlParams.push(buildDateTimeFilter(endDate, endTime, true));
-        sqlParams.push(Math.max(1, Math.min(168, Number(req.query.callbackWindowHours || 24))));
+        sqlParams.push(callbackWindowHours);
       }
 
       sql += ' ORDER BY calldate DESC LIMIT 10000'; // Higher limit for wider analytical trend queries
@@ -5810,7 +5978,7 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
     const lostCallAnalytics = buildLostCallAnalytics(calls, {
       startMs: reportStartMs,
       endMs: reportEndMs,
-      callbackWindowHours: Number(req.query.callbackWindowHours || 24),
+      callbackWindowHours,
       directory: localDb.directory || [],
       ownerMap
     });
@@ -6107,13 +6275,14 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
         callbackAfterMissed: lostCallAnalytics.callbackAfterMissed,
         callbackRate: lostCallAnalytics.callbackRate,
         notCalledBack: lostCallAnalytics.notCalledBack,
-        callbackWindowHours: Math.max(1, Math.min(168, Number(req.query.callbackWindowHours || 24)))
+        callbackWindowHours
       },
       lostCallDetails: lostCallAnalytics.items.slice(0, 200),
       slaSummary,
       departmentSummary,
       employeeSummary,
       trunkSummary,
+      usedSettings,
       dbError: (req as any).dbError || undefined,
       demoModeActive: isDemo
     });

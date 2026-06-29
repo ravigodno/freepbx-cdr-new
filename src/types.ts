@@ -90,6 +90,11 @@ export interface AppSettings {
   // Auto-Resolution Settings (KPI Callback timeframe in minutes)
   callbackKpiMinutes?: number;
 
+  // Call quality and lead attribution settings
+  answerSlaSeconds?: number;
+  missedCallCallbackSlaHours?: number;
+  calltrackingMatchWindowMinutes?: number;
+
   // FreePBX REST API Settings
   freepbxApiUrl?: string;
   freepbxApiToken?: string;

@@ -9,6 +9,12 @@ export interface MarketingOverviewSummary {
   lostBudgetEstimate: number | null;
 }
 
+export interface UsedCallQualitySettings {
+  answerSlaSeconds: number;
+  missedCallCallbackSlaHours: number;
+  calltrackingMatchWindowMinutes: number;
+}
+
 export interface CalltrackingSite {
   id: string;
   name: string;
@@ -49,6 +55,13 @@ export interface PhoneClickEvent {
   matchedRecordingFile?: string | null;
   responsibleExtension?: string | null;
   secondsToCall?: number | null;
+  callbackStatus?: 'not_required' | 'called_back' | 'not_called_back' | 'unknown' | string;
+  callbackCallUniqueid?: string | null;
+  callbackCallDate?: string | null;
+  callbackSecondsAfterMissed?: number | null;
+  callbackDisposition?: string | null;
+  callbackBillsec?: number | null;
+  leadStatus?: 'answered' | 'recovered_by_callback' | 'lost' | 'unmatched' | 'ambiguous' | string;
 }
 
 export interface TrafficSourceSummary {
@@ -62,6 +75,10 @@ export interface TrafficSourceSummary {
   answeredCalls?: number;
   missedCalls?: number;
   lostCalls?: number;
+  recoveredByCallback?: number;
+  notCalledBack?: number;
+  trueLostLeads?: number;
+  callbackRecoveryRate?: number;
   matchRate?: number;
   clickToCallConversion?: number;
   cost?: number | null;
@@ -107,8 +124,14 @@ export interface CalltrackingSummaryResponse {
   matchedCalls?: number;
   answeredSiteCalls?: number;
   missedSiteCalls?: number;
+  preliminaryLostSiteCalls?: number;
   lostSiteCalls?: number;
+  trueLostLeads?: number;
+  recoveredByCallback?: number;
+  notCalledBack?: number;
+  callbackRecoveryRate?: number;
   matchRate?: number;
   clickToCallConversion?: number;
   averageSecondsToCall?: number | null;
+  averageCallbackSeconds?: number | null;
 }

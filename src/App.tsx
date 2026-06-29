@@ -56,7 +56,8 @@ import {
   Ban,
   Wallet,
   Cpu,
-  Wrench
+  Wrench,
+  ShieldCheck
 } from 'lucide-react';
 import { CallEntry, DashboardStats, AppSettings, UserRole, DirectoryEntry } from './types';
 import packageJson from '../package.json';
@@ -2729,7 +2730,7 @@ export default function App() {
 
       {/* LEFT SIDEBAR VIEW PLATFORM */}
       <aside className={`${isSidebarExpanded ? 'w-64' : 'w-16 md:w-20'} bg-white dark:bg-[#1e293b] border-r border-slate-200 dark:border-[#334155] flex flex-col items-center justify-between py-5 shrink-0 sticky top-0 h-screen select-none z-30 transition-all duration-300 shadow-xs`}>
-        <div className={`flex min-h-0 flex-1 flex-col ${isSidebarExpanded ? 'items-start px-4' : 'items-center'} gap-6 w-full overflow-y-auto overflow-x-visible pb-3`}>
+        <div className={`flex min-h-0 flex-1 flex-col ${isSidebarExpanded ? 'items-start px-4' : 'items-center'} gap-6 w-full overflow-y-auto overflow-x-hidden pb-3`}>
           {/* Logo Element resembling high-end layers icon */}
           <div className={`flex items-center ${isSidebarExpanded ? 'gap-2 w-full' : 'justify-center w-full'}`}>
             <div className="h-[45px] w-[45px] flex items-center justify-center active:scale-95 transition-transform cursor-pointer shrink-0">
@@ -4122,23 +4123,23 @@ export default function App() {
 
       {/* SYSTEM SETTINGS FULL PAGE */}
       {activeView === 'settings' && (
-        <section className="space-y-4">
-          <div className="w-full bg-white border border-slate-200 rounded-2xl shadow-sm relative min-h-[calc(100vh-150px)] flex flex-col overflow-hidden font-sans">
-            <div className="flex items-center justify-between border-b border-slate-200 p-6 pb-4 shrink-0 bg-slate-50">
-              <div className="flex items-center gap-2">
-                <Settings className="h-6 w-6 text-blue-600 animate-spin-slow" />
-                <h3 className="text-base font-black text-slate-905">Настройки системы</h3></div>
+        <section className="min-w-0 max-w-full space-y-4">
+          <div className="w-full min-w-0 max-w-full bg-white border border-slate-200 rounded-2xl shadow-sm relative min-h-[calc(100vh-150px)] flex flex-col overflow-hidden font-sans">
+            <div className="flex min-w-0 flex-wrap items-center justify-between gap-3 border-b border-slate-200 p-6 pb-4 shrink-0 bg-slate-50">
+              <div className="flex min-w-0 items-center gap-2">
+                <Settings className="h-6 w-6 shrink-0 text-blue-600 animate-spin-slow" />
+                <h3 className="min-w-0 break-words text-base font-black text-slate-905">Настройки системы</h3></div>
               <button
                 type="button"
                 onClick={() => { setActiveView('management'); setDbTestResult(null); resetUserForm(); }}
-                className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-bold text-slate-600 hover:bg-slate-50"
+                className="shrink-0 px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-bold text-slate-600 hover:bg-slate-50"
               >
                 Назад
               </button>
           </div>
 
-            <div className="p-6 pb-2 border-b border-slate-200 bg-slate-50/50 shrink-0">
-              <div className="flex flex-wrap gap-1.5 p-1 bg-gradient-to-br from-slate-50 via-blue-50/40 to-sky-50/50 rounded-xl">
+            <div className="min-w-0 max-w-full p-6 pb-2 border-b border-slate-200 bg-slate-50/50 shrink-0">
+              <div className="flex min-w-0 max-w-full flex-wrap gap-1.5 p-1 bg-gradient-to-br from-slate-50 via-blue-50/40 to-sky-50/50 rounded-xl">
                 {Object.entries({
                   ...(isAdminRole(session?.role) ? {
                     pbx: 'Настройки АТС',
@@ -4152,7 +4153,7 @@ export default function App() {
                     key={tab}
                     type="button"
                     onClick={() => setSettingsTab(tab as any)}
-                    className={`flex-1 py-1.5 text-center text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                    className={`min-w-0 flex-1 break-words py-1.5 text-center text-xs font-bold rounded-lg transition-all cursor-pointer ${
                       settingsTab === tab
                         ? 'bg-blue-600 text-white shadow-md'
                         : 'text-slate-600 hover:text-slate-900'
@@ -4164,13 +4165,13 @@ export default function App() {
               </div></div>
 
             {draftSettings || !isAdminRole(session?.role) ? (
-              <form onSubmit={handleSaveSettings} className="flex-1 flex flex-col min-h-0">
-                <div className="flex-1 p-6 space-y-5 bg-white">
+              <form onSubmit={handleSaveSettings} className="flex-1 flex min-w-0 max-w-full flex-col min-h-0">
+                <div className="flex-1 min-w-0 max-w-full p-6 space-y-5 bg-white">
                   {settingsTab === 'pbx' && draftSettings && (
-                    <div className="space-y-5">
-                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mb-3 border-b border-slate-200 pb-2">
-                          <h4 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                    <div className="min-w-0 max-w-full space-y-5">
+                      <div className="min-w-0 max-w-full rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                        <div className="mb-3 flex min-w-0 flex-col flex-wrap items-stretch justify-between gap-3 border-b border-slate-200 pb-2 sm:flex-row sm:items-center">
+                          <h4 className="flex min-w-0 items-center gap-2 break-words text-sm font-black text-slate-900">
                             <Database className="h-4 w-4 text-blue-600" />
                             MariaDB / FreePBX CDR
                           </h4>
@@ -4178,27 +4179,27 @@ export default function App() {
                             type="button"
                             onClick={testDbConnection}
                             disabled={isTestingDb}
-                            className="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 rounded-lg text-xs font-bold border border-slate-200 active:scale-95 transition-transform cursor-pointer flex items-center justify-center gap-1.5 shadow-sm"
+                            className="flex shrink-0 items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 shadow-sm transition-transform hover:bg-slate-100 active:scale-95 cursor-pointer"
                           >
                             {isTestingDb && <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-500" />}
                             Проверить MariaDB
                           </button>
           </div>
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                          <label className="md:col-span-2 text-xs font-bold text-slate-600">Хост MariaDB<input type="text" value={draftSettings.dbHost} onChange={(e) => setDraftSettings({ ...draftSettings, dbHost: e.target.value })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" required /></label>
-                          <label className="text-xs font-bold text-slate-600">Порт<input type="number" value={draftSettings.dbPort} onChange={(e) => setDraftSettings({ ...draftSettings, dbPort: parseInt(e.target.value, 10) || 3306 })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" required /></label>
-                          <label className="text-xs font-bold text-slate-600">База<input type="text" value={draftSettings.dbName} onChange={(e) => setDraftSettings({ ...draftSettings, dbName: e.target.value })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" required /></label>
-                          <label className="text-xs font-bold text-slate-600">Пользователь<input type="text" value={draftSettings.dbUser} onChange={(e) => setDraftSettings({ ...draftSettings, dbUser: e.target.value })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" required /></label>
-                          <label className="text-xs font-bold text-slate-600">Пар��ль<input type="password" value={draftSettings.dbPass} onChange={(e) => setDraftSettings({ ...draftSettings, dbPass: e.target.value })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" /></label></div>
+                        <div className="grid min-w-0 max-w-full grid-cols-1 gap-3 md:grid-cols-3">
+                          <label className="min-w-0 max-w-full break-words md:col-span-2 text-xs font-bold text-slate-600">Хост MariaDB<input type="text" value={draftSettings.dbHost} onChange={(e) => setDraftSettings({ ...draftSettings, dbHost: e.target.value })} className="mt-1 w-full min-w-0 max-w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900" required /></label>
+                          <label className="min-w-0 max-w-full break-words text-xs font-bold text-slate-600">Порт<input type="number" value={draftSettings.dbPort} onChange={(e) => setDraftSettings({ ...draftSettings, dbPort: parseInt(e.target.value, 10) || 3306 })} className="mt-1 w-full min-w-0 max-w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900" required /></label>
+                          <label className="min-w-0 max-w-full break-words text-xs font-bold text-slate-600">База<input type="text" value={draftSettings.dbName} onChange={(e) => setDraftSettings({ ...draftSettings, dbName: e.target.value })} className="mt-1 w-full min-w-0 max-w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900" required /></label>
+                          <label className="min-w-0 max-w-full break-words text-xs font-bold text-slate-600">Пользователь<input type="text" value={draftSettings.dbUser} onChange={(e) => setDraftSettings({ ...draftSettings, dbUser: e.target.value })} className="mt-1 w-full min-w-0 max-w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900" required /></label>
+                          <label className="min-w-0 max-w-full break-words text-xs font-bold text-slate-600">Пар��ль<input type="password" value={draftSettings.dbPass} onChange={(e) => setDraftSettings({ ...draftSettings, dbPass: e.target.value })} className="mt-1 w-full min-w-0 max-w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900" /></label></div>
                         {dbTestResult && (
                           <div className={`mt-3 p-3.5 border rounded-lg text-xs flex items-start gap-2 ${dbTestResult.success ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-blue-50 border-blue-200 text-blue-700'}`}>
                             <AlertCircle className={`h-4.5 w-4.5 shrink-0 mt-0.5 ${dbTestResult.success ? 'text-emerald-600' : 'text-blue-600'}`} />
                             <span>{dbTestResult.message}</span></div>
                         )}
                       </div>
-                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mb-3 border-b border-slate-200 pb-2">
-                          <h4 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                      <div className="min-w-0 max-w-full rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                        <div className="mb-3 flex min-w-0 flex-col flex-wrap items-stretch justify-between gap-3 border-b border-slate-200 pb-2 sm:flex-row sm:items-center">
+                          <h4 className="flex min-w-0 items-center gap-2 break-words text-sm font-black text-slate-900">
                             <Phone className="h-4 w-4 text-blue-600" />
                             AMI / Click2Call
                           </h4>
@@ -4206,34 +4207,52 @@ export default function App() {
                             type="button"
                             onClick={testAmiConnection}
                             disabled={isTestingAmi}
-                            className="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 rounded-lg text-xs font-bold border border-slate-200 active:scale-95 transition-transform cursor-pointer flex items-center justify-center gap-1.5 shadow-sm"
+                            className="flex shrink-0 items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 shadow-sm transition-transform hover:bg-slate-100 active:scale-95 cursor-pointer"
                           >
                             {isTestingAmi && <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-500" />}
                             Проверить AMI
                           </button>
           </div>
-                        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-                          <label className="md:col-span-2 text-xs font-bold text-slate-600">Хост AMI<input type="text" value={draftSettings.amiHost || ''} onChange={(e) => setDraftSettings({ ...draftSettings, amiHost: e.target.value })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" /></label>
-                          <label className="text-xs font-bold text-slate-600">Порт<input type="number" value={draftSettings.amiPort ?? 5038} onChange={(e) => setDraftSettings({ ...draftSettings, amiPort: parseInt(e.target.value, 10) || 5038 })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" /></label>
-                          <label className="text-xs font-bold text-slate-600">Контекст<input type="text" value={draftSettings.amiContext || 'from-internal'} onChange={(e) => setDraftSettings({ ...draftSettings, amiContext: e.target.value })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" /></label>
-                          <label className="md:col-span-2 text-xs font-bold text-slate-600">AMI User<input type="text" value={draftSettings.amiUser || ''} onChange={(e) => setDraftSettings({ ...draftSettings, amiUser: e.target.value })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" /></label>
-                          <label className="md:col-span-2 text-xs font-bold text-slate-600">AMI Secret<input type="password" value={draftSettings.amiPass || ''} onChange={(e) => setDraftSettings({ ...draftSettings, amiPass: e.target.value })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" /></label></div>
+                        <div className="grid min-w-0 max-w-full grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+                          <label className="min-w-0 max-w-full break-words md:col-span-2 text-xs font-bold text-slate-600">Хост AMI<input type="text" value={draftSettings.amiHost || ''} onChange={(e) => setDraftSettings({ ...draftSettings, amiHost: e.target.value })} className="mt-1 w-full min-w-0 max-w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900" /></label>
+                          <label className="min-w-0 max-w-full break-words text-xs font-bold text-slate-600">Порт<input type="number" value={draftSettings.amiPort ?? 5038} onChange={(e) => setDraftSettings({ ...draftSettings, amiPort: parseInt(e.target.value, 10) || 5038 })} className="mt-1 w-full min-w-0 max-w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900" /></label>
+                          <label className="min-w-0 max-w-full break-words text-xs font-bold text-slate-600">Контекст<input type="text" value={draftSettings.amiContext || 'from-internal'} onChange={(e) => setDraftSettings({ ...draftSettings, amiContext: e.target.value })} className="mt-1 w-full min-w-0 max-w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900" /></label>
+                          <label className="min-w-0 max-w-full break-words md:col-span-2 text-xs font-bold text-slate-600">AMI User<input type="text" value={draftSettings.amiUser || ''} onChange={(e) => setDraftSettings({ ...draftSettings, amiUser: e.target.value })} className="mt-1 w-full min-w-0 max-w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900" /></label>
+                          <label className="min-w-0 max-w-full break-words md:col-span-2 text-xs font-bold text-slate-600">AMI Secret<input type="password" value={draftSettings.amiPass || ''} onChange={(e) => setDraftSettings({ ...draftSettings, amiPass: e.target.value })} className="mt-1 w-full min-w-0 max-w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900" /></label></div>
                         {amiTestResult && (
                           <div className={`mt-3 p-3.5 border rounded-lg text-xs flex items-start gap-2 ${amiTestResult.success ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-blue-50 border-blue-200 text-blue-700'}`}>
                             <AlertCircle className={`h-4.5 w-4.5 shrink-0 mt-0.5 ${amiTestResult.success ? 'text-emerald-600' : 'text-blue-600'}`} />
                             <span>{amiTestResult.message}</span></div>
                         )}
                       </div>
-                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                        <h4 className="text-sm font-black text-slate-900 mb-3 flex items-center gap-2"><Clock className="h-4 w-4 text-blue-600" />Записи и KPI</h4>
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                          <label className="md:col-span-2 text-xs font-bold text-slate-600">Путь к записям<input type="text" value={draftSettings.recordingsPath} onChange={(e) => setDraftSettings({ ...draftSettings, recordingsPath: e.target.value })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" required /></label>
-                          <label className="text-xs font-bold text-slate-600">SLA отзвона, мин<input type="number" min={1} max={1440} value={draftSettings.callbackKpiMinutes ?? 60} onChange={(e) => setDraftSettings({ ...draftSettings, callbackKpiMinutes: parseInt(e.target.value, 10) || 60 })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" /></label></div>
+                      <div className="min-w-0 max-w-full rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                        <h4 className="mb-3 flex min-w-0 items-center gap-2 break-words text-sm font-black text-slate-900"><Clock className="h-4 w-4 shrink-0 text-blue-600" />Записи и KPI</h4>
+                        <div className="grid min-w-0 max-w-full grid-cols-1 gap-3 md:grid-cols-3">
+                          <label className="min-w-0 max-w-full break-words md:col-span-2 text-xs font-bold text-slate-600">Путь к записям<input type="text" value={draftSettings.recordingsPath} onChange={(e) => setDraftSettings({ ...draftSettings, recordingsPath: e.target.value })} className="mt-1 w-full min-w-0 max-w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900" required /></label>
+                          <label className="min-w-0 max-w-full break-words text-xs font-bold text-slate-600">Legacy KPI автообработки, мин<input type="number" min={1} max={1440} value={draftSettings.callbackKpiMinutes ?? 60} onChange={(e) => setDraftSettings({ ...draftSettings, callbackKpiMinutes: parseInt(e.target.value, 10) || 60 })} className="mt-1 w-full min-w-0 max-w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900" /></label></div>
+                      </div>
+
+                      <div className="min-w-0 max-w-full rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                        <h4 className="mb-3 flex min-w-0 items-center gap-2 break-words text-sm font-black text-slate-900"><ShieldCheck className="h-4 w-4 shrink-0 text-purple-600" />Качество звонков и лидов</h4>
+                        <div className="grid min-w-0 max-w-full grid-cols-1 gap-3 md:grid-cols-3">
+                          <label className="min-w-0 max-w-full break-words text-xs font-bold text-slate-600">SLA ответа на входящий звонок, секунд
+                            <input type="number" min={5} max={300} value={draftSettings.answerSlaSeconds ?? 20} onChange={(e) => setDraftSettings({ ...draftSettings, answerSlaSeconds: Math.max(5, Math.min(300, parseInt(e.target.value, 10) || 20)) })} className="mt-1 w-full min-w-0 max-w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900" />
+                            <span className="mt-1 block max-w-full break-words whitespace-normal text-[11px] font-medium leading-relaxed text-slate-500">За сколько секунд входящий звонок должен быть принят.</span>
+                          </label>
+                          <label className="min-w-0 max-w-full break-words text-xs font-bold text-slate-600">SLA перезвона по пропущенному звонку, часов
+                            <input type="number" min={1} max={168} value={draftSettings.missedCallCallbackSlaHours ?? 24} onChange={(e) => setDraftSettings({ ...draftSettings, missedCallCallbackSlaHours: Math.max(1, Math.min(168, parseInt(e.target.value, 10) || 24)) })} className="mt-1 w-full min-w-0 max-w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900" />
+                            <span className="mt-1 block max-w-full break-words whitespace-normal text-[11px] font-medium leading-relaxed text-slate-500">Если по пропущенному звонку перезвонили в течение этого времени, лид считается спасенным.</span>
+                          </label>
+                          <label className="min-w-0 max-w-full break-words text-xs font-bold text-slate-600">Окно сопоставления клика с CDR, минут
+                            <input type="number" min={1} max={240} value={draftSettings.calltrackingMatchWindowMinutes ?? 30} onChange={(e) => setDraftSettings({ ...draftSettings, calltrackingMatchWindowMinutes: Math.max(1, Math.min(240, parseInt(e.target.value, 10) || 30)) })} className="mt-1 w-full min-w-0 max-w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900" />
+                            <span className="mt-1 block max-w-full break-words whitespace-normal text-[11px] font-medium leading-relaxed text-slate-500">Сколько минут после клика по телефону PBXPuls ищет звонок в CDR. Это техническое окно атрибуции, не SLA.</span>
+                          </label>
+                        </div>
                       </div>
                       
-                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mb-3 border-b border-slate-200 pb-2">
-                          <h4 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                      <div className="min-w-0 max-w-full rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                        <div className="mb-3 flex min-w-0 flex-col flex-wrap items-stretch justify-between gap-3 border-b border-slate-200 pb-2 sm:flex-row sm:items-center">
+                          <h4 className="flex min-w-0 items-center gap-2 break-words text-sm font-black text-slate-900">
                             <Cpu className="h-4 w-4 text-emerald-600" />
                             FreePBX REST API
                           </h4>
@@ -4241,51 +4260,51 @@ export default function App() {
                             type="button"
                             onClick={testFreePBXApiConnection}
                             disabled={isTestingFreePBXApi}
-                            className="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 rounded-lg text-xs font-bold border border-slate-200 active:scale-95 transition-transform cursor-pointer flex items-center justify-center gap-1.5 shadow-sm animate-pulse-once"
+                            className="flex shrink-0 items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 shadow-sm transition-transform hover:bg-slate-100 active:scale-95 cursor-pointer animate-pulse-once"
                           >
                             {isTestingFreePBXApi && <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-500" />}
                             Проверить FreePBX API
                           </button>
                         </div>
-                        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-                          <label className="md:col-span-2 text-xs font-bold text-slate-600">URL FreePBX REST API
+                        <div className="grid min-w-0 max-w-full grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+                          <label className="min-w-0 max-w-full break-words md:col-span-2 text-xs font-bold text-slate-600">URL FreePBX REST API
                             <input 
                               type="text" 
                               placeholder="http://your-freepbx/admin/api" 
                               value={draftSettings.freepbxApiUrl || ''} 
                               onChange={(e) => setDraftSettings({ ...draftSettings, freepbxApiUrl: e.target.value })} 
-                              className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" 
+                              className="mt-1 w-full min-w-0 max-w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900" 
                             />
                           </label>
-                          <label className="md:col-span-2 text-xs font-bold text-slate-600">Client ID
+                          <label className="min-w-0 max-w-full break-words md:col-span-2 text-xs font-bold text-slate-600">Client ID
                             <input 
                               type="text" 
                               value={draftSettings.freepbxApiClientId || ''} 
                               onChange={(e) => setDraftSettings({ ...draftSettings, freepbxApiClientId: e.target.value })} 
-                              className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" 
+                              className="mt-1 w-full min-w-0 max-w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900" 
                             />
                           </label>
-                          <label className="md:col-span-2 text-xs font-bold text-slate-600">Client Secret
+                          <label className="min-w-0 max-w-full break-words md:col-span-2 text-xs font-bold text-slate-600">Client Secret
                             <input 
                               type="password" 
                               value={draftSettings.freepbxApiClientSecret || ''} 
                               onChange={(e) => setDraftSettings({ ...draftSettings, freepbxApiClientSecret: e.target.value })} 
-                              className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" 
+                              className="mt-1 w-full min-w-0 max-w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900" 
                             />
                           </label>
-                          <label className="md:col-span-2 text-xs font-bold text-slate-600">API Token / API Key
+                          <label className="min-w-0 max-w-full break-words md:col-span-2 text-xs font-bold text-slate-600">API Token / API Key
                             <input 
                               type="password" 
                               value={draftSettings.freepbxApiToken || ''} 
                               onChange={(e) => setDraftSettings({ ...draftSettings, freepbxApiToken: e.target.value })} 
-                              className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" 
+                              className="mt-1 w-full min-w-0 max-w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900" 
                             />
                           </label>
-                          <label className="md:col-span-2 text-xs font-bold text-slate-600">Источник extensions
+                          <label className="min-w-0 max-w-full break-words md:col-span-2 text-xs font-bold text-slate-600">Источник extensions
                             <select
                               value={draftSettings.freepbxExtensionProvider || 'auto'}
                               onChange={(e) => setDraftSettings({ ...draftSettings, freepbxExtensionProvider: e.target.value as AppSettings['freepbxExtensionProvider'] })}
-                              className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900"
+                              className="mt-1 w-full min-w-0 max-w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900"
                             >
                               <option value="auto">Auto</option>
                               <option value="bmo">BMO local</option>
@@ -4293,7 +4312,7 @@ export default function App() {
                               <option value="database">Database readonly</option>
                               <option value="legacy-rest">Legacy REST</option>
                             </select>
-                            <span className="mt-1 block text-[11px] font-medium leading-relaxed text-slate-500">Для FreePBX 17 рекомендуется GraphQL API. Для локальной установки FreePBX 15/16 используйте Auto/BMO. Если API недоступен, можно использовать Database readonly.</span>
+                            <span className="mt-1 block max-w-full break-words whitespace-normal text-[11px] font-medium leading-relaxed text-slate-500">Для FreePBX 17 рекомендуется GraphQL API. Для локальной установки FreePBX 15/16 используйте Auto/BMO. Если API недоступен, можно использовать Database readonly.</span>
                           </label>
                         </div>
                         {freepbxApiTestResult && (
@@ -4306,7 +4325,7 @@ export default function App() {
                   )}
                   {settingsTab === 'directory' && draftSettings && (
                     <div className="space-y-5">
-                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                      <div className="min-w-0 max-w-full rounded-2xl border border-slate-200 bg-slate-50 p-4">
                         <h4 className="text-sm font-black text-slate-900 mb-3 flex items-center gap-2"><BookOpen className="h-4 w-4 text-blue-600" />Настройки</h4>
                         <div className="space-y-3 text-xs text-slate-700">
                           <label className="flex items-center gap-2"><input type="checkbox" checked={draftSettings.normEnabled ?? true} onChange={(e) => setDraftSettings({ ...draftSettings, normEnabled: e.target.checked })} className="rounded border-slate-300 text-blue-600" />Включить нормализацию</label>
@@ -4326,32 +4345,32 @@ export default function App() {
 
                       <div className="rounded-2xl border border-slate-200 bg-white p-4">
                         <h4 className="text-sm font-black text-slate-900 mb-3 flex items-center gap-2"><Globe className="h-4 w-4 text-blue-600" />Импорт справочника по ссылке</h4>
-                        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-                          <label className="md:col-span-4 text-xs font-bold text-slate-600">URL файла CSV/JSON
-                            <input type="text" value={draftSettings.directoryImportUrl || ''} onChange={(e) => setDraftSettings({ ...draftSettings, directoryImportUrl: e.target.value })} placeholder="https://site.ru/contacts.csv" className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" />
+                        <div className="grid min-w-0 max-w-full grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+                          <label className="min-w-0 max-w-full break-words md:col-span-4 text-xs font-bold text-slate-600">URL файла CSV/JSON
+                            <input type="text" value={draftSettings.directoryImportUrl || ''} onChange={(e) => setDraftSettings({ ...draftSettings, directoryImportUrl: e.target.value })} placeholder="https://site.ru/contacts.csv" className="mt-1 w-full min-w-0 max-w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900" />
                           </label>
-                          <label className="text-xs font-bold text-slate-600">Формат
-                            <select value={draftSettings.directoryImportFormat || 'csv'} onChange={(e) => setDraftSettings({ ...draftSettings, directoryImportFormat: e.target.value as any })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs">
+                          <label className="min-w-0 max-w-full break-words text-xs font-bold text-slate-600">Формат
+                            <select value={draftSettings.directoryImportFormat || 'csv'} onChange={(e) => setDraftSettings({ ...draftSettings, directoryImportFormat: e.target.value as any })} className="mt-1 w-full min-w-0 max-w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs">
                               <option value="csv">CSV</option>
                               <option value="json">JSON</option>
                             </select>
                           </label>
-                          <label className="text-xs font-bold text-slate-600">Режим
-                            <select value={draftSettings.directoryImportMode || 'upsert'} onChange={(e) => setDraftSettings({ ...draftSettings, directoryImportMode: e.target.value as any })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs">
+                          <label className="min-w-0 max-w-full break-words text-xs font-bold text-slate-600">Режим
+                            <select value={draftSettings.directoryImportMode || 'upsert'} onChange={(e) => setDraftSettings({ ...draftSettings, directoryImportMode: e.target.value as any })} className="mt-1 w-full min-w-0 max-w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs">
                               <option value="upsert">Обновлять/добавлять</option>
                               <option value="append">Только добавить</option>
                               <option value="overwrite">Полностью заменить</option>
                             </select>
                           </label>
-                          <label className="text-xs font-bold text-slate-600">Период
-                            <select value={draftSettings.directoryImportSchedule || 'manual'} onChange={(e) => setDraftSettings({ ...draftSettings, directoryImportSchedule: e.target.value as any })} className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs">
+                          <label className="min-w-0 max-w-full break-words text-xs font-bold text-slate-600">Период
+                            <select value={draftSettings.directoryImportSchedule || 'manual'} onChange={(e) => setDraftSettings({ ...draftSettings, directoryImportSchedule: e.target.value as any })} className="mt-1 w-full min-w-0 max-w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs">
                               <option value="manual">Только вручную</option>
                               <option value="hourly">Каждый час</option>
                               <option value="daily">Каждый день</option>
                               <option value="weekly">Раз в неделю</option>
                             </select>
                           </label>
-                          <label className="text-xs font-bold text-slate-600">Sync token для cron
+                          <label className="min-w-0 max-w-full break-words text-xs font-bold text-slate-600">Sync token для cron
                             <input type="text" readOnly value={draftSettings.directorySyncToken || ''} className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-700 font-mono" />
                           </label></div>
                         <div className="mt-3 flex flex-wrap gap-2">
@@ -4463,7 +4482,7 @@ export default function App() {
                   )}
                   {settingsTab === 'appearance' && (
                     <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 space-y-4">
-                      <h4 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                      <h4 className="flex min-w-0 items-center gap-2 break-words text-sm font-black text-slate-900">
                         <Sliders className="h-4 w-4 text-blue-600" />
                         Настройки интерфейса и темы
                       </h4>

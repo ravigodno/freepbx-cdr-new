@@ -5,7 +5,7 @@ import { MarketingIntegrationsPanel } from './MarketingIntegrationsPanel';
 import { MarketingKpiCard } from './MarketingKpiCard';
 import { CampaignsReportTable, LostLeadsTable, PhoneClicksTable, TrafficSourcesTable } from './MarketingTables';
 import { MarketingEmptyState } from './MarketingEmptyState';
-import { CalltrackingSite, CalltrackingSummaryResponse, MarketingOverviewSummary, PhoneClickEvent, TrafficSourceSummary } from './types';
+import { CalltrackingSite, CalltrackingSummaryResponse, MarketingOverviewSummary, PhoneClickEvent, TrafficSourceSummary, UsedCallQualitySettings } from './types';
 
 type MarketingTabId = 'overview' | 'phone-clicks' | 'sources' | 'campaigns' | 'pages' | 'utm' | 'lost-leads' | 'analytics' | 'integrations';
 
@@ -38,6 +38,7 @@ export default function MarketingTab() {
   const [phoneClicks, setPhoneClicks] = useState<PhoneClickEvent[]>([]);
   const [sources, setSources] = useState<TrafficSourceSummary[]>([]);
   const [sites, setSites] = useState<CalltrackingSite[]>([]);
+  const [usedSettings, setUsedSettings] = useState<UsedCallQualitySettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -66,6 +67,7 @@ export default function MarketingTab() {
         setPhoneClicks(Array.isArray(eventsJson.matches) ? eventsJson.matches : []);
         setSources(Array.isArray(sourcesJson.sources) ? sourcesJson.sources : []);
         setSites(Array.isArray(sitesJson.sites) ? sitesJson.sites : []);
+        setUsedSettings(summaryJson.usedSettings || eventsJson.usedSettings || sourcesJson.usedSettings || null);
       } catch (err: any) {
         if (active) setError(err?.message || 'Не удалось загрузить данные коллтрекинга.');
       } finally {
@@ -77,13 +79,15 @@ export default function MarketingTab() {
     return () => { active = false; };
   }, []);
 
+  const callbackSlaHours = usedSettings?.missedCallCallbackSlaHours ?? 24;
+
   const summary: MarketingOverviewSummary = useMemo(() => ({
     visits: summaryData ? Number(summaryData.uniqueSessions || summaryData.visits || 0) : null,
     phoneClicks: summaryData ? Number(summaryData.phoneClicks || 0) : null,
     siteCalls: summaryData ? Number(summaryData.siteCalls ?? summaryData.matchedCalls ?? 0) : null,
     clickToCallConversion: summaryData ? Number(summaryData.clickToCallConversion ?? 0) : null,
     missedSiteCalls: summaryData ? Number(summaryData.missedSiteCalls ?? 0) : null,
-    lostLeads: summaryData ? Number(summaryData.lostSiteCalls ?? 0) : null,
+    lostLeads: summaryData ? Number(summaryData.trueLostLeads ?? summaryData.lostSiteCalls ?? 0) : null,
     adCost: null,
     lostBudgetEstimate: null
   }), [summaryData]);
@@ -94,16 +98,16 @@ export default function MarketingTab() {
     { label: 'Звонки с сайта', value: formatMetric(summary.siteCalls), hint: summaryData ? 'Сопоставленные phone_click -> CDR' : 'Данные появятся после matching событий', icon: PhoneCall, tone: 'green' as const },
     { label: 'Конверсия клик → звонок', value: formatMetric(summary.clickToCallConversion, '%'), hint: 'Доля кликов, сопоставленных со звонками', icon: Target, tone: 'purple' as const },
     { label: 'Пропущенные звонки с сайта', value: formatMetric(summary.missedSiteCalls), hint: 'Сопоставленные звонки без успешного ответа', icon: PhoneMissed, tone: 'orange' as const },
-    { label: 'Потерянные лиды', value: formatMetric(summary.lostLeads), hint: 'Предварительная оценка по сопоставленным звонкам без ответа', icon: TrendingDown, tone: 'red' as const },
+    { label: 'Потерянные лиды', value: formatMetric(summary.lostLeads), hint: 'С учетом успешных перезвонов в течение ' + callbackSlaHours + ' ч', icon: TrendingDown, tone: 'red' as const },
     { label: 'Рекламный расход', value: formatMetric(summary.adCost, ' ₽'), hint: 'Интеграция с рекламными кабинетами позже', icon: CircleDollarSign, tone: 'blue' as const },
     { label: 'Потерянный бюджет', value: formatMetric(summary.lostBudgetEstimate, ' ₽'), hint: 'Оценка появится после импорта расходов', icon: Banknote, tone: 'red' as const }
-  ], [summary, summaryData]);
+  ], [summary, summaryData, callbackSlaHours]);
 
   const renderTab = () => {
     if (activeTab === 'phone-clicks') return <PhoneClicksTable events={phoneClicks} />;
     if (activeTab === 'sources') return <TrafficSourcesTable sources={sources} />;
     if (activeTab === 'campaigns') return <CampaignsReportTable />;
-    if (activeTab === 'lost-leads') return <LostLeadsTable events={phoneClicks.filter(event => event.matchStatus === 'matched' && (String(event.matchedDisposition || '').toUpperCase() !== 'ANSWERED' || Number(event.matchedBillsec || 0) <= 0))} />;
+    if (activeTab === 'lost-leads') return <LostLeadsTable events={phoneClicks.filter(event => event.leadStatus === 'lost')} />;
     if (activeTab === 'integrations') return <MarketingIntegrationsPanel sites={sites} />;
     if (activeTab === 'pages') {
       return <MarketingEmptyState title="Данных по страницам пока нет" description="Статистика страниц появится после установки JS-скрипта PBXPuls на сайт." />;
