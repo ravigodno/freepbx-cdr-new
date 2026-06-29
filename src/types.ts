@@ -78,6 +78,7 @@ export interface AppSettings {
   dbPass: string;
   demoMode?: boolean;
   freepbxApiWorkingEndpoint?: string;
+  freepbxExtensionProvider?: 'auto' | 'bmo' | 'graphql' | 'database' | 'legacy-rest';
   
   // AMI / Click-to-Call Settings
   amiHost?: string;

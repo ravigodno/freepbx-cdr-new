@@ -130,7 +130,10 @@ function getFreepbxOAuthTokenUrl(baseUrl: string): string {
   return baseUrl.endsWith('/rest') ? baseUrl.replace(/\/rest$/, '/token') : `${baseUrl}/token`;
 }
 
-const FREEPBX_REST_DISCOVERY_ENDPOINTS = ['/extensions', '/userman/extensions', '/core/users'];
+function getFreepbxGraphqlUrl(baseUrl: string): string {
+  if (baseUrl.endsWith('/rest')) return baseUrl.replace(/\/rest$/, '/gql');
+  return `${baseUrl}/gql`;
+}
 
 function normalizeFreepbxRestEndpoint(endpoint: string): string {
   const normalized = String(endpoint || '').trim();
@@ -1630,6 +1633,7 @@ function getDefaultLocalDb(): any {
       amiPass: process.env.AMI_PASS || '',
       amiContext: process.env.AMI_CONTEXT || 'from-internal',
       callbackKpiMinutes: 60,
+      freepbxExtensionProvider: 'auto',
       normEnabled: true,
       normReplace8With7: true,
       normStripSymbols: true,
@@ -1678,6 +1682,11 @@ async function readLocalDb(): Promise<{
       changed = true;
     }
     
+    if (data.settings && !data.settings.hasOwnProperty('freepbxExtensionProvider')) {
+      data.settings.freepbxExtensionProvider = process.env.FREEPBX_EXTENSION_PROVIDER || 'auto';
+      changed = true;
+    }
+
     if (data.settings && !data.settings.hasOwnProperty('amiHost')) {
       data.settings.amiHost = process.env.ASTERISK_AMI_HOST || 'localhost';
       data.settings.amiPort = parseInt(process.env.ASTERISK_AMI_PORT || '5038', 10);
@@ -2985,13 +2994,12 @@ app.post('/api/settings/test-freepbx-api', requireAuth(), async (req, res) => {
   try {
     const settings = req.body;
     if (!settings.freepbxApiUrl) {
-      return res.json({ success: true, message: 'Режим имитации: URL REST API не задан. Тест пройден.' });
+      return res.json({ success: true, message: 'Режим имитации: URL FreePBX API не задан. Тест пройден.' });
     }
 
     const url = normalizeFreepbxApiUrl(settings.freepbxApiUrl);
-    const headers: any = { 'Content-Type': 'application/json' };
-    
-    let tokenMessage = '';
+    const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'application/json' };
+
     if (settings.freepbxApiClientId && settings.freepbxApiClientSecret) {
       try {
         const tokenUrl = getFreepbxOAuthTokenUrl(url);
@@ -3004,72 +3012,86 @@ app.post('/api/settings/test-freepbx-api', requireAuth(), async (req, res) => {
           method: 'POST',
           headers: {
             'Content-Type': 'application/x-www-form-urlencoded',
-            'Accept': 'application/json'
+            Accept: 'application/json'
           },
           body: tokenBody.toString()
         });
-        if (tokenRes.ok) {
-          const tokenData: any = await tokenRes.json();
-          if (tokenData.access_token) {
-            headers['Authorization'] = `Bearer ${tokenData.access_token}`;
-            tokenMessage = ' (Успешно получен OAuth токен!)';
-          } else {
-            return res.status(400).json({ error: 'OAuth token получен без поля access_token' });
-          }
-        } else {
+        if (!tokenRes.ok) {
           const errText = await tokenRes.text().catch(() => '');
           return res.status(400).json({ error: `Ошибка получения OAuth token через ${tokenUrl} [Код: ${tokenRes.status}]: ${errText || tokenRes.statusText}` });
         }
+        const tokenData: any = await tokenRes.json();
+        if (!tokenData.access_token) {
+          return res.status(400).json({ error: 'OAuth token получен без поля access_token' });
+        }
+        headers.Authorization = 'Bearer ' + tokenData.access_token;
       } catch (e: any) {
         return res.status(400).json({ error: `Ошибка авторизации OAuth: ${e.message}` });
       }
     } else if (settings.freepbxApiToken) {
-      headers['Authorization'] = `Bearer ${settings.freepbxApiToken}`;
+      headers.Authorization = 'Bearer ' + settings.freepbxApiToken;
     }
 
-    const checkedEndpoints: string[] = [];
-    for (const endpoint of FREEPBX_REST_DISCOVERY_ENDPOINTS) {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000);
-
-      try {
-        const response = await fetch(`${url}${endpoint}`, {
-          headers,
-          signal: controller.signal
-        });
-        clearTimeout(timeoutId);
-        checkedEndpoints.push(`${endpoint}: ${response.status}`);
-
-        if (response.ok) {
-          const localDb = await readLocalDb();
-          localDb.settings = {
-            ...localDb.settings,
-            freepbxApiWorkingEndpoint: endpoint,
-          };
-          await writeLocalDb(localDb);
-
-          return res.json({
-            success: true,
-            message: `REST API успешно подключен. Рабочий endpoint: ${endpoint}`
-          });
+    const graphqlUrl = getFreepbxGraphqlUrl(url);
+    const query = `{
+      fetchAllExtensions {
+        status
+        message
+        count
+        totalCount
+        extension {
+          extensionId
+          tech
+          user { extension name }
+          coreDevice { id deviceId tech dial devicetype description emergencyCid }
         }
-
-        if (response.status === 401 || response.status === 403) {
-          return res.status(400).json({
-            error: `Ошибка авторизации FreePBX REST API: ${response.status} - ${response.statusText}${tokenMessage}`
-          });
-        }
-      } catch (fetchErr: any) {
-        clearTimeout(timeoutId);
-        checkedEndpoints.push(`${endpoint}: ${fetchErr.message || 'connection timeout'}`);
       }
-    }
+    }`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 7000);
+    try {
+      const response = await fetch(graphqlUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ query }),
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+      const text = await response.text().catch(() => '');
+      let body: any = text;
+      try { body = text ? JSON.parse(text) : null; } catch (err) {}
+      if (!response.ok) {
+        return res.status(400).json({ error: `Ошибка FreePBX GraphQL API: ${response.status} - ${typeof body === 'string' ? body : JSON.stringify(body)}` });
+      }
+      if (body?.errors?.length) {
+        return res.status(400).json({ error: 'Ошибка GraphQL fetchAllExtensions: ' + JSON.stringify(body.errors) });
+      }
+      const result = body?.data?.fetchAllExtensions;
+      if (!result) {
+        return res.status(400).json({ error: 'GraphQL ответ не содержит data.fetchAllExtensions' });
+      }
 
-    res.status(400).json({
-      error: `Не найден рабочий FreePBX REST endpoint. Проверены: ${checkedEndpoints.join(', ') || FREEPBX_REST_DISCOVERY_ENDPOINTS.join(', ')}${tokenMessage}`
-    });
+      const count = Number(result.totalCount ?? result.count ?? (Array.isArray(result.extension) ? result.extension.length : 0));
+      const localDb = await readLocalDb();
+      localDb.settings = {
+        ...localDb.settings,
+        freepbxApiWorkingEndpoint: 'graphql',
+        freepbxExtensionProvider: 'graphql'
+      };
+      await writeLocalDb(localDb);
+
+      return res.json({
+        success: true,
+        provider: 'graphql',
+        count,
+        message: `FreePBX GraphQL API успешно подключен. fetchAllExtensions вернул extensions: ${Number.isFinite(count) ? count : 0}.`
+      });
+    } catch (fetchErr: any) {
+      clearTimeout(timeoutId);
+      return res.status(400).json({ error: `Ошибка запроса FreePBX GraphQL API: ${fetchErr.message || 'connection timeout'}` });
+    }
   } catch (error: any) {
-    res.status(400).json({ error: error.message || 'Ошибка тестирования FreePBX REST API' });
+    res.status(400).json({ error: error.message || 'Ошибка тестирования FreePBX API' });
   }
 });
 

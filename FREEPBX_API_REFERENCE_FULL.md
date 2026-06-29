@@ -381,22 +381,20 @@ Before coding:
 Never reinvent FreePBX API.
 
 
-## Extensions Data Source
+## Extensions Data Source Compatibility Matrix
 
-GraphQL не используется.
+PBXPuls must not rely on a single FreePBX Extensions source. Use the shared provider chain:
 
-Причина:
+1. BMO local.
+2. GraphQL API.
+3. Database readonly.
+4. Legacy REST fallback.
 
-На текущей FreePBX GraphQL schema не содержит:
+Compatibility:
 
-- fetchAllCoreDevices
-- fetchAllCoreDevice
-- fetchAllExtensions
+- FreePBX 17 / Debian 12: GraphQL API preferred, BMO/DB fallback when available.
+- FreePBX 16 / Sangoma/CentOS 7: BMO local preferred, DB fallback.
+- FreePBX 15: BMO local preferred, DB fallback.
+- Remote PBX: GraphQL preferred, DB only if MySQL readonly access is explicitly available.
 
-Это подтверждено introspection.
-
-Для Extensions использовать:
-
-REST + MariaDB (read only).
-
-Не пытаться реализовать Extensions только через GraphQL.
+Legacy REST endpoints /userman/extensions and /core/users may return ajaxRequest declined on FreePBX 17 and must be used only as last fallback. Do not implement Extensions as GraphQL-only because older verified schemas may not expose fetchAllExtensions.

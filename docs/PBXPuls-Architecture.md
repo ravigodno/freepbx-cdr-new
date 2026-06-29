@@ -219,3 +219,11 @@ Trunk Lab filters extension-looking SIP/PJSIP objects before creating diagnostic
 
 
 Trunk Lab Testing v5.3.0 extends the Management Operation Framework with preview-only operation types for registration, peer/contact and controlled outbound call tests. No Apply endpoint is added. FreePBX DB `trunks` remains the primary inventory source; CLI/AMI/CDR are runtime enrichment and test result sources.
+
+## FreePBX Extensions Compatibility
+
+PBXPuls loads live Extensions through a provider chain in server-management.ts. The chain normalizes every source to the same NormalizedExtension shape and records sourceProvider for the UI.
+
+Default Auto order is BMO local -> GraphQL API -> Database readonly -> Legacy REST. BMO remains first for local FreePBX 15/16 installations. GraphQL is the preferred API path for FreePBX 17 / Debian 12. Database readonly uses SELECT-only reads from asterisk.users and asterisk.devices. Legacy REST is retained only for older systems where ajax endpoints are still valid.
+
+OAuth access tokens for FreePBX API calls are cached in process memory and refreshed before expiry. access_token and client_secret must never be logged.

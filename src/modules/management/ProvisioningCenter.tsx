@@ -285,7 +285,7 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
   const [activeExtTechFilter, setActiveExtTechFilter] = useState<'all' | 'pjsip' | 'sip' | 'unknown'>('all');
   const [activeExtVoicemailFilter, setActiveExtVoicemailFilter] = useState<'all' | 'enabled' | 'disabled'>('all');
   const [activeExtRecordingFilter, setActiveExtRecordingFilter] = useState<'all' | 'always' | 'ondemand' | 'never' | 'unknown'>('all');
-  const [activeExtSourceFilter, setActiveExtSourceFilter] = useState<'all' | 'bmo' | 'rest' | 'merged' | 'unknown'>('all');
+  const [activeExtSourceFilter, setActiveExtSourceFilter] = useState<'all' | 'bmo' | 'graphql' | 'database' | 'legacy-rest' | 'rest' | 'merged' | 'unknown'>('all');
   const [activeExtStatusFilter, setActiveExtStatusFilter] = useState<'all' | 'loaded' | 'warning' | 'error'>('all');
   const [activeExtSortField, setActiveExtSortField] = useState<'extension' | 'name' | 'tech'>('extension');
   const [activeExtSortDir, setActiveExtSortDir] = useState<'asc' | 'desc'>('asc');
@@ -482,9 +482,13 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
         throw new Error('Формат ответа /api/management/extensions не поддерживается');
       }
 
-      if (settingsRes?.ok) {
+      const providerHeader = extensionsRes.headers.get('X-PBXPuls-Extension-Provider') || '';
+      const providerMessageHeader = extensionsRes.headers.get('X-PBXPuls-Extension-Provider-Message') || '';
+      if (providerHeader) {
+        setActiveExtEndpoint(providerMessageHeader ? decodeURIComponent(providerMessageHeader) : providerHeader);
+      } else if (settingsRes?.ok) {
         const settings = await settingsRes.json().catch(() => ({}));
-        setActiveExtEndpoint(settings.freepbxApiUrl ? 'BMO Core + /userman/extensions, fallback /core/users' : (settings.freepbxApiWorkingEndpoint || 'BMO Core'));
+        setActiveExtEndpoint(settings.freepbxExtensionProvider ? 'Configured source: ' + settings.freepbxExtensionProvider : (settings.freepbxApiWorkingEndpoint || 'BMO Core'));
       }
 
       setActiveExtensions(data);
@@ -635,10 +639,15 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
     priority: getExtText(ext, ['recording_priority'], '')
   });
 
-  const getExtensionSourceKey = (ext: any): 'bmo' | 'rest' | 'merged' | 'unknown' => {
+  const getExtensionSourceKey = (ext: any): 'bmo' | 'graphql' | 'database' | 'legacy-rest' | 'rest' | 'merged' | 'unknown' => {
+    const provider = String(ext?.sourceProvider || ext?.raw?.provider || '').trim();
+    if (provider === 'bmo' || provider === 'graphql' || provider === 'database' || provider === 'legacy-rest') return provider;
     const sources = Array.isArray(ext?.raw?.sources) ? ext.raw.sources : [];
     if (sources.length > 1) return 'merged';
     if (sources.includes('/bmo')) return 'bmo';
+    if (sources.includes('/gql')) return 'graphql';
+    if (sources.includes('asterisk.users') || sources.includes('asterisk.devices')) return 'database';
+    if (sources.includes('/userman/extensions') || sources.includes('/core/users')) return 'legacy-rest';
     if (ext?.sourceStatus === 'loaded-from-pbx' || sources.length === 1) return 'rest';
     return 'unknown';
   };
@@ -851,8 +860,11 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
   };
   const getExtensionSourceLabel = (ext: any) => {
     const key = getExtensionSourceKey(ext);
-    if (key === 'merged') return 'BMO + REST';
-    if (key === 'bmo') return 'BMO';
+    if (key === 'merged') return 'Merged';
+    if (key === 'bmo') return 'BMO local';
+    if (key === 'graphql') return 'GraphQL API';
+    if (key === 'database') return 'Database readonly';
+    if (key === 'legacy-rest') return 'Legacy REST';
     if (key === 'rest') return 'REST';
     return 'Unknown';
   };
@@ -912,7 +924,14 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
     if (key === 'warning') return getBadgeClass('amber');
     return getBadgeClass('rose');
   };
-  const getSourceBadgeClass = (ext: any) => getExtensionSourceKey(ext) === 'merged' ? getBadgeClass('indigo') : getExtensionSourceKey(ext) === 'bmo' ? getBadgeClass('green') : getExtensionSourceKey(ext) === 'rest' ? getBadgeClass('blue') : getBadgeClass('slate');
+  const getSourceBadgeClass = (ext: any) => {
+    const key = getExtensionSourceKey(ext);
+    if (key === 'merged' || key === 'graphql') return getBadgeClass('indigo');
+    if (key === 'bmo') return getBadgeClass('green');
+    if (key === 'database') return getBadgeClass('amber');
+    if (key === 'rest' || key === 'legacy-rest') return getBadgeClass('blue');
+    return getBadgeClass('slate');
+  };
   const getPreviewActionClass = (action: string) => {
     const normalized = String(action || '').toLowerCase();
     if (['create', 'success'].includes(normalized)) return 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400';
@@ -2381,7 +2400,7 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
                 <select value={activeExtTechFilter} onChange={(e) => setActiveExtTechFilter(e.target.value as any)} className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white"><option value="all">Technology</option><option value="pjsip">PJSIP</option><option value="sip">SIP</option><option value="unknown">Unknown</option></select>
                 <select value={activeExtVoicemailFilter} onChange={(e) => setActiveExtVoicemailFilter(e.target.value as any)} className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white"><option value="all">Voicemail</option><option value="enabled">Enabled</option><option value="disabled">Disabled</option></select>
                 <select value={activeExtRecordingFilter} onChange={(e) => setActiveExtRecordingFilter(e.target.value as any)} className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white"><option value="all">Recording</option><option value="always">Always</option><option value="ondemand">On Demand</option><option value="never">Never</option><option value="unknown">Unknown</option></select>
-                <select value={activeExtSourceFilter} onChange={(e) => setActiveExtSourceFilter(e.target.value as any)} className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white"><option value="all">Source</option><option value="bmo">BMO</option><option value="rest">REST</option><option value="merged">BMO + REST</option><option value="unknown">Unknown</option></select>
+                <select value={activeExtSourceFilter} onChange={(e) => setActiveExtSourceFilter(e.target.value as any)} className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white"><option value="all">Source</option><option value="bmo">BMO local</option><option value="graphql">GraphQL API</option><option value="database">Database readonly</option><option value="legacy-rest">Legacy REST</option><option value="rest">REST</option><option value="merged">Merged</option><option value="unknown">Unknown</option></select>
                 <select value={activeExtStatusFilter} onChange={(e) => setActiveExtStatusFilter(e.target.value as any)} className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white"><option value="all">Status</option><option value="loaded">Loaded</option><option value="warning">Warning</option><option value="error">Error</option></select>
                 <div className="flex gap-2"><select value={activeExtSortField} onChange={(e) => setActiveExtSortField(e.target.value as any)} className="h-9 min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white"><option value="extension">Extension</option><option value="name">Name</option><option value="tech">Tech</option></select><button type="button" onClick={() => setActiveExtSortDir(activeExtSortDir === 'asc' ? 'desc' : 'asc')} className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-3 text-xs font-black text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">{activeExtSortDir === 'asc' ? 'ASC' : 'DESC'}</button></div>
               </div>

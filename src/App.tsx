@@ -1712,12 +1712,12 @@ export default function App() {
       if (resp.ok) {
         setFreePBXApiTestResult({
           success: true,
-          message: data.message || 'Подключение к FreePBX REST API успешно установлено!'
+          message: data.message || 'Подключение к FreePBX API / Extensions успешно установлено!'
         });
       } else {
         setFreePBXApiTestResult({
           success: false,
-          message: data.error || 'Не удалось подключиться к FreePBX REST API.'
+          message: data.error || 'Не удалось подключиться к FreePBX API.'
         });
       }
     } catch (err: any) {
@@ -1868,6 +1868,7 @@ export default function App() {
     if (view === 'calls') return hasPermission('view_calls');
     if (view === 'directory') return hasPermission('view_directory');
     if (view === 'reports') return hasPermission('view_reports');
+    if (view === 'marketing') return hasPermission('view_reports');
     if (view === 'monitoring') return hasPermission('view_monitoring');
     if (view === 'management') return hasPermission('view_management');
     if (view === 'balance') return hasPermission('view_balance');
@@ -2728,7 +2729,7 @@ export default function App() {
 
       {/* LEFT SIDEBAR VIEW PLATFORM */}
       <aside className={`${isSidebarExpanded ? 'w-64' : 'w-16 md:w-20'} bg-white dark:bg-[#1e293b] border-r border-slate-200 dark:border-[#334155] flex flex-col items-center justify-between py-5 shrink-0 sticky top-0 h-screen select-none z-30 transition-all duration-300 shadow-xs`}>
-        <div className={`flex flex-col ${isSidebarExpanded ? 'items-start px-4' : 'items-center'} gap-6 w-full`}>
+        <div className={`flex min-h-0 flex-1 flex-col ${isSidebarExpanded ? 'items-start px-4' : 'items-center'} gap-6 w-full overflow-y-auto overflow-x-visible pb-3`}>
           {/* Logo Element resembling high-end layers icon */}
           <div className={`flex items-center ${isSidebarExpanded ? 'gap-2 w-full' : 'justify-center w-full'}`}>
             <div className="h-[45px] w-[45px] flex items-center justify-center active:scale-95 transition-transform cursor-pointer shrink-0">
@@ -2740,7 +2741,7 @@ export default function App() {
           </div>
 
           {/* Navigation Items */}
-          <div className={`flex flex-col ${isSidebarExpanded ? 'items-stretch' : 'items-center'} gap-2 w-full ${isSidebarExpanded ? '' : 'px-2'}`}>
+          <div className={`flex flex-col ${isSidebarExpanded ? 'items-stretch' : 'items-center'} gap-2 w-full ${isSidebarExpanded ? '' : 'px-2'} shrink-0`}>
             {/* Phone Registry */}
             {hasPermission('view_calls') && (
               <button
@@ -4243,7 +4244,7 @@ export default function App() {
                             className="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 rounded-lg text-xs font-bold border border-slate-200 active:scale-95 transition-transform cursor-pointer flex items-center justify-center gap-1.5 shadow-sm animate-pulse-once"
                           >
                             {isTestingFreePBXApi && <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-500" />}
-                            Проверить REST API
+                            Проверить FreePBX API
                           </button>
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
@@ -4279,6 +4280,20 @@ export default function App() {
                               onChange={(e) => setDraftSettings({ ...draftSettings, freepbxApiToken: e.target.value })} 
                               className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900 font-mono" 
                             />
+                          </label>
+                          <label className="md:col-span-2 text-xs font-bold text-slate-600">Источник extensions
+                            <select
+                              value={draftSettings.freepbxExtensionProvider || 'auto'}
+                              onChange={(e) => setDraftSettings({ ...draftSettings, freepbxExtensionProvider: e.target.value as AppSettings['freepbxExtensionProvider'] })}
+                              className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-900"
+                            >
+                              <option value="auto">Auto</option>
+                              <option value="bmo">BMO local</option>
+                              <option value="graphql">GraphQL API</option>
+                              <option value="database">Database readonly</option>
+                              <option value="legacy-rest">Legacy REST</option>
+                            </select>
+                            <span className="mt-1 block text-[11px] font-medium leading-relaxed text-slate-500">Для FreePBX 17 рекомендуется GraphQL API. Для локальной установки FreePBX 15/16 используйте Auto/BMO. Если API недоступен, можно использовать Database readonly.</span>
                           </label>
                         </div>
                         {freepbxApiTestResult && (

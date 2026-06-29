@@ -281,3 +281,18 @@ Trunk Lab v5.2.0 uses FreePBX DB `asterisk.trunks` as the primary read-only Trun
 
 
 Trunk Lab v5.3.0 adds controlled testing operations through the same Management preview endpoint. Registration and Peer/Contact tests are read-only. Outbound call test requires explicit confirmation, may be billed by the operator, and uses current FreePBX Outbound Routes without changing configuration.
+
+## FreePBX Extensions Provider Chain
+
+Extensions inventory now uses a universal provider chain instead of relying on legacy REST/ajax endpoints.
+
+Default Auto order:
+
+1. BMO local provider.
+2. FreePBX GraphQL API provider.
+3. Database readonly provider.
+4. Legacy REST fallback.
+
+Legacy REST endpoints /userman/extensions and /core/users are kept only as the last fallback. On FreePBX 17, ajaxRequest declined responses are treated as provider warnings and must not break loading when GraphQL or another provider has returned extensions.
+
+The Management Extensions screen displays the active provider returned by the backend: BMO local, GraphQL API, Database readonly or Legacy REST.

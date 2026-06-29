@@ -212,8 +212,30 @@ interface NormalizedExtension {
   bulkFields?: Record<string, any>;
   raw: any;
   sourceStatus: 'loaded-from-pbx' | 'local' | 'error';
+  sourceProvider?: ExtensionSourceProvider;
 }
 
+type ExtensionSourceProvider = 'bmo' | 'graphql' | 'database' | 'legacy-rest';
+type ExtensionProviderMode = 'auto' | ExtensionSourceProvider;
+
+interface ExtensionLoadMeta {
+  sourceProvider?: ExtensionSourceProvider;
+  message: string;
+  warnings: string[];
+  errors: string[];
+}
+
+interface ExtensionProviderDefinition {
+  name: ExtensionSourceProvider;
+  label: string;
+  load: () => Promise<NormalizedExtension[]>;
+}
+
+let lastExtensionLoadMeta: ExtensionLoadMeta = {
+  message: '',
+  warnings: [],
+  errors: []
+};
 
 type ExtensionPreviewType = 'create' | 'update' | 'delete' | 'trunk_lab_diagnostics' | 'trunk_lab_registration_test' | 'trunk_lab_peer_test' | 'trunk_lab_outbound_call_test';
 type ExtensionPreviewAction = 'create' | 'update' | 'delete' | 'skip' | 'conflict' | 'error' | 'diagnostic';
@@ -500,34 +522,57 @@ function getFreepbxGraphqlUrl(baseUrl: string): string {
   return `${baseUrl}/gql`;
 }
 
+const freepbxOAuthTokenCache = new Map<string, { accessToken: string; expiresAt: number }>();
+
+async function getCachedFreepbxAccessToken(settings: any, baseUrl: string): Promise<string> {
+  const clientId = String(settings.freepbxApiClientId || '').trim();
+  const clientSecret = String(settings.freepbxApiClientSecret || '');
+  if (!clientId || !clientSecret) {
+    throw new Error('FreePBX OAuth client_id/client_secret are not configured.');
+  }
+
+  const cacheKey = `${baseUrl}|${clientId}`;
+  const cached = freepbxOAuthTokenCache.get(cacheKey);
+  if (cached?.accessToken && Date.now() < cached.expiresAt - 60000) {
+    return cached.accessToken;
+  }
+
+  const tokenUrl = getFreepbxOAuthTokenUrl(baseUrl);
+  const tokenBody = new URLSearchParams({
+    grant_type: 'client_credentials',
+    client_id: clientId,
+    client_secret: clientSecret
+  });
+  const tokenRes = await fetch(tokenUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+    body: tokenBody.toString()
+  });
+  if (!tokenRes.ok) {
+    const errText = await tokenRes.text().catch(() => '');
+    throw new Error('OAuth token request failed (' + tokenRes.status + '): ' + (errText || tokenRes.statusText));
+  }
+  const tokenData: any = await tokenRes.json();
+  if (!tokenData.access_token) throw new Error('OAuth token response did not include access_token.');
+  const expiresInSeconds = Math.max(120, Number(tokenData.expires_in || tokenData.expires || 3600));
+  freepbxOAuthTokenCache.set(cacheKey, {
+    accessToken: String(tokenData.access_token),
+    expiresAt: Date.now() + expiresInSeconds * 1000
+  });
+  return String(tokenData.access_token);
+}
+
 async function buildFreepbxAuthHeaders(settings: any, baseUrl: string): Promise<Record<string, string>> {
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (settings.freepbxApiClientId && settings.freepbxApiClientSecret) {
-    const tokenUrl = getFreepbxOAuthTokenUrl(baseUrl);
-    const tokenBody = new URLSearchParams({
-      grant_type: 'client_credentials',
-      client_id: settings.freepbxApiClientId,
-      client_secret: settings.freepbxApiClientSecret
-    });
-    const tokenRes = await fetch(tokenUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
-      body: tokenBody.toString()
-    });
-    if (!tokenRes.ok) {
-      const errText = await tokenRes.text().catch(() => '');
-      throw new Error('OAuth token request failed (' + tokenRes.status + '): ' + (errText || tokenRes.statusText));
-    }
-    const tokenData: any = await tokenRes.json();
-    if (!tokenData.access_token) throw new Error('OAuth token response did not include access_token.');
-    headers.Authorization = 'Bearer ' + tokenData.access_token;
+    headers.Authorization = 'Bearer ' + await getCachedFreepbxAccessToken(settings, baseUrl);
   } else if (settings.freepbxApiToken) {
     headers.Authorization = 'Bearer ' + settings.freepbxApiToken;
   }
   return headers;
 }
 
-const FREEPBX_REST_DISCOVERY_ENDPOINTS = ['/extensions', '/userman/extensions', '/core/users'];
+const LEGACY_REST_EXTENSION_ENDPOINTS = ['/extensions', '/userman/extensions', '/core/users'];
 
 function normalizeFreepbxRestEndpoint(endpoint: string): string {
   const normalized = String(endpoint || '').trim();
@@ -537,7 +582,7 @@ function normalizeFreepbxRestEndpoint(endpoint: string): string {
 function resolveFreepbxRequestEndpoint(settings: any, endpoint: string): string {
   const normalizedEndpoint = normalizeFreepbxRestEndpoint(endpoint);
   const workingEndpoint = normalizeFreepbxRestEndpoint(settings.freepbxApiWorkingEndpoint || '');
-  if (!workingEndpoint || !FREEPBX_REST_DISCOVERY_ENDPOINTS.includes(workingEndpoint)) {
+  if (!workingEndpoint || !LEGACY_REST_EXTENSION_ENDPOINTS.includes(workingEndpoint)) {
     return normalizedEndpoint;
   }
   if (normalizedEndpoint === '/extensions') {
@@ -558,30 +603,7 @@ async function freepbxRawRequest(endpoint: string) {
   const baseUrl = normalizeFreepbxApiUrl(settings.freepbxApiUrl);
   const normalizedEndpoint = normalizeFreepbxRestEndpoint(endpoint);
   const url = baseUrl + normalizedEndpoint;
-  const headers: Record<string, string> = { Accept: 'application/json' };
-
-  if (settings.freepbxApiClientId && settings.freepbxApiClientSecret) {
-    const tokenUrl = getFreepbxOAuthTokenUrl(baseUrl);
-    const tokenBody = new URLSearchParams({
-      grant_type: 'client_credentials',
-      client_id: settings.freepbxApiClientId,
-      client_secret: settings.freepbxApiClientSecret
-    });
-    const tokenRes = await fetch(tokenUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
-      body: tokenBody.toString()
-    });
-    if (!tokenRes.ok) {
-      const errText = await tokenRes.text().catch(() => '');
-      throw new Error('OAuth token request failed (' + tokenRes.status + '): ' + (errText || tokenRes.statusText));
-    }
-    const tokenData: any = await tokenRes.json();
-    if (!tokenData.access_token) throw new Error('OAuth token response did not include access_token.');
-    headers.Authorization = 'Bearer ' + tokenData.access_token;
-  } else if (settings.freepbxApiToken) {
-    headers.Authorization = 'Bearer ' + settings.freepbxApiToken;
-  }
+  const headers = await buildFreepbxAuthHeaders(settings, baseUrl);
 
   const response = await fetch(url, { method: 'GET', headers });
   const text = await response.text().catch(() => '');
@@ -603,39 +625,9 @@ async function freepbxRequest(endpoint: string, method: string, body?: any) {
     'Accept': 'application/json'
   };
 
-  if (settings.freepbxApiClientId && settings.freepbxApiClientSecret) {
-    // FreePBX API advertises /admin/api/api/token for OAuth client_credentials.
-    try {
-      const tokenUrl = getFreepbxOAuthTokenUrl(baseUrl);
-      const tokenBody = new URLSearchParams({
-        grant_type: 'client_credentials',
-        client_id: settings.freepbxApiClientId,
-        client_secret: settings.freepbxApiClientSecret
-      });
-      const tokenRes = await fetch(tokenUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Accept': 'application/json'
-        },
-        body: tokenBody.toString()
-      });
-      if (tokenRes.ok) {
-        const tokenData: any = await tokenRes.json();
-        if (tokenData.access_token) {
-          headers['Authorization'] = `Bearer ${tokenData.access_token}`;
-        } else {
-          throw new Error('OAuth token response did not include access_token.');
-        }
-      } else {
-        const errText = await tokenRes.text().catch(() => '');
-        throw new Error(`OAuth token request to ${tokenUrl} failed (${tokenRes.status}): ${errText || tokenRes.statusText}`);
-      }
-    } catch (e: any) {
-      throw new Error(`FreePBX REST OAuth authorization failed: ${e.message}`);
-    }
-  } else if (settings.freepbxApiToken) {
-    headers['Authorization'] = `Bearer ${settings.freepbxApiToken}`;
+  const authHeaders = await buildFreepbxAuthHeaders(settings, baseUrl);
+  if (authHeaders.Authorization) {
+    headers.Authorization = authHeaders.Authorization;
   }
 
   console.log(`[FreePBX-REST] Executing ${method} to ${url}`);
@@ -1419,6 +1411,43 @@ async function loadUsermanExtensions(): Promise<Array<{ extension: string; userm
 async function loadGraphqlCoreDevices(): Promise<NormalizedExtension[]> {
   const candidates = [
     {
+      name: 'fetchAllExtensions-direct',
+      query: `{
+        fetchAllExtensions {
+          status
+          message
+          count
+          totalCount
+          extension {
+            extensionId
+            tech
+            user {
+              extension
+              name
+              voicemail
+              callwaiting
+              donotdisturb
+              recording_in_external
+              recording_out_external
+              recording_in_internal
+              recording_out_internal
+              recording_ondemand
+            }
+            coreDevice {
+              id
+              deviceId
+              tech
+              dial
+              devicetype
+              description
+              emergencyCid
+            }
+          }
+        }
+      }`,
+      pick: (data: any) => data.data?.fetchAllExtensions?.extension || []
+    },
+    {
       name: 'fetchAllCoreDevices-rich',
       query: `{
         fetchAllCoreDevices {
@@ -1835,40 +1864,201 @@ function hydrateApplyPayload(payload: any): any {
   return clone;
 }
 
-async function fetchLiveExtensions(): Promise<NormalizedExtension[]> {
+function withExtensionProvider(extensions: NormalizedExtension[], provider: ExtensionSourceProvider): NormalizedExtension[] {
+  return extensions.map((extension) => ({
+    ...extension,
+    sourceProvider: provider,
+    raw: {
+      ...(extension.raw || {}),
+      provider
+    }
+  }));
+}
+
+function getExtensionProviderMessage(provider: ExtensionSourceProvider): string {
+  if (provider === 'bmo') return 'Extensions загружены через FreePBX BMO local';
+  if (provider === 'graphql') return 'Extensions загружены через FreePBX GraphQL API';
+  if (provider === 'database') return 'Extensions загружены из базы asterisk';
+  return 'Extensions загружены через legacy REST fallback';
+}
+
+function normalizeExtensionProviderMode(value: any): ExtensionProviderMode {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (['bmo', 'graphql', 'database', 'legacy-rest'].includes(normalized)) return normalized as ExtensionProviderMode;
+  return 'auto';
+}
+
+function isLegacyAjaxDeclined(message: string): boolean {
+  return /ajaxRequest declined/i.test(message) || /FreePBX REST API error (403).*ajaxRequest declined/i.test(message);
+}
+
+async function loadDatabaseReadonlyExtensions(): Promise<NormalizedExtension[]> {
+  const settings = await getPBXSettings();
+  const connection = await mysql.createConnection({
+    host: settings.dbHost || process.env.DB_HOST || 'localhost',
+    port: Number(settings.dbPort || process.env.DB_PORT || 3306),
+    user: settings.dbUser || process.env.DB_USER || 'freepbxuser',
+    password: settings.dbPass || process.env.DB_PASS || '',
+    multipleStatements: false
+  });
+
+  try {
+    const [userRows] = await connection.execute(
+      'SELECT extension, name, outboundcid, voicemail, recording, sipname FROM asterisk.users ORDER BY extension'
+    );
+    const [deviceRows] = await connection.execute(
+      'SELECT id, tech, dial, devicetype, user, description, emergency_cid FROM asterisk.devices ORDER BY id'
+    );
+
+    const devicesByExtension = new Map<string, any>();
+    (Array.isArray(deviceRows) ? deviceRows : []).forEach((device: any) => {
+      const keys = [device?.id, device?.user].map((item) => String(item || '').trim()).filter(Boolean);
+      keys.forEach((key) => devicesByExtension.set(key, device));
+    });
+
+    const byExtension = new Map<string, NormalizedExtension>();
+    (Array.isArray(userRows) ? userRows : []).forEach((user: any) => {
+      const extension = String(user?.extension || '').trim();
+      if (!extension) return;
+      const device = devicesByExtension.get(extension) || {};
+      const record = {
+        extension,
+        name: user?.name,
+        outboundCid: user?.outboundcid,
+        voicemail: user?.voicemail,
+        recording: user?.recording,
+        sipname: user?.sipname,
+        coreDevice: {
+          id: device?.id,
+          deviceId: device?.id,
+          tech: device?.tech,
+          dial: device?.dial,
+          devicetype: device?.devicetype,
+          user: device?.user,
+          description: device?.description,
+          emergencyCid: device?.emergency_cid
+        }
+      };
+      const normalized = normalizeGraphqlCoreDevice(record) || normalizeExtensionRecord(record, 'loaded-from-pbx');
+      if (normalized) {
+        byExtension.set(extension, {
+          ...normalized,
+          raw: {
+            sources: ['asterisk.users', 'asterisk.devices'],
+            database: sanitizeExtensionRaw(record)
+          }
+        });
+      }
+    });
+
+    (Array.isArray(deviceRows) ? deviceRows : []).forEach((device: any) => {
+      const extension = String(device?.id || device?.user || '').trim();
+      if (!extension || byExtension.has(extension)) return;
+      const record = {
+        extension,
+        name: device?.description,
+        coreDevice: {
+          id: device?.id,
+          deviceId: device?.id,
+          tech: device?.tech,
+          dial: device?.dial,
+          devicetype: device?.devicetype,
+          user: device?.user,
+          description: device?.description,
+          emergencyCid: device?.emergency_cid
+        }
+      };
+      const normalized = normalizeGraphqlCoreDevice(record) || normalizeExtensionRecord(record, 'loaded-from-pbx');
+      if (normalized) {
+        byExtension.set(extension, {
+          ...normalized,
+          raw: {
+            sources: ['asterisk.devices'],
+            database: sanitizeExtensionRaw(record)
+          }
+        });
+      }
+    });
+
+    return Array.from(byExtension.values()).sort((a, b) => a.extension.localeCompare(b.extension, undefined, { numeric: true }));
+  } finally {
+    await connection.end().catch(() => undefined);
+  }
+}
+
+async function loadLegacyRestExtensions(): Promise<NormalizedExtension[]> {
   const errors: string[] = [];
-  let bmoExtensions: NormalizedExtension[] = [];
   let coreUsers: NormalizedExtension[] = [];
   let usermanExtensions: Array<{ extension: string; usermanId: string; username: string; raw: any }> = [];
 
   try {
-    bmoExtensions = await loadBmoExtensions();
-  } catch (err: any) {
-    errors.push('/bmo: ' + err.message);
-  }
-
-  try {
     usermanExtensions = await loadUsermanExtensions();
   } catch (err: any) {
-    errors.push('/userman/extensions: ' + err.message);
-  }
-
-  if (bmoExtensions.length > 0) {
-    return mergeExtensions(bmoExtensions, usermanExtensions, []);
+    errors.push('/userman/extensions: ' + (err?.message || String(err)));
   }
 
   try {
     coreUsers = await loadCoreUsers();
   } catch (err: any) {
-    errors.push('/core/users: ' + err.message);
+    errors.push('/core/users: ' + (err?.message || String(err)));
   }
 
   const merged = mergeExtensions(coreUsers, usermanExtensions, []);
-  if (merged.length === 0 && errors.length > 0) {
-    throw new Error('Не удалось загрузить extensions через FreePBX BMO/REST API. ' + errors.join('; '));
+  if (merged.length > 0) return merged;
+  if (errors.length > 0) throw new Error(errors.join('; '));
+  return [];
+}
+
+function resolveExtensionProviderChain(mode: ExtensionProviderMode): ExtensionProviderDefinition[] {
+  const providers: Record<ExtensionSourceProvider, ExtensionProviderDefinition> = {
+    bmo: { name: 'bmo', label: 'BMO local', load: loadBmoExtensions },
+    graphql: { name: 'graphql', label: 'GraphQL fetchAllExtensions', load: loadGraphqlCoreDevices },
+    database: { name: 'database', label: 'DB readonly', load: loadDatabaseReadonlyExtensions },
+    'legacy-rest': { name: 'legacy-rest', label: 'Legacy REST', load: loadLegacyRestExtensions }
+  };
+
+  if (mode !== 'auto') return [providers[mode]];
+  return [providers.bmo, providers.graphql, providers.database, providers['legacy-rest']];
+}
+
+async function fetchLiveExtensions(): Promise<NormalizedExtension[]> {
+  const settings = await getPBXSettings();
+  const providerMode = normalizeExtensionProviderMode(settings.freepbxExtensionProvider || process.env.FREEPBX_EXTENSION_PROVIDER || 'auto');
+  const providers = resolveExtensionProviderChain(providerMode);
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  for (const provider of providers) {
+    console.log('[FreePBX-Provider] Trying ' + provider.label);
+    try {
+      const loaded = await provider.load();
+      const extensions = withExtensionProvider(loaded, provider.name);
+      console.log('[FreePBX-Provider] ' + provider.label + ' returned ' + extensions.length + ' extensions');
+      if (extensions.length > 0) {
+        lastExtensionLoadMeta = {
+          sourceProvider: provider.name,
+          message: getExtensionProviderMessage(provider.name),
+          warnings,
+          errors
+        };
+        return extensions;
+      }
+      warnings.push(provider.name + ': returned 0 extensions');
+    } catch (err: any) {
+      const message = err?.message || String(err);
+      if (provider.name === 'legacy-rest' && isLegacyAjaxDeclined(message)) {
+        const warning = provider.name + ': legacy ajax declined';
+        warnings.push(warning);
+        console.warn('[FreePBX-Provider] Legacy REST skipped: ajaxRequest declined');
+      } else {
+        errors.push(provider.name + ': ' + message);
+        console.warn('[FreePBX-Provider] ' + provider.label + ' failed: ' + message);
+      }
+    }
   }
 
-  return merged;
+  lastExtensionLoadMeta = { message: '', warnings, errors };
+  throw new Error('Не удалось загрузить extensions через доступные FreePBX providers. Errors: ' + errors.join('; ') + '. Warnings: ' + warnings.join('; '));
 }
 
 function findExtensionByNumber(extensions: NormalizedExtension[], extension: string): NormalizedExtension | undefined {
@@ -3373,6 +3563,10 @@ export function registerManagementRoutes(app: Express, requireAuth: Function) {
   app.get('/api/freepbx/extensions', requireAuth(), async (req, res) => {
     try {
       const normalizedExtensions = await fetchLiveExtensions();
+      if (lastExtensionLoadMeta.sourceProvider) {
+        res.setHeader('X-PBXPuls-Extension-Provider', lastExtensionLoadMeta.sourceProvider);
+        res.setHeader('X-PBXPuls-Extension-Provider-Message', encodeURIComponent(lastExtensionLoadMeta.message || ''));
+      }
       await updatePBXData((db) => { db.extensions = normalizedExtensions; });
       res.json(normalizedExtensions);
     } catch (e: any) {
@@ -3622,9 +3816,8 @@ export function registerManagementRoutes(app: Express, requireAuth: Function) {
 
   app.get('/api/management/extensions/rest-raw', requireAuth(), async (req, res) => {
     try {
-      const endpoints = ['/extensions', '/userman/extensions', '/core/users'];
       const results = [];
-      for (const endpoint of endpoints) {
+      for (const endpoint of LEGACY_REST_EXTENSION_ENDPOINTS) {
         try {
           results.push(await freepbxRawRequest(endpoint));
         } catch (err: any) {
@@ -3640,6 +3833,10 @@ export function registerManagementRoutes(app: Express, requireAuth: Function) {
     try {
       try {
         const normalizedExtensions = await fetchLiveExtensions();
+        if (lastExtensionLoadMeta.sourceProvider) {
+          res.setHeader('X-PBXPuls-Extension-Provider', lastExtensionLoadMeta.sourceProvider);
+          res.setHeader('X-PBXPuls-Extension-Provider-Message', encodeURIComponent(lastExtensionLoadMeta.message || ''));
+        }
         await updatePBXData((db) => {
           db.extensions = normalizedExtensions;
         });

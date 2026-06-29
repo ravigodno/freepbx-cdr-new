@@ -291,3 +291,11 @@ Trunk Lab filters extension-looking SIP/PJSIP objects before creating diagnostic
 
 
 For Trunk Lab Testing, registration and peer/contact tests must remain read-only. Outbound call tests must require explicit user confirmation, use existing FreePBX routing, avoid dialplan/route/trunk changes, avoid reloads and mask all secrets in raw results.
+
+## FreePBX Extensions Provider Rules
+
+Do not load Extensions directly from /userman/extensions or /core/users in new code. Use the shared provider chain in server-management.ts.
+
+Provider order in Auto mode: BMO local, GraphQL API, Database readonly, Legacy REST. Legacy REST is a compatibility fallback only. FreePBX 17 should use GraphQL fetchAllExtensions when OAuth is configured.
+
+FreePBX OAuth tokens must be cached in memory and refreshed before expiry. Never log access_token, client_secret, SIP secret or password values.
