@@ -1,6 +1,6 @@
 import { ReactNode } from 'react';
 import { MarketingEmptyState } from './MarketingEmptyState';
-import { PhoneClickEvent, TrafficSourceSummary } from './types';
+import { PhoneClickEvent, TrafficSourceSummary, YandexMetrikaPageSummary } from './types';
 
 interface EmptyTableProps {
   title: string;
@@ -149,7 +149,7 @@ export function TrafficSourcesTable({ sources = [] }: { sources?: TrafficSourceS
     <EmptyTableCard
       title="Источники звонков"
       description="Атрибуция звонков по рекламным и органическим источникам"
-      columns={['Источник', 'Medium', 'Кампания', 'Визиты', 'Клики', 'Формы', 'Звонки', 'Отвечено', 'Пропущено', 'Спасено', 'Потеряно', 'Конверсия', '% спасенных']}
+      columns={['Источник', 'Medium', 'Кампания', 'Визиты', 'Пользователи', 'Отказы', 'Клики', 'Формы', 'Звонки', 'Отвечено', 'Пропущено', 'Спасено', 'Потеряно', 'Конверсия', '% спасенных']}
       emptyTitle="Нет данных по источникам"
       emptyDescription="Данные появятся после подключения коллтрекинга и рекламных интеграций."
       hasRows={sources.length > 0}
@@ -160,6 +160,8 @@ export function TrafficSourcesTable({ sources = [] }: { sources?: TrafficSourceS
           <td className="px-3 py-3 text-slate-500">{safeText(source.medium)}</td>
           <td className="px-3 py-3 text-slate-500">{safeText(source.campaign)}</td>
           <td className="px-3 py-3 font-mono font-black text-slate-700 dark:text-slate-200">{safeNumber(source.visits)}</td>
+          <td className="px-3 py-3 font-mono font-black text-slate-700 dark:text-slate-200">{source.users === undefined ? '—' : safeNumber(source.users)}</td>
+          <td className="px-3 py-3 font-mono font-black text-slate-700 dark:text-slate-200">{source.bounceRate === undefined || source.bounceRate === null ? '—' : safePercent(source.bounceRate)}</td>
           <td className="px-3 py-3 font-mono font-black text-purple-700 dark:text-purple-300">{safeNumber(source.phoneClicks)}</td>
           <td className="px-3 py-3 font-mono font-black text-slate-700 dark:text-slate-200">{safeNumber(source.formSubmits)}</td>
           <td className="px-3 py-3 font-mono font-black text-blue-700 dark:text-blue-300">{safeNumber(source.calls)}</td>
@@ -169,6 +171,29 @@ export function TrafficSourcesTable({ sources = [] }: { sources?: TrafficSourceS
           <td className="px-3 py-3 font-mono font-black text-rose-700 dark:text-rose-300">{safeNumber(source.trueLostLeads ?? source.lostCalls)}</td>
           <td className="px-3 py-3 font-mono font-black text-slate-700 dark:text-slate-200">{safePercent(source.clickToCallConversion)}</td>
           <td className="px-3 py-3 font-mono font-black text-slate-700 dark:text-slate-200">{safePercent(source.callbackRecoveryRate)}</td>
+        </tr>
+      ))}
+    </EmptyTableCard>
+  );
+}
+
+export function MetrikaPagesTable({ pages = [], connected = false }: { pages?: YandexMetrikaPageSummary[]; connected?: boolean }) {
+  return (
+    <EmptyTableCard
+      title="Страницы"
+      description="Страницы входа и активность посетителей из Яндекс.Метрики"
+      columns={['Страница', 'Визиты', 'Пользователи', 'Просмотры', 'Клики по телефону']}
+      emptyTitle={connected ? 'Данных по страницам пока нет' : 'Яндекс.Метрика не подключена'}
+      emptyDescription={connected ? 'Данные появятся после накопления статистики Метрики.' : 'Подключите Яндекс.Метрику, чтобы видеть страницы входа и поведение посетителей.'}
+      hasRows={pages.length > 0}
+    >
+      {pages.map(page => (
+        <tr key={page.pageUrl} className="transition hover:bg-slate-50 dark:hover:bg-slate-800/40">
+          <td className="max-w-[520px] truncate px-3 py-3 font-semibold text-slate-700 dark:text-slate-200" title={page.pageUrl}>{safeText(page.pageUrl)}</td>
+          <td className="px-3 py-3 font-mono font-black text-slate-700 dark:text-slate-200">{safeNumber(page.visits)}</td>
+          <td className="px-3 py-3 font-mono font-black text-slate-700 dark:text-slate-200">{safeNumber(page.users)}</td>
+          <td className="px-3 py-3 font-mono font-black text-blue-700 dark:text-blue-300">{safeNumber(page.pageViews)}</td>
+          <td className="px-3 py-3 font-mono font-black text-purple-700 dark:text-purple-300">{safeNumber(page.phoneClicks)}</td>
         </tr>
       ))}
     </EmptyTableCard>

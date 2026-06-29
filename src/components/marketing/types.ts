@@ -69,6 +69,9 @@ export interface TrafficSourceSummary {
   medium: string;
   campaign: string;
   visits: number;
+  users?: number;
+  bounceRate?: number | null;
+  avgVisitDurationSeconds?: number | null;
   phoneClicks: number;
   formSubmits: number;
   calls?: number;
@@ -134,4 +137,64 @@ export interface CalltrackingSummaryResponse {
   clickToCallConversion?: number;
   averageSecondsToCall?: number | null;
   averageCallbackSeconds?: number | null;
+}
+
+export interface YandexMetrikaGoals {
+  phoneClickGoalId?: string | null;
+  whatsappClickGoalId?: string | null;
+  telegramClickGoalId?: string | null;
+  emailClickGoalId?: string | null;
+}
+
+export interface YandexMetrikaCounter {
+  counterId: string;
+  name: string;
+  domain?: string | null;
+  status?: string | null;
+}
+
+export interface YandexMetrikaIntegration {
+  id: string;
+  siteId: string;
+  counterId: string;
+  domain?: string | null;
+  name: string;
+  tokenStatus: 'not_checked' | 'valid' | 'invalid' | 'error' | string;
+  isActive: boolean;
+  lastSyncAt?: string | null;
+  lastError?: string | null;
+  goals?: YandexMetrikaGoals | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+export interface YandexMetrikaSummary {
+  visits: number;
+  users: number;
+  pageViews: number;
+  bounceRate: number | null;
+  avgVisitDurationSeconds: number | null;
+  phoneClickGoals: number | null;
+  whatsappClickGoals: number | null;
+  telegramClickGoals: number | null;
+  emailClickGoals: number | null;
+  goalsConfigured?: boolean;
+}
+
+export interface YandexMetrikaSourceSummary {
+  source: string;
+  medium: string;
+  campaign: string | null;
+  visits: number;
+  users: number;
+  bounceRate: number | null;
+  avgVisitDurationSeconds: number | null;
+}
+
+export interface YandexMetrikaPageSummary {
+  pageUrl: string;
+  visits: number;
+  users: number;
+  pageViews: number;
+  phoneClicks: number;
 }

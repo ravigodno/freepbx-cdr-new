@@ -3,9 +3,9 @@ import { Banknote, BarChart3, CheckCircle2, CircleDollarSign, Loader2, MousePoin
 import { MarketingFunnelChain } from './MarketingFunnelChain';
 import { MarketingIntegrationsPanel } from './MarketingIntegrationsPanel';
 import { MarketingKpiCard } from './MarketingKpiCard';
-import { CampaignsReportTable, LostLeadsTable, PhoneClicksTable, TrafficSourcesTable } from './MarketingTables';
+import { CampaignsReportTable, LostLeadsTable, MetrikaPagesTable, PhoneClicksTable, TrafficSourcesTable } from './MarketingTables';
 import { MarketingEmptyState } from './MarketingEmptyState';
-import { CalltrackingSite, CalltrackingSummaryResponse, MarketingOverviewSummary, PhoneClickEvent, TrafficSourceSummary, UsedCallQualitySettings } from './types';
+import { CalltrackingSite, CalltrackingSummaryResponse, MarketingOverviewSummary, PhoneClickEvent, TrafficSourceSummary, UsedCallQualitySettings, YandexMetrikaIntegration, YandexMetrikaPageSummary, YandexMetrikaSourceSummary, YandexMetrikaSummary } from './types';
 
 type MarketingTabId = 'overview' | 'phone-clicks' | 'sources' | 'campaigns' | 'pages' | 'utm' | 'lost-leads' | 'analytics' | 'integrations';
 
@@ -38,7 +38,13 @@ export default function MarketingTab() {
   const [phoneClicks, setPhoneClicks] = useState<PhoneClickEvent[]>([]);
   const [sources, setSources] = useState<TrafficSourceSummary[]>([]);
   const [sites, setSites] = useState<CalltrackingSite[]>([]);
+  const [metrikaIntegrations, setMetrikaIntegrations] = useState<YandexMetrikaIntegration[]>([]);
+  const [metrikaSummary, setMetrikaSummary] = useState<YandexMetrikaSummary | null>(null);
+  const [metrikaSources, setMetrikaSources] = useState<YandexMetrikaSourceSummary[]>([]);
+  const [metrikaPages, setMetrikaPages] = useState<YandexMetrikaPageSummary[]>([]);
+  const [metrikaStatus, setMetrikaStatus] = useState<'connected' | 'not_configured' | 'error'>('not_configured');
   const [usedSettings, setUsedSettings] = useState<UsedCallQualitySettings | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -50,23 +56,32 @@ export default function MarketingTab() {
         setError('');
         const token = getAuthToken();
         const headers = { Authorization: 'Bearer ' + token };
-        const [summaryRes, eventsRes, sourcesRes, sitesRes] = await Promise.all([
+        const [summaryRes, eventsRes, sourcesRes, sitesRes, metrikaIntegrationsRes, metrikaSummaryRes, metrikaSourcesRes, metrikaPagesRes] = await Promise.all([
           fetch('/api/calltracking/summary', { headers }),
           fetch('/api/calltracking/matches?limit=100', { headers }),
           fetch('/api/calltracking/sources', { headers }),
-          fetch('/api/calltracking/sites', { headers })
+          fetch('/api/calltracking/sites', { headers }),
+          fetch('/api/marketing/metrika/integrations', { headers }),
+          fetch('/api/marketing/metrika/summary', { headers }),
+          fetch('/api/marketing/metrika/sources', { headers }),
+          fetch('/api/marketing/metrika/pages', { headers })
         ]);
-        if (!summaryRes.ok || !eventsRes.ok || !sourcesRes.ok || !sitesRes.ok) {
-          throw new Error('Не удалось загрузить данные коллтрекинга.');
+        if (!summaryRes.ok || !eventsRes.ok || !sourcesRes.ok || !sitesRes.ok || !metrikaIntegrationsRes.ok || !metrikaSummaryRes.ok || !metrikaSourcesRes.ok || !metrikaPagesRes.ok) {
+          throw new Error('Не удалось загрузить данные маркетинга.');
         }
-        const [summaryJson, eventsJson, sourcesJson, sitesJson] = await Promise.all([
-          summaryRes.json(), eventsRes.json(), sourcesRes.json(), sitesRes.json()
+        const [summaryJson, eventsJson, sourcesJson, sitesJson, metrikaIntegrationsJson, metrikaSummaryJson, metrikaSourcesJson, metrikaPagesJson] = await Promise.all([
+          summaryRes.json(), eventsRes.json(), sourcesRes.json(), sitesRes.json(), metrikaIntegrationsRes.json(), metrikaSummaryRes.json(), metrikaSourcesRes.json(), metrikaPagesRes.json()
         ]);
         if (!active) return;
         setSummaryData(summaryJson.summary || null);
         setPhoneClicks(Array.isArray(eventsJson.matches) ? eventsJson.matches : []);
         setSources(Array.isArray(sourcesJson.sources) ? sourcesJson.sources : []);
         setSites(Array.isArray(sitesJson.sites) ? sitesJson.sites : []);
+        setMetrikaIntegrations(Array.isArray(metrikaIntegrationsJson.integrations) ? metrikaIntegrationsJson.integrations : []);
+        setMetrikaSummary(metrikaSummaryJson.summary || null);
+        setMetrikaSources(Array.isArray(metrikaSourcesJson.sources) ? metrikaSourcesJson.sources : []);
+        setMetrikaPages(Array.isArray(metrikaPagesJson.pages) ? metrikaPagesJson.pages : []);
+        setMetrikaStatus(metrikaSummaryJson.status || 'not_configured');
         setUsedSettings(summaryJson.usedSettings || eventsJson.usedSettings || sourcesJson.usedSettings || null);
       } catch (err: any) {
         if (active) setError(err?.message || 'Не удалось загрузить данные коллтрекинга.');
@@ -77,12 +92,29 @@ export default function MarketingTab() {
 
     loadMarketing();
     return () => { active = false; };
-  }, []);
+  }, [refreshKey]);
 
   const callbackSlaHours = usedSettings?.missedCallCallbackSlaHours ?? 24;
+  const useMetrikaVisits = metrikaStatus === 'connected' && Number(metrikaSummary?.visits || 0) > 0;
+
+  const mergedSources = useMemo(() => {
+    const map = new Map<string, TrafficSourceSummary>();
+    const keyOf = (source: string, medium?: string | null, campaign?: string | null) => [source || 'direct', medium || '', campaign || ''].join('||');
+    sources.forEach(source => map.set(keyOf(source.source, source.medium, source.campaign), { ...source }));
+    metrikaSources.forEach(source => {
+      const key = keyOf(source.source, source.medium, source.campaign);
+      const existing = map.get(key);
+      if (existing) {
+        map.set(key, { ...existing, visits: source.visits || existing.visits, users: source.users, bounceRate: source.bounceRate, avgVisitDurationSeconds: source.avgVisitDurationSeconds });
+      } else {
+        map.set(key, { source: source.source, medium: source.medium || '', campaign: source.campaign || '', visits: source.visits || 0, users: source.users, bounceRate: source.bounceRate, avgVisitDurationSeconds: source.avgVisitDurationSeconds, phoneClicks: 0, formSubmits: 0, calls: 0, answeredCalls: 0, missedCalls: 0, recoveredByCallback: 0, trueLostLeads: 0, clickToCallConversion: 0, callbackRecoveryRate: 0, cost: null, costPerCall: null });
+      }
+    });
+    return Array.from(map.values()).sort((a, b) => Number(b.phoneClicks || 0) - Number(a.phoneClicks || 0) || Number(b.visits || 0) - Number(a.visits || 0));
+  }, [metrikaSources, sources]);
 
   const summary: MarketingOverviewSummary = useMemo(() => ({
-    visits: summaryData ? Number(summaryData.uniqueSessions || summaryData.visits || 0) : null,
+    visits: useMetrikaVisits ? Number(metrikaSummary?.visits || 0) : (summaryData ? Number(summaryData.uniqueSessions || summaryData.visits || 0) : null),
     phoneClicks: summaryData ? Number(summaryData.phoneClicks || 0) : null,
     siteCalls: summaryData ? Number(summaryData.siteCalls ?? summaryData.matchedCalls ?? 0) : null,
     clickToCallConversion: summaryData ? Number(summaryData.clickToCallConversion ?? 0) : null,
@@ -90,10 +122,10 @@ export default function MarketingTab() {
     lostLeads: summaryData ? Number(summaryData.trueLostLeads ?? summaryData.lostSiteCalls ?? 0) : null,
     adCost: null,
     lostBudgetEstimate: null
-  }), [summaryData]);
+  }), [metrikaSummary?.visits, summaryData, useMetrikaVisits]);
 
   const kpis = useMemo(() => [
-    { label: 'Визиты', value: formatMetric(summary.visits), hint: summaryData ? 'Уникальные sessionId из событий сайта' : 'Данные появятся после подключения скрипта коллтрекинга', icon: BarChart3, tone: 'blue' as const },
+    { label: 'Визиты', value: formatMetric(summary.visits), hint: useMetrikaVisits ? 'Из Яндекс.Метрики' : (summaryData ? 'Fallback: события PBXPuls' : 'Данные появятся после подключения скрипта коллтрекинга'), icon: BarChart3, tone: 'blue' as const },
     { label: 'Клики по телефону', value: formatMetric(summary.phoneClicks), hint: summaryData ? 'Реальные события phone_click' : 'События сайта пока не собираются', icon: MousePointerClick, tone: 'purple' as const },
     { label: 'Звонки с сайта', value: formatMetric(summary.siteCalls), hint: summaryData ? 'Сопоставленные phone_click -> CDR' : 'Данные появятся после matching событий', icon: PhoneCall, tone: 'green' as const },
     { label: 'Конверсия клик → звонок', value: formatMetric(summary.clickToCallConversion, '%'), hint: 'Доля кликов, сопоставленных со звонками', icon: Target, tone: 'purple' as const },
@@ -101,16 +133,16 @@ export default function MarketingTab() {
     { label: 'Потерянные лиды', value: formatMetric(summary.lostLeads), hint: 'С учетом успешных перезвонов в течение ' + callbackSlaHours + ' ч', icon: TrendingDown, tone: 'red' as const },
     { label: 'Рекламный расход', value: formatMetric(summary.adCost, ' ₽'), hint: 'Интеграция с рекламными кабинетами позже', icon: CircleDollarSign, tone: 'blue' as const },
     { label: 'Потерянный бюджет', value: formatMetric(summary.lostBudgetEstimate, ' ₽'), hint: 'Оценка появится после импорта расходов', icon: Banknote, tone: 'red' as const }
-  ], [summary, summaryData, callbackSlaHours]);
+  ], [summary, summaryData, callbackSlaHours, useMetrikaVisits]);
 
   const renderTab = () => {
     if (activeTab === 'phone-clicks') return <PhoneClicksTable events={phoneClicks} />;
-    if (activeTab === 'sources') return <TrafficSourcesTable sources={sources} />;
+    if (activeTab === 'sources') return <TrafficSourcesTable sources={mergedSources} />;
     if (activeTab === 'campaigns') return <CampaignsReportTable />;
     if (activeTab === 'lost-leads') return <LostLeadsTable events={phoneClicks.filter(event => event.leadStatus === 'lost')} />;
-    if (activeTab === 'integrations') return <MarketingIntegrationsPanel sites={sites} />;
+    if (activeTab === 'integrations') return <MarketingIntegrationsPanel sites={sites} metrikaIntegrations={metrikaIntegrations} onMetrikaChanged={() => setRefreshKey(value => value + 1)} />;
     if (activeTab === 'pages') {
-      return <MarketingEmptyState title="Данных по страницам пока нет" description="Статистика страниц появится после установки JS-скрипта PBXPuls на сайт." />;
+      return <MetrikaPagesTable pages={metrikaPages} connected={metrikaStatus === 'connected'} />;
     }
     if (activeTab === 'utm') {
       return <MarketingEmptyState title="UTM-данные пока не собираются" description="PBXPuls начнет показывать utm_source, utm_medium и utm_campaign после подключения коллтрекинга." />;
@@ -124,9 +156,9 @@ export default function MarketingTab() {
         <MarketingFunnelChain />
         <div className="grid gap-4 xl:grid-cols-2">
           <PhoneClicksTable events={phoneClicks} />
-          <TrafficSourcesTable sources={sources} />
+          <TrafficSourcesTable sources={mergedSources} />
         </div>
-        <MarketingIntegrationsPanel sites={sites} />
+        <MarketingIntegrationsPanel sites={sites} metrikaIntegrations={metrikaIntegrations} onMetrikaChanged={() => setRefreshKey(value => value + 1)} />
       </div>
     );
   };
