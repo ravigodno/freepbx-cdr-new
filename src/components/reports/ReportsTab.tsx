@@ -6,7 +6,7 @@ import { CallDirectionChart, ChartMode } from './dashboard/CallDirectionChart';
 import { InsightsPanel } from './dashboard/InsightsPanel';
 import { CallHeatmap } from './dashboard/CallHeatmap';
 import { CallFunnelWidget } from './dashboard/CallFunnelWidget';
-import { ProblemDepartmentsTable } from './dashboard/ProblemDepartmentsTable';
+import { ProblemDepartmentsTable, DepartmentSummaryRow } from './dashboard/ProblemDepartmentsTable';
 import { LostCallsTable, LostCallDetail } from './dashboard/LostCallsTable';
 import { TrunkHealthWidget } from './dashboard/TrunkHealthWidget';
 
@@ -86,6 +86,24 @@ interface LostCallSummary {
   callbackWindowHours: number;
 }
 
+interface EmployeeSummaryRow {
+  extension?: string | null;
+  employeeName?: string | null;
+  department?: string | null;
+  inboundCalls?: number;
+  outboundCalls?: number;
+  answeredCalls?: number;
+  missedCalls?: number;
+  lostCalls?: number;
+  callbackAfterMissed?: number;
+  callbackRate?: number;
+  averageWaitSeconds?: number | null;
+  slaPercent?: number | null;
+  averageDurationSeconds?: number;
+  recordingCount?: number;
+  status?: 'ok' | 'warning' | 'problem' | string;
+}
+
 function safeNumber(value: unknown): number {
   const n = Number(value || 0);
   return Number.isFinite(n) ? n : 0;
@@ -137,6 +155,8 @@ export default function ReportsTab({
   const [lostCallDetails, setLostCallDetails] = useState<LostCallDetail[]>([]);
   const [lostCallSummary, setLostCallSummary] = useState<LostCallSummary | null>(null);
   const [slaSummary, setSlaSummary] = useState<SlaSummary | null>(null);
+  const [departmentSummary, setDepartmentSummary] = useState<DepartmentSummaryRow[]>([]);
+  const [employeeSummary, setEmployeeSummary] = useState<EmployeeSummaryRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [refreshes, setRefreshes] = useState(0);
@@ -158,6 +178,8 @@ export default function ReportsTab({
           endTime,
           groupType,
           department,
+          employee,
+          extension: internalExt,
           operatorExt: internalExt || operatorExt,
           onlyMyCalls: String(onlyMyCalls),
           callbackWindowHours: '24',
@@ -177,6 +199,8 @@ export default function ReportsTab({
         setLostCallDetails(Array.isArray(json.lostCallDetails) ? json.lostCallDetails : []);
         setLostCallSummary(json.lostCallSummary || null);
         setSlaSummary(json.slaSummary || null);
+        setDepartmentSummary(Array.isArray(json.departmentSummary) ? json.departmentSummary : []);
+        setEmployeeSummary(Array.isArray(json.employeeSummary) ? json.employeeSummary : []);
         setError(json.dbError || '');
       } catch (err: any) {
         if (active) setError(err?.message || 'Не удалось загрузить данные аналитики.');
@@ -216,13 +240,16 @@ export default function ReportsTab({
     return { ...totals, sla, avgWait: totals.answeredCount ? Math.round(totals.answeredDuration / totals.answeredCount) : 0 };
   }, [visibleData]);
 
-  const departments = detailingData?.queues?.length ? detailingData.queues : (detailingData?.groups || []);
+  const departments = departmentSummary.length ? departmentSummary : (detailingData?.queues?.length ? detailingData.queues : (detailingData?.groups || []));
+  const departmentOptions = useMemo(() => Array.from(new Set(departmentSummary.map(item => String(item.department || '').trim()).filter(Boolean))), [departmentSummary]);
   const trunks = detailingData?.trunks || [];
   const employees = useMemo(() => {
+    const fromSummary = employeeSummary.map(item => ({ value: String(item.extension || ''), label: String(item.employeeName || item.extension || 'Сотрудник') })).filter(item => item.value);
     const fromAccess = accessUsers.map(user => ({ value: String(user.extension || user.username || ''), label: String(user.name || user.username || user.extension || 'Сотрудник') })).filter(item => item.value);
     const fromDirectory = directory.map(item => ({ value: String(item.number || ''), label: item.name || String(item.number || '') })).filter(item => item.value);
-    return [...fromAccess, ...fromDirectory].slice(0, 80);
-  }, [accessUsers, directory]);
+    const seen = new Set<string>();
+    return [...fromSummary, ...fromAccess, ...fromDirectory].filter(item => { if (seen.has(item.value)) return false; seen.add(item.value); return true; }).slice(0, 80);
+  }, [accessUsers, directory, employeeSummary]);
 
   const slaPercentValue = slaSummary && Number.isFinite(Number(slaSummary.slaPercent)) ? Number(slaSummary.slaPercent) : summary.sla;
   const averageWaitValue = slaSummary ? slaSummary.averageWaitSeconds : summary.avgWait;
@@ -310,7 +337,7 @@ export default function ReportsTab({
                 <option value="day">День</option><option value="week">Неделя</option><option value="month">Месяц</option><option value="hour">Час</option><option value="weekday">День недели</option><option value="year">Год</option>
               </select>
             </div>
-            <div className="space-y-1"><label className={compactLabelClass()}>Отдел</label><select value={department} onChange={e => setDepartment(e.target.value)} className={controlClass()}><option value="all">Все отделы</option><option value="sales">Продажи</option><option value="support">Поддержка</option><option value="accounting">Бухгалтерия</option><option value="logistics">Логистика</option></select></div>
+            <div className="space-y-1"><label className={compactLabelClass()}>Отдел</label><select value={department} onChange={e => setDepartment(e.target.value)} className={controlClass()}><option value="all">Все отделы</option>{departmentOptions.map(item => <option key={item} value={item}>{item}</option>)}<option value="sales">Продажи</option><option value="support">Поддержка</option><option value="accounting">Бухгалтерия</option><option value="logistics">Логистика</option></select></div>
             <div className="space-y-1"><label className={compactLabelClass()}>Сотрудник</label><select value={employee} onChange={e => setEmployee(e.target.value)} className={controlClass()}><option value="all">Все сотрудники</option>{employees.map(item => <option key={item.value + item.label} value={item.value}>{item.label}</option>)}</select></div>
             <div className="space-y-1"><label className={compactLabelClass()}>Внутренний номер</label><input value={internalExt} onChange={e => setInternalExt(e.target.value.replace(/[^0-9]/g, ''))} placeholder="Все" className={controlClass()} /></div>
             <div className="space-y-1"><label className={compactLabelClass()}>Транк</label><select value={trunkFilter} onChange={e => setTrunkFilter(e.target.value)} className={controlClass()}><option value="all">Все транки</option>{trunks.map(item => <option key={item.name} value={item.name}>{item.name}</option>)}</select></div>

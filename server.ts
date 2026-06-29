@@ -733,9 +733,84 @@ const getDirectoryNameByExtension = (directory: any[], extension: string | null)
   return entry?.name || null;
 };
 
-const buildLostCallAnalytics = (calls: any[], options: { startMs: number; endMs: number; callbackWindowHours?: number; directory?: any[] }): LostCallAnalytics => {
+
+type ExtensionOwner = {
+  extension: string;
+  employeeName: string | null;
+  department: string | null;
+  managerName: string | null;
+  userId: string | null;
+  role: string | null;
+};
+
+const buildExtensionOwnerMap = (directory: any[], users: any[]): Map<string, ExtensionOwner> => {
+  const owners = new Map<string, ExtensionOwner>();
+  const ensure = (extension: string): ExtensionOwner => {
+    const ext = onlyDigits(extension);
+    const current = owners.get(ext);
+    if (current) return current;
+    const next = { extension: ext, employeeName: null, department: null, managerName: null, userId: null, role: null };
+    owners.set(ext, next);
+    return next;
+  };
+
+  (directory || []).forEach(entry => {
+    const normalized = normalizeDirectoryEntry(entry);
+    const phones = [normalized.number, ...(Array.isArray(normalized.phones) ? normalized.phones : [])];
+    phones.forEach(phone => {
+      const ext = onlyDigits(phone);
+      if (!isInternalExt(ext)) return;
+      const owner = ensure(ext);
+      owner.employeeName = normalized.name || owner.employeeName;
+      owner.department = normalized.department || owner.department;
+    });
+  });
+
+  (users || []).forEach(user => {
+    const ext = onlyDigits(user?.extension);
+    if (!isInternalExt(ext)) return;
+    const owner = ensure(ext);
+    owner.employeeName = owner.employeeName || String(user?.username || '').trim() || null;
+    owner.userId = user?.id || owner.userId;
+    owner.role = user?.role || owner.role;
+  });
+
+  return owners;
+};
+
+const resolveExtensionOwner = (ownerMap: Map<string, ExtensionOwner>, extension: any): ExtensionOwner | null => {
+  const ext = onlyDigits(extension);
+  if (!isInternalExt(ext)) return null;
+  return ownerMap.get(ext) || { extension: ext, employeeName: null, department: null, managerName: null, userId: null, role: null };
+};
+
+const resolveEmployeeByExtension = (ownerMap: Map<string, ExtensionOwner>, extension: any): string | null => {
+  return resolveExtensionOwner(ownerMap, extension)?.employeeName || null;
+};
+
+const resolveDepartmentByExtension = (ownerMap: Map<string, ExtensionOwner>, extension: any): string | null => {
+  return resolveExtensionOwner(ownerMap, extension)?.department || null;
+};
+
+const getResponsibleExtensionForCall = (call: any): string | null => {
+  if (isIncoming(call)) return getResponsibleExtension(call);
+  if (isOutgoing(call)) return getCallerInternalExt(call) || null;
+  if (isInternal(call)) return getCallerInternalExt(call) || getCalleeInternalExt(call) || null;
+  return getResponsibleExtension(call);
+};
+
+const getAnalyticsStatus = (slaPercent: number | null, missedCalls: number, lostCalls: number): 'ok' | 'warning' | 'problem' => {
+  if (lostCalls > 0) return 'problem';
+  if (slaPercent !== null && slaPercent < 80) return 'problem';
+  if (slaPercent !== null && slaPercent < 90) return 'warning';
+  if (missedCalls > 0) return 'warning';
+  return 'ok';
+};
+
+const buildLostCallAnalytics = (calls: any[], options: { startMs: number; endMs: number; callbackWindowHours?: number; directory?: any[]; ownerMap?: Map<string, ExtensionOwner> }): LostCallAnalytics => {
   const callbackWindowMs = Math.max(1, Math.min(168, Number(options.callbackWindowHours || 24))) * 60 * 60 * 1000;
   const directory = options.directory || [];
+  const ownerMap = options.ownerMap || buildExtensionOwnerMap(directory, []);
   const missedCalls = calls
     .filter(call => {
       const callMs = getCallDateMs(call.calldate);
@@ -791,6 +866,7 @@ const buildLostCallAnalytics = (calls: any[], options: { startMs: number; endMs:
 
     const related = outbound[0] || repeatedInbound[0] || null;
     const responsibleExtension = getResponsibleExtension(call);
+    const owner = resolveExtensionOwner(ownerMap, responsibleExtension);
 
     return {
       externalNumber: call.src || null,
@@ -798,9 +874,9 @@ const buildLostCallAnalytics = (calls: any[], options: { startMs: number; endMs:
       missedAt: call.calldate,
       did: call.did || null,
       direction: 'inbound',
-      department: null,
+      department: owner?.department || null,
       responsibleExtension,
-      responsibleName: getDirectoryNameByExtension(directory, responsibleExtension),
+      responsibleName: owner?.employeeName || getDirectoryNameByExtension(directory, responsibleExtension),
       attempts: outbound.length,
       callbackStatus,
       lastRelatedCallAt: related?.calldate || null,
@@ -4633,6 +4709,8 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
     const operatorExt = getEffectiveOperatorExt(localDb, req, requestedOperatorExt);
     const onlyMyCalls = requestedOnlyMyCalls || isOperatorForcedOwnCalls(localDb, req);
     const department = req.query.department as string || 'all';
+    const employee = req.query.employee as string || 'all';
+    const requestedExtensionFilter = String(req.query.extension || '').trim();
     const slaThresholdSeconds = normalizeSlaThresholdSeconds(req.query.slaThresholdSeconds);
 
     let calls: CallEntry[] = [];
@@ -4929,7 +5007,13 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
       }
     }
 
+    const ownerMap = buildExtensionOwnerMap(localDb.directory || [], localDb.users || []);
+
     const checkCallDepartmentMatch = (c: any, dept: string, directory: any[]): boolean => {
+      const normalizedDept = String(dept || '').trim().toLowerCase();
+      const responsibleExt = getResponsibleExtensionForCall(c);
+      const ownerDept = resolveDepartmentByExtension(ownerMap, responsibleExt);
+      if (ownerDept && ownerDept.toLowerCase() === normalizedDept) return true;
       const num = isIncoming(c) ? c.dst : c.src;
       const entry = directory.find(e => {
         const phones = [e.number, ...(Array.isArray(e.phones) ? e.phones : [])];
@@ -4971,6 +5055,8 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
       groups: new Map<string, any>(),
       outboundRules: new Map<string, any>()
     };
+    const departmentSummaryMap = new Map<string, any>();
+    const employeeSummaryMap = new Map<string, any>();
 
     const getTrunkName = (channelStr: string): string | null => {
       if (!channelStr) return null;
@@ -4990,6 +5076,11 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
       if (startDate && callMs < reportStartMs) return false;
       if (endDate && callMs > reportEndMs) return false;
       if (onlyMyCalls && operatorExt && !callHasExactNumber(c, operatorExt)) return false;
+      const extensionFilter = onlyDigits(requestedExtensionFilter);
+      const employeeFilter = onlyDigits(employee);
+      const responsibleExt = getResponsibleExtensionForCall(c);
+      if (extensionFilter && ![responsibleExt, getCallerInternalExt(c), getCalleeInternalExt(c)].some(ext => onlyDigits(ext) === extensionFilter)) return false;
+      if (employee && employee !== 'all' && employeeFilter && ![responsibleExt, getCallerInternalExt(c), getCalleeInternalExt(c)].some(ext => onlyDigits(ext) === employeeFilter)) return false;
       if (department && department !== 'all' && !checkCallDepartmentMatch(c, department, localDb.directory || [])) return false;
       return true;
     });
@@ -4998,7 +5089,8 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
       startMs: reportStartMs,
       endMs: reportEndMs,
       callbackWindowHours: Number(req.query.callbackWindowHours || 24),
-      directory: localDb.directory || []
+      directory: localDb.directory || [],
+      ownerMap
     });
     const lostByUniqueId = new Map(lostCallAnalytics.items.map(item => [item.uniqueid, item]));
 
@@ -5012,16 +5104,6 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
       if (endDate) {
         const eVal = getDateTimeFilterMs(endDate, endTime, true);
         if (getCallDateMs(c.calldate) > eVal) return;
-      }
-
-      // Extension filter
-      if (onlyMyCalls && operatorExt) {
-        if (!callHasExactNumber(c, operatorExt)) return;
-      }
-
-      // Department filter
-      if (department && department !== 'all') {
-        if (!checkCallDepartmentMatch(c, department, localDb.directory || [])) return;
       }
 
       // Increment trends line
@@ -5093,6 +5175,67 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
           bin.waitSecondsTotal += waitSeconds;
           bin.waitSecondsCount++;
         }
+      }
+
+      const responsibleExt = getResponsibleExtensionForCall(c);
+      const owner = resolveExtensionOwner(ownerMap, responsibleExt);
+      const waitSecondsForSummary = calculateWaitSeconds(c);
+      const lostItemForSummary = lostByUniqueId.get(c.uniqueid);
+      const callbackResolved = lostItemForSummary?.callbackStatus === 'called_back';
+      const lostUnresolved = lostItemForSummary?.callbackStatus === 'not_called_back';
+
+      const touchSummary = (map: Map<string, any>, key: string, base: any) => {
+        let entry = map.get(key);
+        if (!entry) {
+          entry = {
+            ...base, inboundCalls: 0, outboundCalls: 0, answeredCalls: 0, missedCalls: 0, lostCalls: 0,
+            callbackAfterMissed: 0, durationTotal: 0, durationCount: 0, waitTotal: 0, waitCount: 0,
+            slaEligible: 0, answeredWithinSla: 0, recordingCount: 0
+          };
+          map.set(key, entry);
+        }
+        return entry;
+      };
+
+      const updateSummary = (entry: any) => {
+        if (isIncomingCall) entry.inboundCalls++;
+        if (isOutgoingCall) entry.outboundCalls++;
+        if (disposition === 'ANSWERED' && Number(c.billsec || 0) > 0) {
+          entry.answeredCalls++;
+          entry.durationTotal += Number(c.billsec || 0);
+          entry.durationCount++;
+        }
+        if (isIncomingMissed) entry.missedCalls++;
+        if (lostUnresolved) entry.lostCalls++;
+        if (callbackResolved) entry.callbackAfterMissed++;
+        if (isIncomingCall) {
+          entry.slaEligible++;
+          if (disposition === 'ANSWERED' && Number(c.billsec || 0) > 0 && waitSecondsForSummary !== null && waitSecondsForSummary <= slaThresholdSeconds) {
+            entry.answeredWithinSla++;
+          }
+          if (waitSecondsForSummary !== null && Number.isFinite(waitSecondsForSummary)) {
+            entry.waitTotal += waitSecondsForSummary;
+            entry.waitCount++;
+          }
+        }
+        if (c.recordingfile) entry.recordingCount++;
+      };
+
+      if (responsibleExt) {
+        const employeeEntry = touchSummary(employeeSummaryMap, responsibleExt, {
+          extension: responsibleExt,
+          employeeName: owner?.employeeName || null,
+          department: owner?.department || null
+        });
+        updateSummary(employeeEntry);
+      }
+
+      if (owner?.department) {
+        const departmentEntry = touchSummary(departmentSummaryMap, owner.department, {
+          department: owner.department,
+          managerName: owner.managerName || null
+        });
+        updateSummary(departmentEntry);
       }
 
       // Detailing load accumulation
@@ -5197,6 +5340,19 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
       }
     });
 
+    const finalizeSummary = (entry: any) => {
+      const callbackRate = entry.missedCalls ? Math.round((entry.callbackAfterMissed / entry.missedCalls) * 100) : 0;
+      const slaPercent = entry.slaEligible ? Math.round((entry.answeredWithinSla / entry.slaEligible) * 100) : null;
+      const averageWaitSeconds = entry.waitCount ? Math.round(entry.waitTotal / entry.waitCount) : null;
+      const averageDurationSeconds = entry.durationCount ? Math.round(entry.durationTotal / entry.durationCount) : 0;
+      const status = getAnalyticsStatus(slaPercent, entry.missedCalls, entry.lostCalls);
+      const { durationTotal, durationCount, waitTotal, waitCount, slaEligible, answeredWithinSla, ...rest } = entry;
+      return { ...rest, callbackRate, averageWaitSeconds, slaPercent, averageDurationSeconds, status };
+    };
+
+    const departmentSummary = Array.from(departmentSummaryMap.values()).map(finalizeSummary).sort((a, b) => b.lostCalls - a.lostCalls || a.department.localeCompare(b.department));
+    const employeeSummary = Array.from(employeeSummaryMap.values()).map(finalizeSummary).sort((a, b) => b.lostCalls - a.lostCalls || String(a.extension).localeCompare(String(b.extension)));
+
     const resultList = Array.from(bins.values()).sort((a, b) => a.sortKey - b.sortKey).map(bin => {
       const waitCount = Number(bin.waitSecondsCount || 0);
       const answeredWithinSla = Number(bin.answeredWithinSla || 0);
@@ -5233,6 +5389,8 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
       },
       lostCallDetails: lostCallAnalytics.items.slice(0, 200),
       slaSummary,
+      departmentSummary,
+      employeeSummary,
       dbError: (req as any).dbError || undefined,
       demoModeActive: isDemo
     });
