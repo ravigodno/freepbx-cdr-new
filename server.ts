@@ -1535,6 +1535,20 @@ const dbLock = {
 };
 
 
+function createDefaultCalltrackingSite() {
+  const now = new Date().toISOString();
+  return {
+    id: 'site_' + crypto.randomBytes(8).toString('hex'),
+    name: 'Основной сайт',
+    domain: '',
+    publicKey: 'ct_' + crypto.randomBytes(18).toString('hex'),
+    counterId: '',
+    isActive: true,
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
 function normalizeLocalDbSchema(db: any): any {
   const defaults = getDefaultLocalDb();
 
@@ -1549,7 +1563,10 @@ function normalizeLocalDbSchema(db: any): any {
     },
     missedCallStatuses: Array.isArray(db?.missedCallStatuses) ? db.missedCallStatuses : [],
     directory: Array.isArray(db?.directory) ? db.directory : [],
-    blacklist: Array.isArray(db?.blacklist) ? db.blacklist : []
+    blacklist: Array.isArray(db?.blacklist) ? db.blacklist : [],
+    calltrackingSites: Array.isArray(db?.calltrackingSites) && db.calltrackingSites.length ? db.calltrackingSites : [createDefaultCalltrackingSite()],
+    calltrackingEvents: Array.isArray(db?.calltrackingEvents) ? db.calltrackingEvents : [],
+    calltrackingSessions: Array.isArray(db?.calltrackingSessions) ? db.calltrackingSessions : []
   };
 
   return next;
@@ -1596,6 +1613,9 @@ function getDefaultLocalDb(): any {
     missedCallStatuses: [],
     directory: [],
     blacklist: [],
+    calltrackingSites: [createDefaultCalltrackingSite()],
+    calltrackingEvents: [],
+    calltrackingSessions: [],
     roles: getDefaultAccessRoles(),
     settings: {
       dbHost: process.env.DB_HOST || 'localhost',
@@ -1724,6 +1744,19 @@ async function readLocalDb(): Promise<{
         data.settings.directorySyncAsteriskBlacklist = data.settings.directorySyncAsteriskBlacklist ?? false;
         changed = true;
       }
+    }
+
+    if (!Array.isArray(data.calltrackingSites) || data.calltrackingSites.length === 0) {
+      data.calltrackingSites = [createDefaultCalltrackingSite()];
+      changed = true;
+    }
+    if (!Array.isArray(data.calltrackingEvents)) {
+      data.calltrackingEvents = [];
+      changed = true;
+    }
+    if (!Array.isArray(data.calltrackingSessions)) {
+      data.calltrackingSessions = [];
+      changed = true;
     }
 
     if (Array.isArray(data.directory)) {
@@ -2126,9 +2159,289 @@ function isOperatorForcedOwnCalls(localDb: any, req: Request): boolean {
   return dbUser?.role === 'operator';
 }
 
+const CALLTRACKING_ALLOWED_EVENT_TYPES = new Set([
+  'page_view',
+  'phone_impression',
+  'phone_click',
+  'form_submit',
+  'whatsapp_click',
+  'telegram_click',
+  'email_click'
+]);
+
+const CALLTRACKING_MAX_PAYLOAD_BYTES = 16 * 1024;
+
+const cleanMarketingString = (value: any, max = 500): string => {
+  return String(value || '').trim().slice(0, max);
+};
+
+const getClientIp = (req: Request): string => {
+  const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  return forwarded || req.ip || req.socket.remoteAddress || '';
+};
+
+function hashIp(ip: string): string {
+  if (!ip) return '';
+  // CALLTRACKING_IP_HASH_SALT should be configured per installation. The fallback
+  // keeps raw IP out of storage but should be replaced in production deployments.
+  const salt = process.env.CALLTRACKING_IP_HASH_SALT || JWT_SECRET || 'pbxpuls-calltracking-ip-salt';
+  return crypto.createHash('sha256').update(salt + ':' + ip).digest('hex');
+}
+
+const sanitizeCalltrackingRawPayload = (payload: any) => {
+  const raw = payload && typeof payload === 'object' ? { ...payload } : {};
+  delete raw.siteKey;
+  return JSON.parse(JSON.stringify(raw));
+};
+
+const buildCalltrackingSite = (body: any) => {
+  const now = new Date().toISOString();
+  return {
+    id: 'site_' + crypto.randomBytes(8).toString('hex'),
+    name: cleanMarketingString(body?.name || 'Основной сайт', 120),
+    domain: cleanMarketingString(body?.domain || '', 200),
+    publicKey: 'ct_' + crypto.randomBytes(18).toString('hex'),
+    counterId: cleanMarketingString(body?.counterId || '', 80),
+    isActive: true,
+    createdAt: now,
+    updatedAt: now
+  };
+};
+
+const normalizeCalltrackingDate = (value: any): string => {
+  const parsed = value ? new Date(value) : new Date();
+  if (Number.isNaN(parsed.getTime())) return new Date().toISOString();
+  return parsed.toISOString();
+};
+
+const isWithinDateRange = (isoDate: any, startDate?: any, endDate?: any): boolean => {
+  const ms = new Date(isoDate).getTime();
+  if (!Number.isFinite(ms)) return false;
+  if (startDate) {
+    const start = new Date(String(startDate) + 'T00:00:00').getTime();
+    if (Number.isFinite(start) && ms < start) return false;
+  }
+  if (endDate) {
+    const end = new Date(String(endDate) + 'T23:59:59.999').getTime();
+    if (Number.isFinite(end) && ms > end) return false;
+  }
+  return true;
+};
+
+const calltrackingSiteMap = (sites: any[]) => new Map((sites || []).map(site => [site.id, site]));
+
 // API ROUTER START
 const app = express();
 app.use(express.json());
+
+app.options('/api/calltracking/event', (_req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.status(204).end();
+});
+
+app.post('/api/calltracking/event', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+
+  try {
+    const payloadSize = Buffer.byteLength(JSON.stringify(req.body || {}), 'utf8');
+    if (payloadSize > CALLTRACKING_MAX_PAYLOAD_BYTES) {
+      return res.status(413).json({ error: 'payload_too_large' });
+    }
+
+    const siteKey = cleanMarketingString(req.body?.siteKey, 160);
+    const eventType = cleanMarketingString(req.body?.eventType, 60);
+    if (!siteKey || !eventType) {
+      return res.status(400).json({ error: 'invalid_payload' });
+    }
+    if (!CALLTRACKING_ALLOWED_EVENT_TYPES.has(eventType)) {
+      return res.status(400).json({ error: 'invalid_payload' });
+    }
+
+    const localDb = await readLocalDb();
+    const sites = Array.isArray(localDb.calltrackingSites) ? localDb.calltrackingSites : [];
+    const site = sites.find((item: any) => item.publicKey === siteKey && item.isActive !== false);
+    if (!site) {
+      return res.status(403).json({ error: 'invalid_site_key' });
+    }
+
+    const now = new Date().toISOString();
+    const utm = req.body?.utm && typeof req.body.utm === 'object' ? req.body.utm : {};
+    const eventTime = normalizeCalltrackingDate(req.body?.timestamp || req.body?.eventTime);
+    const sessionId = cleanMarketingString(req.body?.sessionId, 160) || null;
+    const event = {
+      id: 'cte_' + crypto.randomBytes(10).toString('hex'),
+      siteId: site.id,
+      eventType,
+      eventTime,
+      pageUrl: cleanMarketingString(req.body?.pageUrl, 1000),
+      referrer: cleanMarketingString(req.body?.referrer, 1000),
+      phoneText: cleanMarketingString(req.body?.phoneText, 120),
+      phoneHref: cleanMarketingString(req.body?.phoneHref, 160),
+      ymClientId: cleanMarketingString(req.body?.ymClientId, 120),
+      utmSource: cleanMarketingString(utm.source, 160),
+      utmMedium: cleanMarketingString(utm.medium, 160),
+      utmCampaign: cleanMarketingString(utm.campaign, 240),
+      utmContent: cleanMarketingString(utm.content, 240),
+      utmTerm: cleanMarketingString(utm.term, 240),
+      userAgent: cleanMarketingString(req.headers['user-agent'], 500),
+      ipHash: hashIp(getClientIp(req)),
+      sessionId,
+      rawPayload: sanitizeCalltrackingRawPayload(req.body),
+      createdAt: now
+    };
+
+    if (!Array.isArray(localDb.calltrackingEvents)) localDb.calltrackingEvents = [];
+    localDb.calltrackingEvents.push(event);
+
+    if (sessionId) {
+      if (!Array.isArray(localDb.calltrackingSessions)) localDb.calltrackingSessions = [];
+      const existing = localDb.calltrackingSessions.find((item: any) => item.siteId === site.id && item.sessionId === sessionId);
+      if (existing) {
+        existing.lastSeenAt = eventTime;
+        existing.lastPageUrl = event.pageUrl || existing.lastPageUrl || '';
+        existing.ymClientId = event.ymClientId || existing.ymClientId || '';
+        existing.utmSource = event.utmSource || existing.utmSource || '';
+        existing.utmMedium = event.utmMedium || existing.utmMedium || '';
+        existing.utmCampaign = event.utmCampaign || existing.utmCampaign || '';
+        existing.referrer = event.referrer || existing.referrer || '';
+        existing.updatedAt = now;
+      } else {
+        localDb.calltrackingSessions.push({
+          id: 'cts_' + crypto.randomBytes(10).toString('hex'),
+          siteId: site.id,
+          sessionId,
+          ymClientId: event.ymClientId || '',
+          firstSeenAt: eventTime,
+          lastSeenAt: eventTime,
+          firstPageUrl: event.pageUrl || '',
+          lastPageUrl: event.pageUrl || '',
+          utmSource: event.utmSource || '',
+          utmMedium: event.utmMedium || '',
+          utmCampaign: event.utmCampaign || '',
+          referrer: event.referrer || '',
+          createdAt: now,
+          updatedAt: now
+        });
+      }
+    }
+
+    await writeLocalDb(localDb);
+    res.json({ ok: true, eventId: event.id, siteId: site.id });
+  } catch (error: any) {
+    res.status(500).json({ error: 'internal_error' });
+  }
+});
+
+app.get('/api/calltracking/sites', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
+  const localDb = await readLocalDb();
+  res.json({ sites: Array.isArray(localDb.calltrackingSites) ? localDb.calltrackingSites : [] });
+});
+
+app.post('/api/calltracking/sites', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
+  const payloadSize = Buffer.byteLength(JSON.stringify(req.body || {}), 'utf8');
+  if (payloadSize > CALLTRACKING_MAX_PAYLOAD_BYTES) return res.status(413).json({ error: 'payload_too_large' });
+
+  const name = cleanMarketingString(req.body?.name, 120);
+  const domain = cleanMarketingString(req.body?.domain, 200);
+  if (!name || !domain) return res.status(400).json({ error: 'invalid_payload' });
+
+  const localDb = await readLocalDb();
+  if (!Array.isArray(localDb.calltrackingSites)) localDb.calltrackingSites = [];
+  const site = buildCalltrackingSite(req.body);
+  localDb.calltrackingSites.push(site);
+  await writeLocalDb(localDb);
+  res.json({ ok: true, site });
+});
+
+app.get('/api/calltracking/events', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
+  const localDb = await readLocalDb();
+  const sites = calltrackingSiteMap(localDb.calltrackingSites || []);
+  const limit = Math.max(1, Math.min(500, Number(req.query.limit || 100)));
+  const offset = Math.max(0, Number(req.query.offset || 0));
+  const siteId = cleanMarketingString(req.query.siteId, 120);
+  const eventType = cleanMarketingString(req.query.eventType, 60);
+
+  let events = Array.isArray(localDb.calltrackingEvents) ? localDb.calltrackingEvents : [];
+  events = events.filter((event: any) => {
+    if (siteId && event.siteId !== siteId) return false;
+    if (eventType && event.eventType !== eventType) return false;
+    if (!isWithinDateRange(event.eventTime || event.createdAt, req.query.startDate, req.query.endDate)) return false;
+    return true;
+  }).sort((a: any, b: any) => new Date(b.eventTime || b.createdAt).getTime() - new Date(a.eventTime || a.createdAt).getTime());
+
+  const total = events.length;
+  const page = events.slice(offset, offset + limit).map((event: any) => ({
+    ...event,
+    siteName: sites.get(event.siteId)?.name || '—',
+    rawPayload: undefined,
+    ipHash: undefined
+  }));
+
+  res.json({ events: page, total });
+});
+
+app.get('/api/calltracking/summary', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
+  const localDb = await readLocalDb();
+  const siteId = cleanMarketingString(req.query.siteId, 120);
+  const events = (Array.isArray(localDb.calltrackingEvents) ? localDb.calltrackingEvents : []).filter((event: any) => {
+    if (siteId && event.siteId !== siteId) return false;
+    return isWithinDateRange(event.eventTime || event.createdAt, req.query.startDate, req.query.endDate);
+  });
+  const sessions = new Set(events.map((event: any) => event.sessionId).filter(Boolean));
+  const count = (type: string) => events.filter((event: any) => event.eventType === type).length;
+  res.json({
+    summary: {
+      visits: sessions.size,
+      pageViews: count('page_view'),
+      phoneImpressions: count('phone_impression'),
+      phoneClicks: count('phone_click'),
+      formSubmits: count('form_submit'),
+      whatsappClicks: count('whatsapp_click'),
+      telegramClicks: count('telegram_click'),
+      emailClicks: count('email_click'),
+      uniqueSessions: sessions.size
+    }
+  });
+});
+
+app.get('/api/calltracking/sources', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
+  const localDb = await readLocalDb();
+  const siteId = cleanMarketingString(req.query.siteId, 120);
+  const events = (Array.isArray(localDb.calltrackingEvents) ? localDb.calltrackingEvents : []).filter((event: any) => {
+    if (siteId && event.siteId !== siteId) return false;
+    return isWithinDateRange(event.eventTime || event.createdAt, req.query.startDate, req.query.endDate);
+  });
+  const groups = new Map<string, any>();
+  events.forEach((event: any) => {
+    const source = event.utmSource || event.referrer || 'direct';
+    const medium = event.utmMedium || '';
+    const campaign = event.utmCampaign || '';
+    const key = [source, medium, campaign].join('||');
+    if (!groups.has(key)) groups.set(key, { source, medium, campaign, sessions: new Set<string>(), phoneClicks: 0, formSubmits: 0 });
+    const group = groups.get(key);
+    if (event.sessionId) group.sessions.add(event.sessionId);
+    if (event.eventType === 'phone_click') group.phoneClicks++;
+    if (event.eventType === 'form_submit') group.formSubmits++;
+  });
+
+  const sources = Array.from(groups.values()).map(group => ({
+    source: group.source,
+    medium: group.medium,
+    campaign: group.campaign,
+    visits: group.sessions.size,
+    phoneClicks: group.phoneClicks,
+    formSubmits: group.formSubmits
+  })).sort((a, b) => b.phoneClicks - a.phoneClicks || b.visits - a.visits);
+
+  res.json({ sources });
+});
 
 // Auth endpoint
 app.post('/api/auth/login', async (req, res) => {

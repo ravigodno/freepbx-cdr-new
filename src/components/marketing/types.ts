@@ -9,30 +9,41 @@ export interface MarketingOverviewSummary {
   lostBudgetEstimate: number | null;
 }
 
+export interface CalltrackingSite {
+  id: string;
+  name: string;
+  domain: string;
+  publicKey: string;
+  counterId?: string;
+  isActive: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface PhoneClickEvent {
+  id?: string;
   eventTime: string;
-  siteName: string;
+  siteId?: string;
+  siteName?: string;
+  siteNameFallback?: string;
   pageUrl: string;
+  referrer?: string;
   phoneText: string;
+  phoneHref?: string;
   ymClientId: string;
   utmSource: string;
   utmMedium: string;
   utmCampaign: string;
-  matchStatus: string;
+  matchStatus?: string;
 }
 
 export interface TrafficSourceSummary {
   source: string;
   medium: string;
+  campaign: string;
   visits: number;
   phoneClicks: number;
-  calls: number;
-  answeredCalls: number;
-  missedCalls: number;
-  lostCalls: number;
-  conversionRate: number;
-  cost: number;
-  costPerCall: number;
+  formSubmits: number;
 }
 
 export interface CampaignSummary {
@@ -58,4 +69,16 @@ export interface LostLead {
   status: string;
   responsibleName: string;
   lostBudgetEstimate: number;
+}
+
+export interface CalltrackingSummaryResponse {
+  visits: number;
+  pageViews: number;
+  phoneImpressions: number;
+  phoneClicks: number;
+  formSubmits: number;
+  whatsappClicks: number;
+  telegramClicks: number;
+  emailClicks: number;
+  uniqueSessions: number;
 }
