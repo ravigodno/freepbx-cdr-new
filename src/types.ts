@@ -171,9 +171,15 @@ export interface DirectoryEntry {
 export interface ContactSyncAccount {
   id: string;
   userId: string;
-  provider: 'google' | 'yandex';
-  status: 'connected' | 'disconnected' | 'error';
-  externalAccountEmail?: string;
+  provider: 'google' | 'yandex' | 'mailru';
+  status: 'connected' | 'disconnected' | 'error' | 'not_configured';
+  authType: 'oauth' | 'carddav';
+  externalAccountEmail?: string | null;
+  carddavUrl?: string | null;
+  scopes?: string[] | string | null;
+  expiresAt?: string | null;
+  lastSyncAt?: string | null;
+  lastError?: string | null;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -182,10 +188,12 @@ export interface ContactSyncMapping {
   id: string;
   contactId: string;
   userId: string;
-  provider: 'google' | 'yandex';
+  provider: 'google' | 'yandex' | 'mailru';
   externalContactId: string;
   lastSyncedAt?: string | null;
-  syncDirection: 'import_only' | 'two_way';
+  syncDirection: 'import_only' | 'export_only' | 'two_way';
+  externalUpdatedAt?: string | null;
+  localUpdatedAt?: string | null;
   conflictStrategy: 'server_wins' | 'external_wins' | 'manual_review';
   createdAt?: string;
   updatedAt?: string;

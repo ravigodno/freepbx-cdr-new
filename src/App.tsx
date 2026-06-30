@@ -126,6 +126,28 @@ type DirectoryOptionalColumnKey =
   | 'responsibleUserId';
 type DirectoryColumnKey = DirectoryRequiredColumnKey | DirectoryOptionalColumnKey | DirectorySystemColumnKey;
 
+type ContactSyncProvider = 'google' | 'yandex' | 'mailru';
+type ContactSyncStatus = 'connected' | 'disconnected' | 'error' | 'not_configured';
+type ContactSyncAuthType = 'oauth' | 'carddav';
+
+interface ContactSyncProviderAccount {
+  id?: string | null;
+  provider: ContactSyncProvider;
+  status: ContactSyncStatus;
+  externalAccountEmail?: string | null;
+  authType: ContactSyncAuthType;
+  carddavUrl?: string | null;
+  lastSyncAt?: string | null;
+  lastError?: string | null;
+  configured?: boolean;
+}
+
+interface CardDavConnectForm {
+  email: string;
+  appPassword: string;
+  carddavUrl: string;
+}
+
 interface DirectoryColumnConfig {
   key: DirectoryColumnKey;
   label: string;
@@ -628,6 +650,13 @@ export default function App() {
   const [urlImportTestResult, setUrlImportTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [isTestingUrlImport, setIsTestingUrlImport] = useState(false);
   const [isSyncingDirectoryUrl, setIsSyncingDirectoryUrl] = useState(false);
+  const [contactSyncAccounts, setContactSyncAccounts] = useState<ContactSyncProviderAccount[]>([]);
+  const [contactSyncMessage, setContactSyncMessage] = useState('');
+  const [contactSyncBusyProvider, setContactSyncBusyProvider] = useState<ContactSyncProvider | null>(null);
+  const [cardDavForms, setCardDavForms] = useState<Record<'yandex' | 'mailru', CardDavConnectForm>>({
+    yandex: { email: '', appPassword: '', carddavUrl: 'https://carddav.yandex.ru' },
+    mailru: { email: '', appPassword: '', carddavUrl: 'https://carddav.mail.ru' }
+  });
 
   // --- ADMIN DIRECTORY IMPORT / EXPORT & NORMALIZATION STATE ---
   const [isAdminPanelExpanded, setIsAdminPanelExpanded] = useState(false);
@@ -1090,6 +1119,161 @@ export default function App() {
       setUrlImportTestResult({ success: false, message: e.message || 'Ошибка связи.' });
     } finally {
       setIsSyncingDirectoryUrl(false);
+    }
+  };
+
+
+  const contactSyncProviderLabels: Record<ContactSyncProvider, string> = {
+    google: 'Google Contacts',
+    yandex: 'Yandex Contacts',
+    mailru: 'Mail.ru Contacts'
+  };
+
+  const getContactSyncAccount = (provider: ContactSyncProvider): ContactSyncProviderAccount => {
+    return contactSyncAccounts.find(item => item.provider === provider) || {
+      provider,
+      status: 'disconnected',
+      authType: provider === 'google' ? 'oauth' : 'carddav',
+      carddavUrl: provider === 'yandex' ? 'https://carddav.yandex.ru' : provider === 'mailru' ? 'https://carddav.mail.ru' : null,
+      configured: provider === 'google' ? false : true
+    };
+  };
+
+  const loadContactSyncAccounts = useCallback(async () => {
+    if (!session?.token) return;
+    try {
+      const resp = await fetch('/api/directory/sync/accounts', {
+        headers: { 'Authorization': 'Bearer ' + session.token }
+      });
+      if (resp.status === 401) {
+        handleAuthError(resp);
+        return;
+      }
+      const data = await resp.json();
+      if (resp.ok) {
+        setContactSyncAccounts(Array.isArray(data.providers) ? data.providers : []);
+      } else {
+        setContactSyncMessage(data.error || 'Ошибка загрузки подключений синхронизации.');
+      }
+    } catch (e: any) {
+      setContactSyncMessage(e.message || 'Ошибка связи при загрузке синхронизации.');
+    }
+  }, [session?.token]);
+
+  useEffect(() => {
+    if (isDirFormOpen && dirVisibility === 'private') {
+      loadContactSyncAccounts();
+    }
+  }, [isDirFormOpen, dirVisibility, loadContactSyncAccounts]);
+
+  const handleGoogleContactsConnect = async () => {
+    setContactSyncBusyProvider('google');
+    setContactSyncMessage('');
+    try {
+      const resp = await fetch('/api/directory/sync/google/connect', {
+        headers: { 'Authorization': 'Bearer ' + session?.token }
+      });
+      const data = await resp.json();
+      if (resp.ok && data.url) {
+        window.location.href = data.url;
+      } else {
+        setContactSyncMessage(data.error || 'Google Contacts не настроен администратором.');
+      }
+    } catch (e: any) {
+      setContactSyncMessage(e.message || 'Ошибка подключения Google Contacts.');
+    } finally {
+      setContactSyncBusyProvider(null);
+    }
+  };
+
+  const handleCardDavConnect = async (provider: 'yandex' | 'mailru') => {
+    const form = cardDavForms[provider];
+    setContactSyncBusyProvider(provider);
+    setContactSyncMessage('');
+    try {
+      const resp = await fetch('/api/directory/sync/' + provider + '/connect', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + session?.token
+        },
+        body: JSON.stringify(form)
+      });
+      const data = await resp.json();
+      if (resp.ok) {
+        setCardDavForms(prev => ({ ...prev, [provider]: { ...prev[provider], appPassword: '' } }));
+        setContactSyncMessage(contactSyncProviderLabels[provider] + ' подключен.');
+        await loadContactSyncAccounts();
+      } else {
+        setContactSyncMessage(data.error || 'Ошибка подключения ' + contactSyncProviderLabels[provider] + '.');
+      }
+    } catch (e: any) {
+      setContactSyncMessage(e.message || 'Ошибка подключения ' + contactSyncProviderLabels[provider] + '.');
+    } finally {
+      setContactSyncBusyProvider(null);
+    }
+  };
+
+  const handlePreviewContactSyncImport = async (provider: ContactSyncProvider) => {
+    setContactSyncBusyProvider(provider);
+    setContactSyncMessage('');
+    try {
+      const resp = await fetch('/api/directory/sync/' + provider + '/preview-import', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + session?.token }
+      });
+      const data = await resp.json();
+      if (resp.ok) {
+        const invalid = Array.isArray(data.items) ? data.items.filter((item: any) => item.status === 'invalid').length : 0;
+        const duplicates = Array.isArray(data.items) ? data.items.filter((item: any) => item.status === 'possible_duplicate').length : 0;
+        setContactSyncMessage('Предпросмотр ' + contactSyncProviderLabels[provider] + ': ' + (data.totalPreviewed || 0) + ' контактов, дублей: ' + duplicates + ', ошибок: ' + invalid + '.');
+      } else {
+        setContactSyncMessage(data.error || 'Предпросмотр ' + contactSyncProviderLabels[provider] + ' недоступен.');
+      }
+    } catch (e: any) {
+      setContactSyncMessage(e.message || 'Ошибка предпросмотра ' + contactSyncProviderLabels[provider] + '.');
+    } finally {
+      setContactSyncBusyProvider(null);
+    }
+  };
+
+  const handleDisconnectContactSync = async (provider: ContactSyncProvider) => {
+    setContactSyncBusyProvider(provider);
+    setContactSyncMessage('');
+    try {
+      const previewResp = await fetch('/api/directory/sync/' + provider + '/disconnect-preview', {
+        headers: { 'Authorization': 'Bearer ' + session?.token }
+      });
+      const preview = await previewResp.json();
+      if (!previewResp.ok) {
+        setContactSyncMessage(preview.error || 'Не удалось получить предпросмотр отключения.');
+        return;
+      }
+      const contactsToDelete = Number(preview.contactsToDelete || 0);
+      const intro = contactsToDelete > 0
+        ? 'Отключение ' + contactSyncProviderLabels[provider] + ' удалит личные контакты, которые были импортированы из ' + contactSyncProviderLabels[provider] + '. Контакты, созданные вручную, общие контакты и контакты из других источников не будут удалены.\n\nБудет удалено: ' + contactsToDelete + ' контактов.'
+        : 'Импортированных из этого сервиса контактов не найдено. Будет отключено только подключение ' + contactSyncProviderLabels[provider] + '.';
+      if (!window.confirm(intro)) return;
+      const resp = await fetch('/api/directory/sync/' + provider + '/disconnect?confirm=true', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + session?.token
+        },
+        body: JSON.stringify({ confirm: true })
+      });
+      const data = await resp.json();
+      if (resp.ok) {
+        setContactSyncMessage(contactSyncProviderLabels[provider] + ' отключен. Удалено контактов: ' + (data.deletedContacts || 0) + '.');
+        await loadContactSyncAccounts();
+        await loadDirectory();
+      } else {
+        setContactSyncMessage(data.error || 'Ошибка отключения ' + contactSyncProviderLabels[provider] + '.');
+      }
+    } catch (e: any) {
+      setContactSyncMessage(e.message || 'Ошибка отключения ' + contactSyncProviderLabels[provider] + '.');
+    } finally {
+      setContactSyncBusyProvider(null);
     }
   };
 
@@ -3280,6 +3464,92 @@ export default function App() {
       default:
         return null;
     }
+  };
+
+
+  const renderContactSyncProviderCard = (provider: ContactSyncProvider) => {
+    const account = getContactSyncAccount(provider);
+    const isBusy = contactSyncBusyProvider === provider;
+    const isConnected = account.status === 'connected';
+    const isGoogle = provider === 'google';
+    const isCardDav = provider === 'yandex' || provider === 'mailru';
+    const form = isCardDav ? cardDavForms[provider] : null;
+    const statusClass = isConnected
+      ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+      : account.status === 'error'
+        ? 'border-red-200 bg-red-50 text-red-700'
+        : 'border-slate-200 bg-white text-slate-500';
+    return (
+      <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-650">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 font-black text-slate-800">
+            <Globe className="h-4 w-4 text-blue-600" />
+            <span>{contactSyncProviderLabels[provider]}</span>
+          </div>
+          <span className={'rounded-full border px-2 py-0.5 text-[10px] font-bold ' + statusClass}>
+            {account.status}
+          </span>
+        </div>
+
+        {isGoogle && account.configured === false && (
+          <div className="mb-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800">Google Contacts не настроен администратором</div>
+        )}
+
+        {isConnected && (
+          <div className="mb-2 space-y-1 text-[11px] text-slate-600">
+            <div>Аккаунт: <span className="font-semibold text-slate-800">{account.externalAccountEmail || 'не указан'}</span></div>
+            {account.lastError && <div className="text-red-700">Ошибка: {account.lastError}</div>}
+          </div>
+        )}
+
+        {isCardDav && !isConnected && form && (
+          <div className="space-y-2">
+            <input
+              type="email"
+              value={form.email}
+              onChange={(e) => setCardDavForms(prev => ({ ...prev, [provider]: { ...prev[provider], email: e.target.value } }))}
+              placeholder={provider === 'yandex' ? 'Email Яндекс' : 'Email Mail.ru'}
+              className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-800"
+            />
+            <input
+              type="password"
+              value={form.appPassword}
+              onChange={(e) => setCardDavForms(prev => ({ ...prev, [provider]: { ...prev[provider], appPassword: e.target.value } }))}
+              placeholder={provider === 'yandex' ? 'Пароль приложения' : 'Пароль для внешнего приложения'}
+              className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-800"
+            />
+            <input
+              type="url"
+              value={form.carddavUrl}
+              onChange={(e) => setCardDavForms(prev => ({ ...prev, [provider]: { ...prev[provider], carddavUrl: e.target.value } }))}
+              className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-800"
+            />
+            <p className="text-[11px] leading-relaxed text-slate-500">
+              {provider === 'yandex' ? 'Для подключения используйте пароль приложения Яндекса.' : 'Для подключения Mail.ru используйте пароль для внешнего приложения.'}
+            </p>
+          </div>
+        )}
+
+        <div className="mt-3 flex flex-wrap gap-2">
+          {isGoogle && !isConnected && (
+            <button type="button" onClick={handleGoogleContactsConnect} disabled={isBusy || account.configured === false} className="rounded-md bg-blue-600 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-blue-700 disabled:opacity-50">
+              {isBusy ? 'Подключение...' : 'Подключить Google Contacts'}
+            </button>
+          )}
+          {isCardDav && !isConnected && (
+            <button type="button" onClick={() => handleCardDavConnect(provider)} disabled={isBusy} className="rounded-md bg-blue-600 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-blue-700 disabled:opacity-50">
+              {isBusy ? 'Подключение...' : 'Подключить ' + contactSyncProviderLabels[provider]}
+            </button>
+          )}
+          {isConnected && (
+            <>
+              <button type="button" onClick={() => handlePreviewContactSyncImport(provider)} disabled={isBusy} className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-50">Предпросмотр импорта</button>
+              <button type="button" onClick={() => handleDisconnectContactSync(provider)} disabled={isBusy} className="rounded-md border border-red-200 bg-white px-3 py-1.5 text-[11px] font-bold text-red-700 hover:bg-red-50 disabled:opacity-50">Отключить</button>
+            </>
+          )}
+        </div>
+      </div>
+    );
   };
 
   const renderDirectoryContactFormSection = (title: string, fieldKeys: DirectoryVisibleColumnKey[]) => {
@@ -5535,12 +5805,23 @@ export default function App() {
 
               {dirVisibility === 'private' && (
                 <div className="rounded-xl border border-slate-200 bg-white p-3">
-                  <h4 className="text-xs font-black text-slate-800">Синхронизация личных контактов</h4>
-                  <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">Google Contacts — скоро</div>
-                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">Yandex Contacts — скоро</div>
+                  <div className="mb-3 flex items-start justify-between gap-3">
+                    <div>
+                      <h4 className="text-xs font-black text-slate-800">Синхронизация личных контактов</h4>
+                      <p className="mt-1 text-[11px] leading-relaxed text-slate-500">Синхронизация работает только с личными контактами пользователя. Общий справочник не отправляется во внешние сервисы.</p>
+                    </div>
+                    <button type="button" onClick={loadContactSyncAccounts} className="rounded-md border border-slate-200 bg-white p-1.5 text-slate-500 hover:bg-slate-50" title="Обновить подключения">
+                      <RefreshCw className="h-3.5 w-3.5" />
+                    </button>
                   </div>
-                  <p className="mt-2 text-[11px] leading-relaxed text-slate-500">Синхронизация будет относиться только к личным контактам пользователя и не будет использовать OAuth модулей Маркетинга.</p>
+                  {contactSyncMessage && (
+                    <div className="mb-3 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-[11px] text-blue-800">{contactSyncMessage}</div>
+                  )}
+                  <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+                    {renderContactSyncProviderCard('google')}
+                    {renderContactSyncProviderCard('yandex')}
+                    {renderContactSyncProviderCard('mailru')}
+                  </div>
                 </div>
               )}
 

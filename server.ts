@@ -362,6 +362,346 @@ const getDirectoryPhoneValidationErrors = (entry: any): string[] => {
   return Array.from(new Set(errors));
 };
 
+
+type ContactProvider = 'google' | 'yandex' | 'mailru';
+type ContactSyncAuthType = 'oauth' | 'carddav';
+type ContactSyncStatus = 'connected' | 'disconnected' | 'error' | 'not_configured';
+type ContactPreviewStatus = 'new' | 'possible_duplicate' | 'invalid';
+
+interface NormalizedExternalContact {
+  provider: ContactProvider;
+  externalContactId: string;
+  fullName?: string;
+  organization?: string;
+  position?: string;
+  phone?: string;
+  phone2?: string;
+  email?: string;
+  website?: string;
+  address?: string;
+  comment?: string;
+  department?: string;
+  group?: string;
+  tags?: string;
+  rawPhones?: string[];
+  rawEmails?: string[];
+  sourceRaw?: unknown;
+}
+
+const CONTACT_SYNC_PROVIDERS: Record<ContactProvider, { provider: ContactProvider; authType: ContactSyncAuthType; defaultCarddavUrl?: string; displayName: string }> = {
+  google: { provider: 'google', authType: 'oauth', displayName: 'Google Contacts' },
+  yandex: { provider: 'yandex', authType: 'carddav', defaultCarddavUrl: 'https://carddav.yandex.ru', displayName: 'Yandex Contacts' },
+  mailru: { provider: 'mailru', authType: 'carddav', defaultCarddavUrl: 'https://carddav.mail.ru', displayName: 'Mail.ru Contacts' }
+};
+
+const CONTACT_SYNC_ENCRYPTION_ERROR = 'Contact sync encryption key is not configured';
+const GOOGLE_CONTACTS_SCOPE = 'https://www.googleapis.com/auth/contacts.readonly';
+const GOOGLE_OAUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
+const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
+const GOOGLE_PEOPLE_CONNECTIONS_URL = 'https://people.googleapis.com/v1/people/me/connections';
+const GOOGLE_PEOPLE_PROFILE_URL = 'https://people.googleapis.com/v1/people/me';
+
+const getContactSyncEncryptionKey = (): Buffer | null => {
+  const raw = String(process.env.CONTACT_SYNC_ENCRYPTION_KEY || '').trim();
+  if (!raw) return null;
+  return crypto.createHash('sha256').update(raw).digest();
+};
+
+function encryptSecret(value: any): string {
+  const raw = String(value || '');
+  const key = getContactSyncEncryptionKey();
+  if (!key) {
+    const error = new Error(CONTACT_SYNC_ENCRYPTION_ERROR) as any;
+    error.code = 'CONTACT_SYNC_ENCRYPTION_NOT_CONFIGURED';
+    throw error;
+  }
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const encrypted = Buffer.concat([cipher.update(raw, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return ['v1', iv.toString('base64url'), tag.toString('base64url'), encrypted.toString('base64url')].join('.');
+}
+
+function decryptSecret(value: any): string {
+  const raw = String(value || '');
+  if (!raw) return '';
+  const key = getContactSyncEncryptionKey();
+  if (!key) {
+    const error = new Error(CONTACT_SYNC_ENCRYPTION_ERROR) as any;
+    error.code = 'CONTACT_SYNC_ENCRYPTION_NOT_CONFIGURED';
+    throw error;
+  }
+  const [version, ivRaw, tagRaw, encryptedRaw] = raw.split('.');
+  if (version !== 'v1' || !ivRaw || !tagRaw || !encryptedRaw) throw new Error('Invalid encrypted secret format');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(ivRaw, 'base64url'));
+  decipher.setAuthTag(Buffer.from(tagRaw, 'base64url'));
+  return Buffer.concat([decipher.update(Buffer.from(encryptedRaw, 'base64url')), decipher.final()]).toString('utf8');
+}
+
+const isContactProvider = (value: any): value is ContactProvider => ['google', 'yandex', 'mailru'].includes(String(value));
+const nowIso = (): string => new Date().toISOString();
+
+const getCurrentDirectoryUserId = (localDb: any, req: Request): string => {
+  return getDirectoryUserId(getAuthenticatedDbUser(localDb, req), (req as any).user);
+};
+
+const sanitizeContactSyncAccount = (account: any, provider: ContactProvider) => ({
+  id: account?.id || null,
+  provider,
+  status: (account?.status || 'disconnected') as ContactSyncStatus,
+  externalAccountEmail: account?.externalAccountEmail || null,
+  authType: CONTACT_SYNC_PROVIDERS[provider].authType,
+  carddavUrl: account?.carddavUrl || CONTACT_SYNC_PROVIDERS[provider].defaultCarddavUrl || null,
+  scopes: account?.scopes || null,
+  expiresAt: account?.expiresAt || null,
+  lastSyncAt: account?.lastSyncAt || null,
+  lastError: account?.lastError || null,
+  createdAt: account?.createdAt || null,
+  updatedAt: account?.updatedAt || null,
+  configured: provider === 'google'
+    ? !!(process.env.GOOGLE_CONTACTS_CLIENT_ID && process.env.GOOGLE_CONTACTS_CLIENT_SECRET && process.env.GOOGLE_CONTACTS_REDIRECT_URI)
+    : true
+});
+
+const getUserContactSyncAccount = (localDb: any, userId: string, provider: ContactProvider): any | null => {
+  return ((localDb as any).contactSyncAccounts || []).find((item: any) => item.userId === userId && item.provider === provider) || null;
+};
+
+const upsertUserContactSyncAccount = (localDb: any, userId: string, provider: ContactProvider, patch: any): any => {
+  const now = nowIso();
+  if (!Array.isArray((localDb as any).contactSyncAccounts)) (localDb as any).contactSyncAccounts = [];
+  const existing = getUserContactSyncAccount(localDb, userId, provider);
+  if (existing) {
+    Object.assign(existing, patch, { userId, provider, updatedAt: now });
+    return existing;
+  }
+  const account = {
+    id: 'csacc_' + crypto.randomBytes(8).toString('hex'),
+    userId,
+    provider,
+    authType: CONTACT_SYNC_PROVIDERS[provider].authType,
+    status: 'disconnected',
+    createdAt: now,
+    updatedAt: now,
+    ...patch
+  };
+  (localDb as any).contactSyncAccounts.push(account);
+  return account;
+};
+
+const appendContactComment = (...parts: any[]): string => parts.map(part => String(part || '').trim()).filter(Boolean).join('\n');
+
+const normalizeExternalPhones = (phones: any[]): { phone?: string; phone2?: string; warnings: string[]; errors: string[]; extraPhones: string[] } => {
+  const valid: string[] = [];
+  const warnings: string[] = [];
+  const errors: string[] = [];
+  (phones || []).forEach((value: any) => {
+    const phone = String(value || '').trim();
+    if (!phone) return;
+    const result = validateDirectoryPhoneNumber(phone);
+    if (result.valid) {
+      if (!valid.includes(phone)) valid.push(phone);
+    } else {
+      errors.push('Телефон "' + phone + '" невалиден. ' + DIRECTORY_PHONE_VALIDATION_MESSAGE);
+    }
+  });
+  const extraPhones = valid.slice(2);
+  if (extraPhones.length) warnings.push('Дополнительные телефоны добавлены в комментарий.');
+  return { phone: valid[0], phone2: valid[1], warnings, errors, extraPhones };
+};
+
+const normalizeExternalEmails = (emails: any[]): { email?: string; warnings: string[]; extraEmails: string[] } => {
+  const valid = Array.from(new Set((emails || []).map(value => String(value || '').trim()).filter(Boolean)));
+  const extraEmails = valid.slice(1);
+  return { email: valid[0], warnings: extraEmails.length ? ['Дополнительные email добавлены в комментарий.'] : [], extraEmails };
+};
+
+const mapNormalizedContactToDirectoryContact = (normalized: NormalizedExternalContact, currentUser: { id: string }): any => {
+  const phones = normalizeExternalPhones([...(normalized.rawPhones || []), normalized.phone, normalized.phone2]);
+  const emails = normalizeExternalEmails([...(normalized.rawEmails || []), normalized.email]);
+  const extraCommentParts = [normalized.comment];
+  if (phones.extraPhones.length) extraCommentParts.push('Дополнительные телефоны: ' + phones.extraPhones.join(', '));
+  if (emails.extraEmails.length) extraCommentParts.push('Дополнительные email: ' + emails.extraEmails.join(', '));
+  return {
+    name: String(normalized.fullName || '').trim(),
+    company: String(normalized.organization || '').trim(),
+    position: String(normalized.position || '').trim(),
+    number: phones.phone || '',
+    phones: [phones.phone, phones.phone2].filter(Boolean),
+    phone: phones.phone || '',
+    phone2: phones.phone2 || '',
+    email: emails.email || '',
+    website: String(normalized.website || '').trim(),
+    address: String(normalized.address || '').trim(),
+    comment: appendContactComment(...extraCommentParts),
+    department: String(normalized.department || '').trim(),
+    group: String(normalized.group || '').trim(),
+    tags: String(normalized.tags || '').split(/[;,|]+/).map(tag => tag.trim()).filter(Boolean),
+    visibility: 'private',
+    ownerUserId: currentUser.id,
+    isSpam: false,
+    type: 'client',
+    internalExtension: '',
+    linkedExternalNumber: '',
+    responsibleUserId: '',
+    warnings: [...phones.warnings, ...emails.warnings],
+    errors: phones.errors
+  };
+};
+
+const contactPreviewDuplicateStatus = (directoryContact: any, normalized: NormalizedExternalContact, localDb: any, userId: string): { status: ContactPreviewStatus; warnings: string[] } => {
+  const warnings: string[] = [];
+  const mapped = ((localDb as any).contactSyncMappings || []).some((mapping: any) => (
+    mapping.userId === userId && mapping.provider === normalized.provider && mapping.externalContactId === normalized.externalContactId
+  ));
+  if (mapped) warnings.push('Контакт уже связан с этим внешним провайдером.');
+  const phoneDigits = [directoryContact.number, ...(directoryContact.phones || [])].map(onlyDigits).filter(Boolean);
+  const email = String(directoryContact.email || '').trim().toLowerCase();
+  const fullName = String(directoryContact.name || '').trim().toLowerCase();
+  const organization = String(directoryContact.company || '').trim().toLowerCase();
+  const possibleDuplicate = (localDb.directory || []).map((entry: any) => normalizeDirectoryEntry(entry, localDb.settings)).some((entry: any) => {
+    if (entry.visibility === 'private' && entry.ownerUserId !== userId) return false;
+    const entryPhones = [entry.number, ...(entry.phones || [])].map(onlyDigits).filter(Boolean);
+    if (phoneDigits.length && entryPhones.some((phone: string) => phoneDigits.includes(phone))) return true;
+    if (email && String(entry.email || '').trim().toLowerCase() === email) return true;
+    return !!fullName && !!organization && String(entry.name || '').trim().toLowerCase() === fullName && String(entry.company || '').trim().toLowerCase() === organization;
+  });
+  if (possibleDuplicate) warnings.push('Возможный дубль в справочнике.');
+  return { status: mapped || possibleDuplicate ? 'possible_duplicate' : 'new', warnings };
+};
+
+const buildContactPreviewItems = (provider: ContactProvider, normalizedItems: NormalizedExternalContact[], localDb: any, userId: string) => {
+  return normalizedItems.slice(0, 50).map((normalized) => {
+    const directoryContact = mapNormalizedContactToDirectoryContact(normalized, { id: userId });
+    const duplicate = contactPreviewDuplicateStatus(directoryContact, normalized, localDb, userId);
+    const errors = [...(directoryContact.errors || [])];
+    if (!(directoryContact.name || directoryContact.company) || (!directoryContact.number && !directoryContact.email)) {
+      errors.push('Укажите организацию или ФИО и хотя бы один способ связи: телефон или email');
+    }
+    const status: ContactPreviewStatus = errors.length ? 'invalid' : duplicate.status;
+    return {
+      status,
+      externalContactId: normalized.externalContactId,
+      fullName: directoryContact.name,
+      organization: directoryContact.company,
+      position: directoryContact.position,
+      phone: directoryContact.phone,
+      phone2: directoryContact.phone2,
+      email: directoryContact.email,
+      website: directoryContact.website,
+      address: directoryContact.address,
+      comment: directoryContact.comment,
+      department: directoryContact.department,
+      group: directoryContact.group,
+      tags: Array.isArray(directoryContact.tags) ? directoryContact.tags.join('; ') : '',
+      visibility: 'private',
+      type: 'client',
+      isSpam: false,
+      warnings: [...(directoryContact.warnings || []), ...duplicate.warnings],
+      errors
+    };
+  });
+};
+
+const normalizeGooglePerson = (person: any): NormalizedExternalContact => {
+  const memberships = (person?.memberships || []).map((m: any) => m?.contactGroupMembership?.contactGroupResourceName || m?.contactGroupMembership?.contactGroupId).filter(Boolean);
+  const userDefined = (person?.userDefined || []).map((item: any) => [item?.key, item?.value].filter(Boolean).join(': ')).filter(Boolean);
+  return {
+    provider: 'google',
+    externalContactId: String(person?.resourceName || person?.etag || crypto.createHash('sha1').update(JSON.stringify(person || {})).digest('hex')),
+    fullName: person?.names?.[0]?.displayName || '',
+    organization: person?.organizations?.[0]?.name || '',
+    position: person?.organizations?.[0]?.title || '',
+    department: person?.organizations?.[0]?.department || '',
+    phone: person?.phoneNumbers?.[0]?.value || '',
+    phone2: person?.phoneNumbers?.[1]?.value || '',
+    email: person?.emailAddresses?.[0]?.value || '',
+    website: person?.urls?.[0]?.value || '',
+    address: person?.addresses?.[0]?.formattedValue || '',
+    comment: person?.biographies?.[0]?.value || '',
+    group: memberships.join('; '),
+    tags: userDefined.join('; '),
+    rawPhones: (person?.phoneNumbers || []).map((item: any) => item?.value).filter(Boolean),
+    rawEmails: (person?.emailAddresses || []).map((item: any) => item?.value).filter(Boolean),
+    sourceRaw: person
+  };
+};
+
+const parseVCardValue = (line: string): string => {
+  const idx = line.indexOf(':');
+  return idx >= 0 ? line.slice(idx + 1).replace(/\\,/g, ',').replace(/\\n/gi, '\n').trim() : '';
+};
+
+const normalizeVCardContact = (provider: ContactProvider, vcard: string, fallbackKey: string): NormalizedExternalContact => {
+  const lines = vcard.replace(/\r\n[ \t]/g, '').split(/\r?\n/);
+  const pick = (...names: string[]) => {
+    const line = lines.find(item => names.some(name => item.toUpperCase().startsWith(name + ':') || item.toUpperCase().startsWith(name + ';')));
+    return line ? parseVCardValue(line) : '';
+  };
+  const pickAll = (name: string) => lines.filter(item => item.toUpperCase().startsWith(name + ':') || item.toUpperCase().startsWith(name + ';')).map(parseVCardValue).filter(Boolean);
+  const phones = pickAll('TEL');
+  const emails = pickAll('EMAIL');
+  const uid = pick('UID');
+  const fullName = pick('FN');
+  const organization = pick('ORG').replace(/;/g, ' ').trim();
+  const externalContactId = uid || crypto.createHash('sha1').update([provider, emails[0], phones[0], fullName, fallbackKey].join('|')).digest('hex');
+  return {
+    provider,
+    externalContactId,
+    fullName,
+    organization,
+    position: pick('TITLE') || pick('ROLE'),
+    phone: phones[0] || '',
+    phone2: phones[1] || '',
+    email: emails[0] || '',
+    website: pick('URL'),
+    address: pick('ADR').split(';').filter(Boolean).join(', '),
+    comment: pick('NOTE'),
+    group: pick('CATEGORIES'),
+    tags: pick('CATEGORIES'),
+    rawPhones: phones,
+    rawEmails: emails,
+    sourceRaw: vcard
+  };
+};
+
+const normalizeVCardContacts = (provider: ContactProvider, body: string): NormalizedExternalContact[] => {
+  const cards = String(body || '').match(/BEGIN:VCARD[\s\S]*?END:VCARD/gi) || [];
+  return cards.map((card, index) => normalizeVCardContact(provider, card, String(index)));
+};
+
+const buildContactSyncDisconnectPreview = (localDb: any, userId: string, provider: ContactProvider) => {
+  const mappings = ((localDb as any).contactSyncMappings || []).filter((mapping: any) => mapping.userId === userId && mapping.provider === provider);
+  const contactIds = new Set(mappings.map((mapping: any) => String(mapping.contactId || '')).filter(Boolean));
+  const contactsToDelete = (localDb.directory || []).filter((entry: any) => {
+    const normalized = normalizeDirectoryEntry(entry, localDb.settings);
+    return contactIds.has(String(normalized.id || '')) && normalized.visibility === 'private' && normalized.ownerUserId === userId;
+  });
+  return { provider, contactsToDelete: contactsToDelete.length, mappingsToDelete: mappings.length, contactIdsToDelete: new Set(contactsToDelete.map((entry: any) => String(entry.id))) };
+};
+
+const disconnectContactSyncProvider = async (localDb: any, userId: string, provider: ContactProvider) => {
+  const preview = buildContactSyncDisconnectPreview(localDb, userId, provider);
+  const contactIdsToDelete = preview.contactIdsToDelete as Set<string>;
+  const beforeContacts = (localDb.directory || []).length;
+  localDb.directory = (localDb.directory || []).filter((entry: any) => !contactIdsToDelete.has(String(entry.id || '')));
+  const beforeMappings = ((localDb as any).contactSyncMappings || []).length;
+  (localDb as any).contactSyncMappings = ((localDb as any).contactSyncMappings || []).filter((mapping: any) => !(mapping.userId === userId && mapping.provider === provider));
+  upsertUserContactSyncAccount(localDb, userId, provider, {
+    status: 'disconnected',
+    encryptedAccessToken: '',
+    encryptedRefreshToken: '',
+    encryptedPassword: '',
+    expiresAt: null,
+    lastError: null
+  });
+  await writeLocalDb(localDb);
+  const deletedContacts = beforeContacts - (localDb.directory || []).length;
+  const deletedMappings = beforeMappings - ((localDb as any).contactSyncMappings || []).length;
+  console.log('[CONTACT_SYNC] disconnect provider=' + provider + ' userId=' + userId + ' deletedContacts=' + deletedContacts + ' deletedMappings=' + deletedMappings);
+  return { deletedContacts, deletedMappings };
+};
+
 const getNumberTokens = (...values: any[]): string[] => {
   return values
     .flatMap(value => String(value || '').match(/\d+/g) || [])
@@ -5063,20 +5403,210 @@ app.get('/api/directory/sync/accounts', requireAuth(), async (req, res) => {
     return res.status(403).json({ error: 'Access denied: view_directory permission required' });
   }
   const localDb = await readLocalDb();
-  const dbUser = getAuthenticatedDbUser(localDb, req);
-  const userId = getDirectoryUserId(dbUser, (req as any).user);
-  const accounts = ((localDb as any).contactSyncAccounts || [])
-    .filter((item: any) => isDirectorySuperUser((req as any).user) || item.userId === userId)
-    .map((item: any) => ({
-      id: item.id,
-      userId: item.userId,
-      provider: item.provider,
-      status: item.status,
-      externalAccountEmail: item.externalAccountEmail || '',
-      createdAt: item.createdAt || null,
-      updatedAt: item.updatedAt || null
-    }));
-  res.json({ accounts, providers: [{ provider: 'google', status: 'coming_soon' }, { provider: 'yandex', status: 'coming_soon' }] });
+  const userId = getCurrentDirectoryUserId(localDb, req);
+  const providers = (Object.keys(CONTACT_SYNC_PROVIDERS) as ContactProvider[]).map(provider => {
+    const account = getUserContactSyncAccount(localDb, userId, provider);
+    return sanitizeContactSyncAccount(account, provider);
+  });
+  res.json({ providers });
+});
+
+app.get('/api/directory/sync/google/connect', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_directory'))) {
+    return res.status(403).json({ error: 'Access denied: view_directory permission required' });
+  }
+  if (!getContactSyncEncryptionKey()) return res.status(400).json({ error: CONTACT_SYNC_ENCRYPTION_ERROR });
+  const clientId = process.env.GOOGLE_CONTACTS_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CONTACTS_CLIENT_SECRET;
+  const redirectUri = process.env.GOOGLE_CONTACTS_REDIRECT_URI;
+  if (!clientId || !clientSecret || !redirectUri) {
+    return res.status(400).json({ error: 'Google Contacts sync is not configured' });
+  }
+  const localDb = await readLocalDb();
+  const userId = getCurrentDirectoryUserId(localDb, req);
+  const statePayload = JSON.stringify({ userId, provider: 'google', nonce: crypto.randomBytes(12).toString('hex'), ts: Date.now() });
+  const encodedState = base64UrlEncode(statePayload);
+  const state = encodedState + '.' + crypto.createHmac('sha256', JWT_SECRET).update(encodedState).digest('base64url');
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    response_type: 'code',
+    scope: GOOGLE_CONTACTS_SCOPE,
+    access_type: 'offline',
+    prompt: 'consent',
+    state
+  });
+  res.json({ url: GOOGLE_OAUTH_URL + '?' + params.toString() });
+});
+
+app.get('/api/directory/sync/google/callback', async (req, res) => {
+  try {
+    if (!getContactSyncEncryptionKey()) return res.status(400).json({ error: CONTACT_SYNC_ENCRYPTION_ERROR });
+    const code = String(req.query.code || '').trim();
+    const state = String(req.query.state || '').trim();
+    const [encodedPayload, signature] = state.split('.');
+    if (!code || !encodedPayload || !signature) return res.status(400).json({ error: 'Invalid Google OAuth callback' });
+    const expected = crypto.createHmac('sha256', JWT_SECRET).update(encodedPayload).digest('base64url');
+    const valid = Buffer.from(signature).length === Buffer.from(expected).length && crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+    if (!valid) return res.status(400).json({ error: 'Invalid Google OAuth state' });
+    const statePayload = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8'));
+    if (statePayload.provider !== 'google' || Date.now() - Number(statePayload.ts || 0) > 15 * 60 * 1000) {
+      return res.status(400).json({ error: 'Invalid Google OAuth state' });
+    }
+    const clientId = process.env.GOOGLE_CONTACTS_CLIENT_ID;
+    const clientSecret = process.env.GOOGLE_CONTACTS_CLIENT_SECRET;
+    const redirectUri = process.env.GOOGLE_CONTACTS_REDIRECT_URI;
+    if (!clientId || !clientSecret || !redirectUri) return res.status(400).json({ error: 'Google Contacts sync is not configured' });
+    const tokenResp = await fetch(GOOGLE_TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ code, client_id: clientId, client_secret: clientSecret, redirect_uri: redirectUri, grant_type: 'authorization_code' }).toString()
+    });
+    const tokens: any = await tokenResp.json();
+    if (!tokenResp.ok || !tokens.access_token) return res.status(400).json({ error: 'Google Contacts token exchange failed' });
+    let externalAccountEmail = '';
+    try {
+      const profileResp = await fetch(GOOGLE_PEOPLE_PROFILE_URL + '?personFields=emailAddresses', { headers: { Authorization: 'Bearer ' + tokens.access_token } });
+      const profile: any = await profileResp.json();
+      externalAccountEmail = profile?.emailAddresses?.[0]?.value || '';
+    } catch (e) {}
+    const localDb = await readLocalDb();
+    upsertUserContactSyncAccount(localDb, String(statePayload.userId), 'google', {
+      provider: 'google',
+      authType: 'oauth',
+      status: 'connected',
+      externalAccountEmail,
+      encryptedAccessToken: encryptSecret(tokens.access_token),
+      encryptedRefreshToken: tokens.refresh_token ? encryptSecret(tokens.refresh_token) : (getUserContactSyncAccount(localDb, String(statePayload.userId), 'google')?.encryptedRefreshToken || ''),
+      expiresAt: tokens.expires_in ? new Date(Date.now() + Number(tokens.expires_in) * 1000).toISOString() : null,
+      scopes: tokens.scope || GOOGLE_CONTACTS_SCOPE,
+      lastError: null
+    });
+    await writeLocalDb(localDb);
+    res.json({ ok: true, provider: 'google', status: 'connected', externalAccountEmail });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message || 'Google Contacts callback failed' });
+  }
+});
+
+const refreshGoogleContactAccessToken = async (localDb: any, account: any): Promise<string> => {
+  const refreshToken = decryptSecret(account.encryptedRefreshToken || '');
+  if (!refreshToken) throw new Error('Google Contacts refresh token is missing');
+  const clientId = process.env.GOOGLE_CONTACTS_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CONTACTS_CLIENT_SECRET;
+  if (!clientId || !clientSecret) throw new Error('Google Contacts sync is not configured');
+  const tokenResp = await fetch(GOOGLE_TOKEN_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ client_id: clientId, client_secret: clientSecret, refresh_token: refreshToken, grant_type: 'refresh_token' }).toString()
+  });
+  const tokens: any = await tokenResp.json();
+  if (!tokenResp.ok || !tokens.access_token) throw new Error('Google Contacts token refresh failed');
+  account.encryptedAccessToken = encryptSecret(tokens.access_token);
+  account.expiresAt = tokens.expires_in ? new Date(Date.now() + Number(tokens.expires_in) * 1000).toISOString() : null;
+  account.updatedAt = nowIso();
+  await writeLocalDb(localDb);
+  return tokens.access_token;
+};
+
+app.post('/api/directory/sync/google/preview-import', requireAuth(), async (req, res) => {
+  try {
+    const localDb = await readLocalDb();
+    const userId = getCurrentDirectoryUserId(localDb, req);
+    const account = getUserContactSyncAccount(localDb, userId, 'google');
+    if (!account || account.status !== 'connected') return res.status(400).json({ error: 'Google Contacts account is not connected' });
+    let accessToken = decryptSecret(account.encryptedAccessToken || '');
+    if (!accessToken || (account.expiresAt && Date.parse(account.expiresAt) <= Date.now() + 60000)) {
+      accessToken = await refreshGoogleContactAccessToken(localDb, account);
+    }
+    const params = new URLSearchParams({
+      pageSize: '50',
+      personFields: 'names,organizations,phoneNumbers,emailAddresses,urls,addresses,biographies,memberships,userDefined'
+    });
+    let peopleResp = await fetch(GOOGLE_PEOPLE_CONNECTIONS_URL + '?' + params.toString(), { headers: { Authorization: 'Bearer ' + accessToken } });
+    if (peopleResp.status === 401) {
+      accessToken = await refreshGoogleContactAccessToken(localDb, account);
+      peopleResp = await fetch(GOOGLE_PEOPLE_CONNECTIONS_URL + '?' + params.toString(), { headers: { Authorization: 'Bearer ' + accessToken } });
+    }
+    const payload: any = await peopleResp.json();
+    if (!peopleResp.ok) return res.status(400).json({ error: payload?.error?.message || 'Google People API request failed' });
+    const normalized = (payload.connections || []).map(normalizeGooglePerson);
+    const items = buildContactPreviewItems('google', normalized, localDb, userId);
+    res.json({ provider: 'google', items, totalPreviewed: items.length });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message || 'Google Contacts preview import failed' });
+  }
+});
+
+const connectCardDavProvider = async (req: Request, res: Response, provider: ContactProvider) => {
+  try {
+    if (!(await checkUserPermission(req, 'view_directory'))) {
+      return res.status(403).json({ error: 'Access denied: view_directory permission required' });
+    }
+    if (!getContactSyncEncryptionKey()) return res.status(400).json({ error: CONTACT_SYNC_ENCRYPTION_ERROR });
+    const email = String(req.body?.email || '').trim();
+    const appPassword = String(req.body?.appPassword || '').trim();
+    const carddavUrl = String(req.body?.carddavUrl || CONTACT_SYNC_PROVIDERS[provider].defaultCarddavUrl || '').trim();
+    if (!email || !appPassword) return res.status(400).json({ error: 'Email and app password are required' });
+    const localDb = await readLocalDb();
+    const userId = getCurrentDirectoryUserId(localDb, req);
+    upsertUserContactSyncAccount(localDb, userId, provider, {
+      provider,
+      authType: 'carddav',
+      status: 'connected',
+      externalAccountEmail: email,
+      encryptedPassword: encryptSecret(appPassword),
+      carddavUrl,
+      lastError: null
+    });
+    await writeLocalDb(localDb);
+    res.json({ ok: true, provider, status: 'connected', externalAccountEmail: email, authType: 'carddav', carddavUrl });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message || 'CardDAV provider connect failed' });
+  }
+};
+
+app.post('/api/directory/sync/yandex/connect', requireAuth(), (req, res) => connectCardDavProvider(req, res, 'yandex'));
+app.post('/api/directory/sync/mailru/connect', requireAuth(), (req, res) => connectCardDavProvider(req, res, 'mailru'));
+
+app.post('/api/directory/sync/:provider/preview-import', requireAuth(), async (req, res) => {
+  const provider = String(req.params.provider || '');
+  if (!isContactProvider(provider)) return res.status(404).json({ error: 'Unknown contact sync provider' });
+  if (provider === 'google') return res.status(405).json({ error: 'Use /api/directory/sync/google/preview-import' });
+  const localDb = await readLocalDb();
+  const userId = getCurrentDirectoryUserId(localDb, req);
+  const account = getUserContactSyncAccount(localDb, userId, provider);
+  if (!account || account.status !== 'connected') return res.status(400).json({ error: CONTACT_SYNC_PROVIDERS[provider].displayName + ' account is not connected' });
+  res.status(501).json({ error: CONTACT_SYNC_PROVIDERS[provider].displayName + ' CardDAV preview import is not implemented yet' });
+});
+
+app.get('/api/directory/sync/:provider/disconnect-preview', requireAuth(), async (req, res) => {
+  const provider = String(req.params.provider || '');
+  if (!isContactProvider(provider)) return res.status(404).json({ error: 'Unknown contact sync provider' });
+  const localDb = await readLocalDb();
+  const userId = getCurrentDirectoryUserId(localDb, req);
+  const preview = buildContactSyncDisconnectPreview(localDb, userId, provider);
+  res.json({ provider, contactsToDelete: preview.contactsToDelete, mappingsToDelete: preview.mappingsToDelete });
+});
+
+app.post('/api/directory/sync/:provider/disconnect', requireAuth(), async (req, res) => {
+  const provider = String(req.params.provider || '');
+  if (!isContactProvider(provider)) return res.status(404).json({ error: 'Unknown contact sync provider' });
+  const localDb = await readLocalDb();
+  const userId = getCurrentDirectoryUserId(localDb, req);
+  const preview = buildContactSyncDisconnectPreview(localDb, userId, provider);
+  const confirm = String(req.query.confirm || '').toLowerCase() === 'true' || req.body?.confirm === true;
+  if (!confirm) {
+    return res.json({
+      requiresConfirmation: true,
+      provider,
+      contactsToDelete: preview.contactsToDelete,
+      mappingsToDelete: preview.mappingsToDelete,
+      message: 'Отключение удалит контакты, импортированные из этого сервиса.'
+    });
+  }
+  const result = await disconnectContactSyncProvider(localDb, userId, provider);
+  res.json({ ok: true, provider, deletedContacts: result.deletedContacts, deletedMappings: result.deletedMappings, status: 'disconnected' });
 });
 
 // Create a new directory entry
