@@ -428,6 +428,8 @@ export default function App() {
 
   // --- TELEPHONE DIRECTORY STATE & HANDLERS ---
   const [activeView, setActiveView] = useState<'calls' | 'directory' | 'reports' | 'marketing' | 'monitoring' | 'management' | 'balance' | 'settings'>(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('tab') === 'marketing' || params.get('yandexOAuth')) return 'marketing';
     const saved = localStorage.getItem('asterisk_cdr_active_view') as 'calls' | 'directory' | 'reports' | 'marketing' | 'monitoring' | 'management' | 'balance' | null;
     return saved || 'calls';
   });

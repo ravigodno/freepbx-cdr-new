@@ -1,6 +1,6 @@
 import { ReactNode } from 'react';
 import { MarketingEmptyState } from './MarketingEmptyState';
-import { PhoneClickEvent, TrafficSourceSummary, YandexMetrikaPageSummary } from './types';
+import { PhoneClickEvent, TrafficSourceSummary, YandexMetrikaPageSummary, YandexMetrikaPhoneGoalEventRow, YandexMetrikaPhoneGoalSummaryResponse } from './types';
 
 interface EmptyTableProps {
   title: string;
@@ -12,9 +12,29 @@ interface EmptyTableProps {
   hasRows?: boolean;
 }
 
-function safeText(value: unknown): string {
-  const text = String(value || '').trim();
+function formatMarketingCellValue(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '—';
+  if (Array.isArray(value)) {
+    const text = value.map(item => formatMarketingCellValue(item)).filter(item => item !== '—').join(', ');
+    return text || '—';
+  }
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const candidate = record.name ?? record.value ?? record.id ?? record.title ?? record.label;
+    if (candidate !== undefined && candidate !== null) return formatMarketingCellValue(candidate);
+    try {
+      const json = JSON.stringify(value);
+      return json && json !== '{}' ? json.slice(0, 180) : '—';
+    } catch {
+      return '—';
+    }
+  }
+  const text = String(value).trim();
   return text || '—';
+}
+
+function safeText(value: unknown): string {
+  return formatMarketingCellValue(value);
 }
 
 function safeNumber(value: unknown): string {
@@ -122,37 +142,149 @@ function EmptyTableCard({ title, description, columns, emptyTitle, emptyDescript
   );
 }
 
-export function PhoneClicksTable({ events = [] }: { events?: PhoneClickEvent[] | null }) {
+interface PhoneClicksTableProps {
+  events?: PhoneClickEvent[] | null;
+  metrikaGoalSummary?: YandexMetrikaPhoneGoalSummaryResponse | null;
+  metrikaGoalRows?: YandexMetrikaPhoneGoalEventRow[] | null;
+  metrikaGoalError?: string | null;
+}
+
+type UnifiedPhoneClickRow =
+  | { kind: 'pbxpuls'; sortTime: number; event: PhoneClickEvent }
+  | { kind: 'metrika'; sortTime: number; row: YandexMetrikaPhoneGoalEventRow };
+
+function goalTimeAccuracyLabel(row: YandexMetrikaPhoneGoalEventRow): string {
+  if (row.timeGranularity === 'exact') return 'точное';
+  if (row.timeGranularity === 'minute') return 'до минуты';
+  if (row.timeGranularity === 'daily') return 'только дата';
+  return 'агрегировано';
+}
+
+function goalDateTimeLabel(row: YandexMetrikaPhoneGoalEventRow): string {
+  if (row.dateTime) return formatDateTime(row.dateTime);
+  const date = safeText(row.date);
+  return date === '—' ? '—' : date + ' · без точного времени';
+}
+
+function toSortTime(value: unknown): number {
+  const ms = new Date(String(value || '')).getTime();
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+export function PhoneClicksTable({ events = [], metrikaGoalSummary = null, metrikaGoalRows = [], metrikaGoalError = null }: PhoneClicksTableProps) {
   const rows = safeArray(events);
+  const goalRows = safeArray(metrikaGoalRows);
+  const goalItems = safeArray(metrikaGoalSummary?.items);
+  const pbxpulsPhoneClicks = rows.length;
+  const metrikaPhoneGoalConversions = Number(metrikaGoalSummary?.totalGoalConversions || 0);
+  const phoneClickDataGap = metrikaPhoneGoalConversions - pbxpulsPhoneClicks;
+  const primaryGoalName = goalItems.find(item => item.phoneClickGoalName)?.phoneClickGoalName || goalItems[0]?.phoneClickGoalId || 'цель звонка';
+  const hasMetrikaRows = goalRows.length > 0;
+  const hasMetrikaOnlyWarning = rows.length === 0 && (metrikaPhoneGoalConversions > 0 || hasMetrikaRows);
+  const hasMixedWarning = rows.length > 0 && hasMetrikaRows;
+  const partialErrorText = metrikaGoalError || safeArray(metrikaGoalSummary?.partialErrors).map(item => item.error).filter(Boolean).join('; ');
+  const emptyDescription = hasMetrikaOnlyWarning
+    ? 'PBXPuls пока не получил реальные phone_click через JS-скрипт. Строки Яндекс.Метрики ниже — это агрегированная сверка, не реальные события PBXPuls. Метрика может отдавать цели агрегировано без точного времени. Для точного сопоставления со звонками установите JS-скрипт PBXPuls.'
+    : 'Создайте сайт и установите JS-скрипт PBXPuls на сайт.';
+  const unifiedRows: UnifiedPhoneClickRow[] = [
+    ...rows.map(event => ({ kind: 'pbxpuls' as const, sortTime: toSortTime(event.eventTime), event })),
+    ...goalRows.map(row => ({ kind: 'metrika' as const, sortTime: toSortTime(row.dateTime || row.date), row }))
+  ].sort((a, b) => b.sortTime - a.sortTime);
+
   return (
-    <EmptyTableCard
-      title="Клики по телефонам"
-      description="Сопоставление кликов по телефонным номерам с CDR-звонками и перезвонами"
-      columns={['Дата/время клика', 'Сайт', 'Страница', 'Номер на сайте', 'ymClientId', 'utm_source', 'utm_medium', 'utm_campaign', 'Связь со звонком', 'Статус лида', 'Перезвон', 'Звонок', 'Диспозиция', 'Время до звонка', 'Время до перезвона']}
-      emptyTitle="Событий пока нет"
-      emptyDescription="Создайте сайт и установите JS-скрипт PBXPuls на сайт."
-      hasRows={rows.length > 0}
-    >
-      {rows.map(event => (
-        <tr key={event.eventId || event.id || event.eventTime + event.phoneText} className="transition hover:bg-slate-50 dark:hover:bg-slate-800/40">
-          <td className="px-3 py-3 font-semibold text-slate-700 dark:text-slate-200">{formatDateTime(event.eventTime)}</td>
-          <td className="px-3 py-3 font-bold text-slate-700 dark:text-slate-200">{safeText(event.siteName || event.siteNameFallback)}</td>
-          <td className="max-w-[220px] truncate px-3 py-3 text-slate-500" title={event.pageUrl}>{safeText(event.pageUrl)}</td>
-          <td className="px-3 py-3 font-mono font-black text-slate-800 dark:text-slate-100">{safeText(event.phoneText || event.phoneHref)}</td>
-          <td className="px-3 py-3 font-mono text-slate-500">{safeText(event.ymClientId)}</td>
-          <td className="px-3 py-3 text-slate-500">{safeText(event.utmSource)}</td>
-          <td className="px-3 py-3 text-slate-500">{safeText(event.utmMedium)}</td>
-          <td className="px-3 py-3 text-slate-500">{safeText(event.utmCampaign)}</td>
-          <td className="px-3 py-3"><span className={['rounded-full px-2 py-1 text-[10px] font-black', matchClass(event)].join(' ')}>{matchLabel(event)}</span></td>
-          <td className="px-3 py-3"><span className={['rounded-full px-2 py-1 text-[10px] font-black', leadStatusClass(event)].join(' ')}>{leadStatusLabel(event)}</span></td>
-          <td className="px-3 py-3"><span className={['rounded-full px-2 py-1 text-[10px] font-black', callbackStatusClass(event.callbackStatus)].join(' ')}>{callbackStatusLabel(event.callbackStatus)}</span></td>
-          <td className="px-3 py-3 font-mono text-slate-600 dark:text-slate-300">{safeText(event.matchedCallUniqueid)}</td>
-          <td className="px-3 py-3 font-black text-slate-600 dark:text-slate-300">{safeText(event.matchedDisposition)}</td>
-          <td className="px-3 py-3 text-slate-500">{formatSeconds(event.secondsToCall)}</td>
-          <td className="px-3 py-3 text-slate-500">{formatSeconds(event.callbackSecondsAfterMissed)}</td>
-        </tr>
-      ))}
-    </EmptyTableCard>
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+        <div className="min-w-0 rounded-2xl border border-slate-200/70 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div className="text-[11px] font-black uppercase tracking-wide text-slate-500">PBXPuls JS</div>
+          <div className="mt-2 font-mono text-2xl font-black text-slate-950 dark:text-white">{safeNumber(pbxpulsPhoneClicks)}</div>
+          <div className="mt-1 text-xs font-semibold text-slate-500">Реальные события phone_click для CDR matching</div>
+        </div>
+        <div className="min-w-0 rounded-2xl border border-slate-200/70 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div className="text-[11px] font-black uppercase tracking-wide text-slate-500">Яндекс.Метрика цели</div>
+          <div className="mt-2 font-mono text-2xl font-black text-purple-700 dark:text-purple-300">{safeNumber(metrikaPhoneGoalConversions)}</div>
+          <div className="mt-1 break-words text-xs font-semibold text-slate-500">Достижения сопоставленной цели звонка</div>
+        </div>
+        <div className="min-w-0 rounded-2xl border border-slate-200/70 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div className="text-[11px] font-black uppercase tracking-wide text-slate-500">Сверка</div>
+          <div className="mt-2 font-mono text-2xl font-black text-blue-700 dark:text-blue-300">{safeNumber(phoneClickDataGap)}</div>
+          <div className="mt-1 text-xs font-semibold text-slate-500">Метрика минус PBXPuls JS</div>
+        </div>
+      </div>
+
+      {(hasMetrikaOnlyWarning || hasMixedWarning) && <div className="break-words rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs font-bold text-amber-800 dark:border-amber-900/40 dark:bg-amber-950/20 dark:text-amber-300">{hasMetrikaOnlyWarning ? emptyDescription : 'Основная таблица показывает реальные PBXPuls JS клики и агрегированную сверку из Яндекс.Метрики. CDR-сопоставление выполняется только для PBXPuls JS.'}</div>}
+      {partialErrorText && <div className="break-words rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs font-bold text-amber-800 dark:border-amber-900/40 dark:bg-amber-950/20 dark:text-amber-300">{safeText(partialErrorText)}</div>}
+
+      {goalItems.length > 0 && (
+        <div className="rounded-2xl border border-slate-200/70 bg-white p-4 text-xs font-semibold text-slate-600 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
+          <div className="text-[11px] font-black uppercase tracking-wide text-slate-500">Сопоставленные цели звонка</div>
+          <div className="mt-2 space-y-1">
+            {goalItems.map(item => <div key={item.integrationId} className="break-words">{safeText(item.siteName || item.domain)}: {safeText(item.phoneClickGoalName)} — <span className="font-mono">{safeText(item.phoneClickGoalId)}</span></div>)}
+          </div>
+        </div>
+      )}
+
+      <EmptyTableCard
+        title="Клики по телефонам"
+        description="Основная таблица показывает реальные PBXPuls JS клики и агрегированную сверку из Яндекс.Метрики. CDR-сопоставление выполняется только для PBXPuls JS."
+        columns={['Источник данных', 'Дата/время клика', 'Точность времени', 'Сайт', 'Страница', 'Цель', 'Конверсии', 'Номер на сайте', 'ymClientId', 'utm_source', 'utm_medium', 'utm_campaign', 'Связь со звонком', 'Статус лида', 'Перезвон', 'Звонок', 'Диспозиция', 'Время до звонка', 'Время до перезвона']}
+        emptyTitle="Событий пока нет"
+        emptyDescription={emptyDescription}
+        hasRows={unifiedRows.length > 0}
+      >
+        {unifiedRows.map(item => {
+          if (item.kind === 'metrika') {
+            const row = item.row;
+            return (
+              <tr key={['metrika', row.siteId, row.goalId, row.dateTime || row.date, row.page, row.utmSource, row.utmMedium, row.utmCampaign].map(safeText).join('|')} className="transition hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                <td className="px-3 py-3"><span className="rounded-full bg-purple-50 px-2 py-1 text-[10px] font-black text-purple-700 dark:bg-purple-950/30 dark:text-purple-300">Яндекс.Метрика goal{row.exactTimeAvailable ? '' : ' / агрегировано'}</span></td>
+                <td className="px-3 py-3 font-semibold text-slate-700 dark:text-slate-200">{goalDateTimeLabel(row)}</td>
+                <td className="px-3 py-3 text-slate-500">{goalTimeAccuracyLabel(row)}</td>
+                <td className="px-3 py-3 font-bold text-slate-700 dark:text-slate-200">{safeText(row.domain || row.siteId)}</td>
+                <td className="max-w-[220px] truncate px-3 py-3 text-slate-500" title={safeText(row.page)}>{safeText(row.page)}</td>
+                <td className="px-3 py-3 font-mono text-slate-600 dark:text-slate-300">{safeText(row.goalName)} — {safeText(row.goalId)}</td>
+                <td className="px-3 py-3 font-mono font-black text-purple-700 dark:text-purple-300">{safeNumber(row.conversions)}</td>
+                <td className="px-3 py-3 text-slate-500">—</td>
+                <td className="px-3 py-3 font-mono text-slate-500">{safeText(row.ymClientId)}</td>
+                <td className="px-3 py-3 text-slate-500">{safeText(row.utmSource)}</td>
+                <td className="px-3 py-3 text-slate-500">{safeText(row.utmMedium)}</td>
+                <td className="px-3 py-3 text-slate-500">{safeText(row.utmCampaign)}</td>
+                <td className="px-3 py-3 text-slate-500">—</td>
+                <td className="px-3 py-3 text-slate-500">—</td>
+                <td className="px-3 py-3 text-slate-500">—</td>
+                <td className="px-3 py-3 text-slate-500">—</td>
+                <td className="px-3 py-3 text-slate-500">—</td>
+                <td className="px-3 py-3 text-slate-500">—</td>
+                <td className="px-3 py-3 text-slate-500">—</td>
+              </tr>
+            );
+          }
+          const event = item.event;
+          return (
+            <tr key={event.eventId || event.id || event.eventTime + event.phoneText} className="transition hover:bg-slate-50 dark:hover:bg-slate-800/40">
+              <td className="px-3 py-3"><span className="rounded-full bg-blue-50 px-2 py-1 text-[10px] font-black text-blue-700 dark:bg-blue-950/30 dark:text-blue-300">PBXPuls JS</span></td>
+              <td className="px-3 py-3 font-semibold text-slate-700 dark:text-slate-200">{formatDateTime(event.eventTime)}</td>
+              <td className="px-3 py-3 text-slate-500">точное</td>
+              <td className="px-3 py-3 font-bold text-slate-700 dark:text-slate-200">{safeText(event.siteName || event.siteNameFallback)}</td>
+              <td className="max-w-[220px] truncate px-3 py-3 text-slate-500" title={safeText(event.pageUrl)}>{safeText(event.pageUrl)}</td>
+              <td className="px-3 py-3 text-slate-500">—</td>
+              <td className="px-3 py-3 font-mono font-black text-blue-700 dark:text-blue-300">1</td>
+              <td className="px-3 py-3 font-mono font-black text-slate-800 dark:text-slate-100">{safeText(event.phoneText || event.phoneHref)}</td>
+              <td className="px-3 py-3 font-mono text-slate-500">{safeText(event.ymClientId)}</td>
+              <td className="px-3 py-3 text-slate-500">{safeText(event.utmSource)}</td>
+              <td className="px-3 py-3 text-slate-500">{safeText(event.utmMedium)}</td>
+              <td className="px-3 py-3 text-slate-500">{safeText(event.utmCampaign)}</td>
+              <td className="px-3 py-3"><span className={['rounded-full px-2 py-1 text-[10px] font-black', matchClass(event)].join(' ')}>{matchLabel(event)}</span></td>
+              <td className="px-3 py-3"><span className={['rounded-full px-2 py-1 text-[10px] font-black', leadStatusClass(event)].join(' ')}>{leadStatusLabel(event)}</span></td>
+              <td className="px-3 py-3"><span className={['rounded-full px-2 py-1 text-[10px] font-black', callbackStatusClass(event.callbackStatus)].join(' ')}>{callbackStatusLabel(event.callbackStatus)}</span></td>
+              <td className="px-3 py-3 font-mono text-slate-600 dark:text-slate-300">{safeText(event.matchedCallUniqueid)}</td>
+              <td className="px-3 py-3 font-black text-slate-600 dark:text-slate-300">{safeText(event.matchedDisposition)}</td>
+              <td className="px-3 py-3 text-slate-500">{formatSeconds(event.secondsToCall)}</td>
+              <td className="px-3 py-3 text-slate-500">{formatSeconds(event.callbackSecondsAfterMissed)}</td>
+            </tr>
+          );
+        })}
+      </EmptyTableCard>
+    </div>
   );
 }
 

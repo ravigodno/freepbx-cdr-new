@@ -1610,7 +1610,8 @@ function normalizeLocalDbSchema(db: any): any {
     calltrackingSites: Array.isArray(db?.calltrackingSites) && db.calltrackingSites.length ? db.calltrackingSites : [createDefaultCalltrackingSite()],
     calltrackingEvents: Array.isArray(db?.calltrackingEvents) ? db.calltrackingEvents : [],
     calltrackingSessions: Array.isArray(db?.calltrackingSessions) ? db.calltrackingSessions : [],
-    yandexMetrikaIntegrations: Array.isArray(db?.yandexMetrikaIntegrations) ? db.yandexMetrikaIntegrations.map(normalizeStoredYandexMetrikaIntegration) : []
+    yandexMetrikaIntegrations: Array.isArray(db?.yandexMetrikaIntegrations) ? db.yandexMetrikaIntegrations.map(normalizeStoredYandexMetrikaIntegration) : [],
+    yandexOAuthStates: Array.isArray(db?.yandexOAuthStates) ? db.yandexOAuthStates.filter(isActiveYandexOAuthState) : []
   };
 
   return next;
@@ -1661,6 +1662,7 @@ function getDefaultLocalDb(): any {
     calltrackingEvents: [],
     calltrackingSessions: [],
     yandexMetrikaIntegrations: [],
+    yandexOAuthStates: [],
     roles: getDefaultAccessRoles(),
     settings: {
       dbHost: process.env.DB_HOST || 'localhost',
@@ -1712,6 +1714,17 @@ async function readLocalDb(): Promise<{
     if (!Array.isArray(data.roles)) {
       data.roles = getDefaultAccessRoles();
       changed = true;
+    }
+
+    if (!Array.isArray((data as any).yandexOAuthStates)) {
+      (data as any).yandexOAuthStates = [];
+      changed = true;
+    } else {
+      const filteredYandexOAuthStates = (data as any).yandexOAuthStates.filter(isActiveYandexOAuthState);
+      if (filteredYandexOAuthStates.length !== (data as any).yandexOAuthStates.length) {
+        (data as any).yandexOAuthStates = filteredYandexOAuthStates;
+        changed = true;
+      }
     }
 
     if (!data.directory) {
@@ -2548,7 +2561,68 @@ async function getCalltrackingMatchDataset(localDb: any, query: any) {
 
 const YANDEX_METRIKA_API_BASE = 'https://api-metrika.yandex.net/stat/v1/data';
 const YANDEX_METRIKA_MANAGEMENT_COUNTERS_URL = 'https://api-metrika.yandex.net/management/v1/counters';
+const YANDEX_OAUTH_AUTHORIZE_URL = 'https://oauth.yandex.ru/authorize';
+const YANDEX_OAUTH_TOKEN_URL = 'https://oauth.yandex.ru/token';
 const YANDEX_METRIKA_TIMEOUT_MS = 7000;
+const YANDEX_OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+
+function isActiveYandexOAuthState(record: any): boolean {
+  if (!record || typeof record !== 'object') return false;
+  const expiresAt = Date.parse(String(record.expiresAt || ''));
+  return Number.isFinite(expiresAt) && expiresAt > Date.now();
+}
+
+function getYandexUserKey(req: Request): string {
+  const user = (req as any).user || {};
+  return cleanMarketingString(user.username || user.id || 'unknown', 160).toLowerCase() || 'unknown';
+}
+
+function getYandexRedirectUri(req: Request): string {
+  const explicit = cleanMarketingString(process.env.YANDEX_REDIRECT_URI, 500);
+  if (explicit) return explicit;
+  const baseUrl = cleanMarketingString(process.env.PUBLIC_APP_URL || process.env.APP_BASE_URL, 500).replace(/\/$/, '');
+  if (baseUrl) return baseUrl + '/api/marketing/yandex/oauth/callback';
+  const proto = cleanMarketingString(req.get('x-forwarded-proto'), 20) || req.protocol || 'http';
+  const host = cleanMarketingString(req.get('x-forwarded-host') || req.get('host'), 240);
+  return proto + '://' + host + '/api/marketing/yandex/oauth/callback';
+}
+
+function safeYandexOAuthResult(record: any) {
+  if (!record) return { status: 'none', counters: [], error: null };
+  return {
+    status: record.status || 'none',
+    counters: Array.isArray(record.counters) ? record.counters.map(safeYandexMetrikaCounter).filter(Boolean) : [],
+    error: record.error || null
+  };
+}
+
+async function exchangeYandexOAuthCode(code: string, redirectUri: string): Promise<string> {
+  const body = new URLSearchParams({
+    grant_type: 'authorization_code',
+    code,
+    client_id: process.env.YANDEX_CLIENT_ID || '',
+    client_secret: process.env.YANDEX_CLIENT_SECRET || '',
+    redirect_uri: redirectUri
+  });
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timeout = controller ? setTimeout(() => controller.abort(), YANDEX_METRIKA_TIMEOUT_MS) : null;
+  try {
+    const response = await fetch(YANDEX_OAUTH_TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+      signal: controller?.signal
+    } as any);
+    const json = await response.json().catch(() => ({}));
+    if (!response.ok || !json?.access_token) throw new Error(normalizeYandexMetrikaError(json, response.status));
+    return String(json.access_token || '').trim();
+  } catch (error: any) {
+    if (error?.name === 'AbortError') throw new Error('Yandex OAuth timeout');
+    throw error;
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
 
 function normalizeYandexMetrikaGoals(raw: any) {
   const goals = raw && typeof raw === 'object' ? raw : {};
@@ -2560,12 +2634,13 @@ function normalizeYandexMetrikaGoals(raw: any) {
     phoneClickGoalId: cleanGoalId(goals.phoneClickGoalId),
     whatsappClickGoalId: cleanGoalId(goals.whatsappClickGoalId),
     telegramClickGoalId: cleanGoalId(goals.telegramClickGoalId),
-    emailClickGoalId: cleanGoalId(goals.emailClickGoalId)
+    emailClickGoalId: cleanGoalId(goals.emailClickGoalId),
+    leadFormGoalId: cleanGoalId(goals.leadFormGoalId)
   };
 }
 
 function hasYandexMetrikaGoals(goals: any): boolean {
-  return Boolean(goals?.phoneClickGoalId || goals?.whatsappClickGoalId || goals?.telegramClickGoalId || goals?.emailClickGoalId);
+  return Boolean(goals?.phoneClickGoalId || goals?.whatsappClickGoalId || goals?.telegramClickGoalId || goals?.emailClickGoalId || goals?.leadFormGoalId);
 }
 
 function normalizeYandexDirectSettings(raw: any) {
@@ -2601,6 +2676,9 @@ function safeYandexMetrikaIntegration(integration: any) {
     isActive: integration.isActive !== false,
     lastSyncAt: integration.lastSyncAt || null,
     lastError: integration.lastError || null,
+    lastGoalsSyncAt: integration.lastGoalsSyncAt || null,
+    lastGoalsError: integration.lastGoalsError || null,
+    disconnectedAt: integration.disconnectedAt || null,
     goals: normalizeYandexMetrikaGoals(integration.goals),
     direct: normalizeYandexDirectSettings(integration.direct),
     createdAt: integration.createdAt || null,
@@ -2715,6 +2793,41 @@ async function fetchYandexMetrikaCounters(accessToken: string) {
   }
 }
 
+function safeYandexMetrikaGoal(goal: any) {
+  const id = cleanMarketingString(goal?.id ?? goal?.goal_id ?? goal?.goalId, 40);
+  if (!id) return null;
+  return {
+    id,
+    name: cleanMarketingString(goal?.name ?? goal?.title, 240) || id,
+    type: cleanMarketingString(goal?.type ?? goal?.goal_type, 120) || null,
+    isRetargeting: typeof goal?.is_retargeting === 'boolean' ? goal.is_retargeting : (typeof goal?.isRetargeting === 'boolean' ? goal.isRetargeting : null),
+    status: cleanMarketingString(goal?.status, 80) || null
+  };
+}
+
+async function fetchYandexMetrikaGoalsList(integration: any) {
+  if (!integration?.accessToken) throw new Error('accessToken_missing');
+  if (!integration?.counterId) throw new Error('counterId_missing');
+  const url = 'https://api-metrika.yandex.net/management/v1/counter/' + encodeURIComponent(String(integration.counterId)) + '/goals';
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timeout = controller ? setTimeout(() => controller.abort(), YANDEX_METRIKA_TIMEOUT_MS) : null;
+  try {
+    const response = await fetch(url, {
+      headers: { Authorization: 'OAuth ' + integration.accessToken },
+      signal: controller?.signal
+    } as any);
+    const json = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(normalizeYandexMetrikaError(json, response.status));
+    const rawGoals = Array.isArray(json?.goals) ? json.goals : (Array.isArray(json?.data) ? json.data : []);
+    return rawGoals.map(safeYandexMetrikaGoal).filter(Boolean);
+  } catch (error: any) {
+    if (error?.name === 'AbortError') throw new Error('Yandex Metrika API timeout');
+    throw error;
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 function numberOrNull(value: any): number | null {
   const num = Number(value);
   return Number.isFinite(num) ? num : null;
@@ -2723,6 +2836,164 @@ function numberOrNull(value: any): number | null {
 function numberOrZero(value: any): number {
   const num = Number(value);
   return Number.isFinite(num) ? num : 0;
+}
+
+function getYandexMetrikaGoalIntegrations(localDb: any, query: any) {
+  const siteId = cleanMarketingString(query?.siteId, 120);
+  const integrationId = cleanMarketingString(query?.integrationId, 120);
+  const integrations = Array.isArray(localDb.yandexMetrikaIntegrations) ? localDb.yandexMetrikaIntegrations : [];
+  return integrations.filter((integration: any) => {
+    if (integration.isActive === false || !integration.accessToken || !integration.counterId) return false;
+    if (siteId && integration.siteId !== siteId) return false;
+    if (integrationId && integration.id !== integrationId) return false;
+    return true;
+  });
+}
+
+function getYandexMetrikaGoalName(goals: any[], goalId: string): string | null {
+  const goal = (Array.isArray(goals) ? goals : []).find((item: any) => String(item?.id) === String(goalId));
+  return cleanMarketingString(goal?.name, 240) || null;
+}
+
+async function fetchYandexPhoneGoalTotals(integration: any, startDate: string, endDate: string, goalId: string) {
+  const reachesMetric = 'ym:s:goal' + goalId + 'reaches';
+  const visitsMetric = 'ym:s:goal' + goalId + 'visits';
+  try {
+    const json = await fetchYandexMetrikaData(integration, {
+      date1: startDate,
+      date2: endDate,
+      metrics: reachesMetric + ',' + visitsMetric
+    });
+    const totals = Array.isArray(json?.totals) ? json.totals : [];
+    const conversions = Math.round(numberOrZero(totals[0]));
+    const visitsWithGoal = Math.round(numberOrZero(totals[1]));
+    return { goalConversions: conversions, visitsWithGoal: visitsWithGoal || conversions };
+  } catch (error: any) {
+    if (!isYandexMetricOrDimensionError(error)) throw error;
+    const json = await fetchYandexMetrikaData(integration, {
+      date1: startDate,
+      date2: endDate,
+      metrics: reachesMetric
+    });
+    const totals = Array.isArray(json?.totals) ? json.totals : [];
+    const conversions = Math.round(numberOrZero(totals[0]));
+    return { goalConversions: conversions, visitsWithGoal: conversions };
+  }
+}
+
+function yandexGoalTimeLabel(granularity: string) {
+  if (granularity === 'exact') return 'exact';
+  if (granularity === 'minute') return 'minute';
+  if (granularity === 'daily') return 'daily';
+  return 'aggregated';
+}
+
+function normalizeYandexGoalDateTime(value: string): string | null {
+  const raw = cleanMarketingString(value, 80);
+  if (!raw) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null;
+  return raw;
+}
+
+async function fetchYandexPhoneGoalRows(integration: any, startDate: string, endDate: string, goalId: string, goalName: string | null) {
+  const metric = 'ym:s:goal' + goalId + 'reaches';
+  const attempts = [
+    { dimensions: 'ym:s:dateTime,ym:s:startURL,ym:s:clientID,ym:s:lastsignUTMSource,ym:s:lastsignUTMMedium,ym:s:lastsignUTMCampaign', granularity: 'exact' },
+    { dimensions: 'ym:s:dateTimeMinute,ym:s:startURL,ym:s:clientID,ym:s:lastsignUTMSource,ym:s:lastsignUTMMedium,ym:s:lastsignUTMCampaign', granularity: 'minute' },
+    { dimensions: 'ym:s:date,ym:s:startURL,ym:s:lastsignUTMSource,ym:s:lastsignUTMMedium,ym:s:lastsignUTMCampaign', granularity: 'daily' },
+    { dimensions: 'ym:s:date,ym:s:lastsignUTMSource,ym:s:lastsignUTMMedium,ym:s:lastsignUTMCampaign', granularity: 'daily' },
+    { dimensions: 'ym:s:date', granularity: 'daily' }
+  ];
+  let lastError: any = null;
+  for (const attempt of attempts) {
+    try {
+      const json = await fetchYandexMetrikaData(integration, {
+        date1: startDate,
+        date2: endDate,
+        dimensions: attempt.dimensions,
+        metrics: metric,
+        limit: '1000'
+      });
+      const rows = Array.isArray(json?.data) ? json.data : [];
+      const hasDateTime = attempt.dimensions.includes('dateTime');
+      const hasPage = attempt.dimensions.includes('startURL');
+      const hasClient = attempt.dimensions.includes('clientID');
+      const pageIndex = hasDateTime ? 1 : 1;
+      const clientIndex = hasClient ? (hasPage ? 2 : 1) : -1;
+      const utmOffset = hasDateTime ? (hasClient ? 3 : 2) : (hasPage ? 2 : 1);
+      const exactTimeAvailable = attempt.granularity === 'exact' || attempt.granularity === 'minute';
+      console.log('[YANDEX_GOALS]', { goalId, granularity: attempt.granularity, usedDimensions: attempt.dimensions, rowsCount: rows.length, exactTimeAvailable });
+      return rows.map((row: any) => {
+        const dims = Array.isArray(row?.dimensions) ? row.dimensions : [];
+        const rawTime = directDimensionName(dims, 0);
+        const dateTime = exactTimeAvailable ? normalizeYandexGoalDateTime(rawTime) : null;
+        return {
+          date: rawTime.slice(0, 10) || startDate,
+          dateTime,
+          exactTimeAvailable: Boolean(dateTime),
+          timeGranularity: dateTime ? yandexGoalTimeLabel(attempt.granularity) : 'daily',
+          siteId: integration.siteId,
+          domain: integration.domain || null,
+          counterId: String(integration.counterId || ''),
+          goalId,
+          goalName: goalName || null,
+          source: 'yandex_metrika_goal',
+          conversions: Math.round(numberOrZero(Array.isArray(row?.metrics) ? row.metrics[0] : 0)),
+          page: hasPage ? (directDimensionName(dims, pageIndex) || null) : null,
+          ymClientId: hasClient ? (directDimensionName(dims, clientIndex) || null) : null,
+          utmSource: directDimensionName(dims, utmOffset) || null,
+          utmMedium: directDimensionName(dims, utmOffset + 1) || null,
+          utmCampaign: directDimensionName(dims, utmOffset + 2) || null
+        };
+      }).filter((row: any) => row.conversions > 0);
+    } catch (error: any) {
+      lastError = error;
+      if (!isYandexMetricOrDimensionError(error)) throw error;
+    }
+  }
+  throw lastError || new Error('Yandex Metrika goal data unavailable');
+}
+
+async function getYandexPhoneGoalSummary(localDb: any, query: any) {
+  const { startDate, endDate } = getYandexMetrikaDateRange(query);
+  const sites = calltrackingSiteMap(localDb.calltrackingSites || []);
+  const items: any[] = [];
+  const partialErrors: any[] = [];
+  const integrations = getYandexMetrikaGoalIntegrations(localDb, query);
+
+  for (const integration of integrations) {
+    const phoneClickGoalId = normalizeYandexMetrikaGoals(integration.goals).phoneClickGoalId;
+    if (!phoneClickGoalId) {
+      partialErrors.push({ integrationId: integration.id, siteId: integration.siteId, counterId: String(integration.counterId || ''), error: 'phone goal is not mapped' });
+      continue;
+    }
+    try {
+      let goals: any[] = [];
+      try { goals = await fetchYandexMetrikaGoalsList(integration); } catch (_goalListError) { goals = []; }
+      const phoneClickGoalName = getYandexMetrikaGoalName(goals, phoneClickGoalId);
+      const totals = await fetchYandexPhoneGoalTotals(integration, startDate, endDate, phoneClickGoalId);
+      items.push({
+        integrationId: integration.id,
+        siteId: integration.siteId,
+        siteName: sites.get(integration.siteId)?.name || sites.get(integration.siteId)?.domain || null,
+        domain: integration.domain || null,
+        counterId: String(integration.counterId || ''),
+        phoneClickGoalId,
+        phoneClickGoalName,
+        goalConversions: totals.goalConversions,
+        visitsWithGoal: totals.visitsWithGoal,
+        source: 'yandex_metrika'
+      });
+    } catch (error: any) {
+      partialErrors.push({ integrationId: integration.id, siteId: integration.siteId, counterId: String(integration.counterId || ''), error: normalizeYandexMetrikaError(error) });
+    }
+  }
+
+  return {
+    items,
+    totalGoalConversions: items.reduce((sum, item) => sum + numberOrZero(item.goalConversions), 0),
+    partialErrors
+  };
 }
 
 async function fetchYandexMetrikaSummary(integration: any, startDate: string, endDate: string) {
@@ -2752,7 +3023,8 @@ async function fetchYandexMetrikaSummary(integration: any, startDate: string, en
       ['phoneClickGoals', goals.phoneClickGoalId],
       ['whatsappClickGoals', goals.whatsappClickGoalId],
       ['telegramClickGoals', goals.telegramClickGoalId],
-      ['emailClickGoals', goals.emailClickGoalId]
+      ['emailClickGoals', goals.emailClickGoalId],
+      ['leadFormGoals', goals.leadFormGoalId]
     ].filter((entry): entry is [string, string] => Boolean(entry[1]));
     const goalJson = await fetchYandexMetrikaData(integration, {
       date1: startDate,
@@ -2813,56 +3085,160 @@ function safeDivideMoney(numerator: any, denominator: any): number | null {
   return roundMoney(top / bottom);
 }
 
-function getYandexDirectCostsParams(integration: any, startDate: string, endDate: string) {
+function directDimensionValue(value: any, maxLength = 240): string {
+  if (value === null || value === undefined) return '';
+  if (Array.isArray(value)) return value.map(item => directDimensionValue(item, maxLength)).filter(Boolean).join(', ').slice(0, maxLength);
+  if (typeof value === 'object') {
+    const candidate = value.name ?? value.value ?? value.id ?? value.title ?? value.label;
+    if (candidate !== undefined && candidate !== null) return directDimensionValue(candidate, maxLength);
+    return '';
+  }
+  return cleanMarketingString(value, maxLength) || '';
+}
+
+function directDimensionName(dimensions: any[], index: number): string {
+  return directDimensionValue(dimensions[index], 240);
+}
+
+function directDimensionId(dimensions: any[], index: number): string {
+  return directDimensionValue(dimensions[index]?.id ?? dimensions[index], 120);
+}
+
+const YANDEX_DIRECT_AD_METRICS = [
+  'ym:ad:visits',
+  'ym:ad:users',
+  'ym:ad:pageviews'
+];
+const YANDEX_DIRECT_AD_DIMENSIONS = [
+  'ym:ad:directOrder',
+  'ym:ad:directBannerGroup',
+  'ym:ad:directPhraseOrCond',
+  ''
+];
+const YANDEX_DIRECT_LIMITED_WARNING = 'Данные Директа подключены, но сумма расходов через текущий API недоступна. PBXPuls получил визиты/кампании Директа; для точных расходов может потребоваться Yandex Direct API или корректная cost metric.';
+const YANDEX_DIRECT_NO_DATA_WARNING = 'Директ подключен в ограниченном режиме. Метрика отдала 0 визитов Директа за выбранный период, сумма расходов через текущий API недоступна.';
+
+function isYandexMetricOrDimensionError(error: any): boolean {
+  const message = normalizeYandexMetrikaError(error).toLowerCase();
+  return /incorrectly specified (metric|dimension|attribute)|unknown (metric|dimension|attribute)|error code:\s*400[12]|metric|dimension|attribute/.test(message);
+}
+
+function getYandexDirectAdParams(integration: any, startDate: string, endDate: string, metric: string, dimensions: string) {
   const direct = normalizeYandexDirectSettings(integration.direct);
   const params: Record<string, string> = {
     date1: startDate,
     date2: endDate,
-    dimensions: 'ym:s:date,ym:s:lastsignUTMSource,ym:s:lastsignUTMMedium,ym:s:lastsignUTMCampaign,ym:s:directClickOrder',
-    metrics: 'ym:s:directClicks,ym:s:directExpenses',
+    metrics: metric,
     limit: '100000'
   };
+  if (dimensions) params.dimensions = dimensions;
   if (direct.clientLogins.length) params.direct_client_logins = direct.clientLogins.join(',');
   return params;
 }
 
-function directDimensionName(dimensions: any[], index: number): string {
-  const item = dimensions[index];
-  return cleanMarketingString(item?.name ?? item, 240) || '';
-}
-
-function directDimensionId(dimensions: any[], index: number): string {
-  const item = dimensions[index];
-  return cleanMarketingString(item?.id ?? item?.name ?? item, 120) || '';
+function logYandexDirectAttempt(integration: any, metric: string, dimensions: string | null, status: string, rowsCount = 0) {
+  console.log('[YANDEX_DIRECT]', {
+    counterId: String(integration?.counterId || ''),
+    clientLoginsCount: normalizeYandexDirectSettings(integration?.direct).clientLogins.length,
+    metric,
+    dimensions: dimensions || '',
+    status,
+    rowsCount
+  });
 }
 
 async function fetchYandexDirectCostsViaMetrika(integration: any, startDate: string, endDate: string) {
   const direct = normalizeYandexDirectSettings(integration.direct);
   if (!direct.enabled) return [];
-  const json = await fetchYandexMetrikaData(integration, getYandexDirectCostsParams(integration, startDate, endDate));
-  const rows = Array.isArray(json?.data) ? json.data : [];
-  return rows.map((row: any) => {
-    const dimensions = Array.isArray(row?.dimensions) ? row.dimensions : [];
-    const metrics = Array.isArray(row?.metrics) ? row.metrics : [];
-    const campaignName = directDimensionName(dimensions, 4) || directDimensionName(dimensions, 3);
-    return {
-      date: directDimensionName(dimensions, 0) || startDate,
-      source: directDimensionName(dimensions, 1) || 'yandex',
-      medium: directDimensionName(dimensions, 2) || 'cpc',
-      campaignId: directDimensionId(dimensions, 4) || null,
-      campaignName: campaignName || '',
-      clicks: Math.round(numberOrZero(metrics[0])),
-      cost: roundMoney(metrics[1]) || 0,
-      currency: 'RUB'
-    };
-  }).filter((item: any) => item.clicks > 0 || item.cost > 0);
+  if (!direct.clientLogins.length) throw new Error('Укажите clientLogin Яндекс.Директа');
+
+  const technicalErrors: string[] = [];
+  for (const dimension of YANDEX_DIRECT_AD_DIMENSIONS) {
+    for (const metric of YANDEX_DIRECT_AD_METRICS) {
+      try {
+        const json = await fetchYandexMetrikaData(integration, getYandexDirectAdParams(integration, startDate, endDate, metric, dimension));
+        const rows = Array.isArray(json?.data) ? json.data : [];
+        const totals = Array.isArray(json?.totals) ? json.totals : [];
+        logYandexDirectAttempt(integration, metric, dimension || null, 'ok', rows.length);
+        if (!dimension) {
+          return [{
+            date: startDate,
+            source: 'yandex',
+            medium: 'cpc',
+            campaignId: null,
+            campaignName: 'Яндекс Директ',
+            clicks: Math.round(numberOrZero(totals[0])),
+            directVisits: Math.round(numberOrZero(totals[0])),
+            cost: null,
+            currency: null,
+            limited: true,
+            warning: Math.round(numberOrZero(totals[0])) > 0 ? YANDEX_DIRECT_LIMITED_WARNING : YANDEX_DIRECT_NO_DATA_WARNING,
+            noData: Math.round(numberOrZero(totals[0])) <= 0,
+            usedMetric: metric,
+            usedDimensions: ''
+          }];
+        }
+        const mapped = rows.map((row: any) => {
+          const dimensions = Array.isArray(row?.dimensions) ? row.dimensions : [];
+          const metrics = Array.isArray(row?.metrics) ? row.metrics : [];
+          const campaignName = directDimensionName(dimensions, 0);
+          const visits = Math.round(numberOrZero(metrics[0]));
+          return {
+            date: startDate,
+            source: 'yandex',
+            medium: 'cpc',
+            campaignId: directDimensionId(dimensions, 0) || null,
+            campaignName: campaignName || 'Яндекс Директ',
+            clicks: visits,
+            directVisits: visits,
+            cost: null,
+            currency: null,
+            limited: true,
+            warning: Math.round(numberOrZero(totals[0])) > 0 ? YANDEX_DIRECT_LIMITED_WARNING : YANDEX_DIRECT_NO_DATA_WARNING,
+            noData: Math.round(numberOrZero(totals[0])) <= 0,
+            usedMetric: metric,
+            usedDimensions: dimension
+          };
+        }).filter((item: any) => numberOrZero(item.directVisits ?? item.clicks) > 0);
+        if (mapped.length) return mapped;
+        return [{
+          date: startDate,
+          source: 'yandex',
+          medium: 'cpc',
+          campaignId: null,
+          campaignName: Math.round(numberOrZero(totals[0])) > 0 ? 'Яндекс Директ' : '',
+          clicks: Math.round(numberOrZero(totals[0])),
+          directVisits: Math.round(numberOrZero(totals[0])),
+          cost: null,
+          currency: null,
+          limited: true,
+          warning: Math.round(numberOrZero(totals[0])) > 0 ? YANDEX_DIRECT_LIMITED_WARNING : YANDEX_DIRECT_NO_DATA_WARNING,
+          noData: Math.round(numberOrZero(totals[0])) <= 0,
+          usedMetric: metric,
+          usedDimensions: dimension
+        }];
+      } catch (error: any) {
+        const message = normalizeYandexMetrikaError(error);
+        technicalErrors.push((dimension || 'no_dimensions') + ' / ' + metric + ': ' + message);
+        logYandexDirectAttempt(integration, metric, dimension || null, message, 0);
+        if (!isYandexMetricOrDimensionError(error)) break;
+      }
+    }
+  }
+
+  const error: any = new Error('Не удалось получить данные Директа через Метрику. Проверьте clientLogin, доступы к Директу и связь кампаний со счетчиком Метрики.');
+  error.technicalErrors = technicalErrors.slice(-8);
+  throw error;
 }
 
 function summarizeYandexDirectCosts(items: any[]) {
-  const cost = roundMoney(items.reduce((sum, item) => sum + Number(item.cost || 0), 0)) || 0;
-  const clicks = items.reduce((sum, item) => sum + Math.round(numberOrZero(item.clicks)), 0);
+  const hasCost = items.some(item => item.cost !== null && item.cost !== undefined && Number.isFinite(Number(item.cost)));
+  const cost = hasCost ? (roundMoney(items.reduce((sum, item) => sum + Number(item.cost || 0), 0)) || 0) : null;
+  const clicks = items.reduce((sum, item) => sum + Math.round(numberOrZero(item.directVisits ?? item.clicks)), 0);
   const campaigns = new Set(items.map(item => item.campaignId || item.campaignName).filter(Boolean)).size;
-  return { cost, clicks, avgCpc: safeDivideMoney(cost, clicks), campaigns };
+  const noData = items.length === 0 || clicks === 0 || items.some(item => item.noData);
+  const limited = items.some(item => item.limited) || cost === null;
+  return { cost, clicks, directVisits: clicks, avgCpc: cost === null ? null : safeDivideMoney(cost, clicks), campaigns, noData, warning: noData ? YANDEX_DIRECT_NO_DATA_WARNING : (limited ? YANDEX_DIRECT_LIMITED_WARNING : null) };
 }
 
 function aggregateYandexDirectSources(items: any[]) {
@@ -2875,17 +3251,18 @@ function aggregateYandexDirectSources(items: any[]) {
       campaignId: item.campaignId || null,
       campaignName: item.campaignName || '',
       clicks: 0,
-      cost: 0
+      cost: null,
+      warning: item.warning || null
     });
     const group = groups.get(key);
-    group.clicks += Math.round(numberOrZero(item.clicks));
-    group.cost += Number(item.cost || 0);
+    group.clicks += Math.round(numberOrZero(item.directVisits ?? item.clicks));
+    if (item.cost !== null && item.cost !== undefined) group.cost = roundMoney(Number(group.cost || 0) + Number(item.cost || 0));
+    group.warning = group.warning || item.warning || null;
   });
   return Array.from(groups.values()).map(group => ({
     ...group,
-    cost: roundMoney(group.cost) || 0,
-    avgCpc: safeDivideMoney(group.cost, group.clicks)
-  })).sort((a, b) => Number(b.cost || 0) - Number(a.cost || 0));
+    avgCpc: group.cost === null ? null : safeDivideMoney(group.cost, group.clicks)
+  })).sort((a, b) => Number(b.clicks || 0) - Number(a.clicks || 0));
 }
 
 function attachCostMetrics(row: any) {
@@ -3144,12 +3521,30 @@ app.get('/api/calltracking/summary', requireAuth(), async (req, res) => {
   const sessions = new Set(events.map((event: any) => event.sessionId).filter(Boolean));
   const count = (type: string) => events.filter((event: any) => event.eventType === type).length;
   const dataset = await getCalltrackingMatchDataset(localDb, req.query);
+  let metrikaPhoneGoalConversions = 0;
+  let phoneClickWarning: string | null = null;
+  let metrikaGoalPartialErrors: any[] = [];
+  try {
+    const goalSummary = await getYandexPhoneGoalSummary(localDb, req.query);
+    metrikaPhoneGoalConversions = goalSummary.totalGoalConversions;
+    metrikaGoalPartialErrors = goalSummary.partialErrors;
+    if (count('phone_click') === 0 && metrikaPhoneGoalConversions > 0) {
+      phoneClickWarning = 'В Метрике есть конверсии звонков, но PBXPuls не получил phone_click события. Проверьте установку JS-скрипта и data-site-key.';
+    }
+  } catch (error: any) {
+    metrikaGoalPartialErrors = [{ error: normalizeYandexMetrikaError(error) }];
+  }
   res.json({
     summary: {
       visits: sessions.size,
       pageViews: count('page_view'),
       phoneImpressions: count('phone_impression'),
       phoneClicks: count('phone_click'),
+      pbxpulsPhoneClicks: count('phone_click'),
+      metrikaPhoneGoalConversions,
+      phoneClickDataGap: metrikaPhoneGoalConversions - count('phone_click'),
+      phoneClickWarning,
+      metrikaGoalPartialErrors,
       formSubmits: count('form_submit'),
       whatsappClicks: count('whatsapp_click'),
       telegramClicks: count('telegram_click'),
@@ -3299,12 +3694,13 @@ app.post('/api/marketing/direct/test', requireAuth(), async (req, res) => {
     const items = await fetchYandexDirectCostsViaMetrika(integration, startDate, endDate);
     const summary = summarizeYandexDirectCosts(items);
     await markYandexDirectIntegration(localDb, integration.id, { lastSyncAt: new Date().toISOString(), lastError: null });
-    res.json({ ok: true, status: 'connected', sample: summary });
+    res.json({ ok: true, status: summary.noData ? 'connected_no_data' : (summary.cost === null ? 'connected_limited' : 'connected'), warning: summary.warning || null, sample: summary });
   } catch (error: any) {
-    const message = normalizeYandexMetrikaError(error);
+    const technicalErrors = Array.isArray(error?.technicalErrors) ? error.technicalErrors : [];
+    const message = technicalErrors.length ? error.message : normalizeYandexMetrikaError(error);
     const hint = /direct_client_logins|client.*login|login/i.test(message) ? message + '. Укажите логины клиентов Директа или проверьте доступ к кампаниям.' : message;
     await markYandexDirectIntegration(localDb, integration.id, { lastError: hint });
-    res.json({ ok: false, status: 'error', error: hint });
+    res.json({ ok: false, status: 'error', error: hint, technicalErrors });
   }
 });
 
@@ -3314,17 +3710,18 @@ app.get('/api/marketing/direct/summary', requireAuth(), async (req, res) => {
   const siteId = cleanMarketingString(req.query.siteId, 120);
   const integration = findYandexDirectIntegration(localDb, siteId);
   if (!integration) return res.json({ status: 'not_configured', lastError: null, summary: { cost: 0, clicks: 0, avgCpc: null, campaigns: 0 } });
-  if (!integration.direct.enabled) return res.json({ status: 'disabled', lastError: integration.direct.lastError || null, summary: { cost: 0, clicks: 0, avgCpc: null, campaigns: 0 } });
+  if (!integration.direct.enabled) return res.json({ status: 'disabled', lastError: null, summary: { cost: null, clicks: null, avgCpc: null, campaigns: 0 } });
   const { startDate, endDate } = getYandexMetrikaDateRange(req.query);
   try {
     const items = await fetchYandexDirectCostsViaMetrika(integration, startDate, endDate);
     const summary = summarizeYandexDirectCosts(items);
     await markYandexDirectIntegration(localDb, integration.id, { lastSyncAt: new Date().toISOString(), lastError: null });
-    res.json({ status: 'connected', lastError: null, summary });
+    res.json({ status: summary.noData ? 'connected_no_data' : (summary.cost === null ? 'connected_limited' : 'connected'), lastError: null, warning: summary.warning || null, summary });
   } catch (error: any) {
-    const message = normalizeYandexMetrikaError(error);
+    const technicalErrors = Array.isArray(error?.technicalErrors) ? error.technicalErrors : [];
+    const message = technicalErrors.length ? error.message : normalizeYandexMetrikaError(error);
     await markYandexDirectIntegration(localDb, integration.id, { lastError: message });
-    res.json({ status: 'error', lastError: message, summary: { cost: 0, clicks: 0, avgCpc: null, campaigns: 0 } });
+    res.json({ status: 'error', lastError: message, technicalErrors, summary: { cost: null, clicks: null, avgCpc: null, campaigns: 0 } });
   }
 });
 
@@ -3334,24 +3731,254 @@ app.get('/api/marketing/direct/sources', requireAuth(), async (req, res) => {
   const siteId = cleanMarketingString(req.query.siteId, 120);
   const integration = findYandexDirectIntegration(localDb, siteId);
   if (!integration) return res.json({ status: 'not_configured', lastError: null, items: [] });
-  if (!integration.direct.enabled) return res.json({ status: 'disabled', lastError: integration.direct.lastError || null, items: [] });
+  if (!integration.direct.enabled) return res.json({ status: 'disabled', lastError: null, items: [] });
   const { startDate, endDate } = getYandexMetrikaDateRange(req.query);
   try {
     const items = aggregateYandexDirectSources(await fetchYandexDirectCostsViaMetrika(integration, startDate, endDate));
     await markYandexDirectIntegration(localDb, integration.id, { lastSyncAt: new Date().toISOString(), lastError: null });
-    res.json({ status: 'connected', lastError: null, items });
+    res.json({ status: items.some((item: any) => item.noData) ? 'connected_no_data' : (items.some((item: any) => item.cost === null || item.cost === undefined) ? 'connected_limited' : 'connected'), lastError: null, warning: items.find((item: any) => item.warning)?.warning || null, items });
+  } catch (error: any) {
+    const technicalErrors = Array.isArray(error?.technicalErrors) ? error.technicalErrors : [];
+    const message = technicalErrors.length ? error.message : normalizeYandexMetrikaError(error);
+    await markYandexDirectIntegration(localDb, integration.id, { lastError: message });
+    res.json({ status: 'error', lastError: message, technicalErrors, items: [] });
+  }
+});
+
+app.get('/api/marketing/yandex/oauth/url', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
+  const clientId = cleanMarketingString(process.env.YANDEX_CLIENT_ID, 240);
+  if (!clientId) return res.json({ configured: false, error: 'YANDEX_CLIENT_ID is not configured' });
+
+  const localDb = await readLocalDb();
+  if (!Array.isArray((localDb as any).yandexOAuthStates)) (localDb as any).yandexOAuthStates = [];
+  (localDb as any).yandexOAuthStates = (localDb as any).yandexOAuthStates.filter(isActiveYandexOAuthState);
+  const state = crypto.randomBytes(24).toString('hex');
+  const now = Date.now();
+  const redirectUri = getYandexRedirectUri(req);
+  (localDb as any).yandexOAuthStates.push({
+    state,
+    userKey: getYandexUserKey(req),
+    status: 'pending',
+    counters: [],
+    error: null,
+    redirectUri,
+    createdAt: new Date(now).toISOString(),
+    expiresAt: new Date(now + YANDEX_OAUTH_STATE_TTL_MS).toISOString()
+  });
+  await writeLocalDb(localDb);
+
+  const url = new URL(YANDEX_OAUTH_AUTHORIZE_URL);
+  url.searchParams.set('response_type', 'code');
+  url.searchParams.set('client_id', clientId);
+  url.searchParams.set('redirect_uri', redirectUri);
+  url.searchParams.set('scope', 'metrika:read');
+  url.searchParams.set('state', state);
+  res.json({ configured: true, url: url.toString() });
+});
+
+app.get('/api/marketing/yandex/oauth/callback', async (req, res) => {
+  const state = cleanMarketingString(req.query.state, 120);
+  const code = cleanMarketingString(req.query.code, 500);
+  const yandexOAuthReturnPath = '/?tab=marketing&marketingTab=integrations';
+  const redirectWithError = async (message: string, stateRecord?: any, localDb?: any) => {
+    const safeMessage = encodeURIComponent(cleanMarketingString(message, 180) || 'oauth_error');
+    if (stateRecord && localDb) {
+      stateRecord.status = 'error';
+      stateRecord.error = cleanMarketingString(message, 240) || 'oauth_error';
+      await writeLocalDb(localDb);
+    }
+    res.redirect(yandexOAuthReturnPath + '&yandexOAuth=error&message=' + safeMessage);
+  };
+
+  const localDb = await readLocalDb();
+  if (!Array.isArray((localDb as any).yandexOAuthStates)) (localDb as any).yandexOAuthStates = [];
+  (localDb as any).yandexOAuthStates = (localDb as any).yandexOAuthStates.filter(isActiveYandexOAuthState);
+  const stateRecord = (localDb as any).yandexOAuthStates.find((item: any) => item.state === state);
+  if (!stateRecord) return redirectWithError('OAuth state expired or invalid');
+  if (!code) return redirectWithError('OAuth code is missing', stateRecord, localDb);
+
+  try {
+    const accessToken = await exchangeYandexOAuthCode(code, stateRecord.redirectUri || getYandexRedirectUri(req));
+    const counters = await fetchYandexMetrikaCounters(accessToken);
+    stateRecord.status = 'success';
+    stateRecord.accessToken = accessToken;
+    stateRecord.counters = counters;
+    stateRecord.error = null;
+    stateRecord.updatedAt = new Date().toISOString();
+    stateRecord.expiresAt = new Date(Date.now() + YANDEX_OAUTH_STATE_TTL_MS).toISOString();
+    await writeLocalDb(localDb);
+    res.redirect(yandexOAuthReturnPath + '&yandexOAuth=success');
   } catch (error: any) {
     const message = normalizeYandexMetrikaError(error);
-    await markYandexDirectIntegration(localDb, integration.id, { lastError: message });
-    res.json({ status: 'error', lastError: message, items: [] });
+    return redirectWithError(message, stateRecord, localDb);
   }
+});
+
+app.get('/api/marketing/yandex/oauth/status', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
+  const localDb = await readLocalDb();
+  if (!Array.isArray((localDb as any).yandexOAuthStates)) (localDb as any).yandexOAuthStates = [];
+  (localDb as any).yandexOAuthStates = (localDb as any).yandexOAuthStates.filter(isActiveYandexOAuthState);
+  const userKey = getYandexUserKey(req);
+  const records = (localDb as any).yandexOAuthStates.filter((item: any) => item.userKey === userKey);
+  const latest = records.sort((a: any, b: any) => Date.parse(b.updatedAt || b.createdAt || '') - Date.parse(a.updatedAt || a.createdAt || ''))[0];
+  await writeLocalDb(localDb);
+  res.json(safeYandexOAuthResult(latest));
+});
+
+app.post('/api/marketing/yandex/connect-counter', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
+  const counterId = cleanMarketingString(req.body?.counterId, 40);
+  if (!counterId || !/^\d+$/.test(counterId)) return res.status(400).json({ ok: false, error: 'invalid_counterId' });
+
+  const localDb = await readLocalDb();
+  if (!Array.isArray((localDb as any).yandexOAuthStates)) (localDb as any).yandexOAuthStates = [];
+  (localDb as any).yandexOAuthStates = (localDb as any).yandexOAuthStates.filter(isActiveYandexOAuthState);
+  const userKey = getYandexUserKey(req);
+  const latest = (localDb as any).yandexOAuthStates
+    .filter((item: any) => item.userKey === userKey && item.status === 'success' && item.accessToken)
+    .sort((a: any, b: any) => Date.parse(b.updatedAt || b.createdAt || '') - Date.parse(a.updatedAt || a.createdAt || ''))[0];
+  if (!latest?.accessToken) return res.status(400).json({ ok: false, error: 'oauth_result_not_found' });
+
+  const sites = Array.isArray((localDb as any).calltrackingSites) ? (localDb as any).calltrackingSites : [];
+  const requestedSiteId = cleanMarketingString(req.body?.siteId, 120);
+  const domain = cleanMarketingString(req.body?.domain, 240) || cleanMarketingString(req.body?.siteName, 240) || null;
+  const site = requestedSiteId ? sites.find((item: any) => item.id === requestedSiteId) : (sites.length === 1 ? sites[0] : null);
+  if (!site?.id) return res.status(400).json({ ok: false, error: 'site_not_found' });
+
+  const counter = (Array.isArray(latest.counters) ? latest.counters : []).map(safeYandexMetrikaCounter).filter(Boolean).find((item: any) => item.counterId === counterId);
+  console.log('[YANDEX] connect-counter selected', { siteId: site.id, counterId, domain: domain || counter?.domain || null });
+  const name = cleanMarketingString(req.body?.name, 160) || counter?.name || cleanMarketingString(req.body?.siteName, 160) || 'Яндекс.Метрика';
+  const rawGoals = req.body?.goals && typeof req.body.goals === 'object' ? req.body.goals : {};
+  const goalValues = ['phoneClickGoalId', 'whatsappClickGoalId', 'telegramClickGoalId', 'emailClickGoalId', 'leadFormGoalId'].map(key => cleanMarketingString(rawGoals[key], 40));
+  if (goalValues.some(value => value && !/^\d+$/.test(value))) return res.status(400).json({ ok: false, error: 'invalid_goal_id' });
+  const goals = normalizeYandexMetrikaGoals(rawGoals);
+  if (!Array.isArray((localDb as any).yandexMetrikaIntegrations)) (localDb as any).yandexMetrikaIntegrations = [];
+
+  const now = new Date().toISOString();
+  let integration = (localDb as any).yandexMetrikaIntegrations.find((item: any) => item.siteId === site.id && item.isActive !== false)
+    || (localDb as any).yandexMetrikaIntegrations.find((item: any) => item.siteId === site.id && item.counterId === counterId);
+  if (integration) {
+    integration.counterId = counterId;
+    integration.domain = domain || counter?.domain || integration.domain || null;
+    integration.name = name;
+    integration.accessToken = latest.accessToken;
+    integration.goals = goals;
+    integration.tokenStatus = 'valid';
+    integration.isActive = true;
+    integration.disconnectedAt = null;
+    integration.lastSyncAt = now;
+    integration.lastError = null;
+    integration.updatedAt = now;
+  } else {
+    integration = {
+      id: 'ym_' + crypto.randomBytes(10).toString('hex'),
+      siteId: site.id,
+      counterId,
+      domain: domain || counter?.domain || null,
+      name,
+      accessToken: latest.accessToken,
+      tokenStatus: 'valid',
+      isActive: true,
+      lastSyncAt: now,
+      lastError: null,
+      goals,
+      direct: normalizeYandexDirectSettings(null),
+      createdAt: now,
+      updatedAt: now
+    };
+    (localDb as any).yandexMetrikaIntegrations.push(integration);
+  }
+  (localDb as any).yandexMetrikaIntegrations.forEach((item: any) => {
+    if (item.siteId === site.id && item.id !== integration.id && item.isActive !== false) {
+      item.isActive = false;
+      item.disconnectedAt = now;
+      item.tokenStatus = 'disconnected';
+      item.accessToken = null;
+      item.direct = { ...normalizeYandexDirectSettings(item.direct), enabled: false, lastError: null };
+      item.updatedAt = now;
+    }
+  });
+  try {
+    await fetchYandexMetrikaGoalsList(integration);
+    integration.lastGoalsSyncAt = new Date().toISOString();
+    integration.lastGoalsError = null;
+  } catch (error: any) {
+    integration.lastGoalsError = normalizeYandexMetrikaError(error);
+  }
+  latest.connectedCounterId = counterId;
+  latest.updatedAt = now;
+  await writeLocalDb(localDb);
+  res.json({ ok: true, integration: safeYandexMetrikaIntegration(integration) });
 });
 
 app.get('/api/marketing/metrika/integrations', requireAuth(), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
   const localDb = await readLocalDb();
   const integrations = Array.isArray(localDb.yandexMetrikaIntegrations) ? localDb.yandexMetrikaIntegrations : [];
-  res.json({ integrations: integrations.map(safeYandexMetrikaIntegration).filter(Boolean) });
+  const includeInactive = String(req.query.includeInactive || '') === 'true';
+  const visibleIntegrations = (includeInactive ? integrations : integrations.filter((item: any) => item.isActive !== false))
+    .slice()
+    .sort((a: any, b: any) => Date.parse(b.updatedAt || b.createdAt || '') - Date.parse(a.updatedAt || a.createdAt || ''));
+  res.json({ integrations: visibleIntegrations.map(safeYandexMetrikaIntegration).filter(Boolean) });
+});
+
+app.get('/api/marketing/metrika/integrations/:id/goals', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
+  const localDb = await readLocalDb();
+  const integration = (Array.isArray((localDb as any).yandexMetrikaIntegrations) ? (localDb as any).yandexMetrikaIntegrations : []).find((item: any) => item.id === req.params.id);
+  if (!integration) return res.status(404).json({ error: 'integration_not_found' });
+  if (integration.isActive === false) return res.status(400).json({ error: 'integration_inactive' });
+  if (!integration.accessToken) return res.status(400).json({ error: 'accessToken_missing' });
+  if (!integration.counterId) return res.status(400).json({ error: 'counterId_missing' });
+  try {
+    const goals = await fetchYandexMetrikaGoalsList(integration);
+    integration.lastGoalsSyncAt = new Date().toISOString();
+    integration.lastGoalsError = null;
+    integration.updatedAt = integration.updatedAt || new Date().toISOString();
+    await writeLocalDb(localDb);
+    res.json({ integrationId: integration.id, counterId: String(integration.counterId), goals, mappedGoals: normalizeYandexMetrikaGoals(integration.goals), updatedAt: integration.lastGoalsSyncAt });
+  } catch (error: any) {
+    const message = normalizeYandexMetrikaError(error);
+    integration.lastGoalsError = message;
+    integration.updatedAt = new Date().toISOString();
+    await writeLocalDb(localDb);
+    res.status(502).json({ status: 'error', error: message, integrationId: integration.id, counterId: String(integration.counterId), goals: [], mappedGoals: normalizeYandexMetrikaGoals(integration.goals), updatedAt: integration.lastGoalsSyncAt || null });
+  }
+});
+
+app.patch('/api/marketing/metrika/integrations/:id/goals', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
+  const localDb = await readLocalDb();
+  const integration = (Array.isArray((localDb as any).yandexMetrikaIntegrations) ? (localDb as any).yandexMetrikaIntegrations : []).find((item: any) => item.id === req.params.id);
+  if (!integration) return res.status(404).json({ error: 'integration_not_found' });
+  if (integration.isActive === false) return res.status(400).json({ error: 'integration_inactive' });
+  const rawGoals = req.body && typeof req.body === 'object' ? req.body : {};
+  const goalValues = ['phoneClickGoalId', 'whatsappClickGoalId', 'telegramClickGoalId', 'emailClickGoalId', 'leadFormGoalId'].map(key => cleanMarketingString(rawGoals[key], 40));
+  if (goalValues.some(value => value && !/^\d+$/.test(value))) return res.status(400).json({ error: 'invalid_goal_id' });
+  integration.goals = normalizeYandexMetrikaGoals(rawGoals);
+  integration.updatedAt = new Date().toISOString();
+  await writeLocalDb(localDb);
+  res.json({ ok: true, integration: safeYandexMetrikaIntegration(integration) });
+});
+
+app.delete('/api/marketing/metrika/integrations/:id', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
+  const localDb = await readLocalDb();
+  const integration = (Array.isArray((localDb as any).yandexMetrikaIntegrations) ? (localDb as any).yandexMetrikaIntegrations : []).find((item: any) => item.id === req.params.id);
+  if (!integration) return res.status(404).json({ error: 'integration_not_found' });
+  if (integration.isActive === false && !integration.accessToken) return res.json({ ok: true, integrationId: integration.id, status: 'already_disconnected' });
+  integration.isActive = false;
+  integration.disconnectedAt = new Date().toISOString();
+  integration.tokenStatus = 'disconnected';
+  integration.accessToken = null;
+  integration.lastError = null;
+  integration.lastGoalsError = null;
+  integration.direct = { ...normalizeYandexDirectSettings(integration.direct), enabled: false, lastError: null };
+  integration.updatedAt = new Date().toISOString();
+  await writeLocalDb(localDb);
+  res.json({ ok: true, integrationId: integration.id, status: 'disconnected' });
 });
 
 app.post('/api/marketing/metrika/counters', requireAuth(), async (req, res) => {
@@ -3381,7 +4008,7 @@ app.post('/api/marketing/metrika/integrations', requireAuth(), async (req, res) 
   const name = cleanMarketingString(req.body?.name, 160) || 'Яндекс.Метрика';
   const accessToken = String(req.body?.accessToken || '').trim();
   const rawGoals = req.body?.goals && typeof req.body.goals === 'object' ? req.body.goals : {};
-  const goalValues = ['phoneClickGoalId', 'whatsappClickGoalId', 'telegramClickGoalId', 'emailClickGoalId'].map(key => cleanMarketingString(rawGoals[key], 40));
+  const goalValues = ['phoneClickGoalId', 'whatsappClickGoalId', 'telegramClickGoalId', 'emailClickGoalId', 'leadFormGoalId'].map(key => cleanMarketingString(rawGoals[key], 40));
   if (goalValues.some(value => value && !/^\d+$/.test(value))) return res.status(400).json({ error: 'invalid_goal_id' });
   const goals = normalizeYandexMetrikaGoals(rawGoals);
   if (!siteId || !counterId || !/^\d+$/.test(counterId)) return res.status(400).json({ error: 'invalid_payload' });
@@ -3392,10 +4019,12 @@ app.post('/api/marketing/metrika/integrations', requireAuth(), async (req, res) 
   if (!Array.isArray(localDb.yandexMetrikaIntegrations)) localDb.yandexMetrikaIntegrations = [];
 
   const now = new Date().toISOString();
-  let integration = localDb.yandexMetrikaIntegrations.find((item: any) => item.siteId === siteId && item.counterId === counterId);
+  let integration = localDb.yandexMetrikaIntegrations.find((item: any) => item.siteId === siteId && item.isActive !== false)
+    || localDb.yandexMetrikaIntegrations.find((item: any) => item.siteId === siteId && item.counterId === counterId);
   if (!integration && !accessToken) return res.status(400).json({ error: 'accessToken_required' });
 
   if (integration) {
+    integration.counterId = counterId;
     integration.domain = domain;
     integration.name = name;
     if (accessToken) integration.accessToken = accessToken;
@@ -3447,6 +4076,59 @@ app.post('/api/marketing/metrika/integrations/:id/test', requireAuth(), async (r
     await markYandexMetrikaIntegration(localDb, integration.id, { tokenStatus: 'invalid', lastError: message });
     res.json({ ok: false, status: 'invalid', error: message });
   }
+});
+
+app.get('/api/marketing/metrika/goals/summary', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
+  const localDb = await readLocalDb();
+  try {
+    const result = await getYandexPhoneGoalSummary(localDb, req.query);
+    res.json(result);
+  } catch (error: any) {
+    res.json({ items: [], totalGoalConversions: 0, partialErrors: [{ error: normalizeYandexMetrikaError(error) }] });
+  }
+});
+
+app.get('/api/marketing/metrika/goals/events', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
+  const localDb = await readLocalDb();
+  const { startDate, endDate } = getYandexMetrikaDateRange(req.query);
+  const rows: any[] = [];
+  const partialErrors: any[] = [];
+  const requestedGoalId = cleanMarketingString(req.query.goalId, 40);
+  const integrations = getYandexMetrikaGoalIntegrations(localDb, req.query);
+
+  for (const integration of integrations) {
+    const mappedGoalId = normalizeYandexMetrikaGoals(integration.goals).phoneClickGoalId;
+    const goalId = requestedGoalId || mappedGoalId;
+    if (!goalId) {
+      partialErrors.push({ integrationId: integration.id, siteId: integration.siteId, counterId: String(integration.counterId || ''), error: 'phone goal is not mapped' });
+      continue;
+    }
+    if (!/^\d+$/.test(goalId)) {
+      partialErrors.push({ integrationId: integration.id, siteId: integration.siteId, counterId: String(integration.counterId || ''), error: 'invalid_goal_id' });
+      continue;
+    }
+    try {
+      let goals: any[] = [];
+      try { goals = await fetchYandexMetrikaGoalsList(integration); } catch (_goalListError) { goals = []; }
+      const goalName = getYandexMetrikaGoalName(goals, goalId);
+      rows.push(...await fetchYandexPhoneGoalRows(integration, startDate, endDate, goalId, goalName));
+    } catch (error: any) {
+      partialErrors.push({ integrationId: integration.id, siteId: integration.siteId, counterId: String(integration.counterId || ''), error: normalizeYandexMetrikaError(error) });
+    }
+  }
+
+  const hasExactRows = rows.some((row: any) => row.exactTimeAvailable);
+  const granularity = hasExactRows ? 'minute' : 'daily';
+  res.json({
+    rows,
+    granularity,
+    note: hasExactRows
+      ? 'Yandex Metrica returned goal rows with candidate time. They are still not PBXPuls phone_click events.'
+      : 'Yandex Metrica returned aggregated daily goal data. Exact click time is not available from this report.',
+    partialErrors
+  });
 });
 
 app.get('/api/marketing/metrika/summary', requireAuth(), async (req, res) => {

@@ -146,6 +146,56 @@ export interface CalltrackingSummaryResponse {
   clickToCallConversion?: number;
   averageSecondsToCall?: number | null;
   averageCallbackSeconds?: number | null;
+  pbxpulsPhoneClicks?: number;
+  metrikaPhoneGoalConversions?: number;
+  phoneClickDataGap?: number;
+  phoneClickWarning?: string | null;
+  metrikaGoalPartialErrors?: Array<{ integrationId?: string; siteId?: string; counterId?: string; error: string }>;
+}
+
+export interface YandexMetrikaPhoneGoalSummaryItem {
+  integrationId: string;
+  siteId: string;
+  siteName?: string | null;
+  domain?: string | null;
+  counterId: string;
+  phoneClickGoalId: string;
+  phoneClickGoalName?: string | null;
+  goalConversions: number;
+  visitsWithGoal: number;
+  source: 'yandex_metrika' | string;
+}
+
+export interface YandexMetrikaPhoneGoalSummaryResponse {
+  items: YandexMetrikaPhoneGoalSummaryItem[];
+  totalGoalConversions: number;
+  partialErrors: Array<{ integrationId?: string; siteId?: string; counterId?: string; error: string }>;
+}
+
+export interface YandexMetrikaPhoneGoalEventRow {
+  date: string;
+  dateTime?: string | null;
+  exactTimeAvailable?: boolean;
+  timeGranularity?: 'exact' | 'minute' | 'daily' | 'aggregated' | string;
+  siteId?: string | null;
+  domain?: string | null;
+  counterId?: string | null;
+  goalId: string;
+  goalName?: string | null;
+  source: 'yandex_metrika_goal' | string;
+  conversions: number;
+  page?: string | null;
+  ymClientId?: string | null;
+  utmSource?: string | null;
+  utmMedium?: string | null;
+  utmCampaign?: string | null;
+}
+
+export interface YandexMetrikaPhoneGoalEventsResponse {
+  rows: YandexMetrikaPhoneGoalEventRow[];
+  granularity: 'aggregated' | string;
+  note: string;
+  partialErrors: Array<{ integrationId?: string; siteId?: string; counterId?: string; error: string }>;
 }
 
 export interface YandexDirectSettings {
@@ -156,14 +206,18 @@ export interface YandexDirectSettings {
 }
 
 export interface YandexDirectSummary {
-  status: 'connected' | 'not_configured' | 'disabled' | 'error' | string;
+  status: 'connected' | 'connected_limited' | 'connected_no_data' | 'not_configured' | 'disabled' | 'error' | string;
   lastError: string | null;
   summary: {
     cost: number | null;
     clicks: number | null;
     avgCpc: number | null;
     campaigns: number;
+    directVisits?: number | null;
+    warning?: string | null;
+    noData?: boolean;
   };
+  warning?: string | null;
 }
 
 export interface YandexDirectSourceRow {
@@ -182,6 +236,15 @@ export interface YandexMetrikaGoals {
   whatsappClickGoalId?: string | null;
   telegramClickGoalId?: string | null;
   emailClickGoalId?: string | null;
+  leadFormGoalId?: string | null;
+}
+
+export interface YandexMetrikaGoal {
+  id: string;
+  name: string;
+  type?: string | null;
+  isRetargeting?: boolean | null;
+  status?: string | null;
 }
 
 export interface YandexMetrikaCounter {
@@ -201,6 +264,9 @@ export interface YandexMetrikaIntegration {
   isActive: boolean;
   lastSyncAt?: string | null;
   lastError?: string | null;
+  lastGoalsSyncAt?: string | null;
+  lastGoalsError?: string | null;
+  disconnectedAt?: string | null;
   goals?: YandexMetrikaGoals | null;
   direct?: YandexDirectSettings | null;
   createdAt?: string | null;
