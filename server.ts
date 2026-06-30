@@ -725,6 +725,31 @@ const normalizeCardDavBaseUrl = (value: any): string => {
   return raw;
 };
 
+const sanitizeCardDavLogUrl = (value: any): string => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    const url = new URL(raw);
+    url.username = '';
+    url.password = '';
+    return url.toString();
+  } catch (error) {
+    return raw.replace(/\/\/([^/@\s]+)@/g, '//');
+  }
+};
+
+const logCardDavSafe = (account: Pick<CardDavAccountForRequest, 'provider'>, step: string, url?: string, status?: number | string) => {
+  const parts = [
+    '[CONTACT_SYNC] CardDAV',
+    step,
+    'provider=' + account.provider,
+    'status=safe'
+  ];
+  if (url) parts.push('url=' + sanitizeCardDavLogUrl(url));
+  if (status !== undefined && status !== '') parts.push('httpStatus=' + String(status));
+  console.log(parts.join(' '));
+};
+
 const resolveCardDavUrl = (baseUrl: string, href: string): string => {
   const cleanHref = decodeXmlEntities(String(href || '').trim());
   if (!cleanHref) return '';
@@ -769,6 +794,7 @@ const cardDavRequest = async (account: CardDavAccountForRequest, url: string, op
     const location = response.headers?.get ? (response.headers.get('location') || '') : '';
     const allowed = options.acceptStatuses || [200, 207, 301, 302, 303, 307, 308];
     if (!allowed.includes(response.status)) {
+      logCardDavSafe(account, options.method + ' failed', url, response.status);
       throw new Error('CardDAV request failed');
     }
     return { status: response.status, url, location, body };
@@ -842,9 +868,13 @@ const uniqueCardDavAddressBooks = (items: CardDavAddressBook[]): CardDavAddressB
 
 const buildCardDavFallbackAddressBooks = (account: CardDavAccountForRequest): CardDavAddressBook[] => {
   const baseUrl = normalizeCardDavBaseUrl(account.carddavUrl);
+  const providerBaseUrl = normalizeCardDavBaseUrl(CONTACT_SYNC_PROVIDERS[account.provider].defaultCarddavUrl || account.carddavUrl);
   const encodedEmail = encodeURIComponent(account.email);
   const encodedUser = encodeURIComponent(String(account.email || '').split('@')[0] || account.email);
   return uniqueCardDavAddressBooks([
+    { url: providerBaseUrl + '/addressbook/' + encodedEmail + '/default/' },
+    { url: providerBaseUrl + '/addressbook/' + encodedEmail + '/' },
+    { url: providerBaseUrl + '/' },
     { url: baseUrl + '/' },
     { url: baseUrl + '/addressbook/' },
     { url: baseUrl + '/addressbooks/' + encodedEmail + '/default/' },
@@ -876,7 +906,7 @@ const discoverCardDavAddressBooks = async (account: CardDavAccountForRequest): P
       else if (principal) discoveryUrl = resolveCardDavUrl(baseUrl, principal);
     }
   } catch (error: any) {
-    console.log('[CONTACT_SYNC] CardDAV well-known discovery failed provider=' + account.provider + ' status=safe');
+    logCardDavSafe(account, 'well-known discovery failed', wellKnownUrl);
   }
 
   try {
@@ -884,7 +914,7 @@ const discoverCardDavAddressBooks = async (account: CardDavAccountForRequest): P
     const homeSet = parseCardDavPropHref(principalResp.body, 'addressbook-home-set');
     if (homeSet) discoveryUrl = resolveCardDavUrl(discoveryUrl, homeSet);
   } catch (error: any) {
-    console.log('[CONTACT_SYNC] CardDAV principal discovery failed provider=' + account.provider + ' status=safe');
+    logCardDavSafe(account, 'principal discovery failed', discoveryUrl);
   }
 
   try {
@@ -897,7 +927,7 @@ const discoverCardDavAddressBooks = async (account: CardDavAccountForRequest): P
       candidates.push({ url: discoveryUrl });
     }
   } catch (error: any) {
-    console.log('[CONTACT_SYNC] CardDAV addressbook listing failed provider=' + account.provider + ' status=safe');
+    logCardDavSafe(account, 'addressbook listing failed', discoveryUrl);
   }
 
   return uniqueCardDavAddressBooks([...candidates, ...buildCardDavFallbackAddressBooks(account)]);
@@ -916,7 +946,7 @@ const fetchCardDavVCards = async (account: CardDavAccountForRequest, options: { 
       lastError = new Error('CardDAV returned no contacts');
     } catch (error: any) {
       lastError = error;
-      console.log('[CONTACT_SYNC] CardDAV REPORT failed provider=' + account.provider + ' status=safe');
+      logCardDavSafe(account, 'REPORT failed', book.url);
     }
   }
   throw lastError || new Error('CardDAV address book was not found');
@@ -1024,19 +1054,35 @@ const diagnoseGoogleContacts = async (localDb: any, userId: string): Promise<{ p
   return { provider, ok: true, steps };
 };
 
-const diagnoseCardDavContacts = async (localDb: any, userId: string, provider: 'yandex' | 'mailru'): Promise<{ provider: ContactProvider; ok: boolean; steps: ContactSyncDiagnosticStep[] }> => {
+const diagnoseCardDavContacts = async (localDb: any, userId: string, provider: 'yandex' | 'mailru'): Promise<{ provider: ContactProvider; ok: boolean; steps: ContactSyncDiagnosticStep[]; accountStatus: ContactSyncStatus | null; externalAccountEmail: string | null; carddavUrl: string | null }> => {
   const steps: ContactSyncDiagnosticStep[] = [];
   const account = getUserContactSyncAccount(localDb, userId, provider);
-  if (!account || account.status !== 'connected') {
-    addContactSyncDiagnosticStep(steps, 'account', 'Проверка подключения', 'error', 'CardDAV account is not connected');
-    return { provider, ok: false, steps };
+  const accountStatus = account?.status || null;
+  const externalAccountEmail = account?.externalAccountEmail || null;
+  const carddavUrlForResponse = account?.carddavUrl || CONTACT_SYNC_PROVIDERS[provider].defaultCarddavUrl || null;
+  const result = (ok: boolean) => ({
+    provider,
+    ok,
+    steps,
+    accountStatus,
+    externalAccountEmail,
+    carddavUrl: carddavUrlForResponse
+  });
+
+  if (!account) {
+    addContactSyncDiagnosticStep(steps, 'account', 'Проверка подключения', 'error', 'CardDAV account was not found');
+    return result(false);
   }
   addContactSyncDiagnosticStep(steps, 'account', 'Проверка подключения', 'ok', 'Аккаунт найден');
+  if (account.status !== 'connected') {
+    addContactSyncDiagnosticStep(steps, 'account_status', 'Статус подключения', 'error', 'CardDAV account status is not connected');
+    return result(false);
+  }
 
   const encryptedPassword = String(account.encryptedPassword || '');
   if (!encryptedPassword) {
     addContactSyncDiagnosticStep(steps, 'password', 'Проверка пароля приложения', 'error', 'CardDAV password is not available');
-    return { provider, ok: false, steps };
+    return result(false);
   }
   addContactSyncDiagnosticStep(steps, 'password', 'Проверка пароля приложения', 'ok', 'Зашифрованный пароль найден');
 
@@ -1047,21 +1093,25 @@ const diagnoseCardDavContacts = async (localDb: any, userId: string, provider: '
     addContactSyncDiagnosticStep(steps, 'decrypt', 'Расшифровка секрета', 'ok', 'Секрет доступен');
   } catch (error: any) {
     addContactSyncDiagnosticStep(steps, 'decrypt', 'Расшифровка секрета', 'error', 'CardDAV password is not available');
-    return { provider, ok: false, steps };
+    return result(false);
   }
 
   const email = String(account.externalAccountEmail || '').trim();
   const carddavUrl = String(account.carddavUrl || CONTACT_SYNC_PROVIDERS[provider].defaultCarddavUrl || '').trim();
-  if (!email || !carddavUrl) {
-    addContactSyncDiagnosticStep(steps, 'carddav_url', 'Проверка CardDAV URL', 'error', 'CardDAV account is not connected');
-    return { provider, ok: false, steps };
+  if (!email) {
+    addContactSyncDiagnosticStep(steps, 'carddav_url', 'Проверка CardDAV URL', 'error', 'CardDAV account email is not available');
+    return result(false);
+  }
+  if (!carddavUrl) {
+    addContactSyncDiagnosticStep(steps, 'carddav_url', 'Проверка CardDAV URL', 'error', 'CardDAV URL is not available');
+    return result(false);
   }
   try {
     normalizeCardDavBaseUrl(carddavUrl);
     addContactSyncDiagnosticStep(steps, 'carddav_url', 'Проверка CardDAV URL', 'ok', 'CardDAV URL задан');
   } catch (error: any) {
     addContactSyncDiagnosticStep(steps, 'carddav_url', 'Проверка CardDAV URL', 'error', 'CardDAV request failed');
-    return { provider, ok: false, steps };
+    return result(false);
   }
 
   let addressBooks: CardDavAddressBook[] = [];
@@ -1071,7 +1121,7 @@ const diagnoseCardDavContacts = async (localDb: any, userId: string, provider: '
     addContactSyncDiagnosticStep(steps, 'discovery', 'CardDAV discovery', 'ok', 'Адресная книга найдена');
   } catch (error: any) {
     addContactSyncDiagnosticStep(steps, 'discovery', 'CardDAV discovery', 'error', error?.message === 'CardDAV address book was not found' ? 'CardDAV address book was not found' : 'CardDAV request failed');
-    return { provider, ok: false, steps };
+    return result(false);
   }
 
   const reportBody = buildAddressBookQueryReport();
@@ -1085,27 +1135,28 @@ const diagnoseCardDavContacts = async (localDb: any, userId: string, provider: '
       lastReportError = new Error('CardDAV returned no contacts');
     } catch (error: any) {
       lastReportError = error;
+      logCardDavSafe({ provider }, 'REPORT failed', book.url);
     }
   }
   if (lastReportError && !vcards.length && lastReportError.message !== 'CardDAV returned no contacts') {
     addContactSyncDiagnosticStep(steps, 'report', 'REPORT addressbook-query', 'error', 'CardDAV request failed');
-    return { provider, ok: false, steps };
+    return result(false);
   }
   addContactSyncDiagnosticStep(steps, 'report', 'REPORT addressbook-query', 'ok', 'REPORT выполнен');
 
   if (!vcards.length) {
     addContactSyncDiagnosticStep(steps, 'vcards', 'Извлечение vCard', 'warning', 'CardDAV returned no contacts');
-    return { provider, ok: false, steps };
+    return result(false);
   }
   addContactSyncDiagnosticStep(steps, 'vcards', 'Извлечение vCard', 'ok', 'vCard контакты получены: ' + vcards.length);
 
   const normalized = normalizeVCardContacts(provider, vcards.join('\n'));
   if (!normalized.length) {
     addContactSyncDiagnosticStep(steps, 'normalize', 'Разбор vCard', 'warning', 'vCard parse returned no contacts');
-    return { provider, ok: false, steps };
+    return result(false);
   }
   addContactSyncDiagnosticStep(steps, 'normalize', 'Разбор vCard', 'ok', 'Контакты распознаны: ' + normalized.length);
-  return { provider, ok: true, steps };
+  return result(true);
 };
 
 const buildExternalContactImportRawEntry = (item: any, userId: string): any => {
