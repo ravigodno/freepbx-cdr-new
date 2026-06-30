@@ -533,6 +533,20 @@ export default function App() {
     ));
   };
 
+  const parseDirectoryImportBoolean = (value: string, fieldLabel: string): { value: boolean; error?: string } => {
+    const raw = String(value || '').trim().toLowerCase();
+    if (!raw) return { value: false };
+    if (['true', '1', 'yes', 'да'].includes(raw)) return { value: true };
+    if (['false', '0', 'no', 'нет'].includes(raw)) return { value: false };
+    return { value: false, error: fieldLabel + ': допустимы true/false, 1/0, yes/no, да/нет' };
+  };
+
+  const cleanImportedEmail = (value: string): string => {
+    const raw = String(value || '').trim();
+    const markdownMail = raw.match(/^\[([^\]]+)\]\(mailto:([^\)]+)\)$/i);
+    return markdownMail ? markdownMail[2].trim() : raw;
+  };
+
   const getEntryPhones = (entry: DirectoryEntry): string[] => {
     const phones = Array.isArray(entry.phones) ? entry.phones : [];
     const all = [...phones, entry.number].map(v => String(v || '').trim()).filter(Boolean);
@@ -630,7 +644,7 @@ export default function App() {
 
       const lines = text.split(/\r?\n/).filter(line => line.trim());
       const header = parseCsvLine(lines[0] || '').map(h => h.toLowerCase());
-      const hasHeader = header.some(h => ['name','имя','фио','company','компания','phone1','телефон','номер'].includes(h));
+      const hasHeader = header.some(h => ['name','fullname','имя','фио','company','organization','компания','phone','phone1','телефон','номер'].includes(h));
       const dataLines = hasHeader ? lines.slice(1) : lines;
 
       const getByHeader = (cols: string[], ...names: string[]) => {
@@ -643,18 +657,20 @@ export default function App() {
 
       const parsed = dataLines.map((line, index) => {
         const cols = parseCsvLine(line);
-        const name = hasHeader ? (getByHeader(cols, 'name','имя','фио','contact','контакт') || cols[0]) : cols[0];
-        const company = hasHeader ? getByHeader(cols, 'company','компания','organization','организация') : '';
+        const name = hasHeader ? (getByHeader(cols, 'fullName','fullname','name','имя','фио','contact','контакт') || cols[0]) : cols[0];
+        const company = hasHeader ? getByHeader(cols, 'organization','company','компания','организация') : '';
         const position = hasHeader ? getByHeader(cols, 'position','должность','job','title') : '';
-        const phone1 = hasHeader ? (getByHeader(cols, 'phone1','телефон1','номер1','phone','телефон','номер') || cols[1]) : cols[1];
+        const phone1 = hasHeader ? (getByHeader(cols, 'phone','phone1','телефон1','номер1','телефон','номер') || cols[1]) : cols[1];
         const phone2 = hasHeader ? getByHeader(cols, 'phone2','телефон2','номер2') : '';
         const phone3 = hasHeader ? getByHeader(cols, 'phone3','телефон3','номер3') : '';
-        const email = hasHeader ? getByHeader(cols, 'email','почта','e-mail') : '';
+        const email = cleanImportedEmail(hasHeader ? getByHeader(cols, 'email','почта','e-mail') : '');
         const website = hasHeader ? getByHeader(cols, 'website','сайт','site') : '';
         const tagsRaw = hasHeader ? getByHeader(cols, 'tags','теги','tag') : '';
         const comment = hasHeader ? getByHeader(cols, 'comment','комментарий','notes') : (cols[3] || '');
         const typeRaw = hasHeader ? getByHeader(cols, 'type','тип') : (cols[2] || '');
-        const isSpam = /^(1|true|yes|да)$/i.test(hasHeader ? getByHeader(cols, 'is_spam','spam','спам') : '');
+        const isSpamRaw = hasHeader ? getByHeader(cols, 'isSpam','is_spam','spam','спам') : '';
+        const parsedSpam = parseDirectoryImportBoolean(isSpamRaw, 'isSpam');
+        const isSpam = parsedSpam.value;
         const isBlacklisted = /^(1|true|yes|да)$/i.test(hasHeader ? getByHeader(cols, 'is_blacklisted','blacklist','черный список','чс') : '');
         const phones = [phone1, phone2, phone3].map(v => String(v || '').trim()).filter(Boolean);
         if (!(name || company) || (phones.length === 0 && !email)) return null;
@@ -674,7 +690,12 @@ export default function App() {
         const internalExtension = hasHeader ? getByHeader(cols, 'internalExtension','внутренний номер','extension') : '';
         const linkedExternalNumber = hasHeader ? getByHeader(cols, 'linkedExternalNumber','связанный внешний номер','externalNumber') : '';
         const responsibleUserId = hasHeader ? getByHeader(cols, 'responsibleUserId','ответственный сотрудник','responsible') : '';
-        const importErrors = getDirectoryPhoneValidationErrors([...phones, linkedExternalNumber]);
+        const importErrors = [
+          ...typeErrors,
+          ...visibilityErrors,
+          ...(parsedSpam.error ? [parsedSpam.error] : []),
+          ...getDirectoryPhoneValidationErrors([...phones, linkedExternalNumber])
+        ];
 
         return {
           name: String(name).trim(),
@@ -730,15 +751,16 @@ export default function App() {
 
     try {
       const BOM = "\uFEFF";
-      let csvContent = BOM + "Имя,Компания,Должность,Телефон1,Телефон2,Телефон3,Email,Сайт,Теги,Комментарий,is_spam,is_blacklisted,Тип\r\n";
-      csvContent += `"Иванов Иван","РА Выгодно","Директор","79991234567","365200000","","mail@example.com","example.com","VIP;Клиент","Основной контакт",false,false,"client"\r\n`;
-      csvContent += `"Техподдержка","","","103","","","","","Внутренний","Внутренний номер отдела",false,false,"internal"\r\n`;
+      let csvContent = BOM + "type,visibility,isSpam,organization,fullName,phone,email,comment\r\n";
+      csvContent += "client,shared,false,ООО Ромашка,Иван Иванов,+79781234567,test@mail.ru,обычный контакт\r\n";
+      csvContent += "supplier,private,false,ООО Личный,Петр Петров,100,,личный контакт с внутренним номером\r\n";
+      csvContent += "government,shared,true,ФНС,Спам Контакт,99999999999,spam@mail.ru,спам-тест\r\n";
 
       const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.setAttribute("href", url);
-      link.setAttribute("download", "shablon_importa_kontaktov_v2.csv");
+      link.setAttribute("download", "shablon_importa_kontaktov_directory.csv");
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -755,24 +777,19 @@ export default function App() {
 
     try {
       const BOM = "\uFEFF";
-      let csvContent = BOM + "Имя,Компания,Должность,Телефон1,Телефон2,Телефон3,Email,Сайт,Теги,Комментарий,is_spam,is_blacklisted,Тип\r\n";
+      let csvContent = BOM + "type,visibility,isSpam,organization,fullName,phone,email,comment\r\n";
 
       directory.forEach(entry => {
         const phones = getEntryPhones(entry);
         const values = [
-          entry.name,
-          entry.company || '',
-          entry.position || '',
-          phones[0] || '',
-          phones[1] || '',
-          phones[2] || '',
-          entry.email || '',
-          entry.website || '',
-          getDirectoryEntryTags(entry).join(';'),
-          entry.comment || '',
+          entry.type || 'client',
+          entry.visibility === 'private' ? 'private' : 'shared',
           entry.isSpam ? 'true' : 'false',
-          entry.isBlacklisted ? 'true' : 'false',
-          entry.type
+          entry.company || '',
+          entry.name || '',
+          phones[0] || '',
+          entry.email || '',
+          entry.comment || ''
         ].map(v => `"${String(v || '').replace(/"/g, '""')}"`);
         csvContent += values.join(',') + "\r\n";
       });
@@ -3874,7 +3891,7 @@ export default function App() {
                   Импорт контактов
                 </h2>
                 <p className="mt-1 max-w-3xl text-xs leading-relaxed text-slate-500">
-                  Загрузите CSV-файл с контактами, проверьте обязательные поля, возможные ошибки и дубли перед сохранением. XLSX предусмотрен архитектурно, текущий импорт выполняется через CSV без новых зависимостей.
+                  Загрузите CSV-файл с контактами, проверьте обязательные поля, возможные ошибки и дубли перед сохранением. XLSX предусмотрен архитектурно, текущий импорт выполняется через CSV без новых зависимостей. Если visibility не заполнено, будет shared; если isSpam не заполнено, будет false. Телефон должен содержать от 2 до 11 цифр.
                 </p>
               </div>
               <button type="button" onClick={closeDirectoryImportPage} className="shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50">
@@ -3895,12 +3912,12 @@ export default function App() {
                     <tbody className="divide-y divide-slate-100">
                       {[
                         ['Тип контакта', 'type', 'обязательно', 'client / supplier / government'],
-                        ['Видимость', 'visibility', 'опционально', 'shared / private'],
-                        ['Спам', 'is_spam', 'опционально', 'true / false'],
-                        ['Организация', 'company', 'организация или ФИО', 'ООО Вектор'],
-                        ['ФИО', 'name', 'организация или ФИО', 'Иванов Иван'],
+                        ['Видимость', 'visibility', 'опционально, по умолчанию shared', 'shared — общий, private — личный'],
+                        ['Спам', 'isSpam', 'опционально, по умолчанию false', 'true / false / 1 / 0 / yes / no / да / нет'],
+                        ['Организация', 'organization', 'организация или ФИО', 'ООО Ромашка'],
+                        ['ФИО', 'fullName', 'организация или ФИО', 'Иван Иванов'],
                         ['Должность', 'position', 'опционально', 'директор'],
-                        ['Телефон', 'phone1', 'телефон или email', '79781234567'],
+                        ['Телефон', 'phone', 'телефон или email', '+79781234567; от 2 до 11 цифр'],
                         ['Доп. телефон', 'phone2', 'опционально', '365200000'],
                         ['Email', 'email', 'телефон или email', 'mail@example.com'],
                         ['Сайт', 'website', 'опционально', 'example.com'],
@@ -3923,7 +3940,7 @@ export default function App() {
               <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                 <h3 className="mb-2 text-sm font-black text-slate-900">Пример CSV</h3>
                 <div className="overflow-x-auto rounded-lg border border-slate-200 bg-slate-950 p-3 text-[11px] text-slate-100">
-                  <code className="whitespace-pre">type,visibility,is_spam,company,name,position,phone1,phone2,email,website,inn,kpp,ogrn,address,comment,department,tags,internalExtension,linkedExternalNumber,responsibleUserId{'\n'}client,shared,false,ООО Вектор,Иванов Иван,Директор,79781234567,,mail@example.com,example.com,,,,Симферополь,Первичный контакт,Продажи,VIP;Клиент,,,u1</code>
+                  <code className="whitespace-pre">type,visibility,isSpam,organization,fullName,phone,email,comment{'\n'}client,shared,false,ООО Ромашка,Иван Иванов,+79781234567,test@mail.ru,обычный контакт{'\n'}supplier,private,false,ООО Личный,Петр Петров,100,,личный контакт с внутренним номером{'\n'}government,shared,true,ФНС,Спам Контакт,99999999999,spam@mail.ru,спам-тест</code>
                 </div>
               </div>
             </div>

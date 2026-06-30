@@ -1204,7 +1204,7 @@ const normalizeDirectoryEntry = (entry: any, settings?: AppSettings): any => {
   const isInternal = allowedType === 'internal' || (!allowedType && phones[0] && onlyDigits(phones[0]).length <= 5);
   const normalizedType = allowedType || (isInternal ? 'internal' : 'client');
   const rawVisibility = String(entry?.visibility || '').trim().toLowerCase();
-  const visibility = rawVisibility === 'private' ? 'private' : 'shared';
+  const visibility = rawVisibility === 'private' || rawVisibility === 'личный' ? 'private' : 'shared';
   const boolValue = (value: any): boolean => {
     const raw = String(value ?? '').trim().toLowerCase();
     return value === true || ['1', 'true', 'yes', 'да', 'y'].includes(raw);
@@ -1314,6 +1314,13 @@ const prepareDirectoryEntryForSave = (raw: any, localDb: any, req: Request, exis
   const dbUser = getAuthenticatedDbUser(localDb, req);
   const ownerId = getDirectoryUserId(dbUser, authUser);
   const rawMerged = { ...(existing || {}), ...(raw || {}) };
+  const metadataErrors = getDirectoryImportMetadataErrors(rawMerged);
+  if (metadataErrors.length) {
+    const error = new Error(metadataErrors[0]) as any;
+    error.code = 'INVALID_DIRECTORY_IMPORT_METADATA';
+    error.details = metadataErrors;
+    throw error;
+  }
   const phoneErrors = getDirectoryPhoneValidationErrors(rawMerged);
   if (phoneErrors.length) {
     const error = new Error(DIRECTORY_PHONE_VALIDATION_MESSAGE) as any;
@@ -1348,6 +1355,32 @@ const findDirectoryContactByNumber = (directory: any[], num: any): any | null =>
 const parseBool = (value: any): boolean => {
   const s = String(value ?? '').trim().toLowerCase();
   return value === true || ['1', 'true', 'yes', 'да', 'y'].includes(s);
+};
+
+const parseDirectoryImportBooleanStrict = (value: any, fieldName = 'isSpam'): { value: boolean; error?: string } => {
+  const raw = String(value ?? '').trim().toLowerCase();
+  if (!raw) return { value: false };
+  if (['true', '1', 'yes', 'да'].includes(raw)) return { value: true };
+  if (['false', '0', 'no', 'нет'].includes(raw)) return { value: false };
+  return { value: false, error: fieldName + ': допустимы true/false, 1/0, yes/no, да/нет' };
+};
+
+const getDirectoryImportMetadataErrors = (entry: any): string[] => {
+  const errors: string[] = [];
+  const rawVisibility = String(entry?.visibility ?? '').trim().toLowerCase();
+  if (rawVisibility && !['shared', 'private', 'общий', 'личный'].includes(rawVisibility)) {
+    errors.push('visibility: допустимы shared или private');
+  }
+  const rawSpam = entry?.isSpam ?? entry?.is_spam ?? entry?.spam ?? entry?.['спам'];
+  if (rawSpam !== undefined && String(rawSpam ?? '').trim() !== '') {
+    const parsed = parseDirectoryImportBooleanStrict(rawSpam, 'isSpam');
+    if (parsed.error) errors.push(parsed.error);
+  }
+  const rawType = String(entry?.type ?? '').trim().toLowerCase();
+  if (rawType && !['client', 'supplier', 'government', 'internal', 'клиент', 'поставщик', 'госорган', 'внутренний'].includes(rawType)) {
+    errors.push('type: допустимы client, supplier, government');
+  }
+  return errors;
 };
 
 const parseCsvLine = (line: string): string[] => {
@@ -1395,10 +1428,10 @@ const parseDirectoryText = (text: string, settings?: AppSettings): any[] => {
     let raw: any;
     if (headers.length) {
       raw = {
-        name: get('name','имя','фио','contact','контакт') || cols[0],
-        company: get('company','компания','organization','организация'),
+        name: get('fullName','fullname','name','имя','фио','contact','контакт') || cols[0],
+        company: get('organization','company','компания','организация'),
         position: get('position','��олжность','job','title'),
-        phone1: get('phone1','телефон1','номер1','phone','телефон','номер') || cols[1],
+        phone1: get('phone','phone1','телефон1','номер1','телефон','номер') || cols[1],
         phone2: get('phone2','телефон2','номер2'),
         phone3: get('phone3','телефон3','номер3'),
         email: get('email','почта','e-mail'),
@@ -1415,7 +1448,7 @@ const parseDirectoryText = (text: string, settings?: AppSettings): any[] => {
         internalExtension: get('internalExtension','внутренний номер','extension'),
         linkedExternalNumber: get('linkedExternalNumber','связанный внешний номер','externalNumber'),
         responsibleUserId: get('responsibleUserId','ответственный сотрудник','responsible'),
-        isSpam: parseBool(get('is_spam','spam','спам')),
+        isSpam: parseDirectoryImportBooleanStrict(get('isSpam','is_spam','spam','спам')).value,
         isBlacklisted: parseBool(get('is_blacklisted','blacklist','черный список','чс'))
       };
     } else {
@@ -5071,6 +5104,10 @@ app.post('/api/directory', requireAuth(), async (req, res) => {
       res.status(400).json({ error: 'Invalid phone number format', message: DIRECTORY_PHONE_VALIDATION_MESSAGE, details: error.details || [] });
       return;
     }
+    if (error?.code === 'INVALID_DIRECTORY_IMPORT_METADATA') {
+      res.status(400).json({ error: 'Invalid directory import value', message: error.message || 'Неверное значение CSV', details: error.details || [] });
+      return;
+    }
     res.status(500).json({ error: error.message });
   }
 });
@@ -5121,6 +5158,10 @@ app.put('/api/directory/:id', requireAuth(), async (req, res) => {
   } catch (error: any) {
     if (error?.code === 'INVALID_DIRECTORY_PHONE') {
       res.status(400).json({ error: 'Invalid phone number format', message: DIRECTORY_PHONE_VALIDATION_MESSAGE, details: error.details || [] });
+      return;
+    }
+    if (error?.code === 'INVALID_DIRECTORY_IMPORT_METADATA') {
+      res.status(400).json({ error: 'Invalid directory import value', message: error.message || 'Неверное значение CSV', details: error.details || [] });
       return;
     }
     res.status(500).json({ error: error.message });
@@ -5188,6 +5229,10 @@ app.post('/api/directory/import', requireAuth(), async (req, res) => {
   } catch (error: any) {
     if (error?.code === 'INVALID_DIRECTORY_PHONE') {
       res.status(400).json({ error: 'Invalid phone number format', message: DIRECTORY_PHONE_VALIDATION_MESSAGE, details: error.details || [] });
+      return;
+    }
+    if (error?.code === 'INVALID_DIRECTORY_IMPORT_METADATA') {
+      res.status(400).json({ error: 'Invalid directory import value', message: error.message || 'Неверное значение CSV', details: error.details || [] });
       return;
     }
     res.status(500).json({ error: error.message });
@@ -5276,9 +5321,9 @@ app.post('/api/directory/import/preview', requireAuth(), async (req, res) => {
       try {
         normalizedEntry = prepareDirectoryEntryForSave(entry, localDb, req);
       } catch (error: any) {
-        if (error?.code === 'INVALID_DIRECTORY_PHONE') {
+        if (error?.code === 'INVALID_DIRECTORY_PHONE' || error?.code === 'INVALID_DIRECTORY_IMPORT_METADATA') {
           normalizedEntry = normalizeDirectoryEntry(entry, localDb.settings);
-          errors.push(...(error.details || [DIRECTORY_PHONE_VALIDATION_MESSAGE]));
+          errors.push(...(error.details || [error.message || DIRECTORY_PHONE_VALIDATION_MESSAGE]));
         } else {
           throw error;
         }
@@ -5296,6 +5341,10 @@ app.post('/api/directory/import/preview', requireAuth(), async (req, res) => {
   } catch (error: any) {
     if (error?.code === 'INVALID_DIRECTORY_PHONE') {
       res.status(400).json({ error: 'Invalid phone number format', message: DIRECTORY_PHONE_VALIDATION_MESSAGE, details: error.details || [] });
+      return;
+    }
+    if (error?.code === 'INVALID_DIRECTORY_IMPORT_METADATA') {
+      res.status(400).json({ error: 'Invalid directory import value', message: error.message || 'Неверное значение CSV', details: error.details || [] });
       return;
     }
     res.status(500).json({ error: error.message });
