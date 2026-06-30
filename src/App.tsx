@@ -103,6 +103,92 @@ import ProvisioningCenter from './modules/management/ProvisioningCenter';
 const BalanceCenter = lazy(() => import('./modules/management/BalanceCenter'));
 
 
+type DirectoryRequiredColumnKey = 'type' | 'fullName' | 'phone';
+type DirectorySystemColumnKey = 'actions';
+type DirectoryOptionalColumnKey =
+  | 'visibility'
+  | 'isSpam'
+  | 'organization'
+  | 'position'
+  | 'phone2'
+  | 'email'
+  | 'website'
+  | 'inn'
+  | 'kpp'
+  | 'ogrn'
+  | 'address'
+  | 'comment'
+  | 'department'
+  | 'group'
+  | 'tags'
+  | 'internalExtension'
+  | 'linkedExternalNumber'
+  | 'responsibleUserId';
+type DirectoryColumnKey = DirectoryRequiredColumnKey | DirectoryOptionalColumnKey | DirectorySystemColumnKey;
+
+interface DirectoryColumnConfig {
+  key: DirectoryColumnKey;
+  label: string;
+  required?: boolean;
+  system?: boolean;
+  className?: string;
+}
+
+const DIRECTORY_COLUMNS_STORAGE_KEY = 'pbxpuls.directory.columns.personal';
+const requiredDirectoryColumns: DirectoryRequiredColumnKey[] = ['type', 'fullName', 'phone'];
+const systemDirectoryColumns: DirectorySystemColumnKey[] = ['actions'];
+const defaultDirectoryOptionalColumns: DirectoryOptionalColumnKey[] = ['email', 'organization', 'visibility', 'isSpam'];
+const optionalDirectoryColumns: DirectoryColumnConfig[] = [
+  { key: 'visibility', label: 'Видимость' },
+  { key: 'isSpam', label: 'Спам' },
+  { key: 'organization', label: 'Организация', className: 'w-[230px] min-w-[190px] max-w-[230px]' },
+  { key: 'position', label: 'Должность' },
+  { key: 'phone2', label: 'Доп. телефон' },
+  { key: 'email', label: 'Email', className: 'min-w-[160px] max-w-[220px]' },
+  { key: 'website', label: 'Сайт', className: 'min-w-[150px] max-w-[200px]' },
+  { key: 'inn', label: 'ИНН' },
+  { key: 'kpp', label: 'КПП' },
+  { key: 'ogrn', label: 'ОГРН' },
+  { key: 'address', label: 'Адрес', className: 'min-w-[180px] max-w-[260px]' },
+  { key: 'comment', label: 'Комментарий', className: 'min-w-[180px] max-w-[260px]' },
+  { key: 'department', label: 'Отдел / группа' },
+  { key: 'group', label: 'Группа' },
+  { key: 'tags', label: 'Теги', className: 'min-w-[160px]' },
+  { key: 'internalExtension', label: 'Внутренний номер' },
+  { key: 'linkedExternalNumber', label: 'Связанный внешний номер' },
+  { key: 'responsibleUserId', label: 'Ответственный сотрудник' }
+];
+const requiredDirectoryColumnConfigs: DirectoryColumnConfig[] = [
+  { key: 'type', label: 'Тип контакта', required: true, className: 'w-[74px]' },
+  { key: 'fullName', label: 'ФИО', required: true, className: 'min-w-[150px]' },
+  { key: 'phone', label: 'Телефон', required: true, className: 'min-w-[160px]' }
+];
+const systemDirectoryColumnConfigs: DirectoryColumnConfig[] = [
+  { key: 'actions', label: 'Действия', system: true, className: 'min-w-[132px] text-right' }
+];
+const directoryColumnConfigs: DirectoryColumnConfig[] = [
+  ...requiredDirectoryColumnConfigs,
+  ...optionalDirectoryColumns,
+  ...systemDirectoryColumnConfigs
+];
+const optionalDirectoryColumnKeys = optionalDirectoryColumns.map(column => column.key as DirectoryOptionalColumnKey);
+
+const sanitizeDirectoryOptionalColumns = (columns: unknown): DirectoryOptionalColumnKey[] => {
+  const values = Array.isArray(columns) ? columns : [];
+  return values.filter((column): column is DirectoryOptionalColumnKey => optionalDirectoryColumnKeys.includes(column as DirectoryOptionalColumnKey));
+};
+
+const loadDirectoryOptionalColumns = (): DirectoryOptionalColumnKey[] => {
+  try {
+    const raw = localStorage.getItem(DIRECTORY_COLUMNS_STORAGE_KEY);
+    if (!raw) return defaultDirectoryOptionalColumns;
+    const parsed = JSON.parse(raw);
+    const optionalColumns = sanitizeDirectoryOptionalColumns(parsed?.optionalColumns);
+    return optionalColumns.length ? optionalColumns : defaultDirectoryOptionalColumns;
+  } catch {
+    return defaultDirectoryOptionalColumns;
+  }
+};
 
 const RU_MONTHS = [
   'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
@@ -490,6 +576,9 @@ export default function App() {
   const [dirTypeFilter, setDirTypeFilter] = useState<'all' | 'client' | 'supplier' | 'government'>('all');
   const [dirSpamMode, setDirSpamMode] = useState<'all' | 'exclude_spam' | 'only_spam'>('exclude_spam');
   const [dirVisibilityMode, setDirVisibilityMode] = useState<'all' | 'shared_only' | 'private_only' | 'my_private_only' | 'exclude_private' | 'exclude_shared'>('all');
+  const [isDirectoryColumnsPanelOpen, setIsDirectoryColumnsPanelOpen] = useState(false);
+  const [selectedDirectoryOptionalColumns, setSelectedDirectoryOptionalColumns] = useState<DirectoryOptionalColumnKey[]>(loadDirectoryOptionalColumns);
+  const [draftDirectoryOptionalColumns, setDraftDirectoryOptionalColumns] = useState<DirectoryOptionalColumnKey[]>(selectedDirectoryOptionalColumns);
   const [directoryPageMode, setDirectoryPageMode] = useState<'list' | 'import'>(() => window.location.pathname === '/management/directory/import' ? 'import' : 'list');
   const [urlImportTestResult, setUrlImportTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [isTestingUrlImport, setIsTestingUrlImport] = useState(false);
@@ -2764,6 +2853,213 @@ export default function App() {
   };
 
 
+  const effectiveDirectoryColumnConfigs: DirectoryColumnConfig[] = [
+    ...requiredDirectoryColumnConfigs,
+    ...optionalDirectoryColumns.filter(column => selectedDirectoryOptionalColumns.includes(column.key as DirectoryOptionalColumnKey)),
+    ...systemDirectoryColumnConfigs
+  ];
+
+  const formatDirectoryCellText = (value: unknown): string => {
+    const text = String(value ?? '').trim();
+    return text || '—';
+  };
+
+  const getDirectoryTypeLabel = (entry: DirectoryEntry): string => {
+    if (entry.type === 'internal') return 'Внутренний';
+    if (entry.type === 'supplier') return 'Поставщик';
+    if (entry.type === 'government') return 'Госорган';
+    return 'Клиент';
+  };
+
+  const toggleDraftDirectoryColumn = (columnKey: DirectoryOptionalColumnKey) => {
+    setDraftDirectoryOptionalColumns(prev => prev.includes(columnKey)
+      ? prev.filter(key => key !== columnKey)
+      : [...prev, columnKey]
+    );
+  };
+
+  const saveDirectoryColumnSettings = () => {
+    const optionalColumns = sanitizeDirectoryOptionalColumns(draftDirectoryOptionalColumns);
+    setSelectedDirectoryOptionalColumns(optionalColumns);
+    localStorage.setItem(DIRECTORY_COLUMNS_STORAGE_KEY, JSON.stringify({ optionalColumns }));
+    setIsDirectoryColumnsPanelOpen(false);
+  };
+
+  const resetDirectoryColumnSettings = () => {
+    localStorage.removeItem(DIRECTORY_COLUMNS_STORAGE_KEY);
+    setSelectedDirectoryOptionalColumns(defaultDirectoryOptionalColumns);
+    setDraftDirectoryOptionalColumns(defaultDirectoryOptionalColumns);
+    setIsDirectoryColumnsPanelOpen(false);
+  };
+
+  const renderDirectoryDash = () => <span className="text-slate-350 italic">—</span>;
+
+  const renderDirectoryTextCell = (value: unknown, maxClass = 'max-w-[220px]') => {
+    const text = formatDirectoryCellText(value);
+    if (text === '—') return renderDirectoryDash();
+    return <div className={`truncate break-words ${maxClass}`} title={text}>{text}</div>;
+  };
+
+  const renderDirectoryCell = (entry: DirectoryEntry, columnKey: DirectoryColumnKey) => {
+    const phones = getEntryPhones(entry);
+    const primaryPhone = phones[0] || '';
+    const extraPhones = phones.slice(1);
+
+    switch (columnKey) {
+      case 'type':
+        return (
+          <div className="flex items-center gap-2 whitespace-nowrap">
+            <span
+              title={entry.isBlacklisted ? 'Черный список' : entry.isSpam ? 'Спам' : getDirectoryTypeLabel(entry)}
+              className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border shadow-xs transition-all ${
+                entry.isBlacklisted
+                  ? 'bg-slate-900 text-white border-slate-900'
+                  : entry.isSpam
+                    ? 'bg-amber-50 text-amber-700 border-amber-200'
+                    : entry.type === 'internal'
+                      ? 'bg-blue-50 text-blue-700 border-blue-200'
+                      : entry.type === 'supplier'
+                        ? 'bg-orange-50 text-orange-700 border-orange-200'
+                        : entry.type === 'government'
+                          ? 'bg-purple-50 text-purple-700 border-purple-200'
+                          : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+              }`}
+            >
+              <DirectoryStatusIcon entry={entry} />
+            </span>
+            <span className="font-semibold text-slate-700">{getDirectoryTypeLabel(entry)}</span>
+          </div>
+        );
+      case 'fullName':
+        return <span className="text-[15px] font-medium text-slate-900">{entry.name || renderDirectoryDash()}</span>;
+      case 'phone':
+        return primaryPhone ? (
+          <div className="flex items-center gap-2 font-mono font-bold text-blue-800 dark:text-rose-200">
+            <span className="select-all">{primaryPhone}</span>
+            <button
+              onClick={() => triggerClickToCall(primaryPhone, entry.name)}
+              className="flex items-center rounded border border-emerald-150 bg-emerald-50 p-1 text-emerald-700 shadow-xs transition-all hover:scale-105 hover:bg-emerald-100 active:scale-95"
+              title={`Позвонить на ${primaryPhone} через SIP/AMI`}
+            >
+              <PhoneCall className="h-3 w-3" />
+            </button>
+          </div>
+        ) : renderDirectoryDash();
+      case 'phone2':
+        return extraPhones.length ? (
+          <div className="flex flex-col gap-1 font-mono font-bold text-blue-800 dark:text-rose-200">
+            {extraPhones.map(phone => (
+              <div key={phone} className="flex items-center gap-2">
+                <span className="select-all">{phone}</span>
+                <button
+                  onClick={() => triggerClickToCall(phone, entry.name)}
+                  className="flex items-center rounded border border-emerald-150 bg-emerald-50 p-1 text-emerald-700 shadow-xs transition-all hover:scale-105 hover:bg-emerald-100 active:scale-95"
+                  title={`Позвонить на ${phone} через SIP/AMI`}
+                >
+                  <PhoneCall className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : renderDirectoryDash();
+      case 'visibility':
+        return (
+          <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-bold ${entry.visibility === 'private' ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'}`}>
+            {entry.visibility === 'private' ? 'Личный' : 'Общий'}
+          </span>
+        );
+      case 'isSpam':
+        return (
+          <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-bold ${entry.isSpam ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-slate-200 bg-slate-50 text-slate-600'}`}>
+            {entry.isSpam ? 'Спам' : 'Нет'}
+          </span>
+        );
+      case 'organization':
+        return renderDirectoryTextCell(entry.company, 'max-w-[210px]');
+      case 'position':
+        return renderDirectoryTextCell(entry.position);
+      case 'email':
+        return entry.email ? (
+          <a href={`mailto:${entry.email}`} className="block truncate text-blue-600 hover:text-blue-700 hover:underline" title={entry.email}>{entry.email}</a>
+        ) : renderDirectoryDash();
+      case 'website':
+        return entry.website ? (
+          <a href={String(entry.website).startsWith('http') ? entry.website : `https://${entry.website}`} target="_blank" rel="noreferrer" className="block truncate text-blue-600 hover:text-blue-700 hover:underline" title={entry.website}>{entry.website}</a>
+        ) : renderDirectoryDash();
+      case 'inn':
+        return renderDirectoryTextCell(entry.inn, 'max-w-[150px]');
+      case 'kpp':
+        return renderDirectoryTextCell(entry.kpp, 'max-w-[150px]');
+      case 'ogrn':
+        return renderDirectoryTextCell(entry.ogrn, 'max-w-[170px]');
+      case 'address':
+        return renderDirectoryTextCell(entry.address, 'max-w-[240px]');
+      case 'comment':
+        return renderDirectoryTextCell(entry.comment, 'max-w-[240px]');
+      case 'department':
+        return renderDirectoryTextCell(entry.department);
+      case 'group':
+        return renderDirectoryTextCell(entry.group);
+      case 'tags':
+        return getDirectoryEntryTags(entry).length ? (
+          <div className="flex flex-wrap gap-1">
+            {getDirectoryEntryTags(entry).map(tag => (
+              <span key={tag} className="rounded-full border border-slate-200 bg-gradient-to-br from-slate-50 via-blue-50/40 to-sky-50/50 px-2 py-0.5 text-[10px] font-bold text-slate-600">{tag}</span>
+            ))}
+          </div>
+        ) : renderDirectoryDash();
+      case 'internalExtension':
+        return renderDirectoryTextCell(entry.internalExtension, 'max-w-[140px]');
+      case 'linkedExternalNumber':
+        return renderDirectoryTextCell(entry.linkedExternalNumber, 'max-w-[170px]');
+      case 'responsibleUserId':
+        return renderDirectoryTextCell(entry.responsibleUserId, 'max-w-[170px]');
+      case 'actions':
+        return (
+          <div className="flex items-center justify-end gap-1.5">
+            {hasPermission('edit_directory') && (
+              <button
+                onClick={() => handleToggleSpam(entry, !entry.isSpam)}
+                className={`rounded-lg border p-1.5 transition-all cursor-pointer ${entry.isSpam ? 'text-amber-700 bg-amber-50 border-amber-200' : 'text-slate-500 hover:text-amber-700 hover:bg-amber-50 border-transparent hover:border-amber-200'}`}
+                title={entry.isSpam ? 'Убрать из спама' : 'Пометить как спам'}
+              >
+                <Ban className="h-3.5 w-3.5" />
+              </button>
+            )}
+            {hasPermission('manage_blacklist') && (
+              <button
+                onClick={() => handleToggleBlacklist(entry, !entry.isBlacklisted, true)}
+                className={`rounded-lg border p-1.5 transition-all cursor-pointer ${entry.isBlacklisted ? 'text-blue-700 bg-blue-50 border-blue-200' : 'text-slate-500 hover:text-blue-700 hover:bg-blue-50 border-transparent hover:border-blue-200'}`}
+                title={entry.isBlacklisted ? 'Убрать из черного списка' : 'Добавить в черный список АТС'}
+              >
+                <AlertCircle className="h-3.5 w-3.5" />
+              </button>
+            )}
+            {hasPermission('edit_directory') && (
+              <button
+                onClick={() => openEditDirEntry(entry)}
+                className="rounded-lg border border-transparent p-1.5 text-slate-500 transition-all hover:border-slate-200 hover:bg-slate-100 hover:text-blue-700 cursor-pointer"
+                title="Редактировать контакт"
+              >
+                <Edit2 className="h-3.5 w-3.5" />
+              </button>
+            )}
+            {hasPermission('edit_directory') && (
+              <button
+                onClick={() => handleDeleteDirEntry(entry.id)}
+                className="rounded-lg border border-transparent p-1.5 text-slate-500 transition-all hover:border-slate-200 hover:bg-slate-100 hover:text-blue-700 cursor-pointer"
+                title="Удалить контакт"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+        );
+      default:
+        return renderDirectoryDash();
+    }
+  };
+
   if (!session) {
     return (
       <div id="login-container" className="min-h-screen relative overflow-hidden bg-gradient-to-br from-slate-50 via-blue-50/30 to-sky-50/40">
@@ -4173,6 +4469,18 @@ export default function App() {
 
             <button
               type="button"
+              onClick={() => {
+                setDraftDirectoryOptionalColumns(selectedDirectoryOptionalColumns);
+                setIsDirectoryColumnsPanelOpen(open => !open);
+              }}
+              className="flex shrink-0 items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 shadow-sm transition-all hover:bg-slate-50"
+            >
+              <Sliders className="h-4 w-4" />
+              Настроить столбцы
+            </button>
+
+            <button
+              type="button"
               onClick={openCreateDirEntry}
               className="flex shrink-0 items-center justify-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-semibold cursor-pointer hover:bg-blue-600 transition-all select-none shadow-sm"
             >
@@ -4182,24 +4490,81 @@ export default function App() {
           </div>
         </div>
 
+        {isDirectoryColumnsPanelOpen && (
+          <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0">
+                <h3 className="text-sm font-black text-slate-900">Столбцы таблицы</h3>
+                <p className="mt-1 max-w-3xl text-xs leading-relaxed text-slate-500">
+                  Выберите дополнительные поля, которые нужно показывать в справочнике. Экспорт CSV выгружает полный набор полей, даже если часть столбцов скрыта в таблице.
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-4 grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.4fr)]">
+              <div className="min-w-0 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <div className="mb-2 text-xs font-black uppercase tracking-wide text-slate-500">Обязательные столбцы</div>
+                <div className="space-y-2">
+                  {[...requiredDirectoryColumnConfigs, ...systemDirectoryColumnConfigs].map(column => (
+                    <label key={column.key} className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
+                      <span>{column.label}</span>
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-slate-400">
+                        <input type="checkbox" checked readOnly disabled className="h-3.5 w-3.5 rounded border-slate-300" />
+                        Всегда отображается
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-3">
+                <div className="mb-2 text-xs font-black uppercase tracking-wide text-slate-500">Дополнительные столбцы</div>
+                <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                  {optionalDirectoryColumns.map(column => (
+                    <label key={column.key} className="flex min-w-0 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100">
+                      <input
+                        type="checkbox"
+                        checked={draftDirectoryOptionalColumns.includes(column.key as DirectoryOptionalColumnKey)}
+                        onChange={() => toggleDraftDirectoryColumn(column.key as DirectoryOptionalColumnKey)}
+                        className="h-3.5 w-3.5 shrink-0 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      <span className="min-w-0 truncate">{column.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                onClick={resetDirectoryColumnSettings}
+                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-50"
+              >
+                Сбросить мои настройки
+              </button>
+              <button
+                type="button"
+                onClick={saveDirectoryColumnSettings}
+                className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white transition-colors hover:bg-blue-700"
+              >
+                Сохранить мои настройки
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* List Table of directory entries */}
-        <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
-          <div className="overflow-x-auto w-full">
-            <table className="w-full border-collapse text-left text-xs text-slate-500">
-              <thead className="bg-slate-50 text-slate-700 uppercase font-bold text-[10px] tracking-wider border-b border-slate-200">
+        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+          <div className="w-full overflow-x-auto">
+            <table className="w-full min-w-[980px] border-collapse text-left text-xs text-slate-500">
+              <thead className="border-b border-slate-200 bg-slate-50 text-[10px] font-bold uppercase tracking-wider text-slate-700">
                 <tr>
-                  <th scope="col" className="py-2 px-1.5">Статус</th>
-                  <th scope="col" className="py-2 px-3">ФИО</th>
-                  <th scope="col" className="py-2 px-3">Телефоны</th>
-                  <th scope="col" className="py-2 px-3">Видимость</th>
-                  <th scope="col" className="py-2 px-2 w-[230px]">Компания</th>
-                  <th scope="col" className="py-2 px-3">Должность</th>
-                  <th scope="col" className="py-2 px-3">Отдел</th>
-                  <th scope="col" className="py-2 px-1.5">Теги</th>
-                  <th scope="col" className="py-2 px-1.5">Комментарий</th>
-                  <th scope="col" className="py-2 px-1.5">Email</th>
-                  <th scope="col" className="py-2 px-3">Сайт</th>
-                  <th scope="col" className="py-3 px-4 text-right">Действия</th>
+                  {effectiveDirectoryColumnConfigs.map(column => (
+                    <th key={column.key} scope="col" className={`py-2 px-3 ${column.className || ''}`}>
+                      {column.label}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -4209,13 +4574,14 @@ export default function App() {
                   if (list.length === 0) {
                     return (
                       <tr>
-                        <td colSpan={12} className="py-8 text-center text-slate-400">
+                        <td colSpan={effectiveDirectoryColumnConfigs.length} className="py-8 text-center text-slate-400">
                           {isLoadingDirectory ? (
                             <div className="flex items-center justify-center gap-2">
                               <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
-                              <span>Загрузка данных справочника...</span></div>
+                              <span>Загрузка данных справочника...</span>
+                            </div>
                           ) : (
-                            "Записи не найдены"
+                            'Записи не найдены'
                           )}
                         </td>
                       </tr>
@@ -4223,164 +4589,18 @@ export default function App() {
                   }
 
                   return list.map((entry) => (
-                    <tr key={entry.id} className="hover:bg-slate-50/80 transition-colors">
-                      <td className="py-3.5 px-1.5 whitespace-nowrap text-center">
-                        <span
-                          title={entry.isBlacklisted ? 'Черный список' : entry.isSpam ? 'Спам' : entry.type === 'internal' ? 'Внутренний' : entry.type === 'supplier' ? 'Поставщик' : entry.type === 'government' ? 'Госорган' : 'Клиент'}
-                          className={`inline-flex items-center justify-center w-7 h-7 rounded-full border shadow-xs transition-all ${
-                            entry.isBlacklisted
-                              ? 'bg-slate-900 text-white border-slate-900'
-                              : entry.isSpam
-                                ? 'bg-amber-50 text-amber-700 border-amber-200'
-                                : entry.type === 'internal'
-                                  ? 'bg-blue-50 text-blue-700 border-blue-200'
-                                  : entry.type === 'supplier'
-                                    ? 'bg-orange-50 text-orange-700 border-orange-200'
-                                    : entry.type === 'government'
-                                      ? 'bg-purple-50 text-purple-700 border-purple-200'
-                                      : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                          }`}
-                        >
-                          <DirectoryStatusIcon entry={entry} />
-                        </span>
-                      </td>
-
-                      <td className="py-3.5 px-3 text-[15px] text-slate-900 font-medium">
-                        {entry.name}
-                      </td>
-
-                      <td className="py-3.5 px-3 text-blue-800 dark:text-rose-200 font-mono font-bold select-all">
-                        <div className="flex flex-col gap-1">
-                          {getEntryPhones(entry).map(phone => (
-                            <div key={phone} className="flex items-center gap-2">
-                              <span>{phone}</span>
-                              <button
-                                onClick={() => triggerClickToCall(phone, entry.name)}
-                                className="p-1 rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-150 cursor-pointer flex items-center transition-all shadow-xs hover:scale-105 active:scale-95"
-                                title={`Позвонить на ${phone} через SIP/AMI`}
-                              >
-                                <PhoneCall className="h-3 w-3" />
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      </td>
-
-                      <td className="py-3.5 px-3 text-slate-700">
-                        <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold border ${entry.visibility === 'private' ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>
-                          {entry.visibility === 'private' ? 'Личный' : 'Общий'}
-                        </span>
-                      </td>
-
-                      <td className="py-3.5 px-2 text-slate-700 w-[230px] max-w-[230px]">
-                        {entry.company ? (
-                          <div className="block truncate max-w-[210px]" title={entry.company}>
-                            {entry.company}
-                          </div>
-                        ) : (
-                          <span className="text-slate-350 italic">—</span>
-                        )}
-                      </td>
-
-                      <td className="py-3.5 px-3 text-slate-700">
-                        {entry.position || <span className="text-slate-350 italic">—</span>}
-                      </td>
-
-                      <td className="py-3.5 px-3 text-slate-700">
-                        {(entry as any).department || <span className="text-slate-350 italic">—</span>}
-                      </td>
-
-
-
-                      <td className="py-3.5 px-1.5">
-                        <div className="flex flex-wrap gap-1">
-                          {getDirectoryEntryTags(entry).length ? getDirectoryEntryTags(entry).map(tag => (
-                            <span key={tag} className="px-2 py-0.5 rounded-full bg-gradient-to-br from-slate-50 via-blue-50/40 to-sky-50/50 border border-slate-200 text-[10px] font-bold text-slate-600">{tag}</span>
-                          )) : <span className="text-slate-350 italic">—</span>}
-                        </div>
-                      </td>
-
-                      <td className="py-3.5 px-1.5 text-slate-650 w-[220px] max-w-[220px]">
-                        {entry.comment ? (
-                          <div className="block truncate max-w-[200px]" title={entry.comment}>
-                            {entry.comment}
-                          </div>
-                        ) : (
-                          <span className="text-slate-350 italic">—</span>
-                        )}
-                      </td>
-
-                      <td className="py-3.5 px-3 text-slate-700 max-w-[190px]">
-                        {entry.email ? (
-                          <a
-                            href={`mailto:${entry.email}`}
-                            className="text-blue-600 hover:text-blue-700 hover:underline truncate block"
-                            title={entry.email}
-                          >
-                            {entry.email}
-                          </a>
-                        ) : (
-                          <span className="text-slate-350 italic">—</span>
-                        )}
-                      </td>
-
-                      <td className="py-3.5 px-3 text-slate-700 max-w-[180px]">
-                        {entry.website ? (
-                          <a
-                            href={String(entry.website).startsWith('http') ? entry.website : `https://${entry.website}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-blue-600 hover:text-blue-700 hover:underline truncate block"
-                            title={entry.website}
-                          >
-                            {entry.website}
-                          </a>
-                        ) : (
-                          <span className="text-slate-350 italic">—</span>
-                        )}
-                      </td>
-
-                      <td className="py-3.5 px-4 text-right">
-                        <div className="flex items-center justify-end gap-1.5">
-                          {hasPermission('edit_directory') && (
-                            <button
-                              onClick={() => handleToggleSpam(entry, !entry.isSpam)}
-                              className={`p-1.5 rounded-lg border transition-all cursor-pointer ${entry.isSpam ? 'text-amber-700 bg-amber-50 border-amber-200' : 'text-slate-500 hover:text-amber-700 hover:bg-amber-50 border-transparent hover:border-amber-200'}`}
-                              title={entry.isSpam ? 'Убрать из спама' : 'Пометить как спам'}
-                            >
-                              <Ban className="h-3.5 w-3.5" />
-                            </button>
-                          )}
-                          {hasPermission('manage_blacklist') && (
-                            <button
-                              onClick={() => handleToggleBlacklist(entry, !entry.isBlacklisted, true)}
-                              className={`p-1.5 rounded-lg border transition-all cursor-pointer ${entry.isBlacklisted ? 'text-blue-700 bg-blue-50 border-blue-200' : 'text-slate-500 hover:text-blue-700 hover:bg-blue-50 border-transparent hover:border-blue-200'}`}
-                              title={entry.isBlacklisted ? 'Убрать из черного списка' : 'Добавить в черный список АТС'}
-                            >
-                              <AlertCircle className="h-3.5 w-3.5" />
-                            </button>
-                          )}
-                          {hasPermission('edit_directory') && (<button
-                            onClick={() => openEditDirEntry(entry)}
-                            className="p-1.5 text-slate-500 hover:text-blue-700 hover:bg-slate-100 rounded-lg border border-transparent hover:border-slate-200 transition-all cursor-pointer"
-                            title="Редактировать контакт"
-                          >
-                            <Edit2 className="h-3.5 w-3.5" />
-                          </button>)}
-                          {hasPermission('edit_directory') && (<button
-                            onClick={() => handleDeleteDirEntry(entry.id)}
-                            className="p-1.5 text-slate-500 hover:text-blue-700 hover:bg-slate-100 rounded-lg border border-transparent hover:border-slate-200 transition-all cursor-pointer"
-                            title="Удалить контакт"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>)}
-          </div>
-                      </td>
+                    <tr key={entry.id} className="transition-colors hover:bg-slate-50/80">
+                      {effectiveDirectoryColumnConfigs.map(column => (
+                        <td key={column.key} className={`py-3.5 px-3 align-top ${column.key === 'actions' ? 'text-right' : 'text-slate-700'}`}>
+                          {renderDirectoryCell(entry, column.key)}
+                        </td>
+                      ))}
                     </tr>
                   ));
                 })()}
               </tbody>
-            </table></div>
+            </table>
+          </div>
         </div>
       </section>
         </>
