@@ -168,6 +168,9 @@ export interface DirectoryEntry {
   updatedAt?: string;
 }
 
+export type ContactSyncDirection = 'import_only' | 'export_only' | 'two_way';
+export type ContactSyncConflictStrategy = 'manual_review' | 'pbxpuls_wins' | 'external_wins' | 'latest_update_wins';
+
 export interface ContactSyncAccount {
   id: string;
   userId: string;
@@ -180,6 +183,8 @@ export interface ContactSyncAccount {
   expiresAt?: string | null;
   lastSyncAt?: string | null;
   lastError?: string | null;
+  syncDirection?: ContactSyncDirection;
+  conflictStrategy?: ContactSyncConflictStrategy;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -191,10 +196,10 @@ export interface ContactSyncMapping {
   provider: 'google' | 'yandex' | 'mailru';
   externalContactId: string;
   lastSyncedAt?: string | null;
-  syncDirection: 'import_only' | 'export_only' | 'two_way';
+  syncDirection: ContactSyncDirection;
   externalUpdatedAt?: string | null;
   localUpdatedAt?: string | null;
-  conflictStrategy: 'server_wins' | 'external_wins' | 'manual_review';
+  conflictStrategy: ContactSyncConflictStrategy;
   createdAt?: string;
   updatedAt?: string;
 }

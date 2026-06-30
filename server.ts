@@ -366,7 +366,17 @@ const getDirectoryPhoneValidationErrors = (entry: any): string[] => {
 type ContactProvider = 'google' | 'yandex' | 'mailru';
 type ContactSyncAuthType = 'oauth' | 'carddav';
 type ContactSyncStatus = 'connected' | 'disconnected' | 'error' | 'not_configured';
+type ContactSyncDirection = 'import_only' | 'export_only' | 'two_way';
+type ContactSyncConflictStrategy = 'manual_review' | 'pbxpuls_wins' | 'external_wins' | 'latest_update_wins';
 type ContactPreviewStatus = 'new' | 'possible_duplicate' | 'invalid';
+type ContactSyncDiagnosticStatus = 'ok' | 'warning' | 'error';
+
+interface ContactSyncDiagnosticStep {
+  key: string;
+  label: string;
+  status: ContactSyncDiagnosticStatus;
+  message: string;
+}
 
 interface NormalizedExternalContact {
   provider: ContactProvider;
@@ -439,6 +449,10 @@ function decryptSecret(value: any): string {
 }
 
 const isContactProvider = (value: any): value is ContactProvider => ['google', 'yandex', 'mailru'].includes(String(value));
+const isContactSyncDirection = (value: any): value is ContactSyncDirection => ['import_only', 'export_only', 'two_way'].includes(String(value));
+const isContactSyncConflictStrategy = (value: any): value is ContactSyncConflictStrategy => ['manual_review', 'pbxpuls_wins', 'external_wins', 'latest_update_wins'].includes(String(value));
+const normalizeContactSyncDirection = (value: any): ContactSyncDirection => isContactSyncDirection(value) ? value : 'import_only';
+const normalizeContactSyncConflictStrategy = (value: any): ContactSyncConflictStrategy => isContactSyncConflictStrategy(value) ? value : 'manual_review';
 const nowIso = (): string => new Date().toISOString();
 
 const getCurrentDirectoryUserId = (localDb: any, req: Request): string => {
@@ -456,6 +470,8 @@ const sanitizeContactSyncAccount = (account: any, provider: ContactProvider) => 
   expiresAt: account?.expiresAt || null,
   lastSyncAt: account?.lastSyncAt || null,
   lastError: account?.lastError || null,
+  syncDirection: normalizeContactSyncDirection(account?.syncDirection),
+  conflictStrategy: normalizeContactSyncConflictStrategy(account?.conflictStrategy),
   createdAt: account?.createdAt || null,
   updatedAt: account?.updatedAt || null,
   configured: provider === 'google'
@@ -472,7 +488,7 @@ const upsertUserContactSyncAccount = (localDb: any, userId: string, provider: Co
   if (!Array.isArray((localDb as any).contactSyncAccounts)) (localDb as any).contactSyncAccounts = [];
   const existing = getUserContactSyncAccount(localDb, userId, provider);
   if (existing) {
-    Object.assign(existing, patch, { userId, provider, updatedAt: now });
+    Object.assign(existing, { syncDirection: normalizeContactSyncDirection(existing.syncDirection), conflictStrategy: normalizeContactSyncConflictStrategy(existing.conflictStrategy) }, patch, { userId, provider, updatedAt: now });
     return existing;
   }
   const account = {
@@ -481,6 +497,8 @@ const upsertUserContactSyncAccount = (localDb: any, userId: string, provider: Co
     provider,
     authType: CONTACT_SYNC_PROVIDERS[provider].authType,
     status: 'disconnected',
+    syncDirection: 'import_only',
+    conflictStrategy: 'manual_review',
     createdAt: now,
     updatedAt: now,
     ...patch
@@ -904,6 +922,191 @@ const fetchCardDavVCards = async (account: CardDavAccountForRequest, options: { 
   throw lastError || new Error('CardDAV address book was not found');
 };
 
+
+const addContactSyncDiagnosticStep = (steps: ContactSyncDiagnosticStep[], key: string, label: string, status: ContactSyncDiagnosticStatus, message: string): boolean => {
+  steps.push({ key, label, status, message });
+  return status !== 'error';
+};
+
+const contactSyncPreviewError = (res: Response, status: number, provider: ContactProvider, step: string, message: string) => {
+  return res.status(status).json({ provider, step, message, error: message });
+};
+
+const getUnsupportedContactSyncDirectionError = (syncDirection: any): string => {
+  const direction = normalizeContactSyncDirection(syncDirection);
+  if (direction === 'export_only') return 'Export sync is not implemented yet';
+  if (direction === 'two_way') return 'Two-way sync is not implemented yet';
+  return '';
+};
+
+const getGooglePeopleParams = (): URLSearchParams => new URLSearchParams({
+  pageSize: '50',
+  personFields: 'names,organizations,phoneNumbers,emailAddresses,urls,addresses,biographies,memberships,userDefined'
+});
+
+const diagnoseGoogleContacts = async (localDb: any, userId: string): Promise<{ provider: ContactProvider; ok: boolean; steps: ContactSyncDiagnosticStep[] }> => {
+  const provider: ContactProvider = 'google';
+  const steps: ContactSyncDiagnosticStep[] = [];
+  const account = getUserContactSyncAccount(localDb, userId, provider);
+  if (!account) {
+    addContactSyncDiagnosticStep(steps, 'account', 'Проверка подключения', 'error', 'Google account is not connected');
+    return { provider, ok: false, steps };
+  }
+  if (account.status !== 'connected') {
+    addContactSyncDiagnosticStep(steps, 'account', 'Проверка подключения', 'error', 'Google account is not connected');
+    return { provider, ok: false, steps };
+  }
+  addContactSyncDiagnosticStep(steps, 'account', 'Проверка подключения', 'ok', 'Аккаунт найден');
+
+  if (!process.env.GOOGLE_CONTACTS_CLIENT_ID || !process.env.GOOGLE_CONTACTS_CLIENT_SECRET || !process.env.GOOGLE_CONTACTS_REDIRECT_URI) {
+    addContactSyncDiagnosticStep(steps, 'config', 'Проверка Google OAuth config', 'error', 'Google Contacts sync is not configured');
+    return { provider, ok: false, steps };
+  }
+  addContactSyncDiagnosticStep(steps, 'config', 'Проверка Google OAuth config', 'ok', 'Google OAuth config задан');
+
+  const hasAccessToken = !!String(account.encryptedAccessToken || '');
+  const hasRefreshToken = !!String(account.encryptedRefreshToken || '');
+  if (!hasAccessToken && !hasRefreshToken) {
+    addContactSyncDiagnosticStep(steps, 'tokens', 'Проверка токенов', 'error', 'Google token is not available');
+    return { provider, ok: false, steps };
+  }
+  addContactSyncDiagnosticStep(steps, 'tokens', 'Проверка токенов', 'ok', 'Зашифрованные токены найдены');
+
+  let accessToken = '';
+  try {
+    accessToken = hasAccessToken ? decryptSecret(account.encryptedAccessToken || '') : '';
+    if (!accessToken && !hasRefreshToken) throw new Error('Google token is not available');
+    addContactSyncDiagnosticStep(steps, 'decrypt', 'Расшифровка токена', 'ok', 'Токен доступен');
+  } catch (error: any) {
+    addContactSyncDiagnosticStep(steps, 'decrypt', 'Расшифровка токена', 'error', 'Google token is not available');
+    return { provider, ok: false, steps };
+  }
+
+  const tokenExpired = !accessToken || (account.expiresAt && Date.parse(account.expiresAt) <= Date.now() + 60000);
+  if (tokenExpired) {
+    try {
+      accessToken = await refreshGoogleContactAccessToken(localDb, account);
+      addContactSyncDiagnosticStep(steps, 'refresh', 'Обновление access token', 'ok', 'Access token обновлен');
+    } catch (error: any) {
+      addContactSyncDiagnosticStep(steps, 'refresh', 'Обновление access token', 'error', 'Google token refresh failed');
+      return { provider, ok: false, steps };
+    }
+  } else {
+    addContactSyncDiagnosticStep(steps, 'refresh', 'Обновление access token', 'ok', 'Access token действителен');
+  }
+
+  let payload: any = null;
+  try {
+    let peopleResp = await fetch(GOOGLE_PEOPLE_CONNECTIONS_URL + '?' + getGooglePeopleParams().toString(), { headers: { Authorization: 'Bearer ' + accessToken } });
+    if (peopleResp.status === 401) {
+      accessToken = await refreshGoogleContactAccessToken(localDb, account);
+      peopleResp = await fetch(GOOGLE_PEOPLE_CONNECTIONS_URL + '?' + getGooglePeopleParams().toString(), { headers: { Authorization: 'Bearer ' + accessToken } });
+    }
+    payload = await peopleResp.json();
+    if (!peopleResp.ok) throw new Error('Google People API request failed');
+    addContactSyncDiagnosticStep(steps, 'people_api', 'Google People API', 'ok', 'Google People API отвечает');
+  } catch (error: any) {
+    addContactSyncDiagnosticStep(steps, 'people_api', 'Google People API', 'error', 'Google People API request failed');
+    return { provider, ok: false, steps };
+  }
+
+  const normalized = (payload?.connections || []).map(normalizeGooglePerson);
+  if (!normalized.length) {
+    addContactSyncDiagnosticStep(steps, 'preview', 'Preview contacts', 'warning', 'Google returned no contacts');
+    return { provider, ok: false, steps };
+  }
+  const items = buildContactPreviewItems(provider, normalized, localDb, userId);
+  if (!items.length) {
+    addContactSyncDiagnosticStep(steps, 'preview', 'Preview contacts', 'warning', 'Google returned no contacts');
+    return { provider, ok: false, steps };
+  }
+  addContactSyncDiagnosticStep(steps, 'preview', 'Preview contacts', 'ok', 'Контакты доступны: ' + items.length);
+  return { provider, ok: true, steps };
+};
+
+const diagnoseCardDavContacts = async (localDb: any, userId: string, provider: 'yandex' | 'mailru'): Promise<{ provider: ContactProvider; ok: boolean; steps: ContactSyncDiagnosticStep[] }> => {
+  const steps: ContactSyncDiagnosticStep[] = [];
+  const account = getUserContactSyncAccount(localDb, userId, provider);
+  if (!account || account.status !== 'connected') {
+    addContactSyncDiagnosticStep(steps, 'account', 'Проверка подключения', 'error', 'CardDAV account is not connected');
+    return { provider, ok: false, steps };
+  }
+  addContactSyncDiagnosticStep(steps, 'account', 'Проверка подключения', 'ok', 'Аккаунт найден');
+
+  const encryptedPassword = String(account.encryptedPassword || '');
+  if (!encryptedPassword) {
+    addContactSyncDiagnosticStep(steps, 'password', 'Проверка пароля приложения', 'error', 'CardDAV password is not available');
+    return { provider, ok: false, steps };
+  }
+  addContactSyncDiagnosticStep(steps, 'password', 'Проверка пароля приложения', 'ok', 'Зашифрованный пароль найден');
+
+  let appPassword = '';
+  try {
+    appPassword = decryptSecret(encryptedPassword);
+    if (!appPassword) throw new Error('CardDAV password is not available');
+    addContactSyncDiagnosticStep(steps, 'decrypt', 'Расшифровка секрета', 'ok', 'Секрет доступен');
+  } catch (error: any) {
+    addContactSyncDiagnosticStep(steps, 'decrypt', 'Расшифровка секрета', 'error', 'CardDAV password is not available');
+    return { provider, ok: false, steps };
+  }
+
+  const email = String(account.externalAccountEmail || '').trim();
+  const carddavUrl = String(account.carddavUrl || CONTACT_SYNC_PROVIDERS[provider].defaultCarddavUrl || '').trim();
+  if (!email || !carddavUrl) {
+    addContactSyncDiagnosticStep(steps, 'carddav_url', 'Проверка CardDAV URL', 'error', 'CardDAV account is not connected');
+    return { provider, ok: false, steps };
+  }
+  try {
+    normalizeCardDavBaseUrl(carddavUrl);
+    addContactSyncDiagnosticStep(steps, 'carddav_url', 'Проверка CardDAV URL', 'ok', 'CardDAV URL задан');
+  } catch (error: any) {
+    addContactSyncDiagnosticStep(steps, 'carddav_url', 'Проверка CardDAV URL', 'error', 'CardDAV request failed');
+    return { provider, ok: false, steps };
+  }
+
+  let addressBooks: CardDavAddressBook[] = [];
+  try {
+    addressBooks = await discoverCardDavAddressBooks({ provider, carddavUrl, email, appPassword });
+    if (!addressBooks.length) throw new Error('CardDAV address book was not found');
+    addContactSyncDiagnosticStep(steps, 'discovery', 'CardDAV discovery', 'ok', 'Адресная книга найдена');
+  } catch (error: any) {
+    addContactSyncDiagnosticStep(steps, 'discovery', 'CardDAV discovery', 'error', error?.message === 'CardDAV address book was not found' ? 'CardDAV address book was not found' : 'CardDAV request failed');
+    return { provider, ok: false, steps };
+  }
+
+  const reportBody = buildAddressBookQueryReport();
+  let vcards: string[] = [];
+  let lastReportError: any = null;
+  for (const book of addressBooks) {
+    try {
+      const report = await cardDavRequest({ provider, carddavUrl, email, appPassword }, book.url, { method: 'REPORT', depth: '1', body: reportBody, acceptStatuses: [200, 207] });
+      vcards = parseCardDavMultiStatus(report.body).slice(0, CARD_DAV_PREVIEW_LIMIT);
+      if (vcards.length) break;
+      lastReportError = new Error('CardDAV returned no contacts');
+    } catch (error: any) {
+      lastReportError = error;
+    }
+  }
+  if (lastReportError && !vcards.length && lastReportError.message !== 'CardDAV returned no contacts') {
+    addContactSyncDiagnosticStep(steps, 'report', 'REPORT addressbook-query', 'error', 'CardDAV request failed');
+    return { provider, ok: false, steps };
+  }
+  addContactSyncDiagnosticStep(steps, 'report', 'REPORT addressbook-query', 'ok', 'REPORT выполнен');
+
+  if (!vcards.length) {
+    addContactSyncDiagnosticStep(steps, 'vcards', 'Извлечение vCard', 'warning', 'CardDAV returned no contacts');
+    return { provider, ok: false, steps };
+  }
+  addContactSyncDiagnosticStep(steps, 'vcards', 'Извлечение vCard', 'ok', 'vCard контакты получены: ' + vcards.length);
+
+  const normalized = normalizeVCardContacts(provider, vcards.join('\n'));
+  if (!normalized.length) {
+    addContactSyncDiagnosticStep(steps, 'normalize', 'Разбор vCard', 'warning', 'vCard parse returned no contacts');
+    return { provider, ok: false, steps };
+  }
+  addContactSyncDiagnosticStep(steps, 'normalize', 'Разбор vCard', 'ok', 'Контакты распознаны: ' + normalized.length);
+  return { provider, ok: true, steps };
+};
 
 const buildExternalContactImportRawEntry = (item: any, userId: string): any => {
   const tags = Array.isArray(item?.tags)
@@ -5776,6 +5979,32 @@ app.get('/api/directory/sync/accounts', requireAuth(), async (req, res) => {
   res.json({ providers });
 });
 
+app.patch('/api/directory/sync/:provider/settings', requireAuth(), async (req, res) => {
+  try {
+    if (!(await checkUserPermission(req, 'view_directory'))) {
+      return res.status(403).json({ error: 'Access denied: view_directory permission required' });
+    }
+    const provider = String(req.params.provider || '');
+    if (!isContactProvider(provider)) return res.status(404).json({ error: 'Unknown contact sync provider' });
+    const syncDirection = String(req.body?.syncDirection || 'import_only');
+    const conflictStrategy = String(req.body?.conflictStrategy || 'manual_review');
+    if (!isContactSyncDirection(syncDirection)) return res.status(400).json({ error: 'Invalid syncDirection' });
+    if (!isContactSyncConflictStrategy(conflictStrategy)) return res.status(400).json({ error: 'Invalid conflictStrategy' });
+    const localDb = await readLocalDb();
+    const userId = getCurrentDirectoryUserId(localDb, req);
+    const account = upsertUserContactSyncAccount(localDb, userId, provider, {
+      authType: CONTACT_SYNC_PROVIDERS[provider].authType,
+      status: getUserContactSyncAccount(localDb, userId, provider)?.status || 'disconnected',
+      syncDirection,
+      conflictStrategy
+    });
+    await writeLocalDb(localDb);
+    res.json({ provider: sanitizeContactSyncAccount(account, provider) });
+  } catch (error: any) {
+    res.status(400).json({ error: error?.message || 'Contact sync settings update failed' });
+  }
+});
+
 app.get('/api/directory/sync/google/connect', requireAuth(), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_directory'))) {
     return res.status(403).json({ error: 'Access denied: view_directory permission required' });
@@ -5874,32 +6103,75 @@ const refreshGoogleContactAccessToken = async (localDb: any, account: any): Prom
   return tokens.access_token;
 };
 
+app.post('/api/directory/sync/:provider/diagnose', requireAuth(), async (req, res) => {
+  try {
+    if (!(await checkUserPermission(req, 'view_directory'))) {
+      return res.status(403).json({ error: 'Access denied: view_directory permission required' });
+    }
+    const provider = String(req.params.provider || '');
+    if (!isContactProvider(provider)) return res.status(404).json({ error: 'Unknown contact sync provider' });
+    const localDb = await readLocalDb();
+    const userId = getCurrentDirectoryUserId(localDb, req);
+    const result = provider === 'google'
+      ? await diagnoseGoogleContacts(localDb, userId)
+      : await diagnoseCardDavContacts(localDb, userId, provider);
+    res.json(result);
+  } catch (error: any) {
+    const provider = isContactProvider(req.params.provider) ? req.params.provider : 'google';
+    res.status(400).json({
+      provider,
+      ok: false,
+      steps: [{ key: 'diagnose', label: 'Диагностика', status: 'error', message: 'Contact sync diagnose failed' }]
+    });
+  }
+});
+
 app.post('/api/directory/sync/google/preview-import', requireAuth(), async (req, res) => {
   try {
     const localDb = await readLocalDb();
     const userId = getCurrentDirectoryUserId(localDb, req);
     const account = getUserContactSyncAccount(localDb, userId, 'google');
-    if (!account || account.status !== 'connected') return res.status(400).json({ error: 'Google Contacts account is not connected' });
-    let accessToken = decryptSecret(account.encryptedAccessToken || '');
-    if (!accessToken || (account.expiresAt && Date.parse(account.expiresAt) <= Date.now() + 60000)) {
-      accessToken = await refreshGoogleContactAccessToken(localDb, account);
+    if (!account || account.status !== 'connected') return contactSyncPreviewError(res, 400, 'google', 'account', 'Google account is not connected');
+    const unsupportedDirectionError = getUnsupportedContactSyncDirectionError(account.syncDirection);
+    if (unsupportedDirectionError) return res.status(400).json({ error: unsupportedDirectionError });
+    const hasAccessToken = !!String(account.encryptedAccessToken || '');
+    const hasRefreshToken = !!String(account.encryptedRefreshToken || '');
+    if (!hasAccessToken && !hasRefreshToken) return contactSyncPreviewError(res, 400, 'google', 'tokens', 'Google token is not available');
+    let accessToken = '';
+    try {
+      accessToken = hasAccessToken ? decryptSecret(account.encryptedAccessToken || '') : '';
+    } catch (error: any) {
+      return contactSyncPreviewError(res, 400, 'google', 'decrypt', 'Google token is not available');
     }
-    const params = new URLSearchParams({
-      pageSize: '50',
-      personFields: 'names,organizations,phoneNumbers,emailAddresses,urls,addresses,biographies,memberships,userDefined'
-    });
-    let peopleResp = await fetch(GOOGLE_PEOPLE_CONNECTIONS_URL + '?' + params.toString(), { headers: { Authorization: 'Bearer ' + accessToken } });
+    if (!accessToken || (account.expiresAt && Date.parse(account.expiresAt) <= Date.now() + 60000)) {
+      try {
+        accessToken = await refreshGoogleContactAccessToken(localDb, account);
+      } catch (error: any) {
+        return contactSyncPreviewError(res, 400, 'google', 'refresh', 'Google token refresh failed');
+      }
+    }
+    let peopleResp = await fetch(GOOGLE_PEOPLE_CONNECTIONS_URL + '?' + getGooglePeopleParams().toString(), { headers: { Authorization: 'Bearer ' + accessToken } });
     if (peopleResp.status === 401) {
-      accessToken = await refreshGoogleContactAccessToken(localDb, account);
-      peopleResp = await fetch(GOOGLE_PEOPLE_CONNECTIONS_URL + '?' + params.toString(), { headers: { Authorization: 'Bearer ' + accessToken } });
+      try {
+        accessToken = await refreshGoogleContactAccessToken(localDb, account);
+      } catch (error: any) {
+        return contactSyncPreviewError(res, 400, 'google', 'refresh', 'Google token refresh failed');
+      }
+      peopleResp = await fetch(GOOGLE_PEOPLE_CONNECTIONS_URL + '?' + getGooglePeopleParams().toString(), { headers: { Authorization: 'Bearer ' + accessToken } });
     }
     const payload: any = await peopleResp.json();
-    if (!peopleResp.ok) return res.status(400).json({ error: payload?.error?.message || 'Google People API request failed' });
+    if (!peopleResp.ok) return contactSyncPreviewError(res, 400, 'google', 'people_api', payload?.error?.message || 'Google People API request failed');
     const normalized = (payload.connections || []).map(normalizeGooglePerson);
+    if (!normalized.length) return contactSyncPreviewError(res, 404, 'google', 'preview', 'Google returned no contacts');
     const items = buildContactPreviewItems('google', normalized, localDb, userId);
     res.json({ provider: 'google', items, totalPreviewed: items.length });
   } catch (error: any) {
-    res.status(400).json({ error: error.message || 'Google Contacts preview import failed' });
+    const message = String(error?.message || 'Google Contacts preview import failed');
+    const step = message.includes('configured') ? 'config' : message.includes('refresh') ? 'refresh' : message.includes('token') ? 'tokens' : 'people_api';
+    const safeMessage = ['Google token is not available', 'Google token refresh failed', 'Google People API request failed', 'Google returned no contacts', 'Google Contacts sync is not configured', CONTACT_SYNC_ENCRYPTION_ERROR].includes(message)
+      ? message
+      : 'Google People API request failed';
+    contactSyncPreviewError(res, 400, 'google', step, safeMessage);
   }
 });
 
@@ -5935,24 +6207,33 @@ app.post('/api/directory/sync/yandex/connect', requireAuth(), (req, res) => conn
 app.post('/api/directory/sync/mailru/connect', requireAuth(), (req, res) => connectCardDavProvider(req, res, 'mailru'));
 
 app.post('/api/directory/sync/:provider/preview-import', requireAuth(), async (req, res) => {
+  let provider: ContactProvider = 'yandex';
   try {
-    const provider = String(req.params.provider || '');
+    provider = String(req.params.provider || '') as ContactProvider;
     if (!isContactProvider(provider)) return res.status(404).json({ error: 'Unknown contact sync provider' });
-    if (provider === 'google') return res.status(405).json({ error: 'Use /api/directory/sync/google/preview-import' });
+    if (provider === 'google') return res.status(405).json({ provider, step: 'provider', message: 'Use /api/directory/sync/google/preview-import', error: 'Use /api/directory/sync/google/preview-import' });
     const localDb = await readLocalDb();
     const userId = getCurrentDirectoryUserId(localDb, req);
     const account = getUserContactSyncAccount(localDb, userId, provider);
-    if (!account || account.status !== 'connected') return res.status(400).json({ error: 'CardDAV account is not connected' });
+    if (!account || account.status !== 'connected') return contactSyncPreviewError(res, 400, provider, 'account', 'CardDAV account is not connected');
+    const unsupportedDirectionError = getUnsupportedContactSyncDirectionError(account.syncDirection);
+    if (unsupportedDirectionError) return res.status(400).json({ error: unsupportedDirectionError });
     const encryptedPassword = String(account.encryptedPassword || '');
-    if (!encryptedPassword) return res.status(400).json({ error: 'CardDAV password is not available' });
-    const appPassword = decryptSecret(encryptedPassword);
-    if (!appPassword) return res.status(400).json({ error: 'CardDAV password is not available' });
+    if (!encryptedPassword) return contactSyncPreviewError(res, 400, provider, 'password', 'CardDAV password is not available');
+    let appPassword = '';
+    try {
+      appPassword = decryptSecret(encryptedPassword);
+    } catch (error: any) {
+      return contactSyncPreviewError(res, 400, provider, 'decrypt', 'CardDAV password is not available');
+    }
+    if (!appPassword) return contactSyncPreviewError(res, 400, provider, 'decrypt', 'CardDAV password is not available');
     const email = String(account.externalAccountEmail || '').trim();
     const carddavUrl = String(account.carddavUrl || CONTACT_SYNC_PROVIDERS[provider].defaultCarddavUrl || '').trim();
-    if (!email || !carddavUrl) return res.status(400).json({ error: 'CardDAV account is not connected' });
-    const vcards = await fetchCardDavVCards({ provider, carddavUrl, email, appPassword }, { limit: CARD_DAV_PREVIEW_LIMIT });
-    if (!vcards.length) return res.status(404).json({ error: 'CardDAV returned no contacts' });
+    if (!email || !carddavUrl) return contactSyncPreviewError(res, 400, provider, 'carddav_url', 'CardDAV account is not connected');
+    const vcards = await fetchCardDavVCards({ provider: provider as 'yandex' | 'mailru', carddavUrl, email, appPassword }, { limit: CARD_DAV_PREVIEW_LIMIT });
+    if (!vcards.length) return contactSyncPreviewError(res, 404, provider, 'vcards', 'CardDAV returned no contacts');
     const normalized = normalizeVCardContacts(provider, vcards.join('\n'));
+    if (!normalized.length) return contactSyncPreviewError(res, 404, provider, 'normalize', 'vCard parse returned no contacts');
     const items = buildContactPreviewItems(provider, normalized, localDb, userId);
     res.json({ provider, items, totalPreviewed: items.length });
   } catch (error: any) {
@@ -5964,9 +6245,16 @@ app.post('/api/directory/sync/:provider/preview-import', requireAuth(), async (r
       'CardDAV request failed',
       'CardDAV request failed: timeout',
       'CardDAV returned no contacts',
+      'vCard parse returned no contacts',
       CONTACT_SYNC_ENCRYPTION_ERROR
     ];
-    res.status(message === 'CardDAV returned no contacts' ? 404 : 400).json({ error: allowedMessages.includes(message) ? message : 'CardDAV request failed' });
+    const safeMessage = allowedMessages.includes(message) ? message : 'CardDAV request failed';
+    const step = safeMessage === 'CardDAV address book was not found' ? 'discovery'
+      : safeMessage === 'CardDAV returned no contacts' ? 'vcards'
+        : safeMessage === 'vCard parse returned no contacts' ? 'normalize'
+          : safeMessage === 'CardDAV password is not available' ? 'password'
+            : 'request';
+    contactSyncPreviewError(res, safeMessage === 'CardDAV returned no contacts' || safeMessage === 'vCard parse returned no contacts' ? 404 : 400, provider, step, safeMessage);
   }
 });
 
@@ -5976,6 +6264,9 @@ app.post('/api/directory/sync/:provider/import', requireAuth(), async (req, res)
     if (!isContactProvider(provider)) return res.status(404).json({ error: 'Unknown contact sync provider' });
     const localDb = await readLocalDb();
     const userId = getCurrentDirectoryUserId(localDb, req);
+    const account = getUserContactSyncAccount(localDb, userId, provider);
+    const unsupportedDirectionError = getUnsupportedContactSyncDirectionError(account?.syncDirection);
+    if (unsupportedDirectionError) return res.status(400).json({ error: unsupportedDirectionError });
     const bodyItems = Array.isArray(req.body?.items) ? req.body.items : [];
     const externalContactIds = Array.isArray(req.body?.externalContactIds) ? req.body.externalContactIds : [];
     const force = req.body?.force === true;

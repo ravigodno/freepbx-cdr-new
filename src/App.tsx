@@ -129,6 +129,8 @@ type DirectoryColumnKey = DirectoryRequiredColumnKey | DirectoryOptionalColumnKe
 type ContactSyncProvider = 'google' | 'yandex' | 'mailru';
 type ContactSyncStatus = 'connected' | 'disconnected' | 'error' | 'not_configured';
 type ContactSyncAuthType = 'oauth' | 'carddav';
+type ContactSyncDirection = 'import_only' | 'export_only' | 'two_way';
+type ContactSyncConflictStrategy = 'manual_review' | 'pbxpuls_wins' | 'external_wins' | 'latest_update_wins';
 
 interface ContactSyncProviderAccount {
   id?: string | null;
@@ -139,6 +141,8 @@ interface ContactSyncProviderAccount {
   carddavUrl?: string | null;
   lastSyncAt?: string | null;
   lastError?: string | null;
+  syncDirection?: ContactSyncDirection;
+  conflictStrategy?: ContactSyncConflictStrategy;
   configured?: boolean;
 }
 
@@ -168,6 +172,19 @@ interface CardDavConnectForm {
   email: string;
   appPassword: string;
   carddavUrl: string;
+}
+
+interface ContactSyncDiagnosticStep {
+  key: string;
+  label: string;
+  status: 'ok' | 'warning' | 'error';
+  message: string;
+}
+
+interface ContactSyncDiagnosticResult {
+  provider: ContactSyncProvider;
+  ok: boolean;
+  steps: ContactSyncDiagnosticStep[];
 }
 
 interface DirectoryColumnConfig {
@@ -682,6 +699,7 @@ export default function App() {
   const [contactSyncPreviewItems, setContactSyncPreviewItems] = useState<Record<ContactSyncProvider, ContactSyncPreviewItem[]>>({ google: [], yandex: [], mailru: [] });
   const [contactSyncSelectedIds, setContactSyncSelectedIds] = useState<Record<ContactSyncProvider, string[]>>({ google: [], yandex: [], mailru: [] });
   const [contactSyncForceDuplicates, setContactSyncForceDuplicates] = useState<Record<ContactSyncProvider, boolean>>({ google: false, yandex: false, mailru: false });
+  const [contactSyncDiagnostics, setContactSyncDiagnostics] = useState<Partial<Record<ContactSyncProvider, ContactSyncDiagnosticResult>>>({});
 
   // --- ADMIN DIRECTORY IMPORT / EXPORT & NORMALIZATION STATE ---
   const [isAdminPanelExpanded, setIsAdminPanelExpanded] = useState(false);
@@ -1154,12 +1172,20 @@ export default function App() {
     mailru: 'Mail.ru Contacts'
   };
 
+  const contactSyncDirectionLabels: Record<ContactSyncDirection, string> = {
+    import_only: 'Только импорт в PBXPuls',
+    export_only: 'Только выгрузка из PBXPuls',
+    two_way: 'Двухсторонняя синхронизация'
+  };
+
   const getContactSyncAccount = (provider: ContactSyncProvider): ContactSyncProviderAccount => {
     return contactSyncAccounts.find(item => item.provider === provider) || {
       provider,
       status: 'disconnected',
       authType: provider === 'google' ? 'oauth' : 'carddav',
       carddavUrl: provider === 'yandex' ? 'https://carddav.yandex.ru' : provider === 'mailru' ? 'https://carddav.mail.ru' : null,
+      syncDirection: 'import_only',
+      conflictStrategy: 'manual_review',
       configured: provider === 'google' ? false : true
     };
   };
@@ -1190,6 +1216,43 @@ export default function App() {
       loadContactSyncAccounts();
     }
   }, [isDirFormOpen, dirVisibility, loadContactSyncAccounts]);
+
+  const handleContactSyncSettingsChange = async (provider: ContactSyncProvider, syncDirection: ContactSyncDirection) => {
+    const account = getContactSyncAccount(provider);
+    setContactSyncBusyProvider(provider);
+    setContactSyncMessage('');
+    try {
+      const resp = await fetch('/api/directory/sync/' + provider + '/settings', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + session?.token
+        },
+        body: JSON.stringify({
+          syncDirection,
+          conflictStrategy: account.conflictStrategy || 'manual_review'
+        })
+      });
+      if (resp.status === 401) {
+        handleAuthError(resp);
+        return;
+      }
+      const data = await resp.json();
+      if (resp.ok && data.provider) {
+        setContactSyncAccounts(prev => {
+          const next = prev.filter(item => item.provider !== provider);
+          return [...next, data.provider];
+        });
+        setContactSyncMessage('Режим синхронизации ' + contactSyncProviderLabels[provider] + ' сохранен: ' + contactSyncDirectionLabels[syncDirection] + '.');
+      } else {
+        setContactSyncMessage(data.error || 'Не удалось сохранить настройки синхронизации.');
+      }
+    } catch (e: any) {
+      setContactSyncMessage(e.message || 'Ошибка сохранения настроек синхронизации.');
+    } finally {
+      setContactSyncBusyProvider(null);
+    }
+  };
 
   const handleGoogleContactsConnect = async () => {
     setContactSyncBusyProvider('google');
@@ -1262,6 +1325,41 @@ export default function App() {
       }
     } catch (e: any) {
       setContactSyncMessage(e.message || 'Ошибка предпросмотра ' + contactSyncProviderLabels[provider] + '.');
+    } finally {
+      setContactSyncBusyProvider(null);
+    }
+  };
+
+  const handleDiagnoseContactSync = async (provider: ContactSyncProvider) => {
+    setContactSyncBusyProvider(provider);
+    setContactSyncMessage('');
+    try {
+      const resp = await fetch('/api/directory/sync/' + provider + '/diagnose', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + session?.token }
+      });
+      if (resp.status === 401) {
+        handleAuthError(resp);
+        return;
+      }
+      const data = await resp.json();
+      if (resp.ok && Array.isArray(data.steps)) {
+        setContactSyncDiagnostics(prev => ({ ...prev, [provider]: data }));
+        const failed = data.steps.find((step: ContactSyncDiagnosticStep) => step.status === 'error') || data.steps.find((step: ContactSyncDiagnosticStep) => step.status === 'warning');
+        setContactSyncMessage(data.ok ? 'Диагностика ' + contactSyncProviderLabels[provider] + ': подключение работает.' : 'Диагностика ' + contactSyncProviderLabels[provider] + ': ' + (failed?.message || 'обнаружена ошибка.'));
+      } else {
+        setContactSyncDiagnostics(prev => ({
+          ...prev,
+          [provider]: { provider, ok: false, steps: [{ key: 'diagnose', label: 'Диагностика', status: 'error', message: data.message || data.error || 'Диагностика недоступна' }] }
+        }));
+        setContactSyncMessage(data.message || data.error || 'Диагностика ' + contactSyncProviderLabels[provider] + ' недоступна.');
+      }
+    } catch (e: any) {
+      setContactSyncDiagnostics(prev => ({
+        ...prev,
+        [provider]: { provider, ok: false, steps: [{ key: 'diagnose', label: 'Диагностика', status: 'error', message: e.message || 'Ошибка диагностики' }] }
+      }));
+      setContactSyncMessage(e.message || 'Ошибка диагностики ' + contactSyncProviderLabels[provider] + '.');
     } finally {
       setContactSyncBusyProvider(null);
     }
@@ -3568,6 +3666,10 @@ export default function App() {
     const previewItems = contactSyncPreviewItems[provider] || [];
     const selectedIds = contactSyncSelectedIds[provider] || [];
     const selectedCount = selectedIds.length;
+    const syncDirection = account.syncDirection || 'import_only';
+    const diagnostic = contactSyncDiagnostics[provider];
+    const diagnosticNeedsCardDavHint = isCardDav && diagnostic?.steps?.some(step => step.key === 'discovery' && step.status === 'error');
+    const diagnosticNeedsGoogleConfigHint = isGoogle && diagnostic?.steps?.some(step => step.key === 'config' && step.status === 'error');
     return (
       <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-650">
         <div className="mb-2 flex items-center justify-between gap-2">
@@ -3620,6 +3722,7 @@ export default function App() {
         )}
 
         <div className="mt-3 flex flex-wrap gap-2">
+          <button type="button" onClick={() => handleDiagnoseContactSync(provider)} disabled={isBusy} className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-50">{isBusy ? 'Проверка...' : 'Проверить подключение'}</button>
           {isGoogle && !isConnected && (
             <button type="button" onClick={handleGoogleContactsConnect} disabled={isBusy || account.configured === false} className="rounded-md bg-blue-600 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-blue-700 disabled:opacity-50">
               {isBusy ? 'Подключение...' : 'Подключить Google Contacts'}
@@ -3637,6 +3740,35 @@ export default function App() {
             </>
           )}
         </div>
+
+        {diagnostic && (
+          <div className="mt-3 rounded-md border border-slate-200 bg-white p-2">
+            <div className="mb-2 text-[11px] font-black uppercase text-slate-500">Диагностика подключения</div>
+            <div className="space-y-1.5">
+              {(diagnostic.steps || []).map((step) => {
+                const stepClass = step.status === 'ok'
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                  : step.status === 'warning'
+                    ? 'border-amber-200 bg-amber-50 text-amber-800'
+                    : 'border-red-200 bg-red-50 text-red-800';
+                const dotClass = step.status === 'ok' ? 'bg-emerald-500' : step.status === 'warning' ? 'bg-amber-500' : 'bg-red-500';
+                return (
+                  <div key={step.key} className={'rounded-md border px-2 py-1.5 ' + stepClass}>
+                    <div className="flex items-start gap-2">
+                      <span className={'mt-1 h-2 w-2 shrink-0 rounded-full ' + dotClass}></span>
+                      <div className="min-w-0">
+                        <div className="font-bold text-[11px]">{step.label}</div>
+                        <div className="break-words text-[11px]">{step.message}</div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {diagnosticNeedsCardDavHint && <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800">Проверьте CardDAV URL и пароль приложения.</div>}
+            {diagnosticNeedsGoogleConfigHint && <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800">Проверьте GOOGLE_CONTACTS_CLIENT_ID, GOOGLE_CONTACTS_CLIENT_SECRET и GOOGLE_CONTACTS_REDIRECT_URI.</div>}
+          </div>
+        )}
 
         {previewItems.length > 0 && (
           <div className="mt-3 rounded-md border border-slate-200 bg-white p-2">
