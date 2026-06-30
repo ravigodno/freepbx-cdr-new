@@ -1157,6 +1157,12 @@ const normalizeDirectoryEntry = (entry: any, settings?: AppSettings): any => {
   const allowedType = ['internal', 'client', 'supplier', 'government'].includes(rawType) ? rawType : '';
   const isInternal = allowedType === 'internal' || (!allowedType && phones[0] && onlyDigits(phones[0]).length <= 5);
   const normalizedType = allowedType || (isInternal ? 'internal' : 'client');
+  const rawVisibility = String(entry?.visibility || '').trim().toLowerCase();
+  const visibility = rawVisibility === 'private' ? 'private' : 'shared';
+  const boolValue = (value: any): boolean => {
+    const raw = String(value ?? '').trim().toLowerCase();
+    return value === true || ['1', 'true', 'yes', 'да', 'y'].includes(raw);
+  };
 
   return {
     id: entry?.id || ('dir_' + Date.now() + '_' + Math.floor(Math.random() * 100000)),
@@ -1164,18 +1170,112 @@ const normalizeDirectoryEntry = (entry: any, settings?: AppSettings): any => {
     number: phones[0] || String(entry?.number || '').trim(),
     phones,
     type: normalizedType,
+    visibility,
+    ownerUserId: visibility === 'private' ? (String(entry?.ownerUserId || entry?.ownerId || entry?.userId || '').trim() || null) : null,
     company: String(entry?.company || entry?.organization || entry?.org || '').trim(),
     department: String(entry?.department || '').trim(),
-      position: String(entry?.position || entry?.job || entry?.title || '').trim(),
+    group: String(entry?.group || entry?.team || '').trim(),
+    position: String(entry?.position || entry?.job || entry?.title || '').trim(),
     email: String(entry?.email || '').trim(),
     website: String(entry?.website || entry?.site || '').trim(),
+    inn: String(entry?.inn || entry?.ИНН || '').trim(),
+    kpp: String(entry?.kpp || entry?.КПП || '').trim(),
+    ogrn: String(entry?.ogrn || entry?.ОГРН || '').trim(),
+    address: String(entry?.address || entry?.адрес || '').trim(),
+    internalExtension: String(entry?.internalExtension || entry?.extension || entry?.internal_number || '').trim(),
+    linkedExternalNumber: String(entry?.linkedExternalNumber || entry?.externalNumber || entry?.linked_external_number || '').trim(),
+    responsibleUserId: String(entry?.responsibleUserId || entry?.responsible || '').trim(),
     tags,
-    isSpam: entry?.isSpam === true || entry?.is_spam === true || String(entry?.isSpam || entry?.is_spam || '').toLowerCase() === 'true' || tags.some((t: string) => t.toLowerCase() === 'спам' || t.toLowerCase() === 'spam'),
-    isBlacklisted: entry?.isBlacklisted === true || entry?.is_blacklisted === true || String(entry?.isBlacklisted || entry?.is_blacklisted || '').toLowerCase() === 'true',
+    isSpam: boolValue(entry?.isSpam ?? entry?.is_spam) || tags.some((t: string) => t.toLowerCase() === 'спам' || t.toLowerCase() === 'spam'),
+    isBlacklisted: boolValue(entry?.isBlacklisted ?? entry?.is_blacklisted),
     comment: String(entry?.comment || entry?.notes || '').trim(),
     createdAt: entry?.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
+};
+
+const getDirectoryUserId = (dbUser: any, authUser: any): string => {
+  return String(dbUser?.id || authUser?.username || '').trim();
+};
+
+const isDirectorySuperUser = (authUser: any): boolean => authUser?.role === 'su';
+
+const canReadDirectoryEntry = (entry: any, authUser: any, dbUser: any, settings?: AppSettings): boolean => {
+  const normalized = normalizeDirectoryEntry(entry, settings);
+  if (normalized.visibility !== 'private') return true;
+  if (isDirectorySuperUser(authUser)) return true;
+  return !!normalized.ownerUserId && normalized.ownerUserId === getDirectoryUserId(dbUser, authUser);
+};
+
+const canWriteDirectoryEntry = (entry: any, authUser: any, dbUser: any, settings?: AppSettings): boolean => {
+  const normalized = normalizeDirectoryEntry(entry, settings);
+  if (isDirectorySuperUser(authUser)) return true;
+  if (normalized.visibility !== 'private') return true;
+  return !!normalized.ownerUserId && normalized.ownerUserId === getDirectoryUserId(dbUser, authUser);
+};
+
+const applyDirectoryAccessAndFilters = (entries: any[], req: Request, localDb: any): any[] => {
+  const authUser = (req as any).user;
+  const dbUser = getAuthenticatedDbUser(localDb, req);
+  const q = String(req.query.q || req.query.search || '').trim().toLowerCase();
+  const type = String(req.query.type || 'all').trim().toLowerCase();
+  const spamMode = String(req.query.spamMode || 'exclude_spam').trim().toLowerCase();
+  const visibilityMode = String(req.query.visibilityMode || 'all').trim().toLowerCase();
+  const currentUserId = getDirectoryUserId(dbUser, authUser);
+  const superUser = isDirectorySuperUser(authUser);
+
+  return (entries || [])
+    .map((entry: any) => normalizeDirectoryEntry(entry, localDb.settings))
+    .filter((entry: any) => canReadDirectoryEntry(entry, authUser, dbUser, localDb.settings))
+    .filter((entry: any) => {
+      if (['client', 'supplier', 'government', 'internal'].includes(type) && entry.type !== type) return false;
+      if (spamMode === 'exclude_spam' && entry.isSpam) return false;
+      if (spamMode === 'only_spam' && !entry.isSpam) return false;
+
+      if (visibilityMode === 'shared_only' && entry.visibility !== 'shared') return false;
+      if (visibilityMode === 'exclude_shared' && entry.visibility === 'shared') return false;
+      if (visibilityMode === 'exclude_private' && entry.visibility === 'private') return false;
+      if (visibilityMode === 'my_private_only' && !(entry.visibility === 'private' && entry.ownerUserId === currentUserId)) return false;
+      if (visibilityMode === 'private_only') {
+        if (entry.visibility !== 'private') return false;
+        if (!superUser && entry.ownerUserId !== currentUserId) return false;
+      }
+
+      if (!q) return true;
+      const haystack = [
+        entry.name,
+        entry.number,
+        ...(entry.phones || []),
+        entry.company,
+        entry.position,
+        entry.department,
+        entry.group,
+        entry.email,
+        entry.website,
+        entry.inn,
+        entry.kpp,
+        entry.ogrn,
+        entry.address,
+        entry.comment,
+        ...(entry.tags || [])
+      ].join(' ').toLowerCase();
+      return haystack.includes(q);
+    });
+};
+
+const prepareDirectoryEntryForSave = (raw: any, localDb: any, req: Request, existing?: any): any => {
+  const authUser = (req as any).user;
+  const dbUser = getAuthenticatedDbUser(localDb, req);
+  const ownerId = getDirectoryUserId(dbUser, authUser);
+  const merged = normalizeDirectoryEntry({ ...(existing || {}), ...(raw || {}) }, localDb.settings);
+  if (merged.visibility === 'private') {
+    merged.ownerUserId = isDirectorySuperUser(authUser)
+      ? (String(raw?.ownerUserId || existing?.ownerUserId || ownerId).trim() || ownerId)
+      : ownerId;
+  } else {
+    merged.ownerUserId = null;
+  }
+  return merged;
 };
 
 const directoryEntryMatchesNumber = (entry: any, num: any): boolean => {
@@ -1253,7 +1353,16 @@ const parseDirectoryText = (text: string, settings?: AppSettings): any[] => {
         website: get('website','сайт','site'),
         tags: get('tags','теги','tag'),
         type: get('type','тип'),
+        visibility: get('visibility','видимость'),
         comment: get('comment','комментарий','notes'),
+        inn: get('inn','инн'),
+        kpp: get('kpp','кпп'),
+        ogrn: get('ogrn','огрн'),
+        address: get('address','адрес'),
+        group: get('group','группа'),
+        internalExtension: get('internalExtension','внутренний номер','extension'),
+        linkedExternalNumber: get('linkedExternalNumber','связанный внешний номер','externalNumber'),
+        responsibleUserId: get('responsibleUserId','ответственный сотрудник','responsible'),
         isSpam: parseBool(get('is_spam','spam','спам')),
         isBlacklisted: parseBool(get('is_blacklisted','blacklist','черный список','чс'))
       };
@@ -1611,7 +1720,9 @@ function normalizeLocalDbSchema(db: any): any {
     calltrackingEvents: Array.isArray(db?.calltrackingEvents) ? db.calltrackingEvents : [],
     calltrackingSessions: Array.isArray(db?.calltrackingSessions) ? db.calltrackingSessions : [],
     yandexMetrikaIntegrations: Array.isArray(db?.yandexMetrikaIntegrations) ? db.yandexMetrikaIntegrations.map(normalizeStoredYandexMetrikaIntegration) : [],
-    yandexOAuthStates: Array.isArray(db?.yandexOAuthStates) ? db.yandexOAuthStates.filter(isActiveYandexOAuthState) : []
+    yandexOAuthStates: Array.isArray(db?.yandexOAuthStates) ? db.yandexOAuthStates.filter(isActiveYandexOAuthState) : [],
+    contactSyncAccounts: Array.isArray(db?.contactSyncAccounts) ? db.contactSyncAccounts : [],
+    contactSyncMappings: Array.isArray(db?.contactSyncMappings) ? db.contactSyncMappings : []
   };
 
   return next;
@@ -1663,6 +1774,8 @@ function getDefaultLocalDb(): any {
     calltrackingSessions: [],
     yandexMetrikaIntegrations: [],
     yandexOAuthStates: [],
+    contactSyncAccounts: [],
+    contactSyncMappings: [],
     roles: getDefaultAccessRoles(),
     settings: {
       dbHost: process.env.DB_HOST || 'localhost',
@@ -1713,6 +1826,15 @@ async function readLocalDb(): Promise<{
     
     if (!Array.isArray(data.roles)) {
       data.roles = getDefaultAccessRoles();
+      changed = true;
+    }
+
+    if (!Array.isArray((data as any).contactSyncAccounts)) {
+      (data as any).contactSyncAccounts = [];
+      changed = true;
+    }
+    if (!Array.isArray((data as any).contactSyncMappings)) {
+      (data as any).contactSyncMappings = [];
       changed = true;
     }
 
@@ -4844,10 +4966,31 @@ app.get('/api/directory', requireAuth(), async (req, res) => {
 
   try {
     const localDb = await readLocalDb();
-    res.json((localDb.directory || []).map((entry: any) => normalizeDirectoryEntry(entry, localDb.settings)));
+    res.json(applyDirectoryAccessAndFilters(localDb.directory || [], req, localDb));
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
+});
+
+app.get('/api/directory/sync/accounts', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_directory'))) {
+    return res.status(403).json({ error: 'Access denied: view_directory permission required' });
+  }
+  const localDb = await readLocalDb();
+  const dbUser = getAuthenticatedDbUser(localDb, req);
+  const userId = getDirectoryUserId(dbUser, (req as any).user);
+  const accounts = ((localDb as any).contactSyncAccounts || [])
+    .filter((item: any) => isDirectorySuperUser((req as any).user) || item.userId === userId)
+    .map((item: any) => ({
+      id: item.id,
+      userId: item.userId,
+      provider: item.provider,
+      status: item.status,
+      externalAccountEmail: item.externalAccountEmail || '',
+      createdAt: item.createdAt || null,
+      updatedAt: item.updatedAt || null
+    }));
+  res.json({ accounts, providers: [{ provider: 'google', status: 'coming_soon' }, { provider: 'yandex', status: 'coming_soon' }] });
 });
 
 // Create a new directory entry
@@ -4862,10 +5005,9 @@ app.post('/api/directory', requireAuth(), async (req, res) => {
     const localDb = await readLocalDb();
     if (!localDb.directory) localDb.directory = [];
 
-    const safeBody = { ...req.body, department: req.body.department || '' };
-    const newEntry = normalizeDirectoryEntry(safeBody, localDb.settings);
-    if (!newEntry.name || !newEntry.phones.length) {
-      res.status(400).json({ error: 'Поля Имя и хотя бы один телефон обязательны' });
+    const newEntry = prepareDirectoryEntryForSave({ ...req.body, department: req.body.department || '' }, localDb, req);
+    if (!(newEntry.name || newEntry.company) || (!newEntry.phones.length && !newEntry.email)) {
+      res.status(400).json({ error: 'Укажите организацию или ФИО и хотя бы один способ связи: телефон или email' });
       return;
     }
 
@@ -4896,19 +5038,24 @@ app.put('/api/directory/:id', requireAuth(), async (req, res) => {
       return;
     }
 
+    const dbUser = getAuthenticatedDbUser(localDb, req);
+    if (!canWriteDirectoryEntry(localDb.directory[entryIdx], authUser, dbUser, localDb.settings)) {
+      res.status(403).json({ error: 'Нет прав на редактирование этого личного контакта' });
+      return;
+    }
+
     const safeBody = {
       ...req.body,
       department: req.body.department || ''
     };
 
-    const updatedEntry = normalizeDirectoryEntry({
-      ...localDb.directory[entryIdx],
+    const updatedEntry = prepareDirectoryEntryForSave({
       ...safeBody,
       id
-    }, localDb.settings);
+    }, localDb, req, localDb.directory[entryIdx]);
 
-    if (!updatedEntry.name || !updatedEntry.phones.length) {
-      res.status(400).json({ error: 'Поля Имя и хотя бы один телефон обязательны' });
+    if (!(updatedEntry.name || updatedEntry.company) || (!updatedEntry.phones.length && !updatedEntry.email)) {
+      res.status(400).json({ error: 'Укажите организацию или ФИО и хотя бы один способ связи: телефон или email' });
       return;
     }
 
@@ -4969,8 +5116,8 @@ app.post('/api/directory/import', requireAuth(), async (req, res) => {
     if (!localDb.directory) localDb.directory = [];
 
     const normalizedEntries = entries
-      .map((entry: any) => normalizeDirectoryEntry(entry, localDb.settings))
-      .filter((entry: any) => entry.name && entry.phones?.length);
+      .map((entry: any) => prepareDirectoryEntryForSave(entry, localDb, req))
+      .filter((entry: any) => (entry.name || entry.company) && (entry.phones?.length || entry.email));
 
     const saveMode = overwrite === true ? 'overwrite' : (mode || 'upsert');
     const result = upsertDirectoryEntries(localDb.directory, normalizedEntries, saveMode);
@@ -5050,6 +5197,33 @@ app.post('/api/directory/sync-url', async (req, res) => {
   }
 });
 
+app.post('/api/directory/import/preview', requireAuth(), async (req, res) => {
+  try {
+    const authUser = (req as any).user;
+    if (authUser?.role !== 'su' && authUser?.permissions?.manage_directory_import !== true) {
+      res.status(403).json({ error: 'Нет прав на импорт справочника' });
+      return;
+    }
+    const entries = Array.isArray(req.body?.entries) ? req.body.entries : [];
+    const localDb = await readLocalDb();
+    const normalized = entries.map((entry: any, index: number) => {
+      const normalizedEntry = prepareDirectoryEntryForSave(entry, localDb, req);
+      const errors: string[] = [];
+      if (!(normalizedEntry.name || normalizedEntry.company)) errors.push('Укажите организацию или ФИО');
+      if (!normalizedEntry.phones.length && !normalizedEntry.email) errors.push('Укажите телефон или email');
+      const duplicate = (localDb.directory || []).find((existing: any) => {
+        const phoneMatch = normalizedEntry.phones.some((phone: string) => directoryEntryMatchesNumber(existing, phone));
+        const emailMatch = normalizedEntry.email && String(existing.email || '').toLowerCase() === normalizedEntry.email.toLowerCase();
+        return phoneMatch || emailMatch;
+      });
+      return { index, entry: normalizedEntry, errors, duplicateId: duplicate?.id || null, duplicateName: duplicate?.name || '' };
+    });
+    res.json({ success: true, rows: normalized, validCount: normalized.filter((row: any) => row.errors.length === 0).length, duplicateCount: normalized.filter((row: any) => row.duplicateId).length });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.get('/api/directory/sync-status', requireAuth(), async (req, res) => {
   const authUser = (req as any).user;
   if (authUser?.role !== 'su' && authUser?.permissions?.manage_directory_import !== true) {
@@ -5069,6 +5243,43 @@ app.get('/api/directory/sync-status', requireAuth(), async (req, res) => {
   });
 });
 
+app.get('/api/directory/:id', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_directory'))) {
+    return res.status(403).json({ error: 'Access denied: view_directory permission required' });
+  }
+  const localDb = await readLocalDb();
+  const entry = (localDb.directory || []).find((item: any) => item.id === req.params.id);
+  if (!entry) return res.status(404).json({ error: 'Контакт не найден' });
+  const dbUser = getAuthenticatedDbUser(localDb, req);
+  if (!canReadDirectoryEntry(entry, (req as any).user, dbUser, localDb.settings)) {
+    return res.status(404).json({ error: 'Контакт не найден' });
+  }
+  res.json(normalizeDirectoryEntry(entry, localDb.settings));
+});
+
+app.post('/api/directory/:id/spam', requireAuth(), async (req, res) => {
+  try {
+    const authUser = (req as any).user;
+    if (authUser?.role !== 'su' && authUser?.permissions?.edit_directory !== true) {
+      res.status(403).json({ error: 'Нет прав на изменение справочника' });
+      return;
+    }
+    const localDb = await readLocalDb();
+    const entry = (localDb.directory || []).find((item: any) => item.id === req.params.id);
+    if (!entry) return res.status(404).json({ error: 'Контакт не найден' });
+    const dbUser = getAuthenticatedDbUser(localDb, req);
+    if (!canWriteDirectoryEntry(entry, authUser, dbUser, localDb.settings)) {
+      return res.status(403).json({ error: 'Нет прав на изменение этого личного контакта' });
+    }
+    entry.isSpam = req.body?.enabled !== false;
+    entry.updatedAt = new Date().toISOString();
+    await writeLocalDb(localDb);
+    res.json({ success: true, entry: normalizeDirectoryEntry(entry, localDb.settings) });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Local/Asterisk blacklist operations
 app.post('/api/directory/:id/blacklist', requireAuth(), async (req, res) => {
   try {
@@ -5085,6 +5296,11 @@ app.post('/api/directory/:id/blacklist', requireAuth(), async (req, res) => {
     const entry = (localDb.directory || []).find((e: any) => e.id === id);
     if (!entry) {
       res.status(404).json({ error: 'Контакт не найден' });
+      return;
+    }
+    const dbUser = getAuthenticatedDbUser(localDb, req);
+    if (!canWriteDirectoryEntry(entry, authUser, dbUser, localDb.settings)) {
+      res.status(403).json({ error: 'Нет прав на изменение этого личного контакта' });
       return;
     }
 
@@ -5127,6 +5343,12 @@ app.delete('/api/directory/:id', requireAuth(), async (req, res) => {
     const entryIdx = localDb.directory.findIndex((e: any) => e.id === id);
     if (entryIdx === -1) {
       res.status(404).json({ error: 'Запись в справочнике не найдена' });
+      return;
+    }
+
+    const dbUser = getAuthenticatedDbUser(localDb, req);
+    if (!canWriteDirectoryEntry(localDb.directory[entryIdx], authUser, dbUser, localDb.settings)) {
+      res.status(403).json({ error: 'Нет прав на удаление этого личного контакта' });
       return;
     }
 

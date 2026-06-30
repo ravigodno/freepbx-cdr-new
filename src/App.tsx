@@ -71,7 +71,7 @@ const DbExplorerTab = lazy(() => import('./modules/monitoring/tabs/monitoring/Db
 import QualityTab from './modules/monitoring/tabs/monitoring/QualityTab';
 import DevicesMapTab from './modules/monitoring/tabs/monitoring/DevicesMapTab';
 import { DirectoryStatusIcon } from './modules/directory/components/DirectoryStatusIcon';
-import { fetchDirectory, saveDirectoryEntry, deleteDirectoryEntry, toggleDirectoryBlacklist } from './modules/directory/services/directoryApi';
+import { fetchDirectory, saveDirectoryEntry, deleteDirectoryEntry, toggleDirectoryBlacklist, toggleDirectorySpam, previewDirectoryImport } from './modules/directory/services/directoryApi';
 import { resetDirFormFieldsHelper, openEditDirEntryHelper, openCreateDirEntryHelper, openAddFromCallHelper } from './modules/directory/utils/directoryFormHelpers';
 import CDRPage from './modules/cdr/pages/CDRPage';
 import LegacyCDRTable from './modules/cdr/components/LegacyCDRTable';
@@ -256,6 +256,7 @@ function RussianDatePicker({ value, onChange, ariaLabel }: RussianDatePickerProp
 
 // Front-end state structures
 interface UserSession {
+  id?: string;
   token: string;
   username: string;
   role: UserRole;
@@ -429,6 +430,7 @@ export default function App() {
   // --- TELEPHONE DIRECTORY STATE & HANDLERS ---
   const [activeView, setActiveView] = useState<'calls' | 'directory' | 'reports' | 'marketing' | 'monitoring' | 'management' | 'balance' | 'settings'>(() => {
     const params = new URLSearchParams(window.location.search);
+    if (window.location.pathname === '/management/directory/import') return 'directory';
     if (params.get('tab') === 'marketing' || params.get('yandexOAuth')) return 'marketing';
     const saved = localStorage.getItem('asterisk_cdr_active_view') as 'calls' | 'directory' | 'reports' | 'marketing' | 'monitoring' | 'management' | 'balance' | null;
     return saved || 'calls';
@@ -479,12 +481,16 @@ export default function App() {
   const [dirTagsText, setDirTagsText] = useState('');
   const [dirIsSpam, setDirIsSpam] = useState(false);
   const [dirIsBlacklisted, setDirIsBlacklisted] = useState(false);
-  const [dirType, setDirType] = useState<'internal' | 'client' | 'supplier' | 'government'>('internal');
+  const [dirType, setDirType] = useState<'internal' | 'client' | 'supplier' | 'government'>('client');
+  const [dirVisibility, setDirVisibility] = useState<'shared' | 'private'>('shared');
   const [dirComment, setDirComment] = useState('');
   const [dirError, setDirError] = useState('');
   const [isSavingDir, setIsSavingDir] = useState(false);
   const [dirSearchQuery, setDirSearchQuery] = useState('');
-  const [dirTypeFilter, setDirTypeFilter] = useState<'all' | 'internal' | 'client' | 'supplier' | 'government' | 'spam'>('all');
+  const [dirTypeFilter, setDirTypeFilter] = useState<'all' | 'client' | 'supplier' | 'government'>('all');
+  const [dirSpamMode, setDirSpamMode] = useState<'all' | 'exclude_spam' | 'only_spam'>('exclude_spam');
+  const [dirVisibilityMode, setDirVisibilityMode] = useState<'all' | 'shared_only' | 'private_only' | 'my_private_only' | 'exclude_private' | 'exclude_shared'>('all');
+  const [directoryPageMode, setDirectoryPageMode] = useState<'list' | 'import'>(() => window.location.pathname === '/management/directory/import' ? 'import' : 'list');
   const [urlImportTestResult, setUrlImportTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [isTestingUrlImport, setIsTestingUrlImport] = useState(false);
   const [isSyncingDirectoryUrl, setIsSyncingDirectoryUrl] = useState(false);
@@ -498,6 +504,8 @@ export default function App() {
   const [importOverwriteMode, setImportOverwriteMode] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [importSuccessCount, setImportSuccessCount] = useState<number | null>(null);
+  const [importPreviewRows, setImportPreviewRows] = useState<any[]>([]);
+  const [importDuplicateCount, setImportDuplicateCount] = useState(0);
   const [isNormalizingDb, setIsNormalizingDb] = useState(false);
   const [normalizedCount, setNormalizedCount] = useState<number | null>(null);
 
@@ -543,7 +551,8 @@ export default function App() {
     setDirTagsText('');
     setDirIsSpam(false);
     setDirIsBlacklisted(false);
-    setDirType('internal');
+    setDirType('client');
+    setDirVisibility('shared');
     setDirComment('');
     setDirError('');
   };
@@ -623,12 +632,23 @@ export default function App() {
         const isSpam = /^(1|true|yes|да)$/i.test(hasHeader ? getByHeader(cols, 'is_spam','spam','спам') : '');
         const isBlacklisted = /^(1|true|yes|да)$/i.test(hasHeader ? getByHeader(cols, 'is_blacklisted','blacklist','черный список','чс') : '');
         const phones = [phone1, phone2, phone3].map(v => String(v || '').trim()).filter(Boolean);
-        if (!name || phones.length === 0) return null;
+        if (!(name || company) || (phones.length === 0 && !email)) return null;
 
-        let type: 'internal' | 'client' = 'client';
-        if (typeRaw.includes('internal') || typeRaw.includes('внутр') || phones[0].replace(/\D/g, '').length <= 5) {
-          type = 'internal';
-        }
+        let type: 'internal' | 'client' | 'supplier' | 'government' = 'client';
+        const normalizedTypeRaw = String(typeRaw || '').toLowerCase();
+        if (normalizedTypeRaw.includes('supplier') || normalizedTypeRaw.includes('постав')) type = 'supplier';
+        else if (normalizedTypeRaw.includes('government') || normalizedTypeRaw.includes('гос')) type = 'government';
+        else if (normalizedTypeRaw.includes('internal') || normalizedTypeRaw.includes('внутр') || ((phones[0] || '').replace(/\D/g, '').length > 0 && (phones[0] || '').replace(/\D/g, '').length <= 5)) type = 'internal';
+        const visibilityRaw = hasHeader ? getByHeader(cols, 'visibility','видимость') : '';
+        const visibility: 'shared' | 'private' = /^(private|личн)/i.test(visibilityRaw) ? 'private' : 'shared';
+        const inn = hasHeader ? getByHeader(cols, 'inn','инн') : '';
+        const kpp = hasHeader ? getByHeader(cols, 'kpp','кпп') : '';
+        const ogrn = hasHeader ? getByHeader(cols, 'ogrn','огрн') : '';
+        const address = hasHeader ? getByHeader(cols, 'address','адрес') : '';
+        const group = hasHeader ? getByHeader(cols, 'group','группа') : '';
+        const internalExtension = hasHeader ? getByHeader(cols, 'internalExtension','внутренний номер','extension') : '';
+        const linkedExternalNumber = hasHeader ? getByHeader(cols, 'linkedExternalNumber','связанный внешний номер','externalNumber') : '';
+        const responsibleUserId = hasHeader ? getByHeader(cols, 'responsibleUserId','ответственный сотрудник','responsible') : '';
 
         return {
           name: String(name).trim(),
@@ -640,7 +660,16 @@ export default function App() {
           website,
           tags: tagsRaw.split(/[;,|]+/).map(t => t.trim()).filter(Boolean),
           type,
+          visibility,
           comment,
+          inn,
+          kpp,
+          ogrn,
+          address,
+          group,
+          internalExtension,
+          linkedExternalNumber,
+          responsibleUserId,
           isSpam,
           isBlacklisted
         };
@@ -870,11 +899,12 @@ export default function App() {
         setImportSuccessCount(data.count);
         setImportText('');
         setParsedImportEntries([]);
+        setImportPreviewRows([]);
+        setImportDuplicateCount(0);
         await loadDirectory();
         loadCalls(page);
         setTimeout(() => {
           setImportSuccessCount(null);
-          setIsImportOpen(false);
         }, 3000);
       } else {
         setImportFileError(data.error || 'Ошибка при импортировании.');
@@ -1026,8 +1056,13 @@ export default function App() {
     if (!session) return;
     setIsLoadingDirectory(true);
     try {
-      const data = await fetchDirectory(session.token);
-      setDirectory(data);
+      const data = await fetchDirectory(session.token, {
+        q: dirSearchQuery,
+        type: dirTypeFilter,
+        spamMode: dirSpamMode,
+        visibilityMode: dirVisibilityMode
+      });
+      setDirectory(Array.isArray(data) ? data : []);
     } catch (e: any) {
       console.error('Error loading directory:', e);
       if (e && (e.message === 'UNAUTHORIZED' || e.message === 'Failed to fetch')) {
@@ -1046,8 +1081,8 @@ export default function App() {
     ].map(v => v.trim()).filter(Boolean);
     const uniquePhones = Array.from(new Set(phones));
 
-    if (!dirName.trim() || uniquePhones.length === 0) {
-      setDirError('Пожалуйста, заполните имя и хотя бы один номер телефона.');
+    if (!(dirName.trim() || dirCompany.trim()) || (uniquePhones.length === 0 && !dirEmail.trim())) {
+      setDirError('Укажите ФИО или организацию и хотя бы один способ связи: телефон или email.');
       return;
     }
     setDirError('');
@@ -1070,6 +1105,7 @@ export default function App() {
           number: uniquePhones[0],
           phones: uniquePhones,
           type: dirType,
+          visibility: dirVisibility,
           company: dirCompany,
           position: dirPosition,
           department: dirDepartment.trim(),
@@ -1123,6 +1159,54 @@ export default function App() {
     }
   };
 
+  const openDirectoryImportPage = () => {
+    setDirectoryPageMode('import');
+    setActiveView('directory');
+    window.history.pushState({}, '', '/management/directory/import');
+  };
+
+  const closeDirectoryImportPage = () => {
+    setDirectoryPageMode('list');
+    window.history.pushState({}, '', '/');
+  };
+
+  const handlePreviewImport = async () => {
+    if (!session?.token || parsedImportEntries.length === 0) return;
+    setIsImporting(true);
+    setImportFileError('');
+    try {
+      const data = await previewDirectoryImport(session.token, parsedImportEntries);
+      setImportPreviewRows(Array.isArray(data.rows) ? data.rows : []);
+      setImportDuplicateCount(Number(data.duplicateCount || 0));
+    } catch (e: any) {
+      if (e?.message === 'UNAUTHORIZED') {
+        handleAuthError();
+        return;
+      }
+      setImportFileError(e.message || 'Не удалось выполнить предпросмотр импорта.');
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
+  const handleToggleSpam = async (entry: DirectoryEntry, enabled: boolean) => {
+    if (!session) return;
+    if (!hasPermission('edit_directory')) {
+      alert('Нет прав на изменение справочника.');
+      return;
+    }
+    try {
+      await toggleDirectorySpam(session.token, entry.id, enabled);
+      await loadDirectory();
+    } catch (e: any) {
+      if (e?.message === 'UNAUTHORIZED') {
+        handleAuthError();
+        return;
+      }
+      alert(e.message || 'Ошибка при изменении признака спама.');
+    }
+  };
+
   const handleToggleBlacklist = async (entry: DirectoryEntry, enabled: boolean, syncAsterisk = true) => {
     if (!session) return;
 
@@ -1155,6 +1239,7 @@ export default function App() {
     setDirIsSpam(!!entry.isSpam);
     setDirIsBlacklisted(!!entry.isBlacklisted);
     setDirType(entry.type);
+    setDirVisibility(entry.visibility === 'private' ? 'private' : 'shared');
     setDirComment(entry.comment || '');
     setDirError('');
     setIsDirFormOpen(true);
@@ -1289,6 +1374,7 @@ export default function App() {
 
       if (resp.ok && data.token) {
         const nextSession: UserSession = {
+          id: data.user.id,
           token: data.token,
           username: data.user.username,
           role: data.user.role,
@@ -1850,6 +1936,14 @@ export default function App() {
     }
   }, [session, startDate, endDate, startTime, endTime, statusFilter, isDemoModeActive, onlyMyCalls, myExt]);
 
+
+  useEffect(() => {
+    if (!session || activeView !== 'directory' || directoryPageMode !== 'list') return;
+    const timer = window.setTimeout(() => {
+      loadDirectory();
+    }, dirSearchQuery ? 250 : 0);
+    return () => window.clearTimeout(timer);
+  }, [session?.token, activeView, directoryPageMode, dirSearchQuery, dirTypeFilter, dirSpamMode, dirVisibilityMode]);
 
   const getFirstAllowedActiveView = useCallback((): typeof activeView => {
     if (!session) return 'reports';
@@ -2774,6 +2868,8 @@ export default function App() {
             {hasPermission('view_directory') && (
               <button
                 onClick={() => {
+                  setDirectoryPageMode('list');
+                  window.history.pushState({}, '', '/');
                   setActiveView('directory');
                   loadDirectory();
                 }}
@@ -3033,7 +3129,7 @@ export default function App() {
                 <div>
                   <h1 className="text-base font-bold text-slate-900 dark:text-slate-100 tracking-tight flex items-center gap-2 font-sans uppercase">
                     {activeView === 'calls' && 'Реестр звонков'}
-                    {activeView === 'directory' && 'Телефонный справочник'}
+                    {activeView === 'directory' && (directoryPageMode === 'import' ? 'Импорт контактов' : 'Телефонный справочник')}
                     {activeView === 'reports' && 'Отчеты и Аналитика'}
                     {activeView === 'marketing' && 'Маркетинг'}
                     {activeView === 'monitoring' && 'Мониторинг звонков'}
@@ -3739,7 +3835,118 @@ export default function App() {
       </>
     )}
 
-      {activeView === 'directory' && (
+      {activeView === 'directory' && directoryPageMode === 'import' && (
+        <section className="min-w-0 max-w-full space-y-4">
+          <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0">
+                <h2 className="flex items-center gap-2 break-words text-lg font-black text-slate-900">
+                  <Upload className="h-5 w-5 text-blue-600" />
+                  Импорт контактов
+                </h2>
+                <p className="mt-1 max-w-3xl text-xs leading-relaxed text-slate-500">
+                  Загрузите CSV-файл с контактами, проверьте обязательные поля, возможные ошибки и дубли перед сохранением. XLSX предусмотрен архитектурно, текущий импорт выполняется через CSV без новых зависимостей.
+                </p>
+              </div>
+              <button type="button" onClick={closeDirectoryImportPage} className="shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50">
+                Назад в справочник
+              </button>
+            </div>
+          </div>
+
+          <div className="grid min-w-0 grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
+            <div className="min-w-0 space-y-4">
+              <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                <h3 className="mb-3 text-sm font-black text-slate-900">Поля файла</h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[720px] text-left text-xs text-slate-600">
+                    <thead className="border-b border-slate-200 bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500">
+                      <tr><th className="px-3 py-2">Поле</th><th className="px-3 py-2">CSV header</th><th className="px-3 py-2">Обязательность</th><th className="px-3 py-2">Пример</th></tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {[
+                        ['Тип контакта', 'type', 'обязательно', 'client / supplier / government'],
+                        ['Видимость', 'visibility', 'опционально', 'shared / private'],
+                        ['Спам', 'is_spam', 'опционально', 'true / false'],
+                        ['Организация', 'company', 'организация или ФИО', 'ООО Вектор'],
+                        ['ФИО', 'name', 'организация или ФИО', 'Иванов Иван'],
+                        ['Должность', 'position', 'опционально', 'директор'],
+                        ['Телефон', 'phone1', 'телефон или email', '79781234567'],
+                        ['Доп. телефон', 'phone2', 'опционально', '365200000'],
+                        ['Email', 'email', 'телефон или email', 'mail@example.com'],
+                        ['Сайт', 'website', 'опционально', 'example.com'],
+                        ['ИНН / КПП / ОГРН', 'inn, kpp, ogrn', 'опционально', '9102000000'],
+                        ['Адрес', 'address', 'опционально', 'Симферополь'],
+                        ['Комментарий', 'comment', 'опционально', 'источник контакта'],
+                        ['Отдел / группа', 'department, group', 'опционально', 'Продажи'],
+                        ['Теги', 'tags', 'опционально', 'VIP; тендер'],
+                        ['Внутренний номер', 'internalExtension', 'опционально', '101'],
+                        ['Связанный внешний номер', 'linkedExternalNumber', 'опционально', '7978...'],
+                        ['Ответственный сотрудник', 'responsibleUserId', 'опционально', 'u1']
+                      ].map(([label, header, required, example]) => (
+                        <tr key={label}><td className="px-3 py-2 font-semibold text-slate-800">{label}</td><td className="px-3 py-2 font-mono">{header}</td><td className="px-3 py-2">{required}</td><td className="px-3 py-2">{example}</td></tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                <h3 className="mb-2 text-sm font-black text-slate-900">Пример CSV</h3>
+                <div className="overflow-x-auto rounded-lg border border-slate-200 bg-slate-950 p-3 text-[11px] text-slate-100">
+                  <code className="whitespace-pre">type,visibility,is_spam,company,name,position,phone1,phone2,email,website,inn,kpp,ogrn,address,comment,department,tags,internalExtension,linkedExternalNumber,responsibleUserId{'\n'}client,shared,false,ООО Вектор,Иванов Иван,Директор,79781234567,,mail@example.com,example.com,,,,Симферополь,Первичный контакт,Продажи,VIP;Клиент,,,u1</code>
+                </div>
+              </div>
+            </div>
+
+            <div className="min-w-0 space-y-4">
+              <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                <h3 className="mb-3 text-sm font-black text-slate-900">Загрузка файла</h3>
+                {importFileError && <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 break-words">{importFileError}</div>}
+                {importSuccessCount !== null && <div className="mb-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-800">Контакты успешно импортированы: {importSuccessCount}</div>}
+                <div className="relative rounded-xl border-2 border-dashed border-slate-200 p-5 text-center hover:border-blue-300">
+                  <input type="file" accept=".csv,.txt" onChange={handleFileUpload} className="absolute inset-0 h-full w-full cursor-pointer opacity-0" />
+                  <Upload className="mx-auto mb-2 h-6 w-6 text-slate-400" />
+                  <div className="text-xs font-bold text-slate-700">Загрузите CSV или TXT-файл с контактами</div>
+                  <div className="mt-1 text-[11px] text-slate-500">CSV/XLSX: XLSX будет добавлен отдельным этапом, сейчас используйте CSV.</div>
+                </div>
+                <textarea value={importText} onChange={(e) => { setImportText(e.target.value); handleParseImport(e.target.value); }} rows={7} placeholder="Вставьте CSV сюда для предпросмотра" className="mt-3 w-full resize-none rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-[11px] text-slate-800" />
+                <div className="mt-3 flex flex-wrap justify-end gap-2">
+                  <button type="button" onClick={handlePreviewImport} disabled={isImporting || parsedImportEntries.length === 0} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50">Проверить ошибки и дубли</button>
+                  <button type="button" onClick={handleExecuteImport} disabled={isImporting || parsedImportEntries.length === 0} className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-50">Импортировать ({parsedImportEntries.length})</button>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <h3 className="text-sm font-black text-slate-900">Предпросмотр импорта</h3>
+                  <span className="text-[11px] text-slate-500">Дубли: {importDuplicateCount}</span>
+                </div>
+                <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
+                  {parsedImportEntries.length === 0 ? (
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-5 text-center text-xs text-slate-400">Нет данных для предпросмотра</div>
+                  ) : parsedImportEntries.slice(0, 50).map((item, idx) => {
+                    const preview = importPreviewRows.find((row: any) => row.index === idx);
+                    const errors = preview?.errors || [];
+                    return (
+                      <div key={idx} className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0"><div className="truncate font-bold text-slate-900">{item.name || item.company || 'Без имени'}</div><div className="truncate text-slate-500">{item.number || item.email || '—'}</div></div>
+                          <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-slate-600">{item.type || 'client'}</span>
+                        </div>
+                        {errors.length > 0 && <div className="mt-2 text-[11px] text-rose-600">{errors.join('; ')}</div>}
+                        {preview?.duplicateId && <div className="mt-2 text-[11px] text-amber-700">Найден возможный дубль: {preview.duplicateName}</div>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {activeView === 'directory' && directoryPageMode === 'list' && (
         <>
           <section id="directory-panel" className="flex flex-col gap-4">
         {/* Admin Directory Controls Panel */}
@@ -3776,11 +3983,11 @@ export default function App() {
                   {hasPermission('manage_directory_import') && (
                   <>
                   <button
-                    onClick={() => setIsImportOpen(true)}
+                    onClick={openDirectoryImportPage}
                     className="flex items-center gap-1.5 px-3.5 py-2 bg-gradient-to-r from-red-600 to-rose-700 hover:from-red-600 hover:to-rose-600 text-white rounded-lg text-xs font-semibold cursor-pointer shadow-xs transition-all active:scale-95 select-none"
                   >
                     <Upload className="h-3.5 w-3.5" />
-                    Импорт контактов (массовый)
+                    Импорт контактов
                   </button>
 
                   <button
@@ -3844,50 +4051,71 @@ export default function App() {
               /></div>
 
             {/* Filter Selector */}
-            <div className="flex rounded-lg overflow-hidden border border-slate-200 bg-gradient-to-br from-slate-50 via-blue-50/40 to-sky-50/50 p-0.5 text-xs">
+            <div className="flex min-w-0 max-w-full flex-col gap-2 xl:flex-row xl:items-center">
+              <div className="flex min-w-0 max-w-full flex-wrap items-center gap-1 rounded-lg border border-slate-200 bg-gradient-to-br from-slate-50 via-blue-50/40 to-sky-50/50 p-0.5 text-xs">
+                <span className="px-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">Тип</span>
+                {([
+                  ['all', 'Все'],
+                  ['client', 'Клиенты'],
+                  ['supplier', 'Поставщики'],
+                  ['government', 'Госорганы']
+                ] as const).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setDirTypeFilter(value)}
+                    className={`px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
+                      dirTypeFilter === value ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-550 hover:text-slate-950'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
 
-              <button
-                onClick={() => setDirTypeFilter('all')}
-                className={`px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
-                  dirTypeFilter === 'all'
-                    ? 'bg-white text-slate-900 shadow-sm'
-                    : 'text-slate-550 hover:text-slate-950'
-                }`}
-              >
-                Все
-              </button>
-              <button
-                onClick={() => setDirTypeFilter('internal')}
-                className={`px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
-                  dirTypeFilter === 'internal'
-                    ? 'bg-white text-slate-900 shadow-sm'
-                    : 'text-slate-550 hover:text-slate-950'
-                }`}
-              >
-                Внутренние
-              </button>
-              <button
-                onClick={() => setDirTypeFilter('client')}
-                className={`px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
-                  dirTypeFilter === 'client'
-                    ? 'bg-white text-slate-900 shadow-sm'
-                    : 'text-slate-555 hover:text-slate-950'
-                }`}
-              >
-                Клиенты
-              </button>
-              <button
-                onClick={() => setDirTypeFilter('spam')}
-                className={`px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
-                  dirTypeFilter === 'spam'
-                    ? 'bg-white text-blue-700 shadow-sm'
-                    : 'text-red-500 hover:text-blue-700'
-                }`}
-              >
-                Спам/ЧС
-              </button>
-          </div>
-          </div>
+              <div className="flex min-w-0 max-w-full flex-wrap items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs">
+                <span className="px-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">Спам</span>
+                {([
+                  ['all', 'Все'],
+                  ['exclude_spam', 'Без спама'],
+                  ['only_spam', 'Только спам']
+                ] as const).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setDirSpamMode(value)}
+                    className={`px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
+                      dirSpamMode === value ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-550 hover:text-slate-950'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex min-w-0 max-w-full flex-wrap items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs">
+                <span className="px-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">Видимость</span>
+                {([
+                  ['all', isAdminRole(session?.role) ? 'Все' : 'Все доступные'],
+                  ['shared_only', 'Общие'],
+                  ...(isAdminRole(session?.role) ? ([['private_only', 'Все личные']] as const) : ([] as any)),
+                  ['my_private_only', 'Мои личные'],
+                  ['exclude_private', 'Исключить личные'],
+                  ['exclude_shared', 'Исключить общие']
+                ] as const).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setDirVisibilityMode(value as any)}
+                    className={`px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
+                      dirVisibilityMode === value ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-550 hover:text-slate-950'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>          </div>
 
           <button
             onClick={openCreateDirEntry}
@@ -3907,6 +4135,7 @@ export default function App() {
                   <th scope="col" className="py-2 px-1.5">Статус</th>
                   <th scope="col" className="py-2 px-3">ФИО</th>
                   <th scope="col" className="py-2 px-3">Телефоны</th>
+                  <th scope="col" className="py-2 px-3">Видимость</th>
                   <th scope="col" className="py-2 px-2 w-[230px]">Компания</th>
                   <th scope="col" className="py-2 px-3">Должность</th>
                   <th scope="col" className="py-2 px-3">Отдел</th>
@@ -3919,32 +4148,12 @@ export default function App() {
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {(() => {
-                  let list = [...directory];
-                  if (dirTypeFilter === 'spam') {
-                    list = list.filter(e => e.isSpam === true || e.isBlacklisted === true);
-                  } else if (dirTypeFilter !== 'all') {
-                    list = list.filter(e => e.type === dirTypeFilter);
-                  }
-                  if (dirSearchQuery.trim()) {
-                    const s = dirSearchQuery.toLowerCase();
-                    list = list.filter(e => {
-                      const phones = getEntryPhones(e).join(' ');
-                      const tags = getDirectoryEntryTags(e).join(' ');
-                      return (
-                        e.name.toLowerCase().includes(s) ||
-                        phones.includes(s) ||
-                        (e.company || '').toLowerCase().includes(s) ||
-                        (e.position || '').toLowerCase().includes(s) ||
-                        tags.toLowerCase().includes(s) ||
-                        (e.comment && e.comment.toLowerCase().includes(s))
-                      );
-                    });
-                  }
+                  const list = Array.isArray(directory) ? directory : [];
 
                   if (list.length === 0) {
                     return (
                       <tr>
-                        <td colSpan={11} className="py-8 text-center text-slate-400">
+                        <td colSpan={12} className="py-8 text-center text-slate-400">
                           {isLoadingDirectory ? (
                             <div className="flex items-center justify-center gap-2">
                               <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
@@ -3996,9 +4205,15 @@ export default function App() {
                               >
                                 <PhoneCall className="h-3 w-3" />
                               </button>
-          </div>
+                            </div>
                           ))}
                         </div>
+                      </td>
+
+                      <td className="py-3.5 px-3 text-slate-700">
+                        <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold border ${entry.visibility === 'private' ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>
+                          {entry.visibility === 'private' ? 'Личный' : 'Общий'}
+                        </span>
                       </td>
 
                       <td className="py-3.5 px-2 text-slate-700 w-[230px] max-w-[230px]">
@@ -4071,6 +4286,15 @@ export default function App() {
 
                       <td className="py-3.5 px-4 text-right">
                         <div className="flex items-center justify-end gap-1.5">
+                          {hasPermission('edit_directory') && (
+                            <button
+                              onClick={() => handleToggleSpam(entry, !entry.isSpam)}
+                              className={`p-1.5 rounded-lg border transition-all cursor-pointer ${entry.isSpam ? 'text-amber-700 bg-amber-50 border-amber-200' : 'text-slate-500 hover:text-amber-700 hover:bg-amber-50 border-transparent hover:border-amber-200'}`}
+                              title={entry.isSpam ? 'Убрать из спама' : 'Пометить как спам'}
+                            >
+                              <Ban className="h-3.5 w-3.5" />
+                            </button>
+                          )}
                           {hasPermission('manage_blacklist') && (
                             <button
                               onClick={() => handleToggleBlacklist(entry, !entry.isBlacklisted, true)}
@@ -4080,20 +4304,20 @@ export default function App() {
                               <AlertCircle className="h-3.5 w-3.5" />
                             </button>
                           )}
-                          <button
+                          {hasPermission('edit_directory') && (<button
                             onClick={() => openEditDirEntry(entry)}
                             className="p-1.5 text-slate-500 hover:text-blue-700 hover:bg-slate-100 rounded-lg border border-transparent hover:border-slate-200 transition-all cursor-pointer"
                             title="Редактировать контакт"
                           >
                             <Edit2 className="h-3.5 w-3.5" />
-                          </button>
-                          <button
+                          </button>)}
+                          {hasPermission('edit_directory') && (<button
                             onClick={() => handleDeleteDirEntry(entry.id)}
                             className="p-1.5 text-slate-500 hover:text-blue-700 hover:bg-slate-100 rounded-lg border border-transparent hover:border-slate-200 transition-all cursor-pointer"
                             title="Удалить контакт"
                           >
                             <Trash2 className="h-3.5 w-3.5" />
-                          </button>
+                          </button>)}
           </div>
                       </td>
                     </tr>
@@ -4401,7 +4625,7 @@ export default function App() {
                         <h4 className="text-sm font-black text-slate-900 mb-3">Инструменты справочника</h4>
                         <div className="flex flex-wrap gap-2">
                           {hasPermission('manage_directory_import') && (
-                          <button type="button" onClick={() => setIsImportOpen(true)} className="px-4 py-2 rounded-lg bg-blue-600 text-white text-xs font-bold hover:bg-blue-700">Импорт контактов</button>
+                          <button type="button" onClick={openDirectoryImportPage} className="px-4 py-2 rounded-lg bg-blue-600 text-white text-xs font-bold hover:bg-blue-700">Импорт контактов</button>
                           )}
                           {hasPermission('manage_directory_import') && (
                           <button type="button" onClick={handleExportCSV} className="px-4 py-2 rounded-lg bg-gradient-to-br from-slate-50 via-blue-50/40 to-sky-50/50 text-slate-800 text-xs font-bold hover:bg-slate-200">Экспорт CSV</button>
@@ -4708,279 +4932,6 @@ export default function App() {
       />
 
 
-
-      {/* MASS DIRECTORY IMPORT DIALOG (ADMINS ONLY) */}
-      {isImportOpen && (
-        <div className="fixed inset-0 bg-slate-950/70  flex items-center justify-center p-4 z-50">
-          <div className="w-full max-w-2xl bg-white border border-slate-200 rounded-2xl p-6 shadow-2xl relative max-h-[90vh] flex flex-col z-[60]">
-            <div className="flex items-start justify-between border-b border-slate-100 pb-3 mb-4 shrink-0">
-              <div>
-                <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                  <Upload className="h-5 w-5 text-blue-600" />
-                  Пакетный импорт телефонного справочника
-                </h3>
-                <p className="text-xs text-slate-500 font-light mt-0.5">
-                  Загрузите CSV/TXT-файлы или скопируйте контакты напрямую в поле ввода.
-                </p></div>
-              <button
-                onClick={() => {
-                  setIsImportOpen(false);
-                  setImportText('');
-                  setParsedImportEntries([]);
-                  setImportFileError('');
-                }}
-                className="text-slate-400 hover:text-slate-650 p-1 rounded-md"
-              >
-                ✕
-              </button>
-          </div>
-
-            <div className="flex-1 overflow-y-auto pr-1 space-y-4 text-xs">
-              {importFileError && (
-                <div className="p-3 bg-blue-50 border border-blue-200 text-blue-600 rounded-lg flex items-center gap-2">
-                  <AlertCircle className="h-4.5 w-4.5 shrink-0" />
-                  <span>{importFileError}</span></div>
-              )}
-
-              {importSuccessCount !== null && (
-                <div className="p-4 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg flex items-start gap-2">
-                  <CheckCircle className="h-5 w-5 shrink-0 text-emerald-600" />
-                  <div>
-                    <h4 className="font-bold font-sans">Импорт выполнен успешно!</h4>
-                    <p className="mt-0.5">В телефонный справочник добавлено: <strong>{importSuccessCount}</strong> контактов.</p></div>
-                </div>
-              )}
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-slate-650 text-xs font-bold mb-1">Вариант 1: Загрузить файл контактов</label>
-                    <div className="border-2 border-dashed border-slate-200 hover:border-red-400 rounded-xl p-4 text-center transition-all relative">
-                      <input
-                        type="file"
-                        accept=".csv,.txt"
-                        onChange={handleFileUpload}
-                        className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-                      />
-                      <Upload className="h-6 w-6 text-slate-400 mx-auto mb-1.5" />
-                      <span className="text-slate-700 font-medium block">Выберите или перетащите файл</span>
-                      <span className="text-[10px] text-slate-455 block mt-0.5">Форматы: .csv, .txt (Разделитель: запятая или точка с запятой)</span></div>
-                  </div>
-
-                  <div>
-                    <label className="block text-slate-650 text-xs font-bold mb-1">Вариант 2: Вставить текст CSV / Скопировать из Excel</label>
-                    <textarea
-                      value={importText}
-                      onChange={(e) => {
-                        setImportText(e.target.value);
-                        handleParseImport(e.target.value);
-                      }}
-                      rows={6}
-                      placeholder="Формат: Имя,Номер,Тип(internal/client),Комментарий&#10;Пример:&#10;Иван Петров,79991234567,client,Директор компании&#15;&#10;Бухгалтерия,102,internal,Офисный номер"
-                      className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 font-mono text-[11px] text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all focus:bg-white resize-none"
-                    ></textarea></div>
-
-                  <div className="p-3 bg-amber-50/70 border border-amber-200 text-amber-900 rounded-xl space-y-1 bg-amber-50">
-                    <h5 className="font-bold flex items-center gap-1">Важное примечание:</h5>
-                    <ul className="list-disc list-inside space-y-0.5 text-[10px] text-amber-850 font-light">
-                      <li>Первая колонка — ФИО / Название, вторая — Номер телефона.</li>
-                      <li>Если номер телефона ≤ 4 символов, тип автоматически выставится как "Внутренний".</li>
-                      <li>Телефонные номера автоматически очистятся и нормализуются при импорте в соответствии с вашими настройками.</li>
-                    </ul></div>
-                </div>
-
-                <div className="flex flex-col h-full bg-slate-50 border border-slate-200 rounded-xl p-3">
-                  <div className="flex items-center justify-between border-b border-slate-200 pb-1.5 mb-2 shrink-0">
-                    <span className="font-bold text-slate-700">Предпросмотр ({parsedImportEntries.length}):</span>
-                    <span className="text-[10px] text-slate-450 uppercase tracking-widest font-bold">Данные к загрузке</span></div>
-
-                  <div className="flex-1 overflow-y-auto max-h-[280px] space-y-1.5 pr-1">
-                    {parsedImportEntries.length === 0 ? (
-                      <div className="h-full flex items-center justify-center text-center text-slate-400 italic font-light p-8">
-                        Нет данных для предпросмотра. Пожалуйста, вставьте список контактов или загрузите готовый файл.
-                      </div>
-                    ) : (
-                      parsedImportEntries.map((item, idx) => (
-                        <div key={idx} className="bg-white border border-slate-150 rounded-lg p-2 flex items-center justify-between shadow-xs">
-                          <div>
-                            <div className="font-bold text-slate-800 truncate max-w-[155px]">{item.name}</div>
-                            <div className="text-[10px] text-slate-500 truncate max-w-[155px]">{item.comment}</div></div>
-                          <div className="text-right">
-                            <div className="font-mono text-blue-800 dark:text-rose-200 font-bold">{item.number}</div>
-                            <span className={`text-[9px] font-semibold px-2 py-0.2 rounded-full border ${
-                              item.type === 'internal'
-                                ? 'bg-gradient-to-br from-slate-50 via-blue-50/40 to-sky-50/50 text-slate-600 border-slate-200'
-                                : 'bg-blue-50 text-blue-600 border-red-150'
-                            }`}>
-                              {item.type === 'internal' ? 'Внутр.' : 'Клиент'}
-                            </span></div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-
-                  <div className="border-t border-slate-200 pt-3 mt-3 shrink-0">
-                    <label className="text-slate-650 font-bold block mb-1">Режим сохранения контактов:</label>
-                    <div className="space-y-1.5">
-                      <label className="flex items-center gap-2 cursor-pointer font-medium text-slate-700">
-                        <input
-                          type="radio"
-                          name="importMode"
-                          checked={!importOverwriteMode}
-                          onChange={() => setImportOverwriteMode(false)}
-                          className="text-blue-600 focus:ring-blue-500 h-3.5 w-3.5 cursor-pointer"
-                        />
-                        <span>Прибавить новые к существующим (Дописать)</span>
-                      </label>
-                      <label className="flex items-center gap-2 cursor-pointer font-medium text-slate-700 text-blue-700">
-                        <input
-                          type="radio"
-                          name="importMode"
-                          checked={importOverwriteMode}
-                          onChange={() => {
-                            if (window.confirm("ВНИМАНИЕ! Вы выбрали полную перезапись. Весь текущий справочник будет удален и заменен новыми контактами! Вы уверены?")) {
-                              setImportOverwriteMode(true);
-                            }
-                          }}
-                          className="text-red-500 focus:ring-blue-500 h-3.5 w-3.5 cursor-pointer"
-                        />
-                        <span className="font-bold text-blue-600 hover:text-blue-700">Очистить справочник и записать заново!</span>
-                      </label></div>
-                  </div></div>
-              </div></div>
-
-            <div className="flex items-center justify-end gap-2.5 pt-4 border-t border-slate-100 mt-4 shrink-0">
-              <button
-                type="button"
-                onClick={() => {
-                  setIsImportOpen(false);
-                  setImportText('');
-                  setParsedImportEntries([]);
-                  setImportFileError('');
-                }}
-                className="px-3.5 py-1.5 bg-gradient-to-br from-slate-50 via-blue-50/40 to-sky-50/50 hover:bg-slate-200 text-slate-650 rounded-lg text-xs font-semibold cursor-pointer transition-all active:scale-95 select-none"
-              >
-                Отмена
-              </button>
-              <button
-                type="button"
-                onClick={handleExecuteImport}
-                disabled={isImporting || parsedImportEntries.length === 0}
-                className="flex items-center gap-1 px-4 py-1.5 bg-emerald-650 hover:bg-emerald-600 disabled:opacity-40 text-white rounded-lg text-xs font-bold cursor-pointer transition-all active:scale-95 shadow-sm select-none"
-              >
-                {isImporting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                Выполнить загрузку в базу ({parsedImportEntries.length})
-              </button>
-          </div>
-          </div></div>
-      )}
-
-      {/* DIRECTORY ADD / EDIT DIALOG */}
-      {isDirFormOpen && (
-        <div className="fixed inset-0 bg-slate-950/70 flex items-center justify-center p-4 z-50">
-          <div className="w-full max-w-2xl bg-white border border-slate-200 rounded-2xl p-6 shadow-2xl relative max-h-[90vh] overflow-y-auto">
-            <div className="flex items-start justify-between border-b border-slate-100 pb-3 mb-4">
-              <div>
-                <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                  <BookOpen className="h-5 w-5 text-blue-600" />
-                  {editingDirEntry ? 'Редактировать контакт' : 'Новый контакт'}
-                </h3>
-                <p className="text-xs text-slate-500 font-light mt-0.5">
-                  Несколько телефонов, компания, должность, теги, СПАМ и черный список.
-                </p></div>
-              <button
-                onClick={() => setIsDirFormOpen(false)}
-                className="text-slate-400 hover:text-slate-650 p-1 rounded-md"
-              >
-                ✕
-              </button>
-          </div>
-
-            <form onSubmit={handleSaveDirEntry} className="space-y-4">
-              {dirError && (
-                <div className="p-3 bg-blue-50 border border-blue-200 text-blue-600 rounded-lg text-xs flex items-center gap-2">
-                  <AlertCircle className="h-4.5 w-4.5 shrink-0" />
-                  <span>{dirError}</span></div>
-              )}
-
-              <div className="space-y-4">
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <label className="text-slate-650 text-xs font-semibold">Статус контакта</label>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-2">
-                    <button type="button" onClick={() => setDirType('internal')} className={`py-2 px-3 rounded-lg border text-xs font-semibold cursor-pointer transition-all ${dirType === 'internal' ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
-                      ☎ Внутренний
-                    </button>
-                    <button type="button" onClick={() => setDirType('client')} className={`py-2 px-3 rounded-lg border text-xs font-semibold cursor-pointer transition-all ${dirType === 'client' ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
-                      👤 Клиент
-                    </button>
-                    <button type="button" onClick={() => setDirType('supplier')} className={`py-2 px-3 rounded-lg border text-xs font-semibold cursor-pointer transition-all ${dirType === 'supplier' ? 'bg-amber-50 border-amber-200 text-amber-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
-                      📦 Поставщик
-                    </button>
-                    <button type="button" onClick={() => setDirType('government')} className={`py-2 px-3 rounded-lg border text-xs font-semibold cursor-pointer transition-all ${dirType === 'government' ? 'bg-purple-50 border-purple-200 text-purple-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
-                      🏛 Госорган
-                    </button>
-                    <label className="flex items-center justify-center gap-2 py-2 px-3 rounded-lg border border-amber-200 bg-amber-50 text-xs text-amber-800 font-bold cursor-pointer">
-                      <input type="checkbox" checked={dirIsSpam} onChange={(e) => setDirIsSpam(e.target.checked)} className="rounded border-amber-300 text-amber-600" />
-                      СПАМ
-                    </label>
-                    <label className="flex items-center justify-center gap-2 py-2 px-3 rounded-lg border border-blue-200 bg-blue-50 text-xs text-blue-700 font-bold cursor-pointer">
-                      <input type="checkbox" checked={dirIsBlacklisted} onChange={(e) => setDirIsBlacklisted(e.target.checked)} className="rounded border-blue-300 text-blue-600" />
-                      ЧС
-                    </label></div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                    <label className="text-slate-650 text-xs font-semibold">ФИО *</label>
-                    <input type="text" required value={dirName} onChange={(e) => setDirName(e.target.value)} placeholder="Иван Смирнов" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500" /></div>
-
-                  <div className="space-y-1">
-                    <label className="text-slate-650 text-xs font-semibold">Основной телефон / SIP *</label>
-                    <input type="text" required value={dirNumber} onChange={(e) => setDirNumber(e.target.value)} placeholder="100 или 79781234567" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 font-mono focus:outline-none focus:ring-1 focus:ring-blue-500" /></div>
-
-                  <div className="space-y-1">
-                    <label className="text-slate-650 text-xs font-semibold">Компания</label>
-                    <input type="text" value={dirCompany} onChange={(e) => setDirCompany(e.target.value)} placeholder="ООО Компания" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500" /></div>
-
-                  <div className="space-y-1">
-                    <label className="text-slate-650 text-xs font-semibold">Должность</label>
-                    <input type="text" value={dirPosition} onChange={(e) => setDirPosition(e.target.value)} placeholder="Директор / менеджер" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500" /></div>
-
-                  <div className="space-y-1">
-                    <label className="text-slate-650 text-xs font-semibold">Отдел</label>
-                    <input type="text" value={dirDepartment} onChange={(e) => setDirDepartment(e.target.value)} placeholder="Продажи, IT, Бухгалтерия" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500" /></div>
-
-                  <div className="space-y-1">
-                    <label className="text-slate-650 text-xs font-semibold">Теги</label>
-                    <input type="text" value={dirTagsText} onChange={(e) => setDirTagsText(e.target.value)} placeholder="VIP; Клиент; СПАМ" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500" /></div>
-
-                  <div className="space-y-1 md:col-span-2">
-                    <label className="text-slate-650 text-xs font-semibold">Дополнительные телефоны</label>
-                    <textarea value={dirPhonesText} onChange={(e) => setDirPhonesText(e.target.value)} rows={3} placeholder="Каждый номер с новой строки или через запятую" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 font-mono focus:outline-none focus:ring-1 focus:ring-blue-500" /></div>
-
-                  <div className="space-y-1 md:col-span-2">
-                    <label className="text-slate-650 text-xs font-semibold">Комментарий</label>
-                    <input type="text" value={dirComment} onChange={(e) => setDirComment(e.target.value)} placeholder="Комментарий, примечание, источник" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500" /></div>
-
-                  <div className="space-y-1">
-                    <label className="text-slate-650 text-xs font-semibold">Email</label>
-                    <input type="email" value={dirEmail} onChange={(e) => setDirEmail(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500" /></div>
-
-                  <div className="space-y-1">
-                    <label className="text-slate-650 text-xs font-semibold">Сайт</label>
-                    <input type="text" value={dirWebsite} onChange={(e) => setDirWebsite(e.target.value)} placeholder="site.ru" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500" /></div>
-                </div></div>
-
-              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
-                <button type="button" onClick={() => setIsDirFormOpen(false)} className="px-4 py-2 border border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-slate-800 rounded-lg text-xs font-medium cursor-pointer">Отмена</button>
-                <button type="submit" disabled={isSavingDir} className="bg-blue-600 hover:bg-blue-700 text-xs font-semibold text-white px-4 py-2 rounded-lg cursor-pointer flex items-center justify-center gap-1 min-w-[90px]">
-                  {isSavingDir && <Loader2 className="h-3 w-3 animate-spin" />}
-                  <span>Сохранить</span>
-                </button>
-          </div>
-            </form></div>
-        </div>
-      )}
 
       {/* CLICK-TO-CALL AMI STATUS LOGS DIALOG */}
       {isCallingModalOpen && session?.role !== 'operator' && (

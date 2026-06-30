@@ -136,21 +136,57 @@ export interface DashboardStats {
   lostCalls: number;
 }
 
+export type DirectoryContactType = 'internal' | 'client' | 'supplier' | 'government';
+export type DirectoryVisibility = 'shared' | 'private';
+
 export interface DirectoryEntry {
   id: string;
   name: string;
   number: string;              // primary phone/ext, kept for backward compatibility
   phones?: string[];           // all phones/exts attached to one contact
-  type: 'internal' | 'client' | 'supplier' | 'government';
+  type: DirectoryContactType;
+  visibility?: DirectoryVisibility;
+  ownerUserId?: string | null;
   company?: string;
   position?: string;
   department?: string;
+  group?: string;
   email?: string;
   website?: string;
+  inn?: string;
+  kpp?: string;
+  ogrn?: string;
+  address?: string;
+  internalExtension?: string;
+  linkedExternalNumber?: string;
+  responsibleUserId?: string;
   tags?: string[];
   isSpam?: boolean;
   isBlacklisted?: boolean;
   comment?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface ContactSyncAccount {
+  id: string;
+  userId: string;
+  provider: 'google' | 'yandex';
+  status: 'connected' | 'disconnected' | 'error';
+  externalAccountEmail?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface ContactSyncMapping {
+  id: string;
+  contactId: string;
+  userId: string;
+  provider: 'google' | 'yandex';
+  externalContactId: string;
+  lastSyncedAt?: string | null;
+  syncDirection: 'import_only' | 'two_way';
+  conflictStrategy: 'server_wins' | 'external_wins' | 'manual_review';
   createdAt?: string;
   updatedAt?: string;
 }
