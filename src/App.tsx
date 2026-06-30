@@ -137,7 +137,8 @@ interface DirectoryColumnConfig {
 const DIRECTORY_COLUMNS_STORAGE_KEY = 'pbxpuls.directory.columns.personal';
 const requiredDirectoryColumns: DirectoryRequiredColumnKey[] = ['type', 'fullName', 'phone'];
 const systemDirectoryColumns: DirectorySystemColumnKey[] = ['actions'];
-const defaultDirectoryOptionalColumns: DirectoryOptionalColumnKey[] = ['email', 'organization', 'visibility', 'isSpam'];
+type DirectoryVisibleColumnKey = DirectoryRequiredColumnKey | DirectoryOptionalColumnKey;
+const defaultDirectoryVisibleColumns: DirectoryVisibleColumnKey[] = ['type', 'fullName', 'phone', 'email', 'organization', 'visibility', 'isSpam'];
 const optionalDirectoryColumns: DirectoryColumnConfig[] = [
   { key: 'visibility', label: 'Видимость' },
   { key: 'isSpam', label: 'Спам' },
@@ -172,21 +173,33 @@ const directoryColumnConfigs: DirectoryColumnConfig[] = [
   ...systemDirectoryColumnConfigs
 ];
 const optionalDirectoryColumnKeys = optionalDirectoryColumns.map(column => column.key as DirectoryOptionalColumnKey);
+const visibleDirectoryColumnKeys = [...requiredDirectoryColumns, ...optionalDirectoryColumnKeys] as DirectoryVisibleColumnKey[];
 
-const sanitizeDirectoryOptionalColumns = (columns: unknown): DirectoryOptionalColumnKey[] => {
+const sanitizeDirectoryVisibleColumns = (columns: unknown): DirectoryVisibleColumnKey[] => {
   const values = Array.isArray(columns) ? columns : [];
-  return values.filter((column): column is DirectoryOptionalColumnKey => optionalDirectoryColumnKeys.includes(column as DirectoryOptionalColumnKey));
+  const sanitized: DirectoryVisibleColumnKey[] = [];
+  values.forEach(column => {
+    if (visibleDirectoryColumnKeys.includes(column as DirectoryVisibleColumnKey) && !sanitized.includes(column as DirectoryVisibleColumnKey)) {
+      sanitized.push(column as DirectoryVisibleColumnKey);
+    }
+  });
+  if (sanitized.length === 0) return defaultDirectoryVisibleColumns;
+  return [
+    ...requiredDirectoryColumns.filter(column => !sanitized.includes(column)),
+    ...sanitized
+  ];
 };
 
-const loadDirectoryOptionalColumns = (): DirectoryOptionalColumnKey[] => {
+const loadDirectoryVisibleColumns = (): DirectoryVisibleColumnKey[] => {
   try {
     const raw = localStorage.getItem(DIRECTORY_COLUMNS_STORAGE_KEY);
-    if (!raw) return defaultDirectoryOptionalColumns;
+    if (!raw) return defaultDirectoryVisibleColumns;
     const parsed = JSON.parse(raw);
-    const optionalColumns = sanitizeDirectoryOptionalColumns(parsed?.optionalColumns);
-    return optionalColumns.length ? optionalColumns : defaultDirectoryOptionalColumns;
+    if (Array.isArray(parsed?.visibleColumns)) return sanitizeDirectoryVisibleColumns(parsed.visibleColumns);
+    if (Array.isArray(parsed?.optionalColumns)) return sanitizeDirectoryVisibleColumns([...requiredDirectoryColumns, ...parsed.optionalColumns]);
+    return defaultDirectoryVisibleColumns;
   } catch {
-    return defaultDirectoryOptionalColumns;
+    return defaultDirectoryVisibleColumns;
   }
 };
 
@@ -577,8 +590,8 @@ export default function App() {
   const [dirSpamMode, setDirSpamMode] = useState<'all' | 'exclude_spam' | 'only_spam'>('exclude_spam');
   const [dirVisibilityMode, setDirVisibilityMode] = useState<'all' | 'shared_only' | 'private_only' | 'my_private_only' | 'exclude_private' | 'exclude_shared'>('all');
   const [isDirectoryColumnsPanelOpen, setIsDirectoryColumnsPanelOpen] = useState(false);
-  const [selectedDirectoryOptionalColumns, setSelectedDirectoryOptionalColumns] = useState<DirectoryOptionalColumnKey[]>(loadDirectoryOptionalColumns);
-  const [draftDirectoryOptionalColumns, setDraftDirectoryOptionalColumns] = useState<DirectoryOptionalColumnKey[]>(selectedDirectoryOptionalColumns);
+  const [selectedDirectoryVisibleColumns, setSelectedDirectoryVisibleColumns] = useState<DirectoryVisibleColumnKey[]>(loadDirectoryVisibleColumns);
+  const [draftDirectoryVisibleColumns, setDraftDirectoryVisibleColumns] = useState<DirectoryVisibleColumnKey[]>(selectedDirectoryVisibleColumns);
   const [directoryPageMode, setDirectoryPageMode] = useState<'list' | 'import'>(() => window.location.pathname === '/management/directory/import' ? 'import' : 'list');
   const [urlImportTestResult, setUrlImportTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [isTestingUrlImport, setIsTestingUrlImport] = useState(false);
@@ -2854,10 +2867,15 @@ export default function App() {
 
 
   const effectiveDirectoryColumnConfigs: DirectoryColumnConfig[] = [
-    ...requiredDirectoryColumnConfigs,
-    ...optionalDirectoryColumns.filter(column => selectedDirectoryOptionalColumns.includes(column.key as DirectoryOptionalColumnKey)),
+    ...selectedDirectoryVisibleColumns
+      .map(columnKey => directoryColumnConfigs.find(column => column.key === columnKey))
+      .filter((column): column is DirectoryColumnConfig => Boolean(column)),
     ...systemDirectoryColumnConfigs
   ];
+
+  const draftDirectoryOrderConfigs: DirectoryColumnConfig[] = draftDirectoryVisibleColumns
+    .map(columnKey => directoryColumnConfigs.find(column => column.key === columnKey))
+    .filter((column): column is DirectoryColumnConfig => Boolean(column));
 
   const formatDirectoryCellText = (value: unknown): string => {
     const text = String(value ?? '').trim();
@@ -2872,23 +2890,47 @@ export default function App() {
   };
 
   const toggleDraftDirectoryColumn = (columnKey: DirectoryOptionalColumnKey) => {
-    setDraftDirectoryOptionalColumns(prev => prev.includes(columnKey)
+    setDraftDirectoryVisibleColumns(prev => prev.includes(columnKey)
       ? prev.filter(key => key !== columnKey)
       : [...prev, columnKey]
     );
   };
 
+  const moveDraftDirectoryColumn = (columnKey: DirectoryVisibleColumnKey, direction: -1 | 1) => {
+    setDraftDirectoryVisibleColumns(prev => {
+      const index = prev.indexOf(columnKey);
+      const nextIndex = index + direction;
+      if (index < 0 || nextIndex < 0 || nextIndex >= prev.length) return prev;
+      const next = [...prev];
+      [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
+      return next;
+    });
+  };
+
+  const moveDraftDirectoryColumnTo = (columnKey: DirectoryVisibleColumnKey, targetKey: DirectoryVisibleColumnKey) => {
+    if (columnKey === targetKey) return;
+    setDraftDirectoryVisibleColumns(prev => {
+      const fromIndex = prev.indexOf(columnKey);
+      const toIndex = prev.indexOf(targetKey);
+      if (fromIndex < 0 || toIndex < 0) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
+      return next;
+    });
+  };
+
   const saveDirectoryColumnSettings = () => {
-    const optionalColumns = sanitizeDirectoryOptionalColumns(draftDirectoryOptionalColumns);
-    setSelectedDirectoryOptionalColumns(optionalColumns);
-    localStorage.setItem(DIRECTORY_COLUMNS_STORAGE_KEY, JSON.stringify({ optionalColumns }));
+    const visibleColumns = sanitizeDirectoryVisibleColumns(draftDirectoryVisibleColumns);
+    setSelectedDirectoryVisibleColumns(visibleColumns);
+    localStorage.setItem(DIRECTORY_COLUMNS_STORAGE_KEY, JSON.stringify({ visibleColumns }));
     setIsDirectoryColumnsPanelOpen(false);
   };
 
   const resetDirectoryColumnSettings = () => {
     localStorage.removeItem(DIRECTORY_COLUMNS_STORAGE_KEY);
-    setSelectedDirectoryOptionalColumns(defaultDirectoryOptionalColumns);
-    setDraftDirectoryOptionalColumns(defaultDirectoryOptionalColumns);
+    setSelectedDirectoryVisibleColumns(defaultDirectoryVisibleColumns);
+    setDraftDirectoryVisibleColumns(defaultDirectoryVisibleColumns);
     setIsDirectoryColumnsPanelOpen(false);
   };
 
@@ -4470,7 +4512,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => {
-                setDraftDirectoryOptionalColumns(selectedDirectoryOptionalColumns);
+                setDraftDirectoryVisibleColumns(selectedDirectoryVisibleColumns);
                 setIsDirectoryColumnsPanelOpen(open => !open);
               }}
               className="flex shrink-0 items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 shadow-sm transition-all hover:bg-slate-50"
@@ -4496,40 +4538,86 @@ export default function App() {
               <div className="min-w-0">
                 <h3 className="text-sm font-black text-slate-900">Столбцы таблицы</h3>
                 <p className="mt-1 max-w-3xl text-xs leading-relaxed text-slate-500">
-                  Выберите дополнительные поля, которые нужно показывать в справочнике. Экспорт CSV выгружает полный набор полей, даже если часть столбцов скрыта в таблице.
+                  Выберите дополнительные поля и задайте порядок столбцов. Экспорт CSV выгружает полный набор полей, даже если часть столбцов скрыта или изменен порядок таблицы.
                 </p>
               </div>
             </div>
 
-            <div className="mt-4 grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.4fr)]">
+            <div className="mt-4 grid min-w-0 grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
               <div className="min-w-0 rounded-lg border border-slate-200 bg-slate-50 p-3">
-                <div className="mb-2 text-xs font-black uppercase tracking-wide text-slate-500">Обязательные столбцы</div>
-                <div className="space-y-2">
-                  {[...requiredDirectoryColumnConfigs, ...systemDirectoryColumnConfigs].map(column => (
-                    <label key={column.key} className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
-                      <span>{column.label}</span>
-                      <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-slate-400">
-                        <input type="checkbox" checked readOnly disabled className="h-3.5 w-3.5 rounded border-slate-300" />
-                        Всегда отображается
-                      </span>
-                    </label>
-                  ))}
+                <div className="mb-2 text-xs font-black uppercase tracking-wide text-slate-500">Показывать столбцы</div>
+                <div className="mb-3 rounded-lg border border-slate-200 bg-white p-3">
+                  <div className="mb-2 text-[11px] font-black uppercase tracking-wide text-slate-400">Обязательные столбцы</div>
+                  <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-3">
+                    {requiredDirectoryColumnConfigs.map(column => (
+                      <label key={column.key} className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700">
+                        <input type="checkbox" checked readOnly disabled className="h-3.5 w-3.5 shrink-0 rounded border-slate-300" />
+                        <span className="min-w-0 truncate">{column.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <div className="mt-2 text-[11px] text-slate-500">Действия всегда отображаются справа.</div>
+                </div>
+
+                <div className="rounded-lg border border-slate-200 bg-white p-3">
+                  <div className="mb-2 text-[11px] font-black uppercase tracking-wide text-slate-400">Дополнительные столбцы</div>
+                  <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2">
+                    {optionalDirectoryColumns.map(column => (
+                      <label key={column.key} className="flex min-w-0 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100">
+                        <input
+                          type="checkbox"
+                          checked={draftDirectoryVisibleColumns.includes(column.key as DirectoryOptionalColumnKey)}
+                          onChange={() => toggleDraftDirectoryColumn(column.key as DirectoryOptionalColumnKey)}
+                          className="h-3.5 w-3.5 shrink-0 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        <span className="min-w-0 truncate">{column.label}</span>
+                      </label>
+                    ))}
+                  </div>
                 </div>
               </div>
 
               <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-3">
-                <div className="mb-2 text-xs font-black uppercase tracking-wide text-slate-500">Дополнительные столбцы</div>
-                <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
-                  {optionalDirectoryColumns.map(column => (
-                    <label key={column.key} className="flex min-w-0 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100">
-                      <input
-                        type="checkbox"
-                        checked={draftDirectoryOptionalColumns.includes(column.key as DirectoryOptionalColumnKey)}
-                        onChange={() => toggleDraftDirectoryColumn(column.key as DirectoryOptionalColumnKey)}
-                        className="h-3.5 w-3.5 shrink-0 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                      />
-                      <span className="min-w-0 truncate">{column.label}</span>
-                    </label>
+                <div className="mb-1 text-xs font-black uppercase tracking-wide text-slate-500">Порядок столбцов</div>
+                <p className="mb-3 text-[11px] leading-relaxed text-slate-500">Перетащите столбцы или используйте кнопки вверх/вниз. Действия нельзя переместить: они всегда справа.</p>
+                <div className="space-y-2">
+                  {draftDirectoryOrderConfigs.map((column, index) => (
+                    <div
+                      key={column.key}
+                      draggable
+                      onDragStart={(event) => event.dataTransfer.setData('text/plain', column.key)}
+                      onDragOver={(event) => event.preventDefault()}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        const sourceKey = event.dataTransfer.getData('text/plain') as DirectoryVisibleColumnKey;
+                        moveDraftDirectoryColumnTo(sourceKey, column.key as DirectoryVisibleColumnKey);
+                      }}
+                      className="flex min-w-0 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700"
+                    >
+                      <span className="shrink-0 cursor-grab text-base font-black leading-none text-slate-400" title="Перетащите столбец">≡</span>
+                      <span className="min-w-0 flex-1 truncate font-semibold">{column.label}</span>
+                      {requiredDirectoryColumns.includes(column.key as DirectoryRequiredColumnKey) && (
+                        <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-slate-500">обязательный</span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => moveDraftDirectoryColumn(column.key as DirectoryVisibleColumnKey, -1)}
+                        disabled={index === 0}
+                        className="shrink-0 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-bold text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+                        title="Переместить выше"
+                      >
+                        Вверх
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => moveDraftDirectoryColumn(column.key as DirectoryVisibleColumnKey, 1)}
+                        disabled={index === draftDirectoryOrderConfigs.length - 1}
+                        className="shrink-0 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-bold text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+                        title="Переместить ниже"
+                      >
+                        Вниз
+                      </button>
+                    </div>
                   ))}
                 </div>
               </div>
