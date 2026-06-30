@@ -533,6 +533,7 @@ export default function App() {
     setDirIsSpam,
     setDirIsBlacklisted,
     setDirType,
+    setDirVisibility,
     setDirComment,
     setDirError,
     setIsDirFormOpen
@@ -1089,42 +1090,30 @@ export default function App() {
     setIsSavingDir(true);
 
     try {
-      const url = editingDirEntry 
-        ? `/api/directory/${editingDirEntry.id}`
-        : '/api/directory';
-      const method = editingDirEntry ? 'PUT' : 'POST';
+      const payload = {
+        name: dirName,
+        number: uniquePhones[0] || '',
+        phones: uniquePhones,
+        type: dirType,
+        visibility: dirVisibility,
+        company: dirCompany,
+        position: dirPosition,
+        department: dirDepartment.trim(),
+        email: dirEmail,
+        website: dirWebsite,
+        tags: dirTagsText.split(/[;,|]+/).map(t => t.trim()).filter(Boolean),
+        isSpam: dirIsSpam,
+        isBlacklisted: dirIsBlacklisted,
+        comment: dirComment
+      };
 
-      const resp = await fetch(url, {
-        method,
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session?.token}`
-        },
-        body: JSON.stringify({
-          name: dirName,
-          number: uniquePhones[0],
-          phones: uniquePhones,
-          type: dirType,
-          visibility: dirVisibility,
-          company: dirCompany,
-          position: dirPosition,
-          department: dirDepartment.trim(),
-          email: dirEmail,
-          website: dirWebsite,
-          tags: dirTagsText.split(/[;,|]+/).map(t => t.trim()).filter(Boolean),
-          isSpam: dirIsSpam,
-          isBlacklisted: dirIsBlacklisted,
-          comment: dirComment
-        })
-      });
-
-      if (resp.status === 401) {
-        handleAuthError(resp);
+      const data = await saveDirectoryEntry(session?.token || '', payload, editingDirEntry?.id);
+      if (data?.error === 'UNAUTHORIZED') {
+        handleAuthError();
         return;
       }
 
-      const data = await resp.json();
-      if (resp.ok) {
+      if (data?.success) {
         await loadDirectory();
         loadCalls(page);
         setIsDirFormOpen(false);
@@ -1132,7 +1121,11 @@ export default function App() {
       } else {
         setDirError(data.error || 'Ошибка при сохранении записи.');
       }
-    } catch (err) {
+    } catch (err: any) {
+      if (err?.message === 'UNAUTHORIZED') {
+        handleAuthError();
+        return;
+      }
       setDirError('Не удалось соединиться с сервером.');
     } finally {
       setIsSavingDir(false);

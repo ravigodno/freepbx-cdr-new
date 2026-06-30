@@ -1269,13 +1269,11 @@ const prepareDirectoryEntryForSave = (raw: any, localDb: any, req: Request, exis
   const ownerId = getDirectoryUserId(dbUser, authUser);
   const merged = normalizeDirectoryEntry({ ...(existing || {}), ...(raw || {}) }, localDb.settings);
   if (merged.visibility === 'private') {
-    merged.ownerUserId = isDirectorySuperUser(authUser)
-      ? (String(raw?.ownerUserId || existing?.ownerUserId || ownerId).trim() || ownerId)
-      : ownerId;
+    merged.ownerUserId = ownerId;
   } else {
     merged.ownerUserId = null;
   }
-  return merged;
+  return normalizeDirectoryEntry(merged, localDb.settings);
 };
 
 const directoryEntryMatchesNumber = (entry: any, num: any): boolean => {

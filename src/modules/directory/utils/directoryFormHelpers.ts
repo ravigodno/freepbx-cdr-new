@@ -12,6 +12,7 @@ export function resetDirFormFieldsHelper(setters: any, defaultType = 'internal')
   setters.setDirIsSpam(false);
   setters.setDirIsBlacklisted(false);
   setters.setDirType(defaultType);
+  setters.setDirVisibility?.('shared');
   setters.setDirComment('');
   setters.setDirError('');
 }
@@ -32,6 +33,7 @@ export function openEditDirEntryHelper(setters: any, entry: any, helpers: any) {
   setters.setDirIsSpam(!!entry.isSpam);
   setters.setDirIsBlacklisted(!!entry.isBlacklisted);
   setters.setDirType(entry.type);
+  setters.setDirVisibility?.(entry.visibility === 'private' ? 'private' : 'shared');
   setters.setDirComment(entry.comment || '');
   setters.setDirError('');
   setters.setIsDirFormOpen(true);
