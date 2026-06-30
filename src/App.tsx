@@ -142,6 +142,28 @@ interface ContactSyncProviderAccount {
   configured?: boolean;
 }
 
+interface ContactSyncPreviewItem {
+  status: 'new' | 'possible_duplicate' | 'invalid' | string;
+  externalContactId: string;
+  fullName?: string;
+  organization?: string;
+  position?: string;
+  phone?: string;
+  phone2?: string;
+  email?: string;
+  website?: string;
+  address?: string;
+  comment?: string;
+  department?: string;
+  group?: string;
+  tags?: string;
+  visibility?: string;
+  type?: string;
+  isSpam?: boolean;
+  warnings?: string[];
+  errors?: string[];
+}
+
 interface CardDavConnectForm {
   email: string;
   appPassword: string;
@@ -657,6 +679,9 @@ export default function App() {
     yandex: { email: '', appPassword: '', carddavUrl: 'https://carddav.yandex.ru' },
     mailru: { email: '', appPassword: '', carddavUrl: 'https://carddav.mail.ru' }
   });
+  const [contactSyncPreviewItems, setContactSyncPreviewItems] = useState<Record<ContactSyncProvider, ContactSyncPreviewItem[]>>({ google: [], yandex: [], mailru: [] });
+  const [contactSyncSelectedIds, setContactSyncSelectedIds] = useState<Record<ContactSyncProvider, string[]>>({ google: [], yandex: [], mailru: [] });
+  const [contactSyncForceDuplicates, setContactSyncForceDuplicates] = useState<Record<ContactSyncProvider, boolean>>({ google: false, yandex: false, mailru: false });
 
   // --- ADMIN DIRECTORY IMPORT / EXPORT & NORMALIZATION STATE ---
   const [isAdminPanelExpanded, setIsAdminPanelExpanded] = useState(false);
@@ -1224,14 +1249,75 @@ export default function App() {
       });
       const data = await resp.json();
       if (resp.ok) {
-        const invalid = Array.isArray(data.items) ? data.items.filter((item: any) => item.status === 'invalid').length : 0;
-        const duplicates = Array.isArray(data.items) ? data.items.filter((item: any) => item.status === 'possible_duplicate').length : 0;
+        const items = Array.isArray(data.items) ? data.items : [];
+        const invalid = items.filter((item: any) => item.status === 'invalid').length;
+        const duplicates = items.filter((item: any) => item.status === 'possible_duplicate').length;
+        setContactSyncPreviewItems(prev => ({ ...prev, [provider]: items }));
+        setContactSyncSelectedIds(prev => ({ ...prev, [provider]: items.filter((item: any) => item.status === 'new').map((item: any) => String(item.externalContactId || '')).filter(Boolean) }));
         setContactSyncMessage('Предпросмотр ' + contactSyncProviderLabels[provider] + ': ' + (data.totalPreviewed || 0) + ' контактов, дублей: ' + duplicates + ', ошибок: ' + invalid + '.');
       } else {
+        setContactSyncPreviewItems(prev => ({ ...prev, [provider]: [] }));
+        setContactSyncSelectedIds(prev => ({ ...prev, [provider]: [] }));
         setContactSyncMessage(data.error || 'Предпросмотр ' + contactSyncProviderLabels[provider] + ' недоступен.');
       }
     } catch (e: any) {
       setContactSyncMessage(e.message || 'Ошибка предпросмотра ' + contactSyncProviderLabels[provider] + '.');
+    } finally {
+      setContactSyncBusyProvider(null);
+    }
+  };
+
+  const handleSelectNewContactSyncItems = (provider: ContactSyncProvider) => {
+    const ids = (contactSyncPreviewItems[provider] || [])
+      .filter(item => item.status === 'new')
+      .map(item => String(item.externalContactId || ''))
+      .filter(Boolean);
+    setContactSyncSelectedIds(prev => ({ ...prev, [provider]: ids }));
+  };
+
+  const handleClearContactSyncSelection = (provider: ContactSyncProvider) => {
+    setContactSyncSelectedIds(prev => ({ ...prev, [provider]: [] }));
+  };
+
+  const handleToggleContactSyncItem = (provider: ContactSyncProvider, item: ContactSyncPreviewItem, checked: boolean) => {
+    if (item.status === 'invalid') return;
+    const id = String(item.externalContactId || '');
+    if (!id) return;
+    setContactSyncSelectedIds(prev => {
+      const current = prev[provider] || [];
+      const next = checked ? Array.from(new Set([...current, id])) : current.filter(value => value !== id);
+      return { ...prev, [provider]: next };
+    });
+  };
+
+  const handleImportSelectedContactSyncItems = async (provider: ContactSyncProvider) => {
+    const selected = new Set(contactSyncSelectedIds[provider] || []);
+    const items = (contactSyncPreviewItems[provider] || []).filter(item => selected.has(String(item.externalContactId || '')));
+    if (!items.length) {
+      setContactSyncMessage('Выберите контакты для импорта.');
+      return;
+    }
+    setContactSyncBusyProvider(provider);
+    setContactSyncMessage('');
+    try {
+      const resp = await fetch('/api/directory/sync/' + provider + '/import', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + session?.token
+        },
+        body: JSON.stringify({ items, force: contactSyncForceDuplicates[provider] === true })
+      });
+      const data = await resp.json();
+      if (resp.ok) {
+        setContactSyncMessage('Импортировано: ' + (data.imported || 0) + ', пропущено: ' + (data.skipped || 0) + ', ошибок: ' + (data.failed || 0) + '.');
+        setContactSyncSelectedIds(prev => ({ ...prev, [provider]: [] }));
+        await loadDirectory();
+      } else {
+        setContactSyncMessage(data.error || 'Ошибка импорта ' + contactSyncProviderLabels[provider] + '.');
+      }
+    } catch (e: any) {
+      setContactSyncMessage(e.message || 'Ошибка импорта ' + contactSyncProviderLabels[provider] + '.');
     } finally {
       setContactSyncBusyProvider(null);
     }
@@ -3479,6 +3565,9 @@ export default function App() {
       : account.status === 'error'
         ? 'border-red-200 bg-red-50 text-red-700'
         : 'border-slate-200 bg-white text-slate-500';
+    const previewItems = contactSyncPreviewItems[provider] || [];
+    const selectedIds = contactSyncSelectedIds[provider] || [];
+    const selectedCount = selectedIds.length;
     return (
       <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-650">
         <div className="mb-2 flex items-center justify-between gap-2">
@@ -3548,6 +3637,60 @@ export default function App() {
             </>
           )}
         </div>
+
+        {previewItems.length > 0 && (
+          <div className="mt-3 rounded-md border border-slate-200 bg-white p-2">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <button type="button" onClick={() => handleSelectNewContactSyncItems(provider)} className="rounded-md border border-slate-200 px-2 py-1 text-[11px] font-bold text-slate-700 hover:bg-slate-50">Выбрать все новые</button>
+              <button type="button" onClick={() => handleClearContactSyncSelection(provider)} className="rounded-md border border-slate-200 px-2 py-1 text-[11px] font-bold text-slate-500 hover:bg-slate-50">Снять выбор</button>
+              <label className="flex items-center gap-1 text-[11px] font-semibold text-slate-600">
+                <input
+                  type="checkbox"
+                  checked={contactSyncForceDuplicates[provider] === true}
+                  onChange={(e) => setContactSyncForceDuplicates(prev => ({ ...prev, [provider]: e.target.checked }))}
+                />
+                Импортировать возможные дубли как новые
+              </label>
+              <button type="button" onClick={() => handleImportSelectedContactSyncItems(provider)} disabled={isBusy || selectedCount === 0} className="rounded-md bg-emerald-600 px-2 py-1 text-[11px] font-bold text-white hover:bg-emerald-700 disabled:opacity-50">Импортировать выбранные ({selectedCount})</button>
+            </div>
+            <div className="max-h-72 overflow-auto rounded border border-slate-100">
+              <table className="min-w-full text-left text-[11px]">
+                <thead className="sticky top-0 bg-slate-100 text-slate-600">
+                  <tr>
+                    <th className="w-8 p-2"></th>
+                    <th className="p-2">Статус</th>
+                    <th className="p-2">ФИО</th>
+                    <th className="p-2">Телефон</th>
+                    <th className="p-2">Email</th>
+                    <th className="p-2">Организация</th>
+                    <th className="p-2">Проблемы</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {previewItems.map((item) => {
+                    const id = String(item.externalContactId || '');
+                    const isInvalid = item.status === 'invalid';
+                    const isSelected = selectedIds.includes(id);
+                    const statusLabel = item.status === 'new' ? 'Новый' : item.status === 'possible_duplicate' ? 'Возможный дубль' : item.status === 'invalid' ? 'Ошибка' : item.status;
+                    return (
+                      <tr key={id || Math.random()} className="border-t border-slate-100 align-top">
+                        <td className="p-2">
+                          <input type="checkbox" disabled={isInvalid} checked={isSelected} onChange={(e) => handleToggleContactSyncItem(provider, item, e.target.checked)} />
+                        </td>
+                        <td className="p-2 font-semibold text-slate-700">{statusLabel}</td>
+                        <td className="p-2 text-slate-800">{item.fullName || '—'}</td>
+                        <td className="p-2 font-mono text-slate-700">{item.phone || item.phone2 || '—'}</td>
+                        <td className="p-2 text-slate-700">{item.email || '—'}</td>
+                        <td className="p-2 text-slate-700">{item.organization || '—'}</td>
+                        <td className="p-2 text-slate-500">{[...(item.warnings || []), ...(item.errors || [])].join('; ') || '—'}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </div>
     );
   };

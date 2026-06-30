@@ -904,6 +904,137 @@ const fetchCardDavVCards = async (account: CardDavAccountForRequest, options: { 
   throw lastError || new Error('CardDAV address book was not found');
 };
 
+
+const buildExternalContactImportRawEntry = (item: any, userId: string): any => {
+  const tags = Array.isArray(item?.tags)
+    ? item.tags
+    : String(item?.tags || '').split(/[;,|]+/).map((tag: string) => tag.trim()).filter(Boolean);
+  const phone = String(item?.phone || '').trim();
+  const phone2 = String(item?.phone2 || '').trim();
+  return {
+    type: ['internal', 'client', 'supplier', 'government'].includes(String(item?.type || '').trim()) ? String(item.type).trim() : 'client',
+    visibility: 'private',
+    ownerUserId: userId,
+    isSpam: item?.isSpam === true ? true : false,
+    name: String(item?.fullName || item?.name || '').trim(),
+    company: String(item?.organization || item?.company || '').trim(),
+    position: String(item?.position || '').trim(),
+    number: phone,
+    phone,
+    phone2,
+    phones: [phone, phone2].filter(Boolean),
+    email: String(item?.email || '').trim(),
+    website: String(item?.website || '').trim(),
+    inn: String(item?.inn || '').trim(),
+    kpp: String(item?.kpp || '').trim(),
+    ogrn: String(item?.ogrn || '').trim(),
+    address: String(item?.address || '').trim(),
+    comment: String(item?.comment || '').trim(),
+    department: String(item?.department || '').trim(),
+    group: String(item?.group || '').trim(),
+    tags,
+    internalExtension: '',
+    linkedExternalNumber: '',
+    responsibleUserId: ''
+  };
+};
+
+const getExistingContactSyncMapping = (localDb: any, userId: string, provider: ContactProvider, externalContactId: string): any | null => {
+  return ((localDb as any).contactSyncMappings || []).find((mapping: any) => (
+    mapping.userId === userId && mapping.provider === provider && mapping.externalContactId === externalContactId
+  )) || null;
+};
+
+const findExternalImportPossibleDuplicate = (localDb: any, entry: any, userId: string): { reason: string } | null => {
+  const phones = [entry.number, ...(entry.phones || [])].map(onlyDigits).filter(Boolean);
+  const email = String(entry.email || '').trim().toLowerCase();
+  const fullName = String(entry.name || '').trim().toLowerCase();
+  const organization = String(entry.company || '').trim().toLowerCase();
+  const duplicate = (localDb.directory || []).map((item: any) => normalizeDirectoryEntry(item, localDb.settings)).find((existing: any) => {
+    if (existing.visibility === 'private' && existing.ownerUserId !== userId) return false;
+    const existingPhones = [existing.number, ...(existing.phones || [])].map(onlyDigits).filter(Boolean);
+    if (phones.length && existingPhones.some((phone: string) => phones.includes(phone))) return true;
+    if (email && String(existing.email || '').trim().toLowerCase() === email) return true;
+    return !!fullName && !!organization && String(existing.name || '').trim().toLowerCase() === fullName && String(existing.company || '').trim().toLowerCase() === organization;
+  });
+  if (!duplicate) return null;
+  const duplicatePhones = [duplicate.number, ...(duplicate.phones || [])].map(onlyDigits).filter(Boolean);
+  if (phones.length && duplicatePhones.some((phone: string) => phones.includes(phone))) return { reason: 'Possible duplicate by phone' };
+  if (email && String(duplicate.email || '').trim().toLowerCase() === email) return { reason: 'Possible duplicate by email' };
+  return { reason: 'Possible duplicate by name and organization' };
+};
+
+const createContactSyncMapping = (localDb: any, userId: string, provider: ContactProvider, contactId: string, externalContactId: string, now: string, item: any) => {
+  if (!Array.isArray((localDb as any).contactSyncMappings)) (localDb as any).contactSyncMappings = [];
+  (localDb as any).contactSyncMappings.push({
+    id: 'csmap_' + crypto.randomBytes(8).toString('hex'),
+    userId,
+    provider,
+    contactId,
+    externalContactId,
+    lastSyncedAt: now,
+    syncDirection: 'import_only',
+    conflictStrategy: 'manual_review',
+    externalUpdatedAt: item?.externalUpdatedAt || null,
+    localUpdatedAt: now,
+    createdAt: now,
+    updatedAt: now
+  });
+};
+
+const importExternalContactItems = (localDb: any, req: Request, provider: ContactProvider, userId: string, items: any[], force: boolean) => {
+  const results: any[] = [];
+  const now = nowIso();
+  if (!Array.isArray(localDb.directory)) localDb.directory = [];
+  items.forEach((item: any) => {
+    const externalContactId = String(item?.externalContactId || '').trim();
+    if (!externalContactId) {
+      results.push({ externalContactId: '', status: 'failed', error: 'externalContactId is required' });
+      return;
+    }
+    const existingMapping = getExistingContactSyncMapping(localDb, userId, provider, externalContactId);
+    if (existingMapping) {
+      results.push({ externalContactId, status: 'skipped_existing_mapping', contactId: existingMapping.contactId || null });
+      return;
+    }
+    if (item?.status === 'invalid') {
+      results.push({ externalContactId, status: 'failed', error: 'Invalid preview contact' });
+      return;
+    }
+    try {
+      const rawEntry = buildExternalContactImportRawEntry(item, userId);
+      const prepared = prepareDirectoryEntryForSave(rawEntry, localDb, req);
+      prepared.visibility = 'private';
+      prepared.ownerUserId = userId;
+      prepared.type = prepared.type || 'client';
+      prepared.isSpam = false;
+      prepared.internalExtension = '';
+      prepared.linkedExternalNumber = '';
+      prepared.responsibleUserId = '';
+      if (!(prepared.name || prepared.company) || (!prepared.phones.length && !prepared.email)) {
+        results.push({ externalContactId, status: 'failed', error: 'Укажите организацию или ФИО и хотя бы один способ связи: телефон или email' });
+        return;
+      }
+      const duplicate = findExternalImportPossibleDuplicate(localDb, prepared, userId);
+      if ((item?.status === 'possible_duplicate' || duplicate) && !force) {
+        results.push({ externalContactId, status: 'skipped_possible_duplicate', reason: duplicate?.reason || 'Possible duplicate' });
+        return;
+      }
+      prepared.createdAt = prepared.createdAt || now;
+      prepared.updatedAt = now;
+      localDb.directory.push(prepared);
+      createContactSyncMapping(localDb, userId, provider, prepared.id, externalContactId, now, item);
+      results.push({ externalContactId, status: 'imported', contactId: prepared.id });
+    } catch (error: any) {
+      results.push({ externalContactId, status: 'failed', error: error?.details?.[0] || error?.message || 'Import failed' });
+    }
+  });
+  const imported = results.filter(item => item.status === 'imported').length;
+  const failed = results.filter(item => item.status === 'failed').length;
+  const skipped = results.length - imported - failed;
+  return { imported, skipped, failed, results };
+};
+
 const buildContactSyncDisconnectPreview = (localDb: any, userId: string, provider: ContactProvider) => {
   const mappings = ((localDb as any).contactSyncMappings || []).filter((mapping: any) => mapping.userId === userId && mapping.provider === provider);
   const contactIds = new Set(mappings.map((mapping: any) => String(mapping.contactId || '')).filter(Boolean));
@@ -5836,6 +5967,27 @@ app.post('/api/directory/sync/:provider/preview-import', requireAuth(), async (r
       CONTACT_SYNC_ENCRYPTION_ERROR
     ];
     res.status(message === 'CardDAV returned no contacts' ? 404 : 400).json({ error: allowedMessages.includes(message) ? message : 'CardDAV request failed' });
+  }
+});
+
+app.post('/api/directory/sync/:provider/import', requireAuth(), async (req, res) => {
+  try {
+    const provider = String(req.params.provider || '');
+    if (!isContactProvider(provider)) return res.status(404).json({ error: 'Unknown contact sync provider' });
+    const localDb = await readLocalDb();
+    const userId = getCurrentDirectoryUserId(localDb, req);
+    const bodyItems = Array.isArray(req.body?.items) ? req.body.items : [];
+    const externalContactIds = Array.isArray(req.body?.externalContactIds) ? req.body.externalContactIds : [];
+    const force = req.body?.force === true;
+    const items = bodyItems.length
+      ? bodyItems
+      : externalContactIds.map((externalContactId: any) => ({ externalContactId, status: 'new' }));
+    if (!items.length) return res.status(400).json({ error: 'No contacts selected for import' });
+    const result = importExternalContactItems(localDb, req, provider, userId, items, force);
+    await writeLocalDb(localDb);
+    res.json({ ok: true, provider, imported: result.imported, skipped: result.skipped, failed: result.failed, results: result.results });
+  } catch (error: any) {
+    res.status(400).json({ error: error?.message || 'External contacts import failed' });
   }
 });
 
