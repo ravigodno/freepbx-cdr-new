@@ -676,16 +676,31 @@ export default function App() {
         if (!(name || company) || (phones.length === 0 && !email)) return null;
 
         let type: 'internal' | 'client' | 'supplier' | 'government' = 'client';
-        const normalizedTypeRaw = String(typeRaw || '').toLowerCase();
-        if (normalizedTypeRaw.includes('supplier') || normalizedTypeRaw.includes('постав')) type = 'supplier';
-        else if (normalizedTypeRaw.includes('government') || normalizedTypeRaw.includes('гос')) type = 'government';
-        else if (normalizedTypeRaw.includes('internal') || normalizedTypeRaw.includes('внутр') || ((phones[0] || '').replace(/\D/g, '').length > 0 && (phones[0] || '').replace(/\D/g, '').length <= 5)) type = 'internal';
+        const normalizedTypeRaw = String(typeRaw || '').trim().toLowerCase();
+        const typeErrors: string[] = [];
+        if (!normalizedTypeRaw) {
+          if ((phones[0] || '').replace(/\D/g, '').length > 0 && (phones[0] || '').replace(/\D/g, '').length <= 5) type = 'internal';
+        } else if (['client', 'клиент'].includes(normalizedTypeRaw)) type = 'client';
+        else if (['supplier', 'поставщик'].includes(normalizedTypeRaw)) type = 'supplier';
+        else if (['government', 'госорган'].includes(normalizedTypeRaw)) type = 'government';
+        else if (['internal', 'внутренний'].includes(normalizedTypeRaw)) type = 'internal';
+        else typeErrors.push('type: допустимы client, supplier, government');
         const visibilityRaw = hasHeader ? getByHeader(cols, 'visibility','видимость') : '';
-        const visibility: 'shared' | 'private' = /^(private|личн)/i.test(visibilityRaw) ? 'private' : 'shared';
+        const normalizedVisibilityRaw = String(visibilityRaw || '').trim().toLowerCase();
+        const visibilityErrors: string[] = [];
+        const visibility: 'shared' | 'private' = !normalizedVisibilityRaw || normalizedVisibilityRaw === 'shared' || normalizedVisibilityRaw === 'общий'
+          ? 'shared'
+          : normalizedVisibilityRaw === 'private' || normalizedVisibilityRaw === 'личный'
+            ? 'private'
+            : 'shared';
+        if (normalizedVisibilityRaw && !['shared', 'private', 'общий', 'личный'].includes(normalizedVisibilityRaw)) {
+          visibilityErrors.push('visibility: допустимы shared или private');
+        }
         const inn = hasHeader ? getByHeader(cols, 'inn','инн') : '';
         const kpp = hasHeader ? getByHeader(cols, 'kpp','кпп') : '';
         const ogrn = hasHeader ? getByHeader(cols, 'ogrn','огрн') : '';
         const address = hasHeader ? getByHeader(cols, 'address','адрес') : '';
+        const department = hasHeader ? getByHeader(cols, 'department','отдел') : '';
         const group = hasHeader ? getByHeader(cols, 'group','группа') : '';
         const internalExtension = hasHeader ? getByHeader(cols, 'internalExtension','внутренний номер','extension') : '';
         const linkedExternalNumber = hasHeader ? getByHeader(cols, 'linkedExternalNumber','связанный внешний номер','externalNumber') : '';
@@ -713,6 +728,7 @@ export default function App() {
           kpp,
           ogrn,
           address,
+          department,
           group,
           internalExtension,
           linkedExternalNumber,
@@ -751,11 +767,10 @@ export default function App() {
 
     try {
       const BOM = "\uFEFF";
-      let csvContent = BOM + "type,visibility,isSpam,organization,fullName,phone,email,comment\r\n";
-      csvContent += "client,shared,false,ООО Ромашка,Иван Иванов,+79781234567,test@mail.ru,обычный контакт\r\n";
-      csvContent += "supplier,private,false,ООО Личный,Петр Петров,100,,личный контакт с внутренним номером\r\n";
-      csvContent += "government,shared,true,ФНС,Спам Контакт,99999999999,spam@mail.ru,спам-тест\r\n";
-
+      let csvContent = BOM + "type,visibility,isSpam,organization,fullName,position,phone,phone2,email,website,inn,kpp,ogrn,address,comment,department,group,tags,internalExtension,linkedExternalNumber,responsibleUserId\r\n";
+      csvContent += "client,shared,false,ООО Ромашка,Иван Иванов,директор,+79781234567,365200000,test@mail.ru,example.com,9102000000,910201001,1234567890123,Симферополь,обычный контакт,Продажи,Клиенты,\"VIP; тендер\",101,79781234567,u1\r\n";
+      csvContent += "supplier,private,false,ООО Личный,Петр Петров,менеджер,100,,private@mail.ru,,,,,Севастополь,личный контакт с внутренним номером,Закупки,Поставщики,личный,100,,\r\n";
+      csvContent += "government,shared,true,ФНС,Спам Контакт,,99999999999,,spam@mail.ru,,,,,Симферополь,спам-тест,Госорганы,Проверка,спам,,,\r\n";
       const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
@@ -777,7 +792,7 @@ export default function App() {
 
     try {
       const BOM = "\uFEFF";
-      let csvContent = BOM + "type,visibility,isSpam,organization,fullName,phone,email,comment\r\n";
+      let csvContent = BOM + "type,visibility,isSpam,organization,fullName,position,phone,phone2,email,website,inn,kpp,ogrn,address,comment,department,group,tags,internalExtension,linkedExternalNumber,responsibleUserId\r\n";
 
       directory.forEach(entry => {
         const phones = getEntryPhones(entry);
@@ -787,10 +802,23 @@ export default function App() {
           entry.isSpam ? 'true' : 'false',
           entry.company || '',
           entry.name || '',
+          entry.position || '',
           phones[0] || '',
+          phones[1] || '',
           entry.email || '',
-          entry.comment || ''
-        ].map(v => `"${String(v || '').replace(/"/g, '""')}"`);
+          entry.website || '',
+          entry.inn || '',
+          entry.kpp || '',
+          entry.ogrn || '',
+          entry.address || '',
+          entry.comment || '',
+          entry.department || '',
+          entry.group || '',
+          getDirectoryEntryTags(entry).join('; '),
+          entry.internalExtension || '',
+          entry.linkedExternalNumber || '',
+          entry.responsibleUserId || ''
+        ].map(v => '"' + String(v || '').replace(/"/g, '""') + '"');
         csvContent += values.join(',') + "\r\n";
       });
 
@@ -3940,7 +3968,7 @@ export default function App() {
               <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                 <h3 className="mb-2 text-sm font-black text-slate-900">Пример CSV</h3>
                 <div className="overflow-x-auto rounded-lg border border-slate-200 bg-slate-950 p-3 text-[11px] text-slate-100">
-                  <code className="whitespace-pre">type,visibility,isSpam,organization,fullName,phone,email,comment{'\n'}client,shared,false,ООО Ромашка,Иван Иванов,+79781234567,test@mail.ru,обычный контакт{'\n'}supplier,private,false,ООО Личный,Петр Петров,100,,личный контакт с внутренним номером{'\n'}government,shared,true,ФНС,Спам Контакт,99999999999,spam@mail.ru,спам-тест</code>
+                  <code className="whitespace-pre">type,visibility,isSpam,organization,fullName,position,phone,phone2,email,website,inn,kpp,ogrn,address,comment,department,group,tags,internalExtension,linkedExternalNumber,responsibleUserId{'\n'}client,shared,false,ООО Ромашка,Иван Иванов,директор,+79781234567,365200000,test@mail.ru,example.com,9102000000,910201001,1234567890123,Симферополь,обычный контакт,Продажи,Клиенты,"VIP; тендер",101,79781234567,u1{'\n'}supplier,private,false,ООО Личный,Петр Петров,менеджер,100,,private@mail.ru,,,,,Севастополь,личный контакт с внутренним номером,Закупки,Поставщики,личный,100,,{'\n'}government,shared,true,ФНС,Спам Контакт,,99999999999,,spam@mail.ru,,,,,Симферополь,спам-тест,Госорганы,Проверка,спам,,,</code>
                 </div>
               </div>
             </div>

@@ -1411,7 +1411,7 @@ const parseDirectoryText = (text: string, settings?: AppSettings): any[] => {
   if (!lines.length) return [];
 
   const first = parseCsvLine(lines[0]).map(h => h.toLowerCase().trim());
-  const hasHeader = first.some(h => ['name','имя','фио','company','компания','phone1','телефон','номер'].includes(h));
+  const hasHeader = first.some(h => ['name','fullname','имя','фио','company','organization','компания','организация','phone','phone1','телефон','номер','type','visibility'].includes(h));
   const headers = hasHeader ? first : [];
   const dataLines = hasHeader ? lines.slice(1) : lines;
 
@@ -1444,6 +1444,7 @@ const parseDirectoryText = (text: string, settings?: AppSettings): any[] => {
         kpp: get('kpp','кпп'),
         ogrn: get('ogrn','огрн'),
         address: get('address','адрес'),
+        department: get('department','отдел'),
         group: get('group','группа'),
         internalExtension: get('internalExtension','внутренний номер','extension'),
         linkedExternalNumber: get('linkedExternalNumber','связанный внешний номер','externalNumber'),
