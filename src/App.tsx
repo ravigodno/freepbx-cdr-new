@@ -139,6 +139,29 @@ const requiredDirectoryColumns: DirectoryRequiredColumnKey[] = ['type', 'fullNam
 const systemDirectoryColumns: DirectorySystemColumnKey[] = ['actions'];
 type DirectoryVisibleColumnKey = DirectoryRequiredColumnKey | DirectoryOptionalColumnKey;
 const defaultDirectoryVisibleColumns: DirectoryVisibleColumnKey[] = ['type', 'fullName', 'phone', 'email', 'organization', 'visibility', 'isSpam'];
+const directoryContactFormFieldOrder: DirectoryVisibleColumnKey[] = [
+  'type',
+  'visibility',
+  'isSpam',
+  'organization',
+  'fullName',
+  'position',
+  'phone',
+  'phone2',
+  'email',
+  'website',
+  'inn',
+  'kpp',
+  'ogrn',
+  'address',
+  'department',
+  'group',
+  'tags',
+  'internalExtension',
+  'linkedExternalNumber',
+  'responsibleUserId',
+  'comment'
+];
 const optionalDirectoryColumns: DirectoryColumnConfig[] = [
   { key: 'visibility', label: 'Видимость' },
   { key: 'isSpam', label: 'Спам' },
@@ -160,7 +183,7 @@ const optionalDirectoryColumns: DirectoryColumnConfig[] = [
   { key: 'responsibleUserId', label: 'Ответственный сотрудник' }
 ];
 const requiredDirectoryColumnConfigs: DirectoryColumnConfig[] = [
-  { key: 'type', label: 'Тип контакта', required: true, className: 'w-[74px]' },
+  { key: 'type', label: 'Тип', required: true, className: 'w-[74px]' },
   { key: 'fullName', label: 'ФИО', required: true, className: 'min-w-[150px]' },
   { key: 'phone', label: 'Телефон', required: true, className: 'min-w-[160px]' }
 ];
@@ -577,6 +600,14 @@ export default function App() {
   const [dirDepartment, setDirDepartment] = useState('');
   const [dirEmail, setDirEmail] = useState('');
   const [dirWebsite, setDirWebsite] = useState('');
+  const [dirInn, setDirInn] = useState('');
+  const [dirKpp, setDirKpp] = useState('');
+  const [dirOgrn, setDirOgrn] = useState('');
+  const [dirAddress, setDirAddress] = useState('');
+  const [dirGroup, setDirGroup] = useState('');
+  const [dirInternalExtension, setDirInternalExtension] = useState('');
+  const [dirLinkedExternalNumber, setDirLinkedExternalNumber] = useState('');
+  const [dirResponsibleUserId, setDirResponsibleUserId] = useState('');
   const [dirTagsText, setDirTagsText] = useState('');
   const [dirIsSpam, setDirIsSpam] = useState(false);
   const [dirIsBlacklisted, setDirIsBlacklisted] = useState(false);
@@ -589,6 +620,7 @@ export default function App() {
   const [dirTypeFilter, setDirTypeFilter] = useState<'all' | 'client' | 'supplier' | 'government'>('all');
   const [dirSpamMode, setDirSpamMode] = useState<'all' | 'exclude_spam' | 'only_spam'>('exclude_spam');
   const [dirVisibilityMode, setDirVisibilityMode] = useState<'all' | 'shared_only' | 'private_only' | 'my_private_only' | 'exclude_private' | 'exclude_shared'>('all');
+  const [dirFormShowAllFields, setDirFormShowAllFields] = useState(false);
   const [isDirectoryColumnsPanelOpen, setIsDirectoryColumnsPanelOpen] = useState(false);
   const [selectedDirectoryVisibleColumns, setSelectedDirectoryVisibleColumns] = useState<DirectoryVisibleColumnKey[]>(loadDirectoryVisibleColumns);
   const [draftDirectoryVisibleColumns, setDraftDirectoryVisibleColumns] = useState<DirectoryVisibleColumnKey[]>(selectedDirectoryVisibleColumns);
@@ -669,6 +701,14 @@ export default function App() {
     setDirDepartment,
     setDirEmail,
     setDirWebsite,
+    setDirInn,
+    setDirKpp,
+    setDirOgrn,
+    setDirAddress,
+    setDirGroup,
+    setDirInternalExtension,
+    setDirLinkedExternalNumber,
+    setDirResponsibleUserId,
     setDirTagsText,
     setDirIsSpam,
     setDirIsBlacklisted,
@@ -689,6 +729,14 @@ export default function App() {
     setDirDepartment('');
     setDirEmail('');
     setDirWebsite('');
+    setDirInn('');
+    setDirKpp('');
+    setDirOgrn('');
+    setDirAddress('');
+    setDirGroup('');
+    setDirInternalExtension('');
+    setDirLinkedExternalNumber('');
+    setDirResponsibleUserId('');
     setDirTagsText('');
     setDirIsSpam(false);
     setDirIsBlacklisted(false);
@@ -696,6 +744,7 @@ export default function App() {
     setDirVisibility('shared');
     setDirComment('');
     setDirError('');
+    setDirFormShowAllFields(false);
   };
 
 
@@ -1259,7 +1308,7 @@ export default function App() {
       ...dirPhonesText.split(/[;,\n]+/)
     ].map(v => v.trim()).filter(Boolean);
     const uniquePhones = Array.from(new Set(phones));
-    const phoneValidationErrors = getDirectoryPhoneValidationErrors(uniquePhones);
+    const phoneValidationErrors = getDirectoryPhoneValidationErrors([...uniquePhones, dirLinkedExternalNumber]);
     if (phoneValidationErrors.length) {
       setDirError(directoryPhoneValidationMessage);
       return;
@@ -1282,8 +1331,16 @@ export default function App() {
         company: dirCompany,
         position: dirPosition,
         department: dirDepartment.trim(),
+        group: dirGroup.trim(),
         email: dirEmail,
         website: dirWebsite,
+        inn: dirInn.trim(),
+        kpp: dirKpp.trim(),
+        ogrn: dirOgrn.trim(),
+        address: dirAddress.trim(),
+        internalExtension: dirInternalExtension.trim(),
+        linkedExternalNumber: dirLinkedExternalNumber.trim(),
+        responsibleUserId: dirResponsibleUserId.trim(),
         tags: dirTagsText.split(/[;,|]+/).map(t => t.trim()).filter(Boolean),
         isSpam: dirIsSpam,
         isBlacklisted: dirIsBlacklisted,
@@ -1411,6 +1468,14 @@ export default function App() {
     setDirDepartment((entry as any).department || '');
     setDirEmail(entry.email || '');
     setDirWebsite(entry.website || '');
+    setDirInn(entry.inn || '');
+    setDirKpp(entry.kpp || '');
+    setDirOgrn(entry.ogrn || '');
+    setDirAddress(entry.address || '');
+    setDirGroup(entry.group || '');
+    setDirInternalExtension(entry.internalExtension || '');
+    setDirLinkedExternalNumber(entry.linkedExternalNumber || '');
+    setDirResponsibleUserId(entry.responsibleUserId || '');
     setDirTagsText(getDirectoryEntryTags(entry).join('; '));
     setDirIsSpam(!!entry.isSpam);
     setDirIsBlacklisted(!!entry.isBlacklisted);
@@ -1418,6 +1483,7 @@ export default function App() {
     setDirVisibility(entry.visibility === 'private' ? 'private' : 'shared');
     setDirComment(entry.comment || '');
     setDirError('');
+    setDirFormShowAllFields(false);
     setIsDirFormOpen(true);
   };
 
@@ -2969,7 +3035,6 @@ export default function App() {
             >
               <DirectoryStatusIcon entry={entry} />
             </span>
-            <span className="font-semibold text-slate-700">{getDirectoryTypeLabel(entry)}</span>
           </div>
         );
       case 'fullName':
@@ -3100,6 +3165,134 @@ export default function App() {
       default:
         return renderDirectoryDash();
     }
+  };
+
+  const hasDirectoryFormFieldValue = (fieldKey: DirectoryVisibleColumnKey): boolean => {
+    const original = editingDirEntry as any;
+    const originalPhones = editingDirEntry ? getEntryPhones(editingDirEntry) : [];
+    const originalExtraPhones = originalPhones.slice(1).join('');
+    const values: Record<DirectoryVisibleColumnKey, unknown> = {
+      type: dirType,
+      fullName: dirName || original?.name,
+      phone: dirNumber || originalPhones[0] || original?.number,
+      visibility: original?.visibility,
+      isSpam: dirIsSpam || original?.isSpam,
+      organization: dirCompany || original?.company,
+      position: dirPosition || original?.position,
+      phone2: dirPhonesText || originalExtraPhones,
+      email: dirEmail || original?.email,
+      website: dirWebsite || original?.website,
+      inn: dirInn || original?.inn,
+      kpp: dirKpp || original?.kpp,
+      ogrn: dirOgrn || original?.ogrn,
+      address: dirAddress || original?.address,
+      comment: dirComment || original?.comment,
+      department: dirDepartment || original?.department,
+      group: dirGroup || original?.group,
+      tags: dirTagsText || (Array.isArray(original?.tags) ? original.tags.join('; ') : ''),
+      internalExtension: dirInternalExtension || original?.internalExtension,
+      linkedExternalNumber: dirLinkedExternalNumber || original?.linkedExternalNumber,
+      responsibleUserId: dirResponsibleUserId || original?.responsibleUserId
+    };
+    return String(values[fieldKey] ?? '').trim().length > 0;
+  };
+
+  const visibleDirectoryContactFormFields: DirectoryVisibleColumnKey[] = dirFormShowAllFields
+    ? directoryContactFormFieldOrder
+    : directoryContactFormFieldOrder.filter(fieldKey => {
+      if (requiredDirectoryColumns.includes(fieldKey as DirectoryRequiredColumnKey)) return true;
+      if (selectedDirectoryVisibleColumns.includes(fieldKey)) return true;
+      return !!editingDirEntry && hasDirectoryFormFieldValue(fieldKey);
+    });
+
+  const hasDirectoryContactFormField = (fieldKey: DirectoryVisibleColumnKey): boolean => visibleDirectoryContactFormFields.includes(fieldKey);
+
+  const directoryFormInputClass = 'w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500';
+  const directoryFormMonoInputClass = directoryFormInputClass + ' font-mono';
+
+  const renderDirectoryContactFormField = (fieldKey: DirectoryVisibleColumnKey) => {
+    switch (fieldKey) {
+      case 'type':
+        return (
+          <label className="space-y-1 text-xs font-semibold text-slate-650">
+            <span>Тип контакта</span>
+            <select value={dirType} onChange={(e) => setDirType(e.target.value as typeof dirType)} className={directoryFormInputClass}>
+              <option value="client">Клиент</option>
+              <option value="supplier">Поставщик</option>
+              <option value="government">Госорган</option>
+              <option value="internal">Внутренний</option>
+            </select>
+          </label>
+        );
+      case 'visibility':
+        return (
+          <label className="space-y-1 text-xs font-semibold text-slate-650">
+            <span>Видимость</span>
+            <select value={dirVisibility} onChange={(e) => setDirVisibility(e.target.value as typeof dirVisibility)} className={directoryFormInputClass}>
+              <option value="shared">Общий контакт</option>
+              <option value="private">Личный контакт</option>
+            </select>
+          </label>
+        );
+      case 'isSpam':
+        return (
+          <label className="flex min-h-[58px] items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">
+            <input type="checkbox" checked={dirIsSpam} onChange={(e) => setDirIsSpam(e.target.checked)} className="rounded border-amber-300 text-amber-600" />
+            Спам
+          </label>
+        );
+      case 'organization':
+        return <label className="space-y-1 text-xs font-semibold text-slate-650"><span>Организация</span><input type="text" value={dirCompany} onChange={(e) => setDirCompany(e.target.value)} placeholder="ООО Компания" className={directoryFormInputClass} /></label>;
+      case 'fullName':
+        return <label className="space-y-1 text-xs font-semibold text-slate-650"><span>ФИО</span><input type="text" value={dirName} onChange={(e) => setDirName(e.target.value)} placeholder="Иван Смирнов" className={directoryFormInputClass} /></label>;
+      case 'position':
+        return <label className="space-y-1 text-xs font-semibold text-slate-650"><span>Должность</span><input type="text" value={dirPosition} onChange={(e) => setDirPosition(e.target.value)} placeholder="Директор / менеджер" className={directoryFormInputClass} /></label>;
+      case 'phone':
+        return <label className="space-y-1 text-xs font-semibold text-slate-650"><span>Телефон</span><input type="text" value={dirNumber} onChange={(e) => setDirNumber(e.target.value)} placeholder="100 или 79781234567" className={directoryFormMonoInputClass} /></label>;
+      case 'phone2':
+        return <label className="space-y-1 text-xs font-semibold text-slate-650 md:col-span-2"><span>Доп. телефон</span><textarea value={dirPhonesText} onChange={(e) => setDirPhonesText(e.target.value)} rows={3} placeholder="Каждый номер с новой строки или через запятую" className={directoryFormMonoInputClass} /></label>;
+      case 'email':
+        return <label className="space-y-1 text-xs font-semibold text-slate-650"><span>Email</span><input type="email" value={dirEmail} onChange={(e) => setDirEmail(e.target.value)} className={directoryFormInputClass} /></label>;
+      case 'website':
+        return <label className="space-y-1 text-xs font-semibold text-slate-650"><span>Сайт</span><input type="text" value={dirWebsite} onChange={(e) => setDirWebsite(e.target.value)} placeholder="site.ru" className={directoryFormInputClass} /></label>;
+      case 'inn':
+        return <label className="space-y-1 text-xs font-semibold text-slate-650"><span>ИНН</span><input type="text" value={dirInn} onChange={(e) => setDirInn(e.target.value)} className={directoryFormMonoInputClass} /></label>;
+      case 'kpp':
+        return <label className="space-y-1 text-xs font-semibold text-slate-650"><span>КПП</span><input type="text" value={dirKpp} onChange={(e) => setDirKpp(e.target.value)} className={directoryFormMonoInputClass} /></label>;
+      case 'ogrn':
+        return <label className="space-y-1 text-xs font-semibold text-slate-650"><span>ОГРН</span><input type="text" value={dirOgrn} onChange={(e) => setDirOgrn(e.target.value)} className={directoryFormMonoInputClass} /></label>;
+      case 'address':
+        return <label className="space-y-1 text-xs font-semibold text-slate-650 md:col-span-2"><span>Адрес</span><input type="text" value={dirAddress} onChange={(e) => setDirAddress(e.target.value)} placeholder="Город, улица, офис" className={directoryFormInputClass} /></label>;
+      case 'department':
+        return <label className="space-y-1 text-xs font-semibold text-slate-650"><span>Отдел / группа</span><input type="text" value={dirDepartment} onChange={(e) => setDirDepartment(e.target.value)} placeholder="Продажи, IT, Бухгалтерия" className={directoryFormInputClass} /></label>;
+      case 'group':
+        return <label className="space-y-1 text-xs font-semibold text-slate-650"><span>Группа</span><input type="text" value={dirGroup} onChange={(e) => setDirGroup(e.target.value)} placeholder="Клиенты, Поставщики" className={directoryFormInputClass} /></label>;
+      case 'tags':
+        return <label className="space-y-1 text-xs font-semibold text-slate-650 md:col-span-2"><span>Теги</span><input type="text" value={dirTagsText} onChange={(e) => setDirTagsText(e.target.value)} placeholder="VIP; Клиент; тендер" className={directoryFormInputClass} /></label>;
+      case 'internalExtension':
+        return <label className="space-y-1 text-xs font-semibold text-slate-650"><span>Внутренний номер</span><input type="text" value={dirInternalExtension} onChange={(e) => setDirInternalExtension(e.target.value)} placeholder="101" className={directoryFormMonoInputClass} /></label>;
+      case 'linkedExternalNumber':
+        return <label className="space-y-1 text-xs font-semibold text-slate-650"><span>Связанный внешний номер</span><input type="text" value={dirLinkedExternalNumber} onChange={(e) => setDirLinkedExternalNumber(e.target.value)} placeholder="79781234567" className={directoryFormMonoInputClass} /></label>;
+      case 'responsibleUserId':
+        return <label className="space-y-1 text-xs font-semibold text-slate-650"><span>Ответственный сотрудник</span><input type="text" value={dirResponsibleUserId} onChange={(e) => setDirResponsibleUserId(e.target.value)} placeholder="u1" className={directoryFormInputClass} /></label>;
+      case 'comment':
+        return <label className="space-y-1 text-xs font-semibold text-slate-650 md:col-span-2"><span>Комментарий</span><textarea value={dirComment} onChange={(e) => setDirComment(e.target.value)} rows={3} placeholder="Комментарий, примечание, источник" className={directoryFormInputClass} /></label>;
+      default:
+        return null;
+    }
+  };
+
+  const renderDirectoryContactFormSection = (title: string, fieldKeys: DirectoryVisibleColumnKey[]) => {
+    const visibleFields = fieldKeys.filter(hasDirectoryContactFormField);
+    if (visibleFields.length === 0) return null;
+    return (
+      <div className="rounded-xl border border-slate-200 bg-white p-3">
+        <h4 className="mb-3 text-xs font-black uppercase tracking-wide text-slate-500">{title}</h4>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          {visibleFields.map(fieldKey => <React.Fragment key={fieldKey}>{renderDirectoryContactFormField(fieldKey)}</React.Fragment>)}
+        </div>
+      </div>
+    );
   };
 
   if (!session) {
@@ -5298,116 +5491,62 @@ export default function App() {
 
 
       {isDirFormOpen && (
-        <div className="fixed inset-0 bg-slate-950/70 flex items-center justify-center p-4 z-50">
-          <div className="w-full max-w-2xl bg-white border border-slate-200 rounded-2xl p-6 shadow-2xl relative max-h-[90vh] overflow-y-auto">
-            <div className="flex items-start justify-between border-b border-slate-100 pb-3 mb-4">
-              <div>
-                <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                  <BookOpen className="h-5 w-5 text-blue-600" />
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4">
+          <div className="relative max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-2xl border border-slate-200 bg-slate-50 p-5 shadow-2xl">
+            <div className="mb-4 flex items-start justify-between gap-3 border-b border-slate-200 pb-3">
+              <div className="min-w-0">
+                <h3 className="flex items-center gap-2 text-base font-bold text-slate-900">
+                  <BookOpen className="h-5 w-5 shrink-0 text-blue-600" />
                   {editingDirEntry ? 'Редактировать контакт' : 'Новый контакт'}
                 </h3>
-                <p className="text-xs text-slate-500 font-light mt-0.5">
-                  Контакт справочника может быть общим или личным. Для сохранения укажите ФИО или организацию и телефон или email.
+                <p className="mt-0.5 max-w-2xl text-xs font-light leading-relaxed text-slate-500">
+                  Форма показывает обязательные поля, выбранные столбцы таблицы и заполненные поля контакта. Для сохранения укажите ФИО или организацию и телефон или email.
                 </p>
               </div>
-              <button onClick={() => setIsDirFormOpen(false)} className="text-slate-400 hover:text-slate-650 p-1 rounded-md">✕</button>
+              <button type="button" onClick={() => setIsDirFormOpen(false)} className="rounded-md p-1 text-slate-400 hover:text-slate-650">✕</button>
             </div>
 
             <form onSubmit={handleSaveDirEntry} className="space-y-4">
               {dirError && (
-                <div className="p-3 bg-blue-50 border border-blue-200 text-blue-600 rounded-lg text-xs flex items-center gap-2">
+                <div className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-600">
                   <AlertCircle className="h-4.5 w-4.5 shrink-0" />
                   <span>{dirError}</span>
                 </div>
               )}
 
-              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                <label className="text-slate-650 text-xs font-semibold">Тип и видимость контакта</label>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-2">
-                  {([
-                    ['client', 'Клиент'],
-                    ['supplier', 'Поставщик'],
-                    ['government', 'Госорган'],
-                    ['internal', 'Внутренний']
-                  ] as const).map(([value, label]) => (
-                    <button key={value} type="button" onClick={() => setDirType(value)} className={`py-2 px-3 rounded-lg border text-xs font-semibold cursor-pointer transition-all ${dirType === value ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
-                      {label}
-                    </button>
-                  ))}
-                  <button type="button" onClick={() => setDirVisibility('shared')} className={`py-2 px-3 rounded-lg border text-xs font-semibold cursor-pointer transition-all ${dirVisibility === 'shared' ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
-                    Общий контакт
-                  </button>
-                  <button type="button" onClick={() => setDirVisibility('private')} className={`py-2 px-3 rounded-lg border text-xs font-semibold cursor-pointer transition-all ${dirVisibility === 'private' ? 'bg-amber-50 border-amber-200 text-amber-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
-                    Личный контакт
-                  </button>
-                  <label className="flex items-center justify-center gap-2 py-2 px-3 rounded-lg border border-amber-200 bg-amber-50 text-xs text-amber-800 font-bold cursor-pointer">
-                    <input type="checkbox" checked={dirIsSpam} onChange={(e) => setDirIsSpam(e.target.checked)} className="rounded border-amber-300 text-amber-600" />
-                    СПАМ
-                  </label>
-                  <label className="flex items-center justify-center gap-2 py-2 px-3 rounded-lg border border-blue-200 bg-blue-50 text-xs text-blue-700 font-bold cursor-pointer">
-                    <input type="checkbox" checked={dirIsBlacklisted} onChange={(e) => setDirIsBlacklisted(e.target.checked)} className="rounded border-blue-300 text-blue-600" />
-                    ЧС
-                  </label>
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white p-3">
+                <div className="text-xs text-slate-500">
+                  Сейчас показано полей: <span className="font-bold text-slate-800">{visibleDirectoryContactFormFields.length}</span>. Actions и ownerUserId в форму не выводятся.
                 </div>
+                <button
+                  type="button"
+                  onClick={() => setDirFormShowAllFields(value => !value)}
+                  className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                >
+                  {dirFormShowAllFields ? 'Скрыть дополнительные поля' : 'Показать все поля'}
+                </button>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="text-slate-650 text-xs font-semibold">ФИО</label>
-                  <input type="text" value={dirName} onChange={(e) => setDirName(e.target.value)} placeholder="Иван Смирнов" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500" />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-slate-650 text-xs font-semibold">Основной телефон / SIP</label>
-                  <input type="text" value={dirNumber} onChange={(e) => setDirNumber(e.target.value)} placeholder="100 или 79781234567" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 font-mono focus:outline-none focus:ring-1 focus:ring-blue-500" />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-slate-650 text-xs font-semibold">Компания</label>
-                  <input type="text" value={dirCompany} onChange={(e) => setDirCompany(e.target.value)} placeholder="ООО Компания" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500" />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-slate-650 text-xs font-semibold">Должность</label>
-                  <input type="text" value={dirPosition} onChange={(e) => setDirPosition(e.target.value)} placeholder="Директор / менеджер" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500" />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-slate-650 text-xs font-semibold">Отдел</label>
-                  <input type="text" value={dirDepartment} onChange={(e) => setDirDepartment(e.target.value)} placeholder="Продажи, IT, Бухгалтерия" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500" />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-slate-650 text-xs font-semibold">Теги</label>
-                  <input type="text" value={dirTagsText} onChange={(e) => setDirTagsText(e.target.value)} placeholder="VIP; Клиент; СПАМ" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500" />
-                </div>
-                <div className="space-y-1 md:col-span-2">
-                  <label className="text-slate-650 text-xs font-semibold">Дополнительные телефоны</label>
-                  <textarea value={dirPhonesText} onChange={(e) => setDirPhonesText(e.target.value)} rows={3} placeholder="Каждый номер с новой строки или через запятую" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 font-mono focus:outline-none focus:ring-1 focus:ring-blue-500" />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-slate-650 text-xs font-semibold">Email</label>
-                  <input type="email" value={dirEmail} onChange={(e) => setDirEmail(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500" />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-slate-650 text-xs font-semibold">Сайт</label>
-                  <input type="text" value={dirWebsite} onChange={(e) => setDirWebsite(e.target.value)} placeholder="site.ru" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500" />
-                </div>
-                <div className="space-y-1 md:col-span-2">
-                  <label className="text-slate-650 text-xs font-semibold">Комментарий</label>
-                  <input type="text" value={dirComment} onChange={(e) => setDirComment(e.target.value)} placeholder="Комментарий, примечание, источник" className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500" />
-                </div>
-              </div>
+              {renderDirectoryContactFormSection('Основное', ['type', 'visibility', 'isSpam', 'fullName', 'organization', 'position'])}
+              {renderDirectoryContactFormSection('Связь', ['phone', 'phone2', 'email', 'website'])}
+              {renderDirectoryContactFormSection('Реквизиты', ['inn', 'kpp', 'ogrn', 'address'])}
+              {renderDirectoryContactFormSection('CRM / телефония', ['department', 'group', 'tags', 'internalExtension', 'linkedExternalNumber', 'responsibleUserId'])}
+              {renderDirectoryContactFormSection('Комментарий', ['comment'])}
 
               {dirVisibility === 'private' && (
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <div className="rounded-xl border border-slate-200 bg-white p-3">
                   <h4 className="text-xs font-black text-slate-800">Синхронизация личных контактов</h4>
                   <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">Google Contacts — скоро</div>
-                    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">Yandex Contacts — скоро</div>
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">Google Contacts — скоро</div>
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">Yandex Contacts — скоро</div>
                   </div>
                   <p className="mt-2 text-[11px] leading-relaxed text-slate-500">Синхронизация будет относиться только к личным контактам пользователя и не будет использовать OAuth модулей Маркетинга.</p>
                 </div>
               )}
 
-              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
-                <button type="button" onClick={() => setIsDirFormOpen(false)} className="px-4 py-2 border border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-slate-800 rounded-lg text-xs font-medium cursor-pointer">Отмена</button>
-                <button type="submit" disabled={isSavingDir} className="bg-blue-600 hover:bg-blue-700 text-xs font-semibold text-white px-4 py-2 rounded-lg cursor-pointer flex items-center justify-center gap-1 min-w-[90px] disabled:opacity-50">
+              <div className="flex justify-end gap-2 border-t border-slate-200 pt-3">
+                <button type="button" onClick={() => setIsDirFormOpen(false)} className="rounded-lg border border-slate-200 px-4 py-2 text-xs font-medium text-slate-500 hover:bg-slate-50 hover:text-slate-800">Отмена</button>
+                <button type="submit" disabled={isSavingDir} className="flex min-w-[90px] items-center justify-center gap-1 rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50">
                   {isSavingDir && <Loader2 className="h-3 w-3 animate-spin" />}
                   <span>Сохранить</span>
                 </button>
