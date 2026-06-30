@@ -670,6 +670,240 @@ const normalizeVCardContacts = (provider: ContactProvider, body: string): Normal
   return cards.map((card, index) => normalizeVCardContact(provider, card, String(index)));
 };
 
+
+interface CardDavAddressBook {
+  url: string;
+  displayName?: string;
+}
+
+interface CardDavAccountForRequest {
+  provider: 'yandex' | 'mailru';
+  carddavUrl: string;
+  email: string;
+  appPassword: string;
+}
+
+const CARD_DAV_TIMEOUT_MS = 15000;
+const CARD_DAV_PREVIEW_LIMIT = 50;
+
+const decodeXmlEntities = (value: string): string => {
+  return String(value || '')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&');
+};
+
+const stripXmlCdata = (value: string): string => {
+  const raw = String(value || '').trim();
+  const cdata = raw.match(/^<!\[CDATA\[([\s\S]*?)\]\]>$/);
+  return cdata ? cdata[1] : raw;
+};
+
+const normalizeCardDavBaseUrl = (value: any): string => {
+  const raw = String(value || '').trim().replace(/\/+$/, '');
+  if (!/^https?:\/\//i.test(raw)) throw new Error('CardDAV request failed');
+  return raw;
+};
+
+const resolveCardDavUrl = (baseUrl: string, href: string): string => {
+  const cleanHref = decodeXmlEntities(String(href || '').trim());
+  if (!cleanHref) return '';
+  return new URL(cleanHref, baseUrl.endsWith('/') ? baseUrl : baseUrl + '/').toString();
+};
+
+const buildCardDavAuthHeader = (email: string, appPassword: string): string => {
+  return 'Basic ' + Buffer.from(String(email || '') + ':' + String(appPassword || '')).toString('base64');
+};
+
+const buildCardDavPropfindBody = (...props: string[]): string => {
+  return '<?xml version="1.0" encoding="utf-8"?>' +
+    '<d:propfind xmlns:d="DAV:" xmlns:card="urn:ietf:params:xml:ns:carddav">' +
+    '<d:prop>' + props.join('') + '</d:prop>' +
+    '</d:propfind>';
+};
+
+const buildAddressBookQueryReport = (): string => {
+  return '<?xml version="1.0" encoding="utf-8"?>' +
+    '<card:addressbook-query xmlns:d="DAV:" xmlns:card="urn:ietf:params:xml:ns:carddav">' +
+    '<d:prop><d:getetag/><card:address-data/></d:prop>' +
+    '</card:addressbook-query>';
+};
+
+const cardDavRequest = async (account: CardDavAccountForRequest, url: string, options: { method: string; depth?: string; body?: string; acceptStatuses?: number[] }): Promise<{ status: number; url: string; location: string; body: string }> => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), CARD_DAV_TIMEOUT_MS);
+  try {
+    const response: any = await fetch(url, {
+      method: options.method,
+      redirect: 'manual',
+      signal: controller.signal,
+      headers: {
+        Authorization: buildCardDavAuthHeader(account.email, account.appPassword),
+        Depth: options.depth || '0',
+        'Content-Type': 'application/xml; charset=utf-8',
+        Accept: 'application/xml, text/xml, text/vcard, */*'
+      },
+      body: options.body
+    } as any);
+    const body = await response.text();
+    const location = response.headers?.get ? (response.headers.get('location') || '') : '';
+    const allowed = options.acceptStatuses || [200, 207, 301, 302, 303, 307, 308];
+    if (!allowed.includes(response.status)) {
+      throw new Error('CardDAV request failed');
+    }
+    return { status: response.status, url, location, body };
+  } catch (error: any) {
+    if (error?.name === 'AbortError') throw new Error('CardDAV request failed: timeout');
+    if (error?.message === 'CardDAV request failed') throw error;
+    throw new Error('CardDAV request failed');
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+const parseCardDavHrefValues = (xml: string): string[] => {
+  const out: string[] = [];
+  const re = /<(?:[A-Za-z0-9_-]+:)?href\b[^>]*>([\s\S]*?)<\/(?:[A-Za-z0-9_-]+:)?href>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(xml))) {
+    const href = decodeXmlEntities(stripXmlCdata(match[1])).trim();
+    if (href && !out.includes(href)) out.push(href);
+  }
+  return out;
+};
+
+const parseCardDavPropHref = (xml: string, propName: string): string => {
+  const re = new RegExp('<(?:[A-Za-z0-9_-]+:)?' + propName + '\\b[^>]*>[\\s\\S]*?<(?:[A-Za-z0-9_-]+:)?href\\b[^>]*>([\\s\\S]*?)<\\/(?:[A-Za-z0-9_-]+:)?href>[\\s\\S]*?<\\/(?:[A-Za-z0-9_-]+:)?' + propName + '>', 'i');
+  const match = xml.match(re);
+  return match ? decodeXmlEntities(stripXmlCdata(match[1])).trim() : '';
+};
+
+const parseCardDavAddressBookHrefs = (xml: string): string[] => {
+  const responseBlocks = String(xml || '').match(/<(?:[A-Za-z0-9_-]+:)?response\b[\s\S]*?<\/(?:[A-Za-z0-9_-]+:)?response>/gi) || [];
+  const hrefs: string[] = [];
+  responseBlocks.forEach((block) => {
+    if (!/<(?:[A-Za-z0-9_-]+:)?addressbook\b/i.test(block)) return;
+    const href = parseCardDavHrefValues(block)[0];
+    if (href && !hrefs.includes(href)) hrefs.push(href);
+  });
+  return hrefs;
+};
+
+const parseCardDavDisplayName = (xml: string, href: string): string => {
+  const responseBlocks = String(xml || '').match(/<(?:[A-Za-z0-9_-]+:)?response\b[\s\S]*?<\/(?:[A-Za-z0-9_-]+:)?response>/gi) || [];
+  const block = responseBlocks.find(item => parseCardDavHrefValues(item).includes(href)) || '';
+  const match = block.match(/<(?:[A-Za-z0-9_-]+:)?displayname\b[^>]*>([\s\S]*?)<\/(?:[A-Za-z0-9_-]+:)?displayname>/i);
+  return match ? decodeXmlEntities(stripXmlCdata(match[1])).trim() : '';
+};
+
+const parseCardDavMultiStatus = (xml: string): string[] => {
+  const vcards: string[] = [];
+  const addressDataRe = /<(?:[A-Za-z0-9_-]+:)?address-data\b[^>]*>([\s\S]*?)<\/(?:[A-Za-z0-9_-]+:)?address-data>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = addressDataRe.exec(xml))) {
+    const vcard = decodeXmlEntities(stripXmlCdata(match[1])).trim();
+    if (vcard.includes('BEGIN:VCARD')) vcards.push(vcard);
+  }
+  if (!vcards.length && String(xml || '').includes('BEGIN:VCARD')) {
+    const rawCards = String(xml || '').match(/BEGIN:VCARD[\s\S]*?END:VCARD/gi) || [];
+    rawCards.forEach(card => vcards.push(decodeXmlEntities(card).trim()));
+  }
+  return vcards;
+};
+
+const uniqueCardDavAddressBooks = (items: CardDavAddressBook[]): CardDavAddressBook[] => {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    if (!item.url || seen.has(item.url)) return false;
+    seen.add(item.url);
+    return true;
+  });
+};
+
+const buildCardDavFallbackAddressBooks = (account: CardDavAccountForRequest): CardDavAddressBook[] => {
+  const baseUrl = normalizeCardDavBaseUrl(account.carddavUrl);
+  const encodedEmail = encodeURIComponent(account.email);
+  const encodedUser = encodeURIComponent(String(account.email || '').split('@')[0] || account.email);
+  return uniqueCardDavAddressBooks([
+    { url: baseUrl + '/' },
+    { url: baseUrl + '/addressbook/' },
+    { url: baseUrl + '/addressbooks/' + encodedEmail + '/default/' },
+    { url: baseUrl + '/addressbooks/' + encodedUser + '/default/' },
+    { url: baseUrl + '/principals/' + encodedEmail + '/addressbook/' },
+    { url: baseUrl + '/principals/' + encodedUser + '/addressbook/' }
+  ]);
+};
+
+const discoverCardDavAddressBooks = async (account: CardDavAccountForRequest): Promise<CardDavAddressBook[]> => {
+  const baseUrl = normalizeCardDavBaseUrl(account.carddavUrl);
+  const candidates: CardDavAddressBook[] = [];
+  const propfindBody = buildCardDavPropfindBody(
+    '<d:current-user-principal/>',
+    '<card:addressbook-home-set/>',
+    '<d:displayname/>',
+    '<d:resourcetype/>'
+  );
+  const wellKnownUrl = baseUrl + '/.well-known/carddav';
+  let discoveryUrl = wellKnownUrl;
+  try {
+    const wellKnown = await cardDavRequest(account, wellKnownUrl, { method: 'PROPFIND', depth: '0', body: propfindBody });
+    if (wellKnown.location && wellKnown.status >= 300 && wellKnown.status < 400) {
+      discoveryUrl = resolveCardDavUrl(baseUrl, wellKnown.location);
+    } else {
+      const homeSet = parseCardDavPropHref(wellKnown.body, 'addressbook-home-set');
+      const principal = parseCardDavPropHref(wellKnown.body, 'current-user-principal');
+      if (homeSet) discoveryUrl = resolveCardDavUrl(baseUrl, homeSet);
+      else if (principal) discoveryUrl = resolveCardDavUrl(baseUrl, principal);
+    }
+  } catch (error: any) {
+    console.log('[CONTACT_SYNC] CardDAV well-known discovery failed provider=' + account.provider + ' status=safe');
+  }
+
+  try {
+    const principalResp = await cardDavRequest(account, discoveryUrl, { method: 'PROPFIND', depth: '0', body: propfindBody });
+    const homeSet = parseCardDavPropHref(principalResp.body, 'addressbook-home-set');
+    if (homeSet) discoveryUrl = resolveCardDavUrl(discoveryUrl, homeSet);
+  } catch (error: any) {
+    console.log('[CONTACT_SYNC] CardDAV principal discovery failed provider=' + account.provider + ' status=safe');
+  }
+
+  try {
+    const listResp = await cardDavRequest(account, discoveryUrl, { method: 'PROPFIND', depth: '1', body: propfindBody });
+    const addressBookHrefs = parseCardDavAddressBookHrefs(listResp.body);
+    addressBookHrefs.forEach((href) => {
+      candidates.push({ url: resolveCardDavUrl(discoveryUrl, href), displayName: parseCardDavDisplayName(listResp.body, href) });
+    });
+    if (!addressBookHrefs.length && /addressbook/i.test(listResp.body)) {
+      candidates.push({ url: discoveryUrl });
+    }
+  } catch (error: any) {
+    console.log('[CONTACT_SYNC] CardDAV addressbook listing failed provider=' + account.provider + ' status=safe');
+  }
+
+  return uniqueCardDavAddressBooks([...candidates, ...buildCardDavFallbackAddressBooks(account)]);
+};
+
+const fetchCardDavVCards = async (account: CardDavAccountForRequest, options: { limit?: number } = {}): Promise<string[]> => {
+  const addressBooks = await discoverCardDavAddressBooks(account);
+  if (!addressBooks.length) throw new Error('CardDAV address book was not found');
+  const reportBody = buildAddressBookQueryReport();
+  let lastError: Error | null = null;
+  for (const book of addressBooks) {
+    try {
+      const report = await cardDavRequest(account, book.url, { method: 'REPORT', depth: '1', body: reportBody, acceptStatuses: [200, 207] });
+      const vcards = parseCardDavMultiStatus(report.body).slice(0, options.limit || CARD_DAV_PREVIEW_LIMIT);
+      if (vcards.length) return vcards;
+      lastError = new Error('CardDAV returned no contacts');
+    } catch (error: any) {
+      lastError = error;
+      console.log('[CONTACT_SYNC] CardDAV REPORT failed provider=' + account.provider + ' status=safe');
+    }
+  }
+  throw lastError || new Error('CardDAV address book was not found');
+};
+
 const buildContactSyncDisconnectPreview = (localDb: any, userId: string, provider: ContactProvider) => {
   const mappings = ((localDb as any).contactSyncMappings || []).filter((mapping: any) => mapping.userId === userId && mapping.provider === provider);
   const contactIds = new Set(mappings.map((mapping: any) => String(mapping.contactId || '')).filter(Boolean));
@@ -5570,14 +5804,39 @@ app.post('/api/directory/sync/yandex/connect', requireAuth(), (req, res) => conn
 app.post('/api/directory/sync/mailru/connect', requireAuth(), (req, res) => connectCardDavProvider(req, res, 'mailru'));
 
 app.post('/api/directory/sync/:provider/preview-import', requireAuth(), async (req, res) => {
-  const provider = String(req.params.provider || '');
-  if (!isContactProvider(provider)) return res.status(404).json({ error: 'Unknown contact sync provider' });
-  if (provider === 'google') return res.status(405).json({ error: 'Use /api/directory/sync/google/preview-import' });
-  const localDb = await readLocalDb();
-  const userId = getCurrentDirectoryUserId(localDb, req);
-  const account = getUserContactSyncAccount(localDb, userId, provider);
-  if (!account || account.status !== 'connected') return res.status(400).json({ error: CONTACT_SYNC_PROVIDERS[provider].displayName + ' account is not connected' });
-  res.status(501).json({ error: CONTACT_SYNC_PROVIDERS[provider].displayName + ' CardDAV preview import is not implemented yet' });
+  try {
+    const provider = String(req.params.provider || '');
+    if (!isContactProvider(provider)) return res.status(404).json({ error: 'Unknown contact sync provider' });
+    if (provider === 'google') return res.status(405).json({ error: 'Use /api/directory/sync/google/preview-import' });
+    const localDb = await readLocalDb();
+    const userId = getCurrentDirectoryUserId(localDb, req);
+    const account = getUserContactSyncAccount(localDb, userId, provider);
+    if (!account || account.status !== 'connected') return res.status(400).json({ error: 'CardDAV account is not connected' });
+    const encryptedPassword = String(account.encryptedPassword || '');
+    if (!encryptedPassword) return res.status(400).json({ error: 'CardDAV password is not available' });
+    const appPassword = decryptSecret(encryptedPassword);
+    if (!appPassword) return res.status(400).json({ error: 'CardDAV password is not available' });
+    const email = String(account.externalAccountEmail || '').trim();
+    const carddavUrl = String(account.carddavUrl || CONTACT_SYNC_PROVIDERS[provider].defaultCarddavUrl || '').trim();
+    if (!email || !carddavUrl) return res.status(400).json({ error: 'CardDAV account is not connected' });
+    const vcards = await fetchCardDavVCards({ provider, carddavUrl, email, appPassword }, { limit: CARD_DAV_PREVIEW_LIMIT });
+    if (!vcards.length) return res.status(404).json({ error: 'CardDAV returned no contacts' });
+    const normalized = normalizeVCardContacts(provider, vcards.join('\n'));
+    const items = buildContactPreviewItems(provider, normalized, localDb, userId);
+    res.json({ provider, items, totalPreviewed: items.length });
+  } catch (error: any) {
+    const message = String(error?.message || 'CardDAV request failed');
+    const allowedMessages = [
+      'CardDAV account is not connected',
+      'CardDAV password is not available',
+      'CardDAV address book was not found',
+      'CardDAV request failed',
+      'CardDAV request failed: timeout',
+      'CardDAV returned no contacts',
+      CONTACT_SYNC_ENCRYPTION_ERROR
+    ];
+    res.status(message === 'CardDAV returned no contacts' ? 404 : 400).json({ error: allowedMessages.includes(message) ? message : 'CardDAV request failed' });
+  }
 });
 
 app.get('/api/directory/sync/:provider/disconnect-preview', requireAuth(), async (req, res) => {
