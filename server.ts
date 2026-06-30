@@ -10850,6 +10850,11 @@ app.post('/api/devices-map/snapshot', requireAuth(), (req, res) => {
 // REGISTER BULK PROVISIONING MANAGEMENT CENTER ROUTES
 registerManagementRoutes(app, requireAuth);
 
+// API fallback must stay before Vite/static SPA fallback so missing API routes return JSON, not index.html.
+app.use('/api', (req, res) => {
+  res.status(404).json({ error: 'API endpoint not found' });
+});
+
 // FRONTEND DEV / PRODUCTION INTEGRATION HANDLER
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
