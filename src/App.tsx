@@ -509,6 +509,30 @@ export default function App() {
   const [isNormalizingDb, setIsNormalizingDb] = useState(false);
   const [normalizedCount, setNormalizedCount] = useState<number | null>(null);
 
+  const directoryPhoneValidationMessage = 'Телефон должен содержать от 2 до 11 цифр. Допустимы + в начале, пробелы, дефисы и скобки.';
+
+  const normalizePhoneDigits = (value: string): string => String(value || '').replace(/\D/g, '');
+
+  const validateDirectoryPhoneNumber = (value: string): boolean => {
+    const raw = String(value || '').trim();
+    if (!raw) return true;
+    const digits = normalizePhoneDigits(raw);
+    const plusCount = (raw.match(/\+/g) || []).length;
+    const allowed = /^\+?[0-9\s\-()]+$/.test(raw);
+    const plusOk = plusCount <= 1 && (plusCount === 0 || raw.startsWith('+'));
+    return allowed && plusOk && digits.length >= 2 && digits.length <= 11;
+  };
+
+  const getDirectoryPhoneValidationErrors = (phones: string[]): string[] => {
+    return Array.from(new Set(
+      phones
+        .map(phone => String(phone || '').trim())
+        .filter(Boolean)
+        .filter(phone => !validateDirectoryPhoneNumber(phone))
+        .map(phone => 'Телефон "' + phone + '" невалиден. ' + directoryPhoneValidationMessage)
+    ));
+  };
+
   const getEntryPhones = (entry: DirectoryEntry): string[] => {
     const phones = Array.isArray(entry.phones) ? entry.phones : [];
     const all = [...phones, entry.number].map(v => String(v || '').trim()).filter(Boolean);
@@ -650,6 +674,7 @@ export default function App() {
         const internalExtension = hasHeader ? getByHeader(cols, 'internalExtension','внутренний номер','extension') : '';
         const linkedExternalNumber = hasHeader ? getByHeader(cols, 'linkedExternalNumber','связанный внешний номер','externalNumber') : '';
         const responsibleUserId = hasHeader ? getByHeader(cols, 'responsibleUserId','ответственный сотрудник','responsible') : '';
+        const importErrors = getDirectoryPhoneValidationErrors([...phones, linkedExternalNumber]);
 
         return {
           name: String(name).trim(),
@@ -671,6 +696,7 @@ export default function App() {
           internalExtension,
           linkedExternalNumber,
           responsibleUserId,
+          _importErrors: importErrors,
           isSpam,
           isBlacklisted
         };
@@ -878,6 +904,11 @@ export default function App() {
     }
 
     if (parsedImportEntries.length === 0) return;
+    const invalidRows = parsedImportEntries.filter((entry: any) => Array.isArray(entry._importErrors) && entry._importErrors.length > 0);
+    if (invalidRows.length) {
+      setImportFileError('Исправьте телефоны перед импортом. Строк с ошибками: ' + invalidRows.length + '.');
+      return;
+    }
     setIsImporting(true);
     try {
       const resp = await fetch('/api/directory/import', {
@@ -1081,6 +1112,11 @@ export default function App() {
       ...dirPhonesText.split(/[;,\n]+/)
     ].map(v => v.trim()).filter(Boolean);
     const uniquePhones = Array.from(new Set(phones));
+    const phoneValidationErrors = getDirectoryPhoneValidationErrors(uniquePhones);
+    if (phoneValidationErrors.length) {
+      setDirError(directoryPhoneValidationMessage);
+      return;
+    }
 
     if (!(dirName.trim() || dirCompany.trim()) || (uniquePhones.length === 0 && !dirEmail.trim())) {
       setDirError('Укажите ФИО или организацию и хотя бы один способ связи: телефон или email.');
@@ -3920,7 +3956,7 @@ export default function App() {
                     <div className="rounded-lg border border-slate-200 bg-slate-50 p-5 text-center text-xs text-slate-400">Нет данных для предпросмотра</div>
                   ) : parsedImportEntries.slice(0, 50).map((item, idx) => {
                     const preview = importPreviewRows.find((row: any) => row.index === idx);
-                    const errors = preview?.errors || [];
+                    const errors = [...(item._importErrors || []), ...(preview?.errors || [])];
                     return (
                       <div key={idx} className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs">
                         <div className="flex items-start justify-between gap-2">

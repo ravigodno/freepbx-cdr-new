@@ -316,6 +316,52 @@ const onlyDigits = (value: any): string => {
   return String(value || '').replace(/\D/g, '');
 };
 
+
+const DIRECTORY_PHONE_VALIDATION_MESSAGE = 'Телефон должен содержать от 2 до 11 цифр. Допустимы + в начале, пробелы, дефисы и скобки.';
+
+const validateDirectoryPhoneNumber = (value: any): { valid: boolean; digits: string; message?: string } => {
+  const raw = String(value ?? '').trim();
+  if (!raw) return { valid: true, digits: '' };
+  const digits = onlyDigits(raw);
+  const plusCount = (raw.match(/\+/g) || []).length;
+  const allowed = /^\+?[0-9\s\-()]+$/.test(raw);
+  const plusOk = plusCount <= 1 && (plusCount === 0 || raw.startsWith('+'));
+  const lengthOk = digits.length >= 2 && digits.length <= 11;
+  return {
+    valid: allowed && plusOk && lengthOk,
+    digits,
+    message: allowed && plusOk && lengthOk ? undefined : DIRECTORY_PHONE_VALIDATION_MESSAGE
+  };
+};
+
+const getDirectoryPhoneValidationErrors = (entry: any): string[] => {
+  const values = [
+    ...(Array.isArray(entry?.phones) ? entry.phones : []),
+    entry?.number,
+    entry?.phone,
+    entry?.phone1,
+    entry?.phone2,
+    entry?.phone3,
+    entry?.linkedExternalNumber,
+    entry?.externalNumber,
+    entry?.linked_external_number
+  ];
+  const errors: string[] = [];
+  values.forEach((value) => {
+    const raw = String(value ?? '').trim();
+    if (!raw) return;
+    raw.split(/[;,|\n]+/).forEach(part => {
+      const phone = String(part || '').trim();
+      if (!phone) return;
+      const result = validateDirectoryPhoneNumber(phone);
+      if (!result.valid) {
+        errors.push('Телефон "' + phone + '" невалиден. ' + DIRECTORY_PHONE_VALIDATION_MESSAGE);
+      }
+    });
+  });
+  return Array.from(new Set(errors));
+};
+
 const getNumberTokens = (...values: any[]): string[] => {
   return values
     .flatMap(value => String(value || '').match(/\d+/g) || [])
@@ -1267,7 +1313,15 @@ const prepareDirectoryEntryForSave = (raw: any, localDb: any, req: Request, exis
   const authUser = (req as any).user;
   const dbUser = getAuthenticatedDbUser(localDb, req);
   const ownerId = getDirectoryUserId(dbUser, authUser);
-  const merged = normalizeDirectoryEntry({ ...(existing || {}), ...(raw || {}) }, localDb.settings);
+  const rawMerged = { ...(existing || {}), ...(raw || {}) };
+  const phoneErrors = getDirectoryPhoneValidationErrors(rawMerged);
+  if (phoneErrors.length) {
+    const error = new Error(DIRECTORY_PHONE_VALIDATION_MESSAGE) as any;
+    error.code = 'INVALID_DIRECTORY_PHONE';
+    error.details = phoneErrors;
+    throw error;
+  }
+  const merged = normalizeDirectoryEntry(rawMerged, localDb.settings);
   if (merged.visibility === 'private') {
     merged.ownerUserId = ownerId;
   } else {
@@ -5013,6 +5067,10 @@ app.post('/api/directory', requireAuth(), async (req, res) => {
     await writeLocalDb(localDb);
     res.json({ success: true, entry: newEntry });
   } catch (error: any) {
+    if (error?.code === 'INVALID_DIRECTORY_PHONE') {
+      res.status(400).json({ error: 'Invalid phone number format', message: DIRECTORY_PHONE_VALIDATION_MESSAGE, details: error.details || [] });
+      return;
+    }
     res.status(500).json({ error: error.message });
   }
 });
@@ -5061,6 +5119,10 @@ app.put('/api/directory/:id', requireAuth(), async (req, res) => {
     await writeLocalDb(localDb);
     res.json({ success: true, entry: updatedEntry });
   } catch (error: any) {
+    if (error?.code === 'INVALID_DIRECTORY_PHONE') {
+      res.status(400).json({ error: 'Invalid phone number format', message: DIRECTORY_PHONE_VALIDATION_MESSAGE, details: error.details || [] });
+      return;
+    }
     res.status(500).json({ error: error.message });
   }
 });
@@ -5124,6 +5186,10 @@ app.post('/api/directory/import', requireAuth(), async (req, res) => {
     await writeLocalDb(localDb);
     res.json({ success: true, count: normalizedEntries.length, added: result.added, updated: result.updated });
   } catch (error: any) {
+    if (error?.code === 'INVALID_DIRECTORY_PHONE') {
+      res.status(400).json({ error: 'Invalid phone number format', message: DIRECTORY_PHONE_VALIDATION_MESSAGE, details: error.details || [] });
+      return;
+    }
     res.status(500).json({ error: error.message });
   }
 });
@@ -5205,11 +5271,21 @@ app.post('/api/directory/import/preview', requireAuth(), async (req, res) => {
     const entries = Array.isArray(req.body?.entries) ? req.body.entries : [];
     const localDb = await readLocalDb();
     const normalized = entries.map((entry: any, index: number) => {
-      const normalizedEntry = prepareDirectoryEntryForSave(entry, localDb, req);
+      let normalizedEntry: any;
       const errors: string[] = [];
+      try {
+        normalizedEntry = prepareDirectoryEntryForSave(entry, localDb, req);
+      } catch (error: any) {
+        if (error?.code === 'INVALID_DIRECTORY_PHONE') {
+          normalizedEntry = normalizeDirectoryEntry(entry, localDb.settings);
+          errors.push(...(error.details || [DIRECTORY_PHONE_VALIDATION_MESSAGE]));
+        } else {
+          throw error;
+        }
+      }
       if (!(normalizedEntry.name || normalizedEntry.company)) errors.push('Укажите организацию или ФИО');
       if (!normalizedEntry.phones.length && !normalizedEntry.email) errors.push('Укажите телефон или email');
-      const duplicate = (localDb.directory || []).find((existing: any) => {
+      const duplicate = errors.length ? null : (localDb.directory || []).find((existing: any) => {
         const phoneMatch = normalizedEntry.phones.some((phone: string) => directoryEntryMatchesNumber(existing, phone));
         const emailMatch = normalizedEntry.email && String(existing.email || '').toLowerCase() === normalizedEntry.email.toLowerCase();
         return phoneMatch || emailMatch;
@@ -5218,6 +5294,10 @@ app.post('/api/directory/import/preview', requireAuth(), async (req, res) => {
     });
     res.json({ success: true, rows: normalized, validCount: normalized.filter((row: any) => row.errors.length === 0).length, duplicateCount: normalized.filter((row: any) => row.duplicateId).length });
   } catch (error: any) {
+    if (error?.code === 'INVALID_DIRECTORY_PHONE') {
+      res.status(400).json({ error: 'Invalid phone number format', message: DIRECTORY_PHONE_VALIDATION_MESSAGE, details: error.details || [] });
+      return;
+    }
     res.status(500).json({ error: error.message });
   }
 });
