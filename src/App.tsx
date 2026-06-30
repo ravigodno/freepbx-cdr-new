@@ -4030,94 +4030,76 @@ export default function App() {
         )}
 
         {/* Directory toolbar */}
-        <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-col sm:flex-row gap-3 items-center justify-between shadow-sm">
-          <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto items-stretch sm:items-center">
-            {/* Search */}
-            <div className="relative min-w-[260px]">
-              <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
-              <input
-                type="text"
-                value={dirSearchQuery}
-                onChange={(e) => setDirSearchQuery(e.target.value)}
-                placeholder="Поиск по имени или номеру..."
-                className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 pl-9 pr-3 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all font-light"
-              /></div>
-
-            {/* Filter Selector */}
-            <div className="flex min-w-0 max-w-full flex-col gap-2 xl:flex-row xl:items-center">
-              <div className="flex min-w-0 max-w-full flex-wrap items-center gap-1 rounded-lg border border-slate-200 bg-gradient-to-br from-slate-50 via-blue-50/40 to-sky-50/50 p-0.5 text-xs">
-                <span className="px-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">Тип</span>
-                {([
-                  ['all', 'Все'],
-                  ['client', 'Клиенты'],
-                  ['supplier', 'Поставщики'],
-                  ['government', 'Госорганы']
-                ] as const).map(([value, label]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    onClick={() => setDirTypeFilter(value)}
-                    className={`px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
-                      dirTypeFilter === value ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-550 hover:text-slate-950'
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
+        <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+          <div className="flex min-w-0 max-w-full flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex min-w-0 flex-1 flex-col gap-2 md:flex-row md:items-center">
+              <div className="relative min-w-0 flex-1">
+                <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                <input
+                  type="text"
+                  value={dirSearchQuery}
+                  onChange={(e) => setDirSearchQuery(e.target.value)}
+                  placeholder="Поиск по справочнику..."
+                  className="w-full min-w-0 bg-slate-50 border border-slate-200 rounded-lg py-2 pl-9 pr-3 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all font-light"
+                />
               </div>
 
-              <div className="flex min-w-0 max-w-full flex-wrap items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs">
-                <span className="px-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">Спам</span>
-                {([
-                  ['all', 'Все'],
-                  ['exclude_spam', 'Без спама'],
-                  ['only_spam', 'Только спам']
-                ] as const).map(([value, label]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    onClick={() => setDirSpamMode(value)}
-                    className={`px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
-                      dirSpamMode === value ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-550 hover:text-slate-950'
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
+              <div className="flex min-w-0 max-w-full flex-wrap gap-2 md:flex-nowrap">
+                <label className="sr-only" htmlFor="directory-type-filter">Тип</label>
+                <select
+                  id="directory-type-filter"
+                  value={dirTypeFilter}
+                  onChange={(e) => setDirTypeFilter(e.target.value as typeof dirTypeFilter)}
+                  className="h-9 min-w-[116px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm outline-none transition-all focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                  title="Тип контакта"
+                >
+                  <option value="all">Тип: Все</option>
+                  <option value="client">Тип: Клиенты</option>
+                  <option value="supplier">Тип: Поставщики</option>
+                  <option value="government">Тип: Госорганы</option>
+                </select>
 
-              <div className="flex min-w-0 max-w-full flex-wrap items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs">
-                <span className="px-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">Видимость</span>
-                {([
-                  ['all', isAdminRole(session?.role) ? 'Все' : 'Все доступные'],
-                  ['shared_only', 'Общие'],
-                  ...(isAdminRole(session?.role) ? ([['private_only', 'Все личные']] as const) : ([] as any)),
-                  ['my_private_only', 'Мои личные'],
-                  ['exclude_private', 'Исключить личные'],
-                  ['exclude_shared', 'Исключить общие']
-                ] as const).map(([value, label]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    onClick={() => setDirVisibilityMode(value as any)}
-                    className={`px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
-                      dirVisibilityMode === value ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-550 hover:text-slate-950'
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </div>          </div>
+                <label className="sr-only" htmlFor="directory-spam-filter">Спам</label>
+                <select
+                  id="directory-spam-filter"
+                  value={dirSpamMode}
+                  onChange={(e) => setDirSpamMode(e.target.value as typeof dirSpamMode)}
+                  className="h-9 min-w-[130px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm outline-none transition-all focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                  title="Спам"
+                >
+                  <option value="all">Спам: Все</option>
+                  <option value="exclude_spam">Спам: Без спама</option>
+                  <option value="only_spam">Спам: Только спам</option>
+                </select>
 
-          <button
-            onClick={openCreateDirEntry}
-            className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-semibold cursor-pointer hover:bg-blue-600 transition-all select-none shadow-sm"
-          >
-            <Plus className="h-4 w-4" />
-            Добавить контакт
-          </button>
+                <label className="sr-only" htmlFor="directory-visibility-filter">Видимость</label>
+                <select
+                  id="directory-visibility-filter"
+                  value={dirVisibilityMode}
+                  onChange={(e) => setDirVisibilityMode(e.target.value as typeof dirVisibilityMode)}
+                  className="h-9 min-w-[170px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm outline-none transition-all focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                  title="Видимость"
+                >
+                  <option value="all">Видимость: {isAdminRole(session?.role) ? 'Все' : 'Все доступные'}</option>
+                  <option value="shared_only">Видимость: Общие</option>
+                  {isAdminRole(session?.role) && <option value="private_only">Видимость: Все личные</option>}
+                  <option value="my_private_only">Видимость: Мои личные</option>
+                  <option value="exclude_private">Видимость: Исключить личные</option>
+                  <option value="exclude_shared">Видимость: Исключить общие</option>
+                </select>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={openCreateDirEntry}
+              className="flex shrink-0 items-center justify-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-semibold cursor-pointer hover:bg-blue-600 transition-all select-none shadow-sm"
+            >
+              <Plus className="h-4 w-4" />
+              Добавить контакт
+            </button>
           </div>
+        </div>
 
         {/* List Table of directory entries */}
         <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
