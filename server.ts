@@ -673,8 +673,9 @@ const getRequiredExternalContactImportErrors = (directoryContact: any, normalize
   return Array.from(new Set(errors));
 };
 
-const buildContactPreviewItems = (provider: ContactProvider, normalizedItems: NormalizedExternalContact[], localDb: any, userId: string) => {
-  return normalizedItems.slice(0, 50).map((normalized) => {
+const buildContactPreviewItems = (provider: ContactProvider, normalizedItems: NormalizedExternalContact[], localDb: any, userId: string, limit?: number) => {
+  const sourceItems = typeof limit === 'number' ? normalizedItems.slice(0, limit) : normalizedItems;
+  return sourceItems.map((normalized) => {
     const directoryContact = mapNormalizedContactToDirectoryContact(normalized, { id: userId });
     const duplicate = contactPreviewDuplicateStatus(directoryContact, normalized, localDb, userId);
     const errors = [...(directoryContact.errors || []), ...getRequiredExternalContactImportErrors(directoryContact, normalized)];
@@ -803,7 +804,6 @@ const normalizeVCardContacts = (provider: ContactProvider, body: string, sourceF
   return cards.map((card, index) => normalizeVCardContact(provider, card, String(index), sourceFormat));
 };
 
-const CONTACT_FILE_PREVIEW_LIMIT = 50;
 
 const stripUtf8Bom = (value: string): string => String(value || '').replace(/^\uFEFF/, '');
 
@@ -4951,7 +4951,7 @@ async function markYandexMetrikaIntegration(localDb: any, integrationId: string,
 
 // API ROUTER START
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '25mb' }));
 
 app.options('/api/calltracking/event', (_req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -6647,7 +6647,7 @@ app.post('/api/directory/sync/:provider/diagnose', requireAuth(), async (req, re
 
 const contactFileTextParser = express.raw({
   type: ['text/csv', 'text/vcard', 'text/x-vcard', 'text/directory', 'text/plain', 'application/octet-stream'],
-  limit: '2mb'
+  limit: '25mb'
 });
 
 app.post('/api/directory/sync/file/preview-import', requireAuth(), contactFileTextParser, async (req, res) => {
@@ -6659,11 +6659,14 @@ app.post('/api/directory/sync/file/preview-import', requireAuth(), contactFileTe
     ensureContactImportSourceEnabled(localDb, 'file');
     const payload = getContactFileImportPayload(req);
     const parsed = normalizeContactFileContacts(payload);
-    const normalized = parsed.contacts.slice(0, CONTACT_FILE_PREVIEW_LIMIT);
+    const normalized = parsed.contacts;
     if (!normalized.length) return contactSyncPreviewError(res, 400, 'file', 'parse', 'CSV/vCard file contains no contacts');
     const userId = getCurrentDirectoryUserId(localDb, req);
     const items = buildContactPreviewItems('file', normalized, localDb, userId);
-    res.json({ provider: 'file', source: 'file', sourceFormat: parsed.sourceFormat, encoding: payload.encoding || 'utf8', fileName: payload.fileName || null, items, totalPreviewed: items.length });
+    const readyToImport = items.filter((item: any) => item.status === 'new').length;
+    const invalid = items.filter((item: any) => item.status === 'invalid').length;
+    const duplicates = items.filter((item: any) => item.status === 'possible_duplicate').length;
+    res.json({ provider: 'file', source: 'file', sourceFormat: parsed.sourceFormat, encoding: payload.encoding || 'utf8', fileName: payload.fileName || null, totalRows: normalized.length, totalPreviewed: items.length, readyToImport, invalid, duplicates, items });
   } catch (error: any) {
     const importDisabled = error?.code === 'CONTACT_IMPORT_SOURCE_DISABLED' || error?.code === 'CONTACT_IMPORT_DISABLED';
     const message = importDisabled ? error.message : 'CSV/vCard file preview failed';

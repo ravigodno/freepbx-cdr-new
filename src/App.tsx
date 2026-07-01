@@ -170,6 +170,16 @@ interface ContactSyncPreviewItem {
   errors?: string[];
 }
 
+interface ContactFilePreviewSummary {
+  totalRows: number;
+  totalPreviewed: number;
+  readyToImport: number;
+  invalid: number;
+  duplicates: number;
+  sourceFormat: ContactFileSourceFormat | '';
+  encoding: string;
+}
+
 interface CardDavConnectForm {
   email: string;
   appPassword: string;
@@ -755,6 +765,7 @@ export default function App() {
   const [contactSyncDiagnostics, setContactSyncDiagnostics] = useState<Partial<Record<ContactSyncProvider, ContactSyncDiagnosticResult>>>({});
   const [contactFileSourceFormat, setContactFileSourceFormat] = useState<ContactFileSourceFormat | ''>('');
   const [contactFileEncoding, setContactFileEncoding] = useState('');
+  const [contactFilePreviewSummary, setContactFilePreviewSummary] = useState<ContactFilePreviewSummary | null>(null);
 
   // --- ADMIN DIRECTORY IMPORT / EXPORT & NORMALIZATION STATE ---
   const [isAdminPanelExpanded, setIsAdminPanelExpanded] = useState(false);
@@ -1400,6 +1411,7 @@ export default function App() {
     setContactFileName(file.name);
     setContactFileSourceFormat('');
     setContactFileEncoding('');
+    setContactFilePreviewSummary(null);
     try {
       const content = await file.arrayBuffer();
       const resp = await fetch('/api/directory/sync/file/preview-import?fileName=' + encodeURIComponent(file.name), {
@@ -1423,16 +1435,27 @@ export default function App() {
         const duplicates = items.filter((item: any) => item.status === 'possible_duplicate').length;
         setContactSyncPreviewItems(prev => ({ ...prev, file: items }));
         setContactSyncSelectedIds(prev => ({ ...prev, file: items.filter((item: any) => item.status === 'new').map((item: any) => String(item.externalContactId || '')).filter(Boolean) }));
-        setContactFileSourceFormat(data.sourceFormat || '');
-        setContactFileEncoding(data.encoding || '');
-        const sourceFormatMessage = getContactFileSourceFormatMessage(data.sourceFormat || '', data.encoding || '');
-        const invalidMessage = invalid > 0 ? ' Контакты без ФИО или телефона не будут импортированы.' : '';
-        setContactSyncMessage((sourceFormatMessage ? sourceFormatMessage + ' ' : '') + 'Предпросмотр: ' + (data.totalPreviewed || 0) + ' контактов, готово к импорту: ' + ready + ', ошибок: ' + invalid + ', дублей: ' + duplicates + '.' + invalidMessage);
+        const summary = {
+          totalRows: Number(data.totalRows ?? items.length),
+          totalPreviewed: Number(data.totalPreviewed ?? items.length),
+          readyToImport: Number(data.readyToImport ?? ready),
+          invalid: Number(data.invalid ?? invalid),
+          duplicates: Number(data.duplicates ?? duplicates),
+          sourceFormat: (data.sourceFormat || '') as ContactFileSourceFormat | '',
+          encoding: String(data.encoding || '')
+        };
+        setContactFileSourceFormat(summary.sourceFormat);
+        setContactFileEncoding(summary.encoding);
+        setContactFilePreviewSummary(summary);
+        const sourceFormatMessage = getContactFileSourceFormatMessage(summary.sourceFormat, summary.encoding);
+        const invalidMessage = summary.invalid > 0 ? ' Контакты без ФИО или телефона не будут импортированы.' : '';
+        setContactSyncMessage((sourceFormatMessage ? sourceFormatMessage + ' ' : '') + 'Предпросмотр: ' + summary.totalPreviewed + ' контактов, готово к импорту: ' + summary.readyToImport + ', ошибок: ' + summary.invalid + ', дублей: ' + summary.duplicates + '.' + invalidMessage);
       } else {
         setContactSyncPreviewItems(prev => ({ ...prev, file: [] }));
         setContactSyncSelectedIds(prev => ({ ...prev, file: [] }));
         setContactFileSourceFormat('');
         setContactFileEncoding('');
+        setContactFilePreviewSummary(null);
         setContactSyncMessage(data.error || 'Не удалось разобрать CSV/vCard файл.');
       }
     } catch (e: any) {
@@ -1492,6 +1515,12 @@ export default function App() {
     }
   };
 
+  const canSelectContactSyncItem = (provider: ContactSyncProvider, item: ContactSyncPreviewItem) => {
+    if (item.status === 'new') return true;
+    if (item.status === 'possible_duplicate') return contactSyncForceDuplicates[provider] === true;
+    return false;
+  };
+
   const handleSelectNewContactSyncItems = (provider: ContactSyncProvider) => {
     const ids = (contactSyncPreviewItems[provider] || [])
       .filter(item => item.status === 'new')
@@ -1505,7 +1534,7 @@ export default function App() {
   };
 
   const handleToggleContactSyncItem = (provider: ContactSyncProvider, item: ContactSyncPreviewItem, checked: boolean) => {
-    if (item.status === 'invalid') return;
+    if (!canSelectContactSyncItem(provider, item)) return;
     const id = String(item.externalContactId || '');
     if (!id) return;
     setContactSyncSelectedIds(prev => {
@@ -1518,7 +1547,7 @@ export default function App() {
   const handleImportSelectedContactSyncItems = async (provider: ContactSyncProvider) => {
     if (!guardContactImportSource(provider)) return;
     const selected = new Set(contactSyncSelectedIds[provider] || []);
-    const items = (contactSyncPreviewItems[provider] || []).filter(item => selected.has(String(item.externalContactId || '')));
+    const items = (contactSyncPreviewItems[provider] || []).filter(item => selected.has(String(item.externalContactId || '')) && canSelectContactSyncItem(provider, item));
     if (!items.length) {
       setContactSyncMessage('Выберите контакты для импорта.');
       return;
@@ -3835,7 +3864,7 @@ export default function App() {
         : 'border-slate-200 bg-white text-slate-500';
     const previewItems = contactSyncPreviewItems[provider] || [];
     const selectedIds = contactSyncSelectedIds[provider] || [];
-    const selectedCount = selectedIds.length;
+    const selectedCount = previewItems.filter(item => selectedIds.includes(String(item.externalContactId || '')) && canSelectContactSyncItem(provider, item)).length;
     const diagnostic = contactSyncDiagnostics[provider];
     const failedDiagnosticStep = diagnostic?.steps?.find(step => step.status === 'error') || diagnostic?.steps?.find(step => step.status === 'warning');
     const friendlyDiagnosticMessage = diagnostic?.ok
@@ -4016,13 +4045,13 @@ export default function App() {
                 <tbody>
                   {previewItems.map((item) => {
                     const id = String(item.externalContactId || '');
-                    const isInvalid = item.status === 'invalid';
-                    const isSelected = selectedIds.includes(id);
+                    const isSelectable = canSelectContactSyncItem(provider, item);
+                    const isSelected = isSelectable && selectedIds.includes(id);
                     const statusLabel = item.status === 'new' ? 'Новый' : item.status === 'possible_duplicate' ? 'Возможный дубль' : item.status === 'invalid' ? 'Ошибка' : item.status;
                     return (
                       <tr key={id || Math.random()} className="border-t border-slate-100 align-top">
                         <td className="p-2">
-                          <input type="checkbox" disabled={isInvalid} checked={isSelected} onChange={(e) => handleToggleContactSyncItem(provider, item, e.target.checked)} />
+                          <input type="checkbox" disabled={!isSelectable} checked={isSelected} onChange={(e) => handleToggleContactSyncItem(provider, item, e.target.checked)} />
                         </td>
                         <td className="p-2 font-semibold text-slate-700">{statusLabel}</td>
                         <td className="p-2 text-slate-800">{item.fullName || '—'}</td>
@@ -4046,7 +4075,7 @@ export default function App() {
     const previewItems = contactSyncPreviewItems.file || [];
     if (!previewItems.length) return null;
     const selectedIds = contactSyncSelectedIds.file || [];
-    const selectedCount = selectedIds.length;
+    const selectedCount = previewItems.filter(item => selectedIds.includes(String(item.externalContactId || '')) && canSelectContactSyncItem('file', item)).length;
     const isBusy = contactSyncBusyProvider === 'file';
     return (
       <div className="rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-650">
@@ -4061,6 +4090,13 @@ export default function App() {
             Загрузить другой файл
           </button>
         </div>
+        {contactFilePreviewSummary && (
+          <div className="mb-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-700">
+            <div className="font-bold text-slate-800">Всего в файле: {contactFilePreviewSummary.totalRows}. Готово к импорту: {contactFilePreviewSummary.readyToImport}. Ошибок: {contactFilePreviewSummary.invalid}. Дублей: {contactFilePreviewSummary.duplicates}.</div>
+            {getContactFileSourceFormatMessage(contactFilePreviewSummary.sourceFormat, contactFilePreviewSummary.encoding) && <div className="mt-1">{getContactFileSourceFormatMessage(contactFilePreviewSummary.sourceFormat, contactFilePreviewSummary.encoding)}</div>}
+            {contactFilePreviewSummary.invalid > 0 && <div className="mt-1 text-red-700">Контакты без ФИО или телефона не будут импортированы.</div>}
+          </div>
+        )}
         <div className="mb-2 flex flex-wrap items-center gap-2">
           <button type="button" onClick={() => handleSelectNewContactSyncItems('file')} className="rounded-md border border-slate-200 px-2 py-1 text-[11px] font-bold text-slate-700 hover:bg-slate-50">Выбрать все новые</button>
           <button type="button" onClick={() => handleClearContactSyncSelection('file')} className="rounded-md border border-slate-200 px-2 py-1 text-[11px] font-bold text-slate-500 hover:bg-slate-50">Снять выбор</button>
@@ -4090,12 +4126,12 @@ export default function App() {
             <tbody>
               {previewItems.map((item) => {
                 const id = String(item.externalContactId || '');
-                const isInvalid = item.status === 'invalid';
-                const isSelected = selectedIds.includes(id);
+                const isSelectable = canSelectContactSyncItem('file', item);
+                const isSelected = isSelectable && selectedIds.includes(id);
                 const statusLabel = item.status === 'new' ? 'Новый' : item.status === 'possible_duplicate' ? 'Возможный дубль' : item.status === 'invalid' ? 'Ошибка' : item.status;
                 return (
                   <tr key={id || Math.random()} className="border-t border-slate-100 align-top">
-                    <td className="p-2"><input type="checkbox" disabled={isInvalid} checked={isSelected} onChange={(e) => handleToggleContactSyncItem('file', item, e.target.checked)} /></td>
+                    <td className="p-2"><input type="checkbox" disabled={!isSelectable} checked={isSelected} onChange={(e) => handleToggleContactSyncItem('file', item, e.target.checked)} /></td>
                     <td className="p-2 font-semibold text-slate-700">{statusLabel}</td>
                     <td className="p-2 text-slate-800">{item.fullName || '—'}</td>
                     <td className="p-2 font-mono text-slate-700">{item.phone || item.phone2 || '—'}</td>
