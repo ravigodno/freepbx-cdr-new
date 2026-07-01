@@ -21,6 +21,8 @@ export type PermissionKey =
   | 'manage_users'
   | 'manage_roles'
   | 'manage_directory_import'
+  | 'directory_import_contacts'
+  | 'directory_manage_import_settings'
   | 'manage_blacklist'
   | 'delete_records'
   | 'process_calls'

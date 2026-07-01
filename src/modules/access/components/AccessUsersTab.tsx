@@ -39,7 +39,9 @@ export default function AccessUsersTab({
     { key: 'view_reports', label: 'Просмотр отчетов', description: 'Доступ к отчетам и статистике' },
     { key: 'listen_recordings', label: 'Прослушивание записей', description: 'Доступ к аудиозаписям разговоров' },
     { key: 'make_calls', label: 'Click2Call', description: 'Возможность инициировать звонки' },
-    { key: 'edit_directory', label: 'Редактирование справочника', description: 'Создание и изменение контактов' }
+    { key: 'edit_directory', label: 'Редактирование справочника', description: 'Создание и изменение контактов' },
+    { key: 'directory_import_contacts', label: 'Личный импорт контактов', description: 'Импорт Google/CSV/vCard в личный справочник пользователя' },
+    { key: 'directory_manage_import_settings', label: 'Настройки импорта контактов', description: 'Управление глобальными источниками личного импорта' }
   ];
 
   const togglePermission = (key: PermissionKey, checked: boolean) => {

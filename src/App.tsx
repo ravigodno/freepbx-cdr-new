@@ -553,6 +553,10 @@ export default function App() {
   };
 
   const isAdminRole = (role?: string | null) => role === 'admin' || role === 'su';
+  const canOpenPersonalContactImport = () => {
+    if (isAdminRole(session?.role)) return true;
+    return settings?.directoryImportEnabled !== false && hasPermission('directory_import_contacts');
+  };
 
   // Settings Modal state
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -686,7 +690,7 @@ export default function App() {
   const [isDirectoryColumnsPanelOpen, setIsDirectoryColumnsPanelOpen] = useState(false);
   const [selectedDirectoryVisibleColumns, setSelectedDirectoryVisibleColumns] = useState<DirectoryVisibleColumnKey[]>(loadDirectoryVisibleColumns);
   const [draftDirectoryVisibleColumns, setDraftDirectoryVisibleColumns] = useState<DirectoryVisibleColumnKey[]>(selectedDirectoryVisibleColumns);
-  const [directoryPageMode, setDirectoryPageMode] = useState<'list' | 'import'>(() => window.location.pathname === '/management/directory/import' ? 'import' : 'list');
+  const [directoryPageMode, setDirectoryPageMode] = useState<'list' | 'import' | 'personal_import'>(() => window.location.pathname === '/management/directory/import' ? 'import' : window.location.pathname === '/directory/import-contacts' ? 'personal_import' : 'list');
   const [urlImportTestResult, setUrlImportTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [isTestingUrlImport, setIsTestingUrlImport] = useState(false);
   const [isSyncingDirectoryUrl, setIsSyncingDirectoryUrl] = useState(false);
@@ -1216,10 +1220,10 @@ export default function App() {
   }, [session?.token]);
 
   useEffect(() => {
-    if (isDirFormOpen && dirVisibility === 'private') {
+    if ((isDirFormOpen && dirVisibility === 'private') || directoryPageMode === 'personal_import') {
       loadContactSyncAccounts();
     }
-  }, [isDirFormOpen, dirVisibility, loadContactSyncAccounts]);
+  }, [isDirFormOpen, dirVisibility, directoryPageMode, loadContactSyncAccounts]);
 
   const handleContactSyncSettingsChange = async (provider: OnlineContactSyncProvider, syncDirection: ContactSyncDirection) => {
     const account = getContactSyncAccount(provider);
@@ -1831,6 +1835,13 @@ export default function App() {
     setDirectoryPageMode('import');
     setActiveView('directory');
     window.history.pushState({}, '', '/management/directory/import');
+  };
+
+  const openPersonalContactImportPage = () => {
+    setDirectoryPageMode('personal_import');
+    setActiveView('directory');
+    loadContactSyncAccounts();
+    window.history.pushState({}, '', '/directory/import-contacts');
   };
 
   const closeDirectoryImportPage = () => {
@@ -4008,6 +4019,37 @@ export default function App() {
     );
   };
 
+  const renderPersonalContactImportPanel = (embedded = false) => (
+    <div className={embedded ? 'rounded-xl border border-slate-200 bg-white p-3' : 'rounded-xl border border-slate-200 bg-white p-4 shadow-sm'}>
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div>
+          <h4 className={embedded ? 'text-xs font-black text-slate-800' : 'text-sm font-black text-slate-900'}>{embedded ? 'Импорт контактов' : 'Личный импорт контактов'}</h4>
+          <p className="mt-1 text-[11px] leading-relaxed text-slate-500">{embedded ? 'Импортируйте личные контакты в PBXPuls. Общий справочник не отправляется во внешние сервисы.' : 'Контакты будут импортированы только в ваш личный справочник.'}</p>
+        </div>
+        <button type="button" onClick={loadContactSyncAccounts} className="rounded-md border border-slate-200 bg-white p-1.5 text-slate-500 hover:bg-slate-50" title="Обновить подключения">
+          <RefreshCw className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      <input ref={contactFileInputRef} type="file" accept=".csv,.vcf,text/csv,text/vcard,text/x-vcard" onChange={handleContactFileInputChange} className="hidden" />
+      {contactSyncMessage && (
+        <div className="mb-3 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-[11px] text-blue-800">{contactSyncMessage}</div>
+      )}
+      <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
+        <button type="button" onClick={() => contactFileInputRef.current?.click()} disabled={contactSyncBusyProvider === 'file' || settings?.fileImportEnabled === false} className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-blue-700 disabled:opacity-50">
+          <Upload className="h-3.5 w-3.5" />
+          {contactSyncBusyProvider === 'file' ? 'Загрузка...' : 'Загрузить CSV/vCard'}
+        </button>
+        <span className="text-[11px] text-slate-500">{settings?.fileImportEnabled === false ? 'Импорт CSV/vCard отключен администратором.' : 'Универсальный импорт для Yandex, Mail.ru и других источников.'}</span>
+      </div>
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+        {renderContactSyncProviderCard('google')}
+        {renderContactSyncProviderCard('yandex')}
+        {renderContactSyncProviderCard('mailru')}
+      </div>
+      <div className="mt-3">{renderContactFilePreviewPanel()}</div>
+    </div>
+  );
+
   const renderDirectoryContactFormSection = (title: string, fieldKeys: DirectoryVisibleColumnKey[]) => {
     const visibleFields = fieldKeys.filter(hasDirectoryContactFormField);
     if (visibleFields.length === 0) return null;
@@ -4460,7 +4502,7 @@ export default function App() {
                 <div>
                   <h1 className="text-base font-bold text-slate-900 dark:text-slate-100 tracking-tight flex items-center gap-2 font-sans uppercase">
                     {activeView === 'calls' && 'Реестр звонков'}
-                    {activeView === 'directory' && (directoryPageMode === 'import' ? 'Импорт контактов' : 'Телефонный справочник')}
+                    {activeView === 'directory' && (directoryPageMode === 'import' ? 'Админский CSV импорт' : directoryPageMode === 'personal_import' ? 'Личный импорт контактов' : 'Телефонный справочник')}
                     {activeView === 'reports' && 'Отчеты и Аналитика'}
                     {activeView === 'marketing' && 'Маркетинг'}
                     {activeView === 'monitoring' && 'Мониторинг звонков'}
@@ -5166,6 +5208,26 @@ export default function App() {
       </>
     )}
 
+      {activeView === 'directory' && directoryPageMode === 'personal_import' && canOpenPersonalContactImport() && (
+        <section className="min-w-0 max-w-full space-y-4">
+          <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0">
+                <h2 className="flex items-center gap-2 break-words text-lg font-black text-slate-900">
+                  <Upload className="h-5 w-5 text-blue-600" />
+                  Личный импорт контактов
+                </h2>
+                <p className="mt-1 max-w-3xl text-xs leading-relaxed text-slate-500">Контакты будут импортированы только в ваш личный справочник.</p>
+              </div>
+              <button type="button" onClick={closeDirectoryImportPage} className="shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50">
+                Назад в справочник
+              </button>
+            </div>
+          </div>
+          {renderPersonalContactImportPanel(false)}
+        </section>
+      )}
+
       {activeView === 'directory' && directoryPageMode === 'import' && (
         <section className="min-w-0 max-w-full space-y-4">
           <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -5173,7 +5235,7 @@ export default function App() {
               <div className="min-w-0">
                 <h2 className="flex items-center gap-2 break-words text-lg font-black text-slate-900">
                   <Upload className="h-5 w-5 text-blue-600" />
-                  Импорт контактов
+                  Админский CSV импорт
                 </h2>
                 <p className="mt-1 max-w-3xl text-xs leading-relaxed text-slate-500">
                   Загрузите CSV-файл с контактами, проверьте обязательные поля, возможные ошибки и дубли перед сохранением. XLSX предусмотрен архитектурно, текущий импорт выполняется через CSV без новых зависимостей. Если visibility не заполнено, будет shared; если isSpam не заполнено, будет false. Телефон должен содержать от 2 до 11 цифр.
@@ -5318,7 +5380,7 @@ export default function App() {
                     className="flex items-center gap-1.5 px-3.5 py-2 bg-gradient-to-r from-red-600 to-rose-700 hover:from-red-600 hover:to-rose-600 text-white rounded-lg text-xs font-semibold cursor-pointer shadow-xs transition-all active:scale-95 select-none"
                   >
                     <Upload className="h-3.5 w-3.5" />
-                    Импорт контактов
+                    CSV импорт справочника
                   </button>
 
                   <button
@@ -5427,6 +5489,17 @@ export default function App() {
                 </select>
               </div>
             </div>
+
+            {canOpenPersonalContactImport() && (
+              <button
+                type="button"
+                onClick={openPersonalContactImportPage}
+                className="flex shrink-0 items-center justify-center gap-1.5 rounded-lg border border-blue-200 bg-white px-4 py-2 text-xs font-semibold text-blue-700 shadow-sm transition-all hover:bg-blue-50"
+              >
+                <Upload className="h-4 w-4" />
+                Импорт контактов
+              </button>
+            )}
 
             <button
               type="button"
@@ -5854,7 +5927,7 @@ export default function App() {
 
                       <div className="rounded-2xl border border-slate-200 bg-white p-4">
                         <h4 className="mb-3 flex items-center gap-2 text-sm font-black text-slate-900"><Upload className="h-4 w-4 text-blue-600" />Настройки импорта</h4>
-                        <p className="mb-3 text-[11px] leading-relaxed text-slate-500">Глобальные переключатели только разрешают источники импорта. Личные подключения, токены, пароли и preview контактов хранятся отдельно для каждого пользователя.</p>
+                        <p className="mb-3 text-[11px] leading-relaxed text-slate-500">Эти настройки только разрешают или запрещают источники импорта. Личные подключения пользователей находятся в Справочник → Импорт контактов.</p>
                         <div className="grid min-w-0 max-w-full grid-cols-1 gap-2 md:grid-cols-2">
                           <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700"><input type="checkbox" checked={draftSettings.directoryImportEnabled ?? true} onChange={(e) => setDraftSettings({ ...draftSettings, directoryImportEnabled: e.target.checked })} className="rounded border-slate-300 text-blue-600" />Импорт справочника по ссылке</label>
                           <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700"><input type="checkbox" checked={draftSettings.googleImportEnabled ?? true} onChange={(e) => setDraftSettings({ ...draftSettings, googleImportEnabled: e.target.checked })} className="rounded border-slate-300 text-blue-600" />Google Contacts import</label>
@@ -5920,7 +5993,7 @@ export default function App() {
                         <h4 className="text-sm font-black text-slate-900 mb-3">Инструменты справочника</h4>
                         <div className="flex flex-wrap gap-2">
                           {hasPermission('manage_directory_import') && (
-                          <button type="button" onClick={openDirectoryImportPage} className="px-4 py-2 rounded-lg bg-blue-600 text-white text-xs font-bold hover:bg-blue-700">Импорт контактов</button>
+                          <button type="button" onClick={openDirectoryImportPage} className="px-4 py-2 rounded-lg bg-blue-600 text-white text-xs font-bold hover:bg-blue-700">CSV импорт справочника</button>
                           )}
                           {hasPermission('manage_directory_import') && (
                           <button type="button" onClick={handleExportCSV} className="px-4 py-2 rounded-lg bg-gradient-to-br from-slate-50 via-blue-50/40 to-sky-50/50 text-slate-800 text-xs font-bold hover:bg-slate-200">Экспорт CSV</button>
@@ -6271,36 +6344,7 @@ export default function App() {
               {renderDirectoryContactFormSection('CRM / телефония', ['department', 'group', 'tags', 'internalExtension', 'linkedExternalNumber', 'responsibleUserId'])}
               {renderDirectoryContactFormSection('Комментарий', ['comment'])}
 
-              {dirVisibility === 'private' && (
-                <div className="rounded-xl border border-slate-200 bg-white p-3">
-                  <div className="mb-3 flex items-start justify-between gap-3">
-                    <div>
-                      <h4 className="text-xs font-black text-slate-800">Импорт контактов</h4>
-                      <p className="mt-1 text-[11px] leading-relaxed text-slate-500">Импортируйте личные контакты в PBXPuls. Общий справочник не отправляется во внешние сервисы.</p>
-                    </div>
-                    <button type="button" onClick={loadContactSyncAccounts} className="rounded-md border border-slate-200 bg-white p-1.5 text-slate-500 hover:bg-slate-50" title="Обновить подключения">
-                      <RefreshCw className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                  <input ref={contactFileInputRef} type="file" accept=".csv,.vcf,text/csv,text/vcard,text/x-vcard" onChange={handleContactFileInputChange} className="hidden" />
-                  {contactSyncMessage && (
-                    <div className="mb-3 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-[11px] text-blue-800">{contactSyncMessage}</div>
-                  )}
-                  <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
-                    <button type="button" onClick={() => contactFileInputRef.current?.click()} disabled={contactSyncBusyProvider === 'file' || settings?.fileImportEnabled === false} className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-blue-700 disabled:opacity-50">
-                      <Upload className="h-3.5 w-3.5" />
-                      {contactSyncBusyProvider === 'file' ? 'Загрузка...' : 'Загрузить CSV/vCard'}
-                    </button>
-                    <span className="text-[11px] text-slate-500">{settings?.fileImportEnabled === false ? 'Импорт CSV/vCard отключен администратором.' : 'Универсальный импорт для Yandex, Mail.ru и других источников.'}</span>
-                  </div>
-                  <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-                    {renderContactSyncProviderCard('google')}
-                    {renderContactSyncProviderCard('yandex')}
-                    {renderContactSyncProviderCard('mailru')}
-                  </div>
-                  <div className="mt-3">{renderContactFilePreviewPanel()}</div>
-                </div>
-              )}
+              {dirVisibility === 'private' && canOpenPersonalContactImport() && renderPersonalContactImportPanel(true)}
 
               <div className="flex justify-end gap-2 border-t border-slate-200 pt-3">
                 <button type="button" onClick={() => setIsDirFormOpen(false)} className="rounded-lg border border-slate-200 px-4 py-2 text-xs font-medium text-slate-500 hover:bg-slate-50 hover:text-slate-800">Отмена</button>
