@@ -434,6 +434,32 @@ const ensureContactImportSourceEnabled = (localDb: any, provider: ContactProvide
 };
 
 const isDirectoryUrlImportEnabled = (settings: any): boolean => settings?.directoryImportEnabled !== false;
+
+const DIRECTORY_IMPORT_SETTINGS_KEYS = [
+  'directoryImportEnabled',
+  'googleImportEnabled',
+  'fileImportEnabled',
+  'yandexCarddavEnabled',
+  'mailruCarddavEnabled'
+] as const;
+
+type DirectoryImportSettingsKey = typeof DIRECTORY_IMPORT_SETTINGS_KEYS[number];
+
+const buildSafeDirectoryImportSettings = async (localDb: any, req: Request) => {
+  const authUser = (req as any).user;
+  const privilegedRole = authUser?.role === 'su' || authUser?.role === 'admin';
+  const canImportContacts = privilegedRole || await checkUserPermission(req, 'directory_import_contacts');
+  const canManageImportSettings = privilegedRole || await checkUserPermission(req, 'directory_manage_import_settings');
+  return {
+    directoryImportEnabled: localDb?.settings?.directoryImportEnabled !== false,
+    googleImportEnabled: localDb?.settings?.googleImportEnabled !== false,
+    fileImportEnabled: localDb?.settings?.fileImportEnabled !== false,
+    yandexCarddavEnabled: localDb?.settings?.yandexCarddavEnabled !== false,
+    mailruCarddavEnabled: localDb?.settings?.mailruCarddavEnabled !== false,
+    canImportContacts,
+    canManageImportSettings
+  };
+};
 const GOOGLE_CONTACTS_SCOPE = 'https://www.googleapis.com/auth/contacts.readonly';
 const GOOGLE_OAUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
@@ -6715,6 +6741,54 @@ app.post('/api/directory/normalize', requireAuth(), async (req, res) => {
     res.json({ success: true, updatedCount });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+
+app.get('/api/directory/import/settings', requireAuth(), async (req, res) => {
+  try {
+    const localDb = await readLocalDb();
+    res.json(await buildSafeDirectoryImportSettings(localDb, req));
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || 'Failed to load contact import settings' });
+  }
+});
+
+app.patch('/api/directory/import/settings', requireAuth(), async (req, res) => {
+  try {
+    const localDb = await readLocalDb();
+    const authUser = (req as any).user;
+    const canManageImportSettings = authUser?.role === 'su'
+      || authUser?.role === 'admin'
+      || await checkUserPermission(req, 'directory_manage_import_settings');
+    if (!canManageImportSettings) {
+      return res.status(403).json({ error: 'You do not have permission to manage contact import settings' });
+    }
+
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+    const allowedKeys = new Set<string>(DIRECTORY_IMPORT_SETTINGS_KEYS as readonly string[]);
+    const incomingKeys = Object.keys(body);
+    const unknownKeys = incomingKeys.filter(key => !allowedKeys.has(key));
+    if (unknownKeys.length) {
+      return res.status(400).json({ error: 'Unsupported contact import settings field', fields: unknownKeys });
+    }
+
+    for (const key of incomingKeys) {
+      if (typeof body[key] !== 'boolean') {
+        return res.status(400).json({ error: 'Contact import settings fields must be boolean', field: key });
+      }
+    }
+
+    for (const key of DIRECTORY_IMPORT_SETTINGS_KEYS) {
+      if (Object.prototype.hasOwnProperty.call(body, key)) {
+        localDb.settings[key as DirectoryImportSettingsKey] = body[key];
+      }
+    }
+
+    await writeLocalDb(localDb);
+    res.json(await buildSafeDirectoryImportSettings(localDb, req));
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || 'Failed to update contact import settings' });
   }
 });
 
