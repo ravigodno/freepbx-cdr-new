@@ -1342,6 +1342,10 @@ export default function App() {
   };
 
   const handlePreviewContactFileImport = async (file: File) => {
+    if (settings?.fileImportEnabled === false) {
+      setContactSyncMessage('Импорт CSV/vCard отключен администратором.');
+      return;
+    }
     setContactSyncBusyProvider('file');
     setContactSyncMessage('');
     setContactFileName(file.name);
@@ -3750,8 +3754,10 @@ export default function App() {
           </span>
         </div>
 
-        {isGoogle && account.configured === false && (
-          <div className="mb-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800">Google Contacts не настроен администратором</div>
+        {account.configured === false && (
+          <div className="mb-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800">
+            {isGoogle ? 'Google Contacts не настроен или отключен администратором' : 'Расширенное подключение отключено администратором'}
+          </div>
         )}
 
         <p className="mb-2 text-[11px] leading-relaxed text-slate-600">
@@ -3769,7 +3775,7 @@ export default function App() {
           </div>
         )}
         {isCardDav && (
-          <button type="button" onClick={() => contactFileInputRef.current?.click()} disabled={contactSyncBusyProvider === 'file'} className="mb-3 inline-flex items-center gap-1 rounded-md bg-blue-600 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-blue-700 disabled:opacity-50">
+          <button type="button" onClick={() => contactFileInputRef.current?.click()} disabled={contactSyncBusyProvider === 'file' || settings?.fileImportEnabled === false} className="mb-3 inline-flex items-center gap-1 rounded-md bg-blue-600 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-blue-700 disabled:opacity-50">
             <Upload className="h-3.5 w-3.5" />
             {contactSyncBusyProvider === 'file' ? 'Загрузка...' : 'Загрузить файл'}
           </button>
@@ -3813,15 +3819,15 @@ export default function App() {
                 <p className="text-[11px] leading-relaxed text-slate-500">
                   {provider === 'yandex' ? 'Для подключения используйте пароль приложения Яндекса.' : 'Для подключения Mail.ru используйте пароль для внешнего приложения.'}
                 </p>
-                <button type="button" onClick={() => handleCardDavConnect(provider)} disabled={isBusy} className="rounded-md bg-blue-600 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-blue-700 disabled:opacity-50">
+                <button type="button" onClick={() => handleCardDavConnect(provider)} disabled={isBusy || account.configured === false} className="rounded-md bg-blue-600 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-blue-700 disabled:opacity-50">
                   {isBusy ? 'Подключение...' : 'Подключить'}
                 </button>
               </div>
             )}
             {isConnected && (
               <div className="mt-2 flex flex-wrap gap-2">
-                <button type="button" onClick={() => handleDiagnoseContactSync(provider)} disabled={isBusy} className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-50">{isBusy ? 'Проверка...' : 'Проверить подключение'}</button>
-                <button type="button" onClick={() => handlePreviewContactSyncImport(provider)} disabled={isBusy} className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-50">Предпросмотр импорта</button>
+                <button type="button" onClick={() => handleDiagnoseContactSync(provider)} disabled={isBusy || account.configured === false} className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-50">{isBusy ? 'Проверка...' : 'Проверить подключение'}</button>
+                <button type="button" onClick={() => handlePreviewContactSyncImport(provider)} disabled={isBusy || account.configured === false} className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-50">Предпросмотр импорта</button>
                 <button type="button" onClick={() => handleDisconnectContactSync(provider)} disabled={isBusy} className="rounded-md border border-red-200 bg-white px-3 py-1.5 text-[11px] font-bold text-red-700 hover:bg-red-50 disabled:opacity-50">Отключить</button>
               </div>
             )}
@@ -3830,7 +3836,7 @@ export default function App() {
 
         {isGoogle && (
           <div className="mt-3 flex flex-wrap gap-2">
-            <button type="button" onClick={() => handleDiagnoseContactSync(provider)} disabled={isBusy} className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-50">{isBusy ? 'Проверка...' : 'Проверить подключение'}</button>
+            <button type="button" onClick={() => handleDiagnoseContactSync(provider)} disabled={isBusy || account.configured === false} className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-50">{isBusy ? 'Проверка...' : 'Проверить подключение'}</button>
             {!isConnected && (
               <button type="button" onClick={handleGoogleContactsConnect} disabled={isBusy || account.configured === false} className="rounded-md bg-blue-600 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-blue-700 disabled:opacity-50">
                 {isBusy ? 'Подключение...' : 'Подключить Google'}
@@ -3838,7 +3844,7 @@ export default function App() {
             )}
             {isConnected && (
               <>
-                <button type="button" onClick={() => handlePreviewContactSyncImport(provider)} disabled={isBusy} className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-50">Предпросмотр импорта</button>
+                <button type="button" onClick={() => handlePreviewContactSyncImport(provider)} disabled={isBusy || account.configured === false} className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-50">Предпросмотр импорта</button>
                 <button type="button" onClick={() => handleDisconnectContactSync(provider)} disabled={isBusy} className="rounded-md border border-red-200 bg-white px-3 py-1.5 text-[11px] font-bold text-red-700 hover:bg-red-50 disabled:opacity-50">Отключить</button>
               </>
             )}
@@ -3946,7 +3952,7 @@ export default function App() {
             <div className="font-black text-slate-800">CSV/vCard</div>
             <div className="mt-1 text-[11px] text-slate-500">{contactFileName || 'Файл контактов'}: предпросмотр импорта в личный справочник</div>
           </div>
-          <button type="button" onClick={() => contactFileInputRef.current?.click()} disabled={isBusy} className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-50">
+          <button type="button" onClick={() => contactFileInputRef.current?.click()} disabled={isBusy || settings?.fileImportEnabled === false} className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-50">
             <Upload className="h-3.5 w-3.5" />
             Загрузить другой файл
           </button>
@@ -5847,6 +5853,18 @@ export default function App() {
                       </div>
 
                       <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                        <h4 className="mb-3 flex items-center gap-2 text-sm font-black text-slate-900"><Upload className="h-4 w-4 text-blue-600" />Настройки импорта</h4>
+                        <p className="mb-3 text-[11px] leading-relaxed text-slate-500">Глобальные переключатели только разрешают источники импорта. Личные подключения, токены, пароли и preview контактов хранятся отдельно для каждого пользователя.</p>
+                        <div className="grid min-w-0 max-w-full grid-cols-1 gap-2 md:grid-cols-2">
+                          <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700"><input type="checkbox" checked={draftSettings.directoryImportEnabled ?? true} onChange={(e) => setDraftSettings({ ...draftSettings, directoryImportEnabled: e.target.checked })} className="rounded border-slate-300 text-blue-600" />Импорт справочника по ссылке</label>
+                          <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700"><input type="checkbox" checked={draftSettings.googleImportEnabled ?? true} onChange={(e) => setDraftSettings({ ...draftSettings, googleImportEnabled: e.target.checked })} className="rounded border-slate-300 text-blue-600" />Google Contacts import</label>
+                          <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700"><input type="checkbox" checked={draftSettings.fileImportEnabled ?? true} onChange={(e) => setDraftSettings({ ...draftSettings, fileImportEnabled: e.target.checked })} className="rounded border-slate-300 text-blue-600" />CSV/vCard import</label>
+                          <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700"><input type="checkbox" checked={draftSettings.yandexCarddavEnabled ?? true} onChange={(e) => setDraftSettings({ ...draftSettings, yandexCarddavEnabled: e.target.checked })} className="rounded border-slate-300 text-blue-600" />Yandex advanced import</label>
+                          <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700"><input type="checkbox" checked={draftSettings.mailruCarddavEnabled ?? true} onChange={(e) => setDraftSettings({ ...draftSettings, mailruCarddavEnabled: e.target.checked })} className="rounded border-slate-300 text-blue-600" />Mail.ru advanced import</label>
+                        </div>
+                      </div>
+
+                      <div className="rounded-2xl border border-slate-200 bg-white p-4">
                         <h4 className="text-sm font-black text-slate-900 mb-3 flex items-center gap-2"><Globe className="h-4 w-4 text-blue-600" />Импорт справочника по ссылке</h4>
                         <div className="grid min-w-0 max-w-full grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
                           <label className="min-w-0 max-w-full break-words md:col-span-4 text-xs font-bold text-slate-600">URL файла CSV/JSON
@@ -5878,10 +5896,10 @@ export default function App() {
                           </label></div>
                         <div className="mt-3 flex flex-wrap gap-2">
                           {hasPermission('manage_directory_import') && (
-                          <button type="button" onClick={handleTestUrlImport} disabled={isTestingUrlImport} className="px-4 py-2 rounded-lg bg-white border border-slate-200 text-slate-800 text-xs font-bold hover:bg-slate-50 disabled:opacity-50">{isTestingUrlImport ? 'Проверка...' : 'Проверить ссылку'}</button>
+                          <button type="button" onClick={handleTestUrlImport} disabled={isTestingUrlImport || draftSettings.directoryImportEnabled === false} className="px-4 py-2 rounded-lg bg-white border border-slate-200 text-slate-800 text-xs font-bold hover:bg-slate-50 disabled:opacity-50">{isTestingUrlImport ? 'Проверка...' : 'Проверить ссылку'}</button>
                           )}
                           {hasPermission('manage_directory_import') && (
-                          <button type="button" onClick={handleSyncDirectoryUrl} disabled={isSyncingDirectoryUrl} className="px-4 py-2 rounded-lg bg-blue-600 text-white text-xs font-bold hover:bg-blue-700 disabled:opacity-50">{isSyncingDirectoryUrl ? 'Синхронизация...' : 'Синхронизировать сейчас'}</button>
+                          <button type="button" onClick={handleSyncDirectoryUrl} disabled={isSyncingDirectoryUrl || draftSettings.directoryImportEnabled === false} className="px-4 py-2 rounded-lg bg-blue-600 text-white text-xs font-bold hover:bg-blue-700 disabled:opacity-50">{isSyncingDirectoryUrl ? 'Синхронизация...' : 'Синхронизировать сейчас'}</button>
                           )}
                         </div>
                         <div className="mt-3 text-[11px] text-slate-500 font-mono bg-slate-50 border border-slate-200 rounded-lg p-2 overflow-x-auto">
@@ -6269,11 +6287,11 @@ export default function App() {
                     <div className="mb-3 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-[11px] text-blue-800">{contactSyncMessage}</div>
                   )}
                   <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
-                    <button type="button" onClick={() => contactFileInputRef.current?.click()} disabled={contactSyncBusyProvider === 'file'} className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-blue-700 disabled:opacity-50">
+                    <button type="button" onClick={() => contactFileInputRef.current?.click()} disabled={contactSyncBusyProvider === 'file' || settings?.fileImportEnabled === false} className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-blue-700 disabled:opacity-50">
                       <Upload className="h-3.5 w-3.5" />
                       {contactSyncBusyProvider === 'file' ? 'Загрузка...' : 'Загрузить CSV/vCard'}
                     </button>
-                    <span className="text-[11px] text-slate-500">Универсальный импорт для Yandex, Mail.ru и других источников.</span>
+                    <span className="text-[11px] text-slate-500">{settings?.fileImportEnabled === false ? 'Импорт CSV/vCard отключен администратором.' : 'Универсальный импорт для Yandex, Mail.ru и других источников.'}</span>
                   </div>
                   <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
                     {renderContactSyncProviderCard('google')}

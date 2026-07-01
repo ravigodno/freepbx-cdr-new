@@ -108,6 +108,11 @@ export interface AppSettings {
   normDigitsOnly?: boolean;
 
   // Directory import / synchronization settings
+  directoryImportEnabled?: boolean;
+  googleImportEnabled?: boolean;
+  fileImportEnabled?: boolean;
+  yandexCarddavEnabled?: boolean;
+  mailruCarddavEnabled?: boolean;
   directoryImportUrl?: string;
   directoryImportFormat?: 'csv' | 'json';
   directoryImportMode?: 'append' | 'upsert' | 'overwrite';

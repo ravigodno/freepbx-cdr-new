@@ -408,6 +408,32 @@ const CONTACT_SYNC_PROVIDERS: Record<ContactProvider, { provider: ContactProvide
 const CONTACT_SYNC_ACCOUNT_PROVIDERS: ContactProvider[] = ['google', 'yandex', 'mailru'];
 
 const CONTACT_SYNC_ENCRYPTION_ERROR = 'Contact sync encryption key is not configured';
+
+const isContactImportSourceEnabled = (settings: any, provider: ContactProvider): boolean => {
+  if (provider === 'google') return settings?.googleImportEnabled !== false;
+  if (provider === 'file') return settings?.fileImportEnabled !== false;
+  if (provider === 'yandex') return settings?.yandexCarddavEnabled !== false;
+  if (provider === 'mailru') return settings?.mailruCarddavEnabled !== false;
+  return false;
+};
+
+const getContactImportSourceDisabledMessage = (provider: ContactProvider): string => {
+  if (provider === 'google') return 'Google Contacts import is disabled by administrator';
+  if (provider === 'file') return 'CSV/vCard contact import is disabled by administrator';
+  if (provider === 'yandex') return 'Yandex advanced contact import is disabled by administrator';
+  if (provider === 'mailru') return 'Mail.ru advanced contact import is disabled by administrator';
+  return 'Contact import source is disabled by administrator';
+};
+
+const ensureContactImportSourceEnabled = (localDb: any, provider: ContactProvider) => {
+  if (!isContactImportSourceEnabled(localDb?.settings || {}, provider)) {
+    const error = new Error(getContactImportSourceDisabledMessage(provider)) as any;
+    error.code = 'CONTACT_IMPORT_SOURCE_DISABLED';
+    throw error;
+  }
+};
+
+const isDirectoryUrlImportEnabled = (settings: any): boolean => settings?.directoryImportEnabled !== false;
 const GOOGLE_CONTACTS_SCOPE = 'https://www.googleapis.com/auth/contacts.readonly';
 const GOOGLE_OAUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
@@ -463,7 +489,7 @@ const getCurrentDirectoryUserId = (localDb: any, req: Request): string => {
   return getDirectoryUserId(getAuthenticatedDbUser(localDb, req), (req as any).user);
 };
 
-const sanitizeContactSyncAccount = (account: any, provider: ContactProvider) => ({
+const sanitizeContactSyncAccount = (account: any, provider: ContactProvider, settings?: any) => ({
   id: account?.id || null,
   provider,
   status: (account?.status || 'disconnected') as ContactSyncStatus,
@@ -478,9 +504,9 @@ const sanitizeContactSyncAccount = (account: any, provider: ContactProvider) => 
   conflictStrategy: normalizeContactSyncConflictStrategy(account?.conflictStrategy),
   createdAt: account?.createdAt || null,
   updatedAt: account?.updatedAt || null,
-  configured: provider === 'google'
+  configured: isContactImportSourceEnabled(settings || {}, provider) && (provider === 'google'
     ? !!(process.env.GOOGLE_CONTACTS_CLIENT_ID && process.env.GOOGLE_CONTACTS_CLIENT_SECRET && process.env.GOOGLE_CONTACTS_REDIRECT_URI)
-    : true
+    : true)
 });
 
 const getUserContactSyncAccount = (localDb: any, userId: string, provider: ContactProvider): any | null => {
@@ -2968,6 +2994,11 @@ function getDefaultLocalDb(): any {
       normReplace8With7: true,
       normStripSymbols: true,
       normDigitsOnly: false,
+      directoryImportEnabled: true,
+      googleImportEnabled: true,
+      fileImportEnabled: true,
+      yandexCarddavEnabled: true,
+      mailruCarddavEnabled: true,
       directoryImportUrl: '',
       directoryImportFormat: 'csv',
       directoryImportMode: 'upsert',
@@ -3106,6 +3137,18 @@ async function readLocalDb(): Promise<{
         data.settings.directorySyncToken = data.settings.directorySyncToken || crypto.randomBytes(24).toString('hex');
         data.settings.directorySyncAsteriskBlacklist = data.settings.directorySyncAsteriskBlacklist ?? false;
         changed = true;
+      }
+      for (const [key, value] of Object.entries({
+        directoryImportEnabled: true,
+        googleImportEnabled: true,
+        fileImportEnabled: true,
+        yandexCarddavEnabled: true,
+        mailruCarddavEnabled: true
+      })) {
+        if (!data.settings.hasOwnProperty(key)) {
+          (data.settings as any)[key] = value;
+          changed = true;
+        }
       }
     }
 
@@ -5857,6 +5900,11 @@ app.get('/api/settings', requireAuth(), async (req, res) => {
       customCanMakeCalls: localDb.settings.customCanMakeCalls,
       customCanEditDirectory: localDb.settings.customCanEditDirectory,
       demoMode: localDb.settings.demoMode,
+      directoryImportEnabled: localDb.settings.directoryImportEnabled !== false,
+      googleImportEnabled: localDb.settings.googleImportEnabled !== false,
+      fileImportEnabled: localDb.settings.fileImportEnabled !== false,
+      yandexCarddavEnabled: localDb.settings.yandexCarddavEnabled !== false,
+      mailruCarddavEnabled: localDb.settings.mailruCarddavEnabled !== false,
     };
     res.json(safeSettings);
   }
@@ -6150,7 +6198,7 @@ app.get('/api/directory/sync/accounts', requireAuth(), async (req, res) => {
   const userId = getCurrentDirectoryUserId(localDb, req);
   const providers = CONTACT_SYNC_ACCOUNT_PROVIDERS.map(provider => {
     const account = getUserContactSyncAccount(localDb, userId, provider);
-    return sanitizeContactSyncAccount(account, provider);
+    return sanitizeContactSyncAccount(account, provider, localDb.settings);
   });
   res.json({ providers });
 });
@@ -6167,6 +6215,7 @@ app.patch('/api/directory/sync/:provider/settings', requireAuth(), async (req, r
     if (!isContactSyncDirection(syncDirection)) return res.status(400).json({ error: 'Invalid syncDirection' });
     if (!isContactSyncConflictStrategy(conflictStrategy)) return res.status(400).json({ error: 'Invalid conflictStrategy' });
     const localDb = await readLocalDb();
+    ensureContactImportSourceEnabled(localDb, provider);
     const userId = getCurrentDirectoryUserId(localDb, req);
     const account = upsertUserContactSyncAccount(localDb, userId, provider, {
       authType: CONTACT_SYNC_PROVIDERS[provider].authType,
@@ -6175,7 +6224,7 @@ app.patch('/api/directory/sync/:provider/settings', requireAuth(), async (req, r
       conflictStrategy
     });
     await writeLocalDb(localDb);
-    res.json({ provider: sanitizeContactSyncAccount(account, provider) });
+    res.json({ provider: sanitizeContactSyncAccount(account, provider, localDb.settings) });
   } catch (error: any) {
     res.status(400).json({ error: error?.message || 'Contact sync settings update failed' });
   }
@@ -6193,6 +6242,11 @@ app.get('/api/directory/sync/google/connect', requireAuth(), async (req, res) =>
     return res.status(400).json({ error: 'Google Contacts sync is not configured' });
   }
   const localDb = await readLocalDb();
+  try {
+    ensureContactImportSourceEnabled(localDb, 'google');
+  } catch (error: any) {
+    return res.status(403).json({ error: error.message });
+  }
   const userId = getCurrentDirectoryUserId(localDb, req);
   const statePayload = JSON.stringify({ userId, provider: 'google', nonce: crypto.randomBytes(12).toString('hex'), ts: Date.now() });
   const encodedState = base64UrlEncode(statePayload);
@@ -6241,6 +6295,7 @@ app.get('/api/directory/sync/google/callback', async (req, res) => {
       externalAccountEmail = profile?.emailAddresses?.[0]?.value || '';
     } catch (e) {}
     const localDb = await readLocalDb();
+    ensureContactImportSourceEnabled(localDb, 'google');
     upsertUserContactSyncAccount(localDb, String(statePayload.userId), 'google', {
       provider: 'google',
       authType: 'oauth',
@@ -6287,6 +6342,7 @@ app.post('/api/directory/sync/:provider/diagnose', requireAuth(), async (req, re
     const provider = String(req.params.provider || '');
     if (!isOnlineContactProvider(provider)) return res.status(404).json({ error: 'Unknown contact sync provider' });
     const localDb = await readLocalDb();
+    ensureContactImportSourceEnabled(localDb, provider);
     const userId = getCurrentDirectoryUserId(localDb, req);
     const result = provider === 'google'
       ? await diagnoseGoogleContacts(localDb, userId)
@@ -6312,15 +6368,17 @@ app.post('/api/directory/sync/file/preview-import', requireAuth(), contactFileTe
     if (!(await checkUserPermission(req, 'view_directory'))) {
       return res.status(403).json({ error: 'Access denied: view_directory permission required' });
     }
+    const localDb = await readLocalDb();
+    ensureContactImportSourceEnabled(localDb, 'file');
     const payload = getContactFileImportPayload(req);
     const normalized = normalizeContactFileContacts(payload).slice(0, CONTACT_FILE_PREVIEW_LIMIT);
     if (!normalized.length) return contactSyncPreviewError(res, 400, 'file', 'parse', 'CSV/vCard file contains no contacts');
-    const localDb = await readLocalDb();
     const userId = getCurrentDirectoryUserId(localDb, req);
     const items = buildContactPreviewItems('file', normalized, localDb, userId);
     res.json({ provider: 'file', source: 'file', fileName: payload.fileName || null, items, totalPreviewed: items.length });
   } catch (error: any) {
-    res.status(400).json({ provider: 'file', step: 'parse', message: 'CSV/vCard file preview failed', error: 'CSV/vCard file preview failed' });
+    const message = error?.code === 'CONTACT_IMPORT_SOURCE_DISABLED' ? error.message : 'CSV/vCard file preview failed';
+    res.status(error?.code === 'CONTACT_IMPORT_SOURCE_DISABLED' ? 403 : 400).json({ provider: 'file', step: 'parse', message, error: message });
   }
 });
 
@@ -6330,6 +6388,7 @@ app.post('/api/directory/sync/file/import', requireAuth(), async (req, res) => {
       return res.status(403).json({ error: 'Access denied: view_directory permission required' });
     }
     const localDb = await readLocalDb();
+    ensureContactImportSourceEnabled(localDb, 'file');
     const userId = getCurrentDirectoryUserId(localDb, req);
     const bodyItems = Array.isArray(req.body?.items) ? req.body.items : [];
     const externalContactIds = Array.isArray(req.body?.externalContactIds) ? req.body.externalContactIds : [];
@@ -6342,13 +6401,14 @@ app.post('/api/directory/sync/file/import', requireAuth(), async (req, res) => {
     await writeLocalDb(localDb);
     res.json({ ok: true, provider: 'file', imported: result.imported, skipped: result.skipped, failed: result.failed, results: result.results });
   } catch (error: any) {
-    res.status(400).json({ error: error?.message || 'File contacts import failed' });
+    res.status(error?.code === 'CONTACT_IMPORT_SOURCE_DISABLED' ? 403 : 400).json({ error: error?.message || 'File contacts import failed' });
   }
 });
 
 app.post('/api/directory/sync/google/preview-import', requireAuth(), async (req, res) => {
   try {
     const localDb = await readLocalDb();
+    ensureContactImportSourceEnabled(localDb, 'google');
     const userId = getCurrentDirectoryUserId(localDb, req);
     const account = getUserContactSyncAccount(localDb, userId, 'google');
     if (!account || account.status !== 'connected') return contactSyncPreviewError(res, 400, 'google', 'account', 'Google account is not connected');
@@ -6388,7 +6448,7 @@ app.post('/api/directory/sync/google/preview-import', requireAuth(), async (req,
   } catch (error: any) {
     const message = String(error?.message || 'Google Contacts preview import failed');
     const step = message.includes('configured') ? 'config' : message.includes('refresh') ? 'refresh' : message.includes('token') ? 'tokens' : 'people_api';
-    const safeMessage = ['Google token is not available', 'Google token refresh failed', 'Google People API request failed', 'Google returned no contacts', 'Google Contacts sync is not configured', CONTACT_SYNC_ENCRYPTION_ERROR].includes(message)
+    const safeMessage = ['Google token is not available', 'Google token refresh failed', 'Google People API request failed', 'Google returned no contacts', 'Google Contacts sync is not configured', getContactImportSourceDisabledMessage('google'), CONTACT_SYNC_ENCRYPTION_ERROR].includes(message)
       ? message
       : 'Google People API request failed';
     contactSyncPreviewError(res, 400, 'google', step, safeMessage);
@@ -6406,6 +6466,7 @@ const connectCardDavProvider = async (req: Request, res: Response, provider: Con
     const carddavUrl = String(req.body?.carddavUrl || CONTACT_SYNC_PROVIDERS[provider].defaultCarddavUrl || '').trim();
     if (!email || !appPassword) return res.status(400).json({ error: 'Email and app password are required' });
     const localDb = await readLocalDb();
+    ensureContactImportSourceEnabled(localDb, provider);
     const userId = getCurrentDirectoryUserId(localDb, req);
     upsertUserContactSyncAccount(localDb, userId, provider, {
       provider,
@@ -6433,6 +6494,7 @@ app.post('/api/directory/sync/:provider/preview-import', requireAuth(), async (r
     if (!isOnlineContactProvider(provider)) return res.status(404).json({ error: 'Unknown contact sync provider' });
     if (provider === 'google') return res.status(405).json({ provider, step: 'provider', message: 'Use /api/directory/sync/google/preview-import', error: 'Use /api/directory/sync/google/preview-import' });
     const localDb = await readLocalDb();
+    ensureContactImportSourceEnabled(localDb, provider);
     const userId = getCurrentDirectoryUserId(localDb, req);
     const account = getUserContactSyncAccount(localDb, userId, provider);
     if (!account || account.status !== 'connected') return contactSyncPreviewError(res, 400, provider, 'account', 'CardDAV account is not connected');
@@ -6468,6 +6530,8 @@ app.post('/api/directory/sync/:provider/preview-import', requireAuth(), async (r
       'vCard parse returned no contacts',
       'Яндекс не принял логин или пароль приложения. Используйте импорт из файла или проверьте пароль приложения.',
       'Mail.ru не принял логин или пароль для внешнего приложения. Используйте импорт из файла или проверьте пароль.',
+      getContactImportSourceDisabledMessage('yandex'),
+      getContactImportSourceDisabledMessage('mailru'),
       CONTACT_SYNC_ENCRYPTION_ERROR
     ];
     const safeMessage = allowedMessages.includes(message) ? message : 'CardDAV request failed';
@@ -6485,6 +6549,7 @@ app.post('/api/directory/sync/:provider/import', requireAuth(), async (req, res)
     const provider = String(req.params.provider || '');
     if (!isOnlineContactProvider(provider)) return res.status(404).json({ error: 'Unknown contact sync provider' });
     const localDb = await readLocalDb();
+    ensureContactImportSourceEnabled(localDb, provider);
     const userId = getCurrentDirectoryUserId(localDb, req);
     const account = getUserContactSyncAccount(localDb, userId, provider);
     const unsupportedDirectionError = getUnsupportedContactSyncDirectionError(account?.syncDirection);
@@ -6669,6 +6734,10 @@ app.post('/api/directory/import', requireAuth(), async (req, res) => {
     }
 
     const localDb = await readLocalDb();
+    if (!isDirectoryUrlImportEnabled(localDb.settings)) {
+      res.status(403).json({ error: 'Directory import is disabled by administrator' });
+      return;
+    }
     if (!localDb.directory) localDb.directory = [];
 
     const normalizedEntries = entries
@@ -6704,6 +6773,10 @@ app.post('/api/directory/import-url/test', requireAuth(), async (req, res) => {
     }
 
     const localDb = await readLocalDb();
+    if (!isDirectoryUrlImportEnabled(localDb.settings)) {
+      res.status(403).json({ error: 'Directory import is disabled by administrator' });
+      return;
+    }
     const url = String(req.body?.url || localDb.settings.directoryImportUrl || '').trim();
     const format = String(req.body?.format || localDb.settings.directoryImportFormat || 'csv');
     if (!url) {
@@ -6722,6 +6795,10 @@ app.post('/api/directory/import-url/test', requireAuth(), async (req, res) => {
 app.post('/api/directory/sync-url', async (req, res) => {
   try {
     const localDb = await readLocalDb();
+    if (!isDirectoryUrlImportEnabled(localDb.settings)) {
+      res.status(403).json({ error: 'Directory import is disabled by administrator' });
+      return;
+    }
     const token = String(req.headers['x-sync-token'] || req.query.token || '');
     const user = getLoggedInUser(req);
     const canManageImport = user?.role === 'su' || user?.permissions?.manage_directory_import === true;
@@ -6770,6 +6847,10 @@ app.post('/api/directory/import/preview', requireAuth(), async (req, res) => {
     }
     const entries = Array.isArray(req.body?.entries) ? req.body.entries : [];
     const localDb = await readLocalDb();
+    if (!isDirectoryUrlImportEnabled(localDb.settings)) {
+      res.status(403).json({ error: 'Directory import is disabled by administrator' });
+      return;
+    }
     const normalized = entries.map((entry: any, index: number) => {
       let normalizedEntry: any;
       const errors: string[] = [];
