@@ -174,9 +174,9 @@ export type ContactSyncConflictStrategy = 'manual_review' | 'pbxpuls_wins' | 'ex
 export interface ContactSyncAccount {
   id: string;
   userId: string;
-  provider: 'google' | 'yandex' | 'mailru';
+  provider: 'google' | 'yandex' | 'mailru' | 'file';
   status: 'connected' | 'disconnected' | 'error' | 'not_configured';
-  authType: 'oauth' | 'carddav';
+  authType: 'oauth' | 'carddav' | 'file';
   externalAccountEmail?: string | null;
   carddavUrl?: string | null;
   scopes?: string[] | string | null;
@@ -193,7 +193,7 @@ export interface ContactSyncMapping {
   id: string;
   contactId: string;
   userId: string;
-  provider: 'google' | 'yandex' | 'mailru';
+  provider: 'google' | 'yandex' | 'mailru' | 'file';
   externalContactId: string;
   lastSyncedAt?: string | null;
   syncDirection: ContactSyncDirection;

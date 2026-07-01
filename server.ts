@@ -363,8 +363,8 @@ const getDirectoryPhoneValidationErrors = (entry: any): string[] => {
 };
 
 
-type ContactProvider = 'google' | 'yandex' | 'mailru';
-type ContactSyncAuthType = 'oauth' | 'carddav';
+type ContactProvider = 'google' | 'yandex' | 'mailru' | 'file';
+type ContactSyncAuthType = 'oauth' | 'carddav' | 'file';
 type ContactSyncStatus = 'connected' | 'disconnected' | 'error' | 'not_configured';
 type ContactSyncDirection = 'import_only' | 'export_only' | 'two_way';
 type ContactSyncConflictStrategy = 'manual_review' | 'pbxpuls_wins' | 'external_wins' | 'latest_update_wins';
@@ -401,8 +401,11 @@ interface NormalizedExternalContact {
 const CONTACT_SYNC_PROVIDERS: Record<ContactProvider, { provider: ContactProvider; authType: ContactSyncAuthType; defaultCarddavUrl?: string; displayName: string }> = {
   google: { provider: 'google', authType: 'oauth', displayName: 'Google Contacts' },
   yandex: { provider: 'yandex', authType: 'carddav', defaultCarddavUrl: 'https://carddav.yandex.ru', displayName: 'Yandex Contacts' },
-  mailru: { provider: 'mailru', authType: 'carddav', defaultCarddavUrl: 'https://carddav.mail.ru', displayName: 'Mail.ru Contacts' }
+  mailru: { provider: 'mailru', authType: 'carddav', defaultCarddavUrl: 'https://carddav.mail.ru', displayName: 'Mail.ru Contacts' },
+  file: { provider: 'file', authType: 'file', displayName: 'CSV/vCard file' }
 };
+
+const CONTACT_SYNC_ACCOUNT_PROVIDERS: ContactProvider[] = ['google', 'yandex', 'mailru'];
 
 const CONTACT_SYNC_ENCRYPTION_ERROR = 'Contact sync encryption key is not configured';
 const GOOGLE_CONTACTS_SCOPE = 'https://www.googleapis.com/auth/contacts.readonly';
@@ -448,7 +451,8 @@ function decryptSecret(value: any): string {
   return Buffer.concat([decipher.update(Buffer.from(encryptedRaw, 'base64url')), decipher.final()]).toString('utf8');
 }
 
-const isContactProvider = (value: any): value is ContactProvider => ['google', 'yandex', 'mailru'].includes(String(value));
+const isContactProvider = (value: any): value is ContactProvider => ['google', 'yandex', 'mailru', 'file'].includes(String(value));
+const isOnlineContactProvider = (value: any): value is Exclude<ContactProvider, 'file'> => ['google', 'yandex', 'mailru'].includes(String(value));
 const isContactSyncDirection = (value: any): value is ContactSyncDirection => ['import_only', 'export_only', 'two_way'].includes(String(value));
 const isContactSyncConflictStrategy = (value: any): value is ContactSyncConflictStrategy => ['manual_review', 'pbxpuls_wins', 'external_wins', 'latest_update_wins'].includes(String(value));
 const normalizeContactSyncDirection = (value: any): ContactSyncDirection => isContactSyncDirection(value) ? value : 'import_only';
@@ -688,6 +692,122 @@ const normalizeVCardContacts = (provider: ContactProvider, body: string): Normal
   return cards.map((card, index) => normalizeVCardContact(provider, card, String(index)));
 };
 
+const CONTACT_FILE_PREVIEW_LIMIT = 50;
+
+const stripUtf8Bom = (value: string): string => String(value || '').replace(/^\uFEFF/, '');
+
+const parseContactCsvRows = (content: string): string[][] => {
+  const raw = stripUtf8Bom(content).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const firstLine = raw.split('\n').find(line => line.trim()) || '';
+  const delimiters = [',', ';', '\t'];
+  const delimiter = delimiters
+    .map(value => ({ value, count: (firstLine.match(new RegExp(value === '\t' ? '\t' : '\\' + value, 'g')) || []).length }))
+    .sort((a, b) => b.count - a.count)[0]?.value || ',';
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cur = '';
+  let inQuotes = false;
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    const next = raw[i + 1];
+    if (ch === '"' && inQuotes && next === '"') {
+      cur += '"';
+      i++;
+    } else if (ch === '"') {
+      inQuotes = !inQuotes;
+    } else if (ch === delimiter && !inQuotes) {
+      row.push(cur.trim());
+      cur = '';
+    } else if (ch === '\n' && !inQuotes) {
+      row.push(cur.trim());
+      if (row.some(cell => cell.trim())) rows.push(row);
+      row = [];
+      cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  row.push(cur.trim());
+  if (row.some(cell => cell.trim())) rows.push(row);
+  return rows;
+};
+
+const normalizeContactFileHeader = (value: any): string => String(value || '').trim().toLowerCase();
+
+const getContactCsvValue = (headers: string[], cols: string[], ...names: string[]): string => {
+  for (const name of names) {
+    const idx = headers.indexOf(normalizeContactFileHeader(name));
+    if (idx >= 0) return String(cols[idx] || '').trim();
+  }
+  return '';
+};
+
+const normalizeCsvFileContacts = (content: string): NormalizedExternalContact[] => {
+  const rows = parseContactCsvRows(content);
+  if (rows.length < 1) return [];
+  const headers = rows[0].map(normalizeContactFileHeader);
+  const knownHeaders = ['fullname', 'name', 'фио', 'имя', 'organization', 'company', 'компания', 'организация', 'phone', 'phone1', 'телефон', 'phone2', 'телефон2', 'email', 'почта'];
+  const hasHeader = headers.some(header => knownHeaders.includes(header));
+  const dataRows = hasHeader ? rows.slice(1) : rows;
+  return dataRows.map((cols, index) => {
+    const fullName = hasHeader ? (getContactCsvValue(headers, cols, 'fullName', 'name', 'ФИО', 'Имя') || cols[0] || '') : (cols[0] || '');
+    const organization = hasHeader ? getContactCsvValue(headers, cols, 'organization', 'company', 'Компания', 'Организация') : '';
+    const phone = hasHeader ? (getContactCsvValue(headers, cols, 'phone', 'phone1', 'Телефон') || cols[1] || '') : (cols[1] || '');
+    const phone2 = hasHeader ? getContactCsvValue(headers, cols, 'phone2', 'Телефон2') : '';
+    const email = hasHeader ? getContactCsvValue(headers, cols, 'email', 'Email', 'Почта') : (cols[2] || '');
+    const base = [fullName, organization, phone, email, index].join('|');
+    return {
+      provider: 'file',
+      externalContactId: crypto.createHash('sha1').update(base).digest('hex'),
+      fullName,
+      organization,
+      position: hasHeader ? getContactCsvValue(headers, cols, 'position', 'Должность') : '',
+      phone,
+      phone2,
+      email,
+      website: hasHeader ? getContactCsvValue(headers, cols, 'website', 'Сайт') : '',
+      address: hasHeader ? getContactCsvValue(headers, cols, 'address', 'Адрес') : '',
+      comment: hasHeader ? getContactCsvValue(headers, cols, 'comment', 'Комментарий') : '',
+      department: hasHeader ? getContactCsvValue(headers, cols, 'department', 'Отдел') : '',
+      group: hasHeader ? getContactCsvValue(headers, cols, 'group', 'Группа') : '',
+      tags: hasHeader ? getContactCsvValue(headers, cols, 'tags', 'Теги') : '',
+      rawPhones: [phone, phone2].filter(Boolean),
+      rawEmails: [email].filter(Boolean),
+      sourceRaw: cols
+    } as NormalizedExternalContact;
+  }).filter(item => item.fullName || item.organization || item.phone || item.email);
+};
+
+const detectContactFileKind = (fileName: string, contentType: string, content: string): 'csv' | 'vcard' => {
+  const lowerName = String(fileName || '').toLowerCase();
+  const lowerType = String(contentType || '').toLowerCase();
+  if (lowerName.endsWith('.vcf') || lowerType.includes('vcard') || /BEGIN:VCARD/i.test(content)) return 'vcard';
+  return 'csv';
+};
+
+const getContactFileImportPayload = (req: Request): { fileName: string; contentType: string; content: string } => {
+  if (typeof req.body === 'string') {
+    return {
+      fileName: String(req.query.fileName || req.headers['x-file-name'] || '').trim(),
+      contentType: String(req.headers['content-type'] || '').trim(),
+      content: req.body
+    };
+  }
+  return {
+    fileName: String(req.body?.fileName || '').trim(),
+    contentType: String(req.body?.contentType || '').trim(),
+    content: String(req.body?.content || '')
+  };
+};
+
+const normalizeContactFileContacts = (payload: { fileName: string; contentType: string; content: string }): NormalizedExternalContact[] => {
+  const content = stripUtf8Bom(payload.content);
+  if (!content.trim()) return [];
+  return detectContactFileKind(payload.fileName, payload.contentType, content) === 'vcard'
+    ? normalizeVCardContacts('file', content)
+    : normalizeCsvFileContacts(content);
+};
+
 
 interface CardDavAddressBook {
   url: string;
@@ -795,12 +915,17 @@ const cardDavRequest = async (account: CardDavAccountForRequest, url: string, op
     const allowed = options.acceptStatuses || [200, 207, 301, 302, 303, 307, 308];
     if (!allowed.includes(response.status)) {
       logCardDavSafe(account, options.method + ' failed', url, response.status);
+      if (response.status === 401) {
+        throw new Error(account.provider === 'yandex'
+          ? 'Яндекс не принял логин или пароль приложения. Используйте импорт из файла или проверьте пароль приложения.'
+          : 'Mail.ru не принял логин или пароль для внешнего приложения. Используйте импорт из файла или проверьте пароль.');
+      }
       throw new Error('CardDAV request failed');
     }
     return { status: response.status, url, location, body };
   } catch (error: any) {
     if (error?.name === 'AbortError') throw new Error('CardDAV request failed: timeout');
-    if (error?.message === 'CardDAV request failed') throw error;
+    if (error?.message === 'CardDAV request failed' || String(error?.message || '').includes('не принял логин или пароль')) throw error;
     throw new Error('CardDAV request failed');
   } finally {
     clearTimeout(timeout);
@@ -1120,7 +1245,7 @@ const diagnoseCardDavContacts = async (localDb: any, userId: string, provider: '
     if (!addressBooks.length) throw new Error('CardDAV address book was not found');
     addContactSyncDiagnosticStep(steps, 'discovery', 'CardDAV discovery', 'ok', 'Адресная книга найдена');
   } catch (error: any) {
-    addContactSyncDiagnosticStep(steps, 'discovery', 'CardDAV discovery', 'error', error?.message === 'CardDAV address book was not found' ? 'CardDAV address book was not found' : 'CardDAV request failed');
+    addContactSyncDiagnosticStep(steps, 'discovery', 'CardDAV discovery', 'error', String(error?.message || '').includes('не принял логин или пароль') ? error.message : error?.message === 'CardDAV address book was not found' ? 'CardDAV address book was not found' : 'CardDAV request failed');
     return result(false);
   }
 
@@ -6023,7 +6148,7 @@ app.get('/api/directory/sync/accounts', requireAuth(), async (req, res) => {
   }
   const localDb = await readLocalDb();
   const userId = getCurrentDirectoryUserId(localDb, req);
-  const providers = (Object.keys(CONTACT_SYNC_PROVIDERS) as ContactProvider[]).map(provider => {
+  const providers = CONTACT_SYNC_ACCOUNT_PROVIDERS.map(provider => {
     const account = getUserContactSyncAccount(localDb, userId, provider);
     return sanitizeContactSyncAccount(account, provider);
   });
@@ -6036,7 +6161,7 @@ app.patch('/api/directory/sync/:provider/settings', requireAuth(), async (req, r
       return res.status(403).json({ error: 'Access denied: view_directory permission required' });
     }
     const provider = String(req.params.provider || '');
-    if (!isContactProvider(provider)) return res.status(404).json({ error: 'Unknown contact sync provider' });
+    if (!isOnlineContactProvider(provider)) return res.status(404).json({ error: 'Unknown contact sync provider' });
     const syncDirection = String(req.body?.syncDirection || 'import_only');
     const conflictStrategy = String(req.body?.conflictStrategy || 'manual_review');
     if (!isContactSyncDirection(syncDirection)) return res.status(400).json({ error: 'Invalid syncDirection' });
@@ -6160,7 +6285,7 @@ app.post('/api/directory/sync/:provider/diagnose', requireAuth(), async (req, re
       return res.status(403).json({ error: 'Access denied: view_directory permission required' });
     }
     const provider = String(req.params.provider || '');
-    if (!isContactProvider(provider)) return res.status(404).json({ error: 'Unknown contact sync provider' });
+    if (!isOnlineContactProvider(provider)) return res.status(404).json({ error: 'Unknown contact sync provider' });
     const localDb = await readLocalDb();
     const userId = getCurrentDirectoryUserId(localDb, req);
     const result = provider === 'google'
@@ -6174,6 +6299,50 @@ app.post('/api/directory/sync/:provider/diagnose', requireAuth(), async (req, re
       ok: false,
       steps: [{ key: 'diagnose', label: 'Диагностика', status: 'error', message: 'Contact sync diagnose failed' }]
     });
+  }
+});
+
+const contactFileTextParser = express.text({
+  type: ['text/csv', 'text/vcard', 'text/x-vcard', 'text/directory', 'text/plain'],
+  limit: '2mb'
+});
+
+app.post('/api/directory/sync/file/preview-import', requireAuth(), contactFileTextParser, async (req, res) => {
+  try {
+    if (!(await checkUserPermission(req, 'view_directory'))) {
+      return res.status(403).json({ error: 'Access denied: view_directory permission required' });
+    }
+    const payload = getContactFileImportPayload(req);
+    const normalized = normalizeContactFileContacts(payload).slice(0, CONTACT_FILE_PREVIEW_LIMIT);
+    if (!normalized.length) return contactSyncPreviewError(res, 400, 'file', 'parse', 'CSV/vCard file contains no contacts');
+    const localDb = await readLocalDb();
+    const userId = getCurrentDirectoryUserId(localDb, req);
+    const items = buildContactPreviewItems('file', normalized, localDb, userId);
+    res.json({ provider: 'file', source: 'file', fileName: payload.fileName || null, items, totalPreviewed: items.length });
+  } catch (error: any) {
+    res.status(400).json({ provider: 'file', step: 'parse', message: 'CSV/vCard file preview failed', error: 'CSV/vCard file preview failed' });
+  }
+});
+
+app.post('/api/directory/sync/file/import', requireAuth(), async (req, res) => {
+  try {
+    if (!(await checkUserPermission(req, 'view_directory'))) {
+      return res.status(403).json({ error: 'Access denied: view_directory permission required' });
+    }
+    const localDb = await readLocalDb();
+    const userId = getCurrentDirectoryUserId(localDb, req);
+    const bodyItems = Array.isArray(req.body?.items) ? req.body.items : [];
+    const externalContactIds = Array.isArray(req.body?.externalContactIds) ? req.body.externalContactIds : [];
+    const force = req.body?.force === true;
+    const items = bodyItems.length
+      ? bodyItems
+      : externalContactIds.map((externalContactId: any) => ({ externalContactId, status: 'new' }));
+    if (!items.length) return res.status(400).json({ error: 'No contacts selected for import' });
+    const result = importExternalContactItems(localDb, req, 'file', userId, items, force);
+    await writeLocalDb(localDb);
+    res.json({ ok: true, provider: 'file', imported: result.imported, skipped: result.skipped, failed: result.failed, results: result.results });
+  } catch (error: any) {
+    res.status(400).json({ error: error?.message || 'File contacts import failed' });
   }
 });
 
@@ -6261,7 +6430,7 @@ app.post('/api/directory/sync/:provider/preview-import', requireAuth(), async (r
   let provider: ContactProvider = 'yandex';
   try {
     provider = String(req.params.provider || '') as ContactProvider;
-    if (!isContactProvider(provider)) return res.status(404).json({ error: 'Unknown contact sync provider' });
+    if (!isOnlineContactProvider(provider)) return res.status(404).json({ error: 'Unknown contact sync provider' });
     if (provider === 'google') return res.status(405).json({ provider, step: 'provider', message: 'Use /api/directory/sync/google/preview-import', error: 'Use /api/directory/sync/google/preview-import' });
     const localDb = await readLocalDb();
     const userId = getCurrentDirectoryUserId(localDb, req);
@@ -6297,6 +6466,8 @@ app.post('/api/directory/sync/:provider/preview-import', requireAuth(), async (r
       'CardDAV request failed: timeout',
       'CardDAV returned no contacts',
       'vCard parse returned no contacts',
+      'Яндекс не принял логин или пароль приложения. Используйте импорт из файла или проверьте пароль приложения.',
+      'Mail.ru не принял логин или пароль для внешнего приложения. Используйте импорт из файла или проверьте пароль.',
       CONTACT_SYNC_ENCRYPTION_ERROR
     ];
     const safeMessage = allowedMessages.includes(message) ? message : 'CardDAV request failed';
@@ -6312,7 +6483,7 @@ app.post('/api/directory/sync/:provider/preview-import', requireAuth(), async (r
 app.post('/api/directory/sync/:provider/import', requireAuth(), async (req, res) => {
   try {
     const provider = String(req.params.provider || '');
-    if (!isContactProvider(provider)) return res.status(404).json({ error: 'Unknown contact sync provider' });
+    if (!isOnlineContactProvider(provider)) return res.status(404).json({ error: 'Unknown contact sync provider' });
     const localDb = await readLocalDb();
     const userId = getCurrentDirectoryUserId(localDb, req);
     const account = getUserContactSyncAccount(localDb, userId, provider);
@@ -6335,7 +6506,7 @@ app.post('/api/directory/sync/:provider/import', requireAuth(), async (req, res)
 
 app.get('/api/directory/sync/:provider/disconnect-preview', requireAuth(), async (req, res) => {
   const provider = String(req.params.provider || '');
-  if (!isContactProvider(provider)) return res.status(404).json({ error: 'Unknown contact sync provider' });
+  if (!isOnlineContactProvider(provider)) return res.status(404).json({ error: 'Unknown contact sync provider' });
   const localDb = await readLocalDb();
   const userId = getCurrentDirectoryUserId(localDb, req);
   const preview = buildContactSyncDisconnectPreview(localDb, userId, provider);
@@ -6344,7 +6515,7 @@ app.get('/api/directory/sync/:provider/disconnect-preview', requireAuth(), async
 
 app.post('/api/directory/sync/:provider/disconnect', requireAuth(), async (req, res) => {
   const provider = String(req.params.provider || '');
-  if (!isContactProvider(provider)) return res.status(404).json({ error: 'Unknown contact sync provider' });
+  if (!isOnlineContactProvider(provider)) return res.status(404).json({ error: 'Unknown contact sync provider' });
   const localDb = await readLocalDb();
   const userId = getCurrentDirectoryUserId(localDb, req);
   const preview = buildContactSyncDisconnectPreview(localDb, userId, provider);

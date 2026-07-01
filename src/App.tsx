@@ -126,9 +126,10 @@ type DirectoryOptionalColumnKey =
   | 'responsibleUserId';
 type DirectoryColumnKey = DirectoryRequiredColumnKey | DirectoryOptionalColumnKey | DirectorySystemColumnKey;
 
-type ContactSyncProvider = 'google' | 'yandex' | 'mailru';
+type ContactSyncProvider = 'google' | 'yandex' | 'mailru' | 'file';
+type OnlineContactSyncProvider = Exclude<ContactSyncProvider, 'file'>;
 type ContactSyncStatus = 'connected' | 'disconnected' | 'error' | 'not_configured';
-type ContactSyncAuthType = 'oauth' | 'carddav';
+type ContactSyncAuthType = 'oauth' | 'carddav' | 'file';
 type ContactSyncDirection = 'import_only' | 'export_only' | 'two_way';
 type ContactSyncConflictStrategy = 'manual_review' | 'pbxpuls_wins' | 'external_wins' | 'latest_update_wins';
 
@@ -696,9 +697,11 @@ export default function App() {
     yandex: { email: '', appPassword: '', carddavUrl: 'https://carddav.yandex.ru' },
     mailru: { email: '', appPassword: '', carddavUrl: 'https://carddav.mail.ru' }
   });
-  const [contactSyncPreviewItems, setContactSyncPreviewItems] = useState<Record<ContactSyncProvider, ContactSyncPreviewItem[]>>({ google: [], yandex: [], mailru: [] });
-  const [contactSyncSelectedIds, setContactSyncSelectedIds] = useState<Record<ContactSyncProvider, string[]>>({ google: [], yandex: [], mailru: [] });
-  const [contactSyncForceDuplicates, setContactSyncForceDuplicates] = useState<Record<ContactSyncProvider, boolean>>({ google: false, yandex: false, mailru: false });
+  const contactFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [contactFileName, setContactFileName] = useState('');
+  const [contactSyncPreviewItems, setContactSyncPreviewItems] = useState<Record<ContactSyncProvider, ContactSyncPreviewItem[]>>({ google: [], yandex: [], mailru: [], file: [] });
+  const [contactSyncSelectedIds, setContactSyncSelectedIds] = useState<Record<ContactSyncProvider, string[]>>({ google: [], yandex: [], mailru: [], file: [] });
+  const [contactSyncForceDuplicates, setContactSyncForceDuplicates] = useState<Record<ContactSyncProvider, boolean>>({ google: false, yandex: false, mailru: false, file: false });
   const [contactSyncDiagnostics, setContactSyncDiagnostics] = useState<Partial<Record<ContactSyncProvider, ContactSyncDiagnosticResult>>>({});
 
   // --- ADMIN DIRECTORY IMPORT / EXPORT & NORMALIZATION STATE ---
@@ -1169,16 +1172,17 @@ export default function App() {
   const contactSyncProviderLabels: Record<ContactSyncProvider, string> = {
     google: 'Google Contacts',
     yandex: 'Yandex Contacts',
-    mailru: 'Mail.ru Contacts'
+    mailru: 'Mail.ru Contacts',
+    file: 'CSV/vCard'
   };
 
   const contactSyncDirectionLabels: Record<ContactSyncDirection, string> = {
-    import_only: 'Только импорт в PBXPuls',
-    export_only: 'Только выгрузка из PBXPuls',
+    import_only: 'Импорт в PBXPuls',
+    export_only: 'Выгрузка во внешний сервис',
     two_way: 'Двухсторонняя синхронизация'
   };
 
-  const getContactSyncAccount = (provider: ContactSyncProvider): ContactSyncProviderAccount => {
+  const getContactSyncAccount = (provider: OnlineContactSyncProvider): ContactSyncProviderAccount => {
     return contactSyncAccounts.find(item => item.provider === provider) || {
       provider,
       status: 'disconnected',
@@ -1217,7 +1221,7 @@ export default function App() {
     }
   }, [isDirFormOpen, dirVisibility, loadContactSyncAccounts]);
 
-  const handleContactSyncSettingsChange = async (provider: ContactSyncProvider, syncDirection: ContactSyncDirection) => {
+  const handleContactSyncSettingsChange = async (provider: OnlineContactSyncProvider, syncDirection: ContactSyncDirection) => {
     const account = getContactSyncAccount(provider);
     setContactSyncBusyProvider(provider);
     setContactSyncMessage('');
@@ -1330,7 +1334,59 @@ export default function App() {
     }
   };
 
-  const handleDiagnoseContactSync = async (provider: ContactSyncProvider) => {
+  const getContactFileContentType = (file: File): string => {
+    const lowerName = file.name.toLowerCase();
+    if (file.type) return file.type;
+    if (lowerName.endsWith('.vcf')) return 'text/vcard';
+    return 'text/csv';
+  };
+
+  const handlePreviewContactFileImport = async (file: File) => {
+    setContactSyncBusyProvider('file');
+    setContactSyncMessage('');
+    setContactFileName(file.name);
+    try {
+      const content = await file.text();
+      const resp = await fetch('/api/directory/sync/file/preview-import?fileName=' + encodeURIComponent(file.name), {
+        method: 'POST',
+        headers: {
+          'Content-Type': getContactFileContentType(file),
+          'Authorization': 'Bearer ' + session?.token
+        },
+        body: content
+      });
+      if (resp.status === 401) {
+        handleAuthError(resp);
+        return;
+      }
+      const data = await resp.json();
+      if (resp.ok) {
+        const items = Array.isArray(data.items) ? data.items : [];
+        const invalid = items.filter((item: any) => item.status === 'invalid').length;
+        const duplicates = items.filter((item: any) => item.status === 'possible_duplicate').length;
+        setContactSyncPreviewItems(prev => ({ ...prev, file: items }));
+        setContactSyncSelectedIds(prev => ({ ...prev, file: items.filter((item: any) => item.status === 'new').map((item: any) => String(item.externalContactId || '')).filter(Boolean) }));
+        setContactSyncMessage('Предпросмотр файла: ' + (data.totalPreviewed || 0) + ' контактов, дублей: ' + duplicates + ', ошибок: ' + invalid + '.');
+      } else {
+        setContactSyncPreviewItems(prev => ({ ...prev, file: [] }));
+        setContactSyncSelectedIds(prev => ({ ...prev, file: [] }));
+        setContactSyncMessage(data.error || 'Не удалось разобрать CSV/vCard файл.');
+      }
+    } catch (e: any) {
+      setContactSyncMessage(e.message || 'Ошибка предпросмотра CSV/vCard файла.');
+    } finally {
+      if (contactFileInputRef.current) contactFileInputRef.current.value = '';
+      setContactSyncBusyProvider(null);
+    }
+  };
+
+  const handleContactFileInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    handlePreviewContactFileImport(file);
+  };
+
+  const handleDiagnoseContactSync = async (provider: OnlineContactSyncProvider) => {
     setContactSyncBusyProvider(provider);
     setContactSyncMessage('');
     try {
@@ -1346,7 +1402,14 @@ export default function App() {
       if (resp.ok && Array.isArray(data.steps)) {
         setContactSyncDiagnostics(prev => ({ ...prev, [provider]: data }));
         const failed = data.steps.find((step: ContactSyncDiagnosticStep) => step.status === 'error') || data.steps.find((step: ContactSyncDiagnosticStep) => step.status === 'warning');
-        setContactSyncMessage(data.ok ? 'Диагностика ' + contactSyncProviderLabels[provider] + ': подключение работает.' : 'Диагностика ' + contactSyncProviderLabels[provider] + ': ' + (failed?.message || 'обнаружена ошибка.'));
+        const friendlyMessage = data.ok
+          ? 'Диагностика ' + contactSyncProviderLabels[provider] + ': подключение работает.'
+          : provider === 'google'
+            ? 'Диагностика Google Contacts: проверьте настройки Google OAuth или повторите подключение.'
+            : (failed?.message || '').includes('не принял логин или пароль')
+              ? 'Диагностика ' + contactSyncProviderLabels[provider] + ': сервис не принял логин или пароль приложения. Используйте импорт из файла или проверьте пароль приложения.'
+              : 'Диагностика ' + contactSyncProviderLabels[provider] + ': используйте импорт из файла или проверьте параметры расширенного подключения.';
+        setContactSyncMessage(friendlyMessage);
       } else {
         setContactSyncDiagnostics(prev => ({
           ...prev,
@@ -1421,7 +1484,7 @@ export default function App() {
     }
   };
 
-  const handleDisconnectContactSync = async (provider: ContactSyncProvider) => {
+  const handleDisconnectContactSync = async (provider: OnlineContactSyncProvider) => {
     setContactSyncBusyProvider(provider);
     setContactSyncMessage('');
     try {
@@ -3651,7 +3714,7 @@ export default function App() {
   };
 
 
-  const renderContactSyncProviderCard = (provider: ContactSyncProvider) => {
+  const renderContactSyncProviderCard = (provider: OnlineContactSyncProvider) => {
     const account = getContactSyncAccount(provider);
     const isBusy = contactSyncBusyProvider === provider;
     const isConnected = account.status === 'connected';
@@ -3666,10 +3729,15 @@ export default function App() {
     const previewItems = contactSyncPreviewItems[provider] || [];
     const selectedIds = contactSyncSelectedIds[provider] || [];
     const selectedCount = selectedIds.length;
-    const syncDirection = account.syncDirection || 'import_only';
     const diagnostic = contactSyncDiagnostics[provider];
-    const diagnosticNeedsCardDavHint = isCardDav && diagnostic?.steps?.some(step => step.key === 'discovery' && step.status === 'error');
-    const diagnosticNeedsGoogleConfigHint = isGoogle && diagnostic?.steps?.some(step => step.key === 'config' && step.status === 'error');
+    const failedDiagnosticStep = diagnostic?.steps?.find(step => step.status === 'error') || diagnostic?.steps?.find(step => step.status === 'warning');
+    const friendlyDiagnosticMessage = diagnostic?.ok
+      ? 'Подключение работает. Можно выполнить предпросмотр импорта.'
+      : isGoogle
+        ? 'Проверьте настройки Google OAuth или повторите подключение.'
+        : failedDiagnosticStep?.message?.includes('не принял логин или пароль')
+          ? 'Сервис не принял логин или пароль приложения. Используйте импорт из файла или проверьте пароль приложения.'
+          : 'Используйте импорт из файла или проверьте параметры расширенного подключения.';
     return (
       <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-650">
         <div className="mb-2 flex items-center justify-between gap-2">
@@ -3686,6 +3754,27 @@ export default function App() {
           <div className="mb-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800">Google Contacts не настроен администратором</div>
         )}
 
+        <p className="mb-2 text-[11px] leading-relaxed text-slate-600">
+          {isGoogle
+            ? 'Подключите Google и импортируйте выбранные контакты в личный справочник PBXPuls.'
+            : provider === 'yandex'
+              ? 'Рекомендуется экспортировать контакты из Яндекса в CSV/vCard и загрузить файл в PBXPuls.'
+              : 'Рекомендуется экспортировать контакты Mail.ru в CSV/vCard и загрузить файл в PBXPuls.'}
+        </p>
+        <div className="mb-2 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-[11px] font-bold text-emerald-800">Импорт в PBXPuls</div>
+        {isAdminRole(session?.role) && (
+          <div className="mb-2 grid grid-cols-1 gap-1 text-[11px] text-slate-400">
+            <div className="rounded-md border border-slate-200 bg-white px-2 py-1">Выгрузка во внешний сервис — скоро</div>
+            <div className="rounded-md border border-slate-200 bg-white px-2 py-1">Двухсторонняя синхронизация — скоро</div>
+          </div>
+        )}
+        {isCardDav && (
+          <button type="button" onClick={() => contactFileInputRef.current?.click()} disabled={contactSyncBusyProvider === 'file'} className="mb-3 inline-flex items-center gap-1 rounded-md bg-blue-600 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-blue-700 disabled:opacity-50">
+            <Upload className="h-3.5 w-3.5" />
+            {contactSyncBusyProvider === 'file' ? 'Загрузка...' : 'Загрузить файл'}
+          </button>
+        )}
+
         {isConnected && (
           <div className="mb-2 space-y-1 text-[11px] text-slate-600">
             <div>Аккаунт: <span className="font-semibold text-slate-800">{account.externalAccountEmail || 'не указан'}</span></div>
@@ -3693,80 +3782,97 @@ export default function App() {
           </div>
         )}
 
-        {isCardDav && !isConnected && form && (
-          <div className="space-y-2">
-            <input
-              type="email"
-              value={form.email}
-              onChange={(e) => setCardDavForms(prev => ({ ...prev, [provider]: { ...prev[provider], email: e.target.value } }))}
-              placeholder={provider === 'yandex' ? 'Email Яндекс' : 'Email Mail.ru'}
-              className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-800"
-            />
-            <input
-              type="password"
-              value={form.appPassword}
-              onChange={(e) => setCardDavForms(prev => ({ ...prev, [provider]: { ...prev[provider], appPassword: e.target.value } }))}
-              placeholder={provider === 'yandex' ? 'Пароль приложения' : 'Пароль для внешнего приложения'}
-              className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-800"
-            />
-            <input
-              type="url"
-              value={form.carddavUrl}
-              onChange={(e) => setCardDavForms(prev => ({ ...prev, [provider]: { ...prev[provider], carddavUrl: e.target.value } }))}
-              className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-800"
-            />
-            <p className="text-[11px] leading-relaxed text-slate-500">
-              {provider === 'yandex' ? 'Для подключения используйте пароль приложения Яндекса.' : 'Для подключения Mail.ru используйте пароль для внешнего приложения.'}
-            </p>
+        {isCardDav && form && (
+          <details className="mt-3 rounded-md border border-slate-200 bg-white p-2">
+            <summary className="cursor-pointer text-[11px] font-black text-slate-700">{provider === 'yandex' ? 'Расширенное подключение через пароль приложения' : 'Расширенное подключение через пароль для внешнего приложения'}</summary>
+            {!isConnected && (
+              <div className="mt-2 space-y-2">
+                <input
+                  type="email"
+                  value={form.email}
+                  onChange={(e) => setCardDavForms(prev => ({ ...prev, [provider]: { ...prev[provider], email: e.target.value } }))}
+                  placeholder={provider === 'yandex' ? 'Email Яндекс' : 'Email Mail.ru'}
+                  className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-800"
+                />
+                <input
+                  type="password"
+                  value={form.appPassword}
+                  onChange={(e) => setCardDavForms(prev => ({ ...prev, [provider]: { ...prev[provider], appPassword: e.target.value } }))}
+                  placeholder={provider === 'yandex' ? 'Пароль приложения' : 'Пароль для внешнего приложения'}
+                  className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-800"
+                />
+                <details className="rounded-md border border-slate-200 bg-slate-50 p-2">
+                  <summary className="cursor-pointer text-[11px] font-bold text-slate-600">Дополнительные настройки</summary>
+                  <input
+                    type="url"
+                    value={form.carddavUrl}
+                    onChange={(e) => setCardDavForms(prev => ({ ...prev, [provider]: { ...prev[provider], carddavUrl: e.target.value } }))}
+                    className="mt-2 w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-800"
+                  />
+                </details>
+                <p className="text-[11px] leading-relaxed text-slate-500">
+                  {provider === 'yandex' ? 'Для подключения используйте пароль приложения Яндекса.' : 'Для подключения Mail.ru используйте пароль для внешнего приложения.'}
+                </p>
+                <button type="button" onClick={() => handleCardDavConnect(provider)} disabled={isBusy} className="rounded-md bg-blue-600 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-blue-700 disabled:opacity-50">
+                  {isBusy ? 'Подключение...' : 'Подключить'}
+                </button>
+              </div>
+            )}
+            {isConnected && (
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button type="button" onClick={() => handleDiagnoseContactSync(provider)} disabled={isBusy} className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-50">{isBusy ? 'Проверка...' : 'Проверить подключение'}</button>
+                <button type="button" onClick={() => handlePreviewContactSyncImport(provider)} disabled={isBusy} className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-50">Предпросмотр импорта</button>
+                <button type="button" onClick={() => handleDisconnectContactSync(provider)} disabled={isBusy} className="rounded-md border border-red-200 bg-white px-3 py-1.5 text-[11px] font-bold text-red-700 hover:bg-red-50 disabled:opacity-50">Отключить</button>
+              </div>
+            )}
+          </details>
+        )}
+
+        {isGoogle && (
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button type="button" onClick={() => handleDiagnoseContactSync(provider)} disabled={isBusy} className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-50">{isBusy ? 'Проверка...' : 'Проверить подключение'}</button>
+            {!isConnected && (
+              <button type="button" onClick={handleGoogleContactsConnect} disabled={isBusy || account.configured === false} className="rounded-md bg-blue-600 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-blue-700 disabled:opacity-50">
+                {isBusy ? 'Подключение...' : 'Подключить Google'}
+              </button>
+            )}
+            {isConnected && (
+              <>
+                <button type="button" onClick={() => handlePreviewContactSyncImport(provider)} disabled={isBusy} className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-50">Предпросмотр импорта</button>
+                <button type="button" onClick={() => handleDisconnectContactSync(provider)} disabled={isBusy} className="rounded-md border border-red-200 bg-white px-3 py-1.5 text-[11px] font-bold text-red-700 hover:bg-red-50 disabled:opacity-50">Отключить</button>
+              </>
+            )}
           </div>
         )}
 
-        <div className="mt-3 flex flex-wrap gap-2">
-          <button type="button" onClick={() => handleDiagnoseContactSync(provider)} disabled={isBusy} className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-50">{isBusy ? 'Проверка...' : 'Проверить подключение'}</button>
-          {isGoogle && !isConnected && (
-            <button type="button" onClick={handleGoogleContactsConnect} disabled={isBusy || account.configured === false} className="rounded-md bg-blue-600 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-blue-700 disabled:opacity-50">
-              {isBusy ? 'Подключение...' : 'Подключить Google Contacts'}
-            </button>
-          )}
-          {isCardDav && !isConnected && (
-            <button type="button" onClick={() => handleCardDavConnect(provider)} disabled={isBusy} className="rounded-md bg-blue-600 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-blue-700 disabled:opacity-50">
-              {isBusy ? 'Подключение...' : 'Подключить ' + contactSyncProviderLabels[provider]}
-            </button>
-          )}
-          {isConnected && (
-            <>
-              <button type="button" onClick={() => handlePreviewContactSyncImport(provider)} disabled={isBusy} className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-50">Предпросмотр импорта</button>
-              <button type="button" onClick={() => handleDisconnectContactSync(provider)} disabled={isBusy} className="rounded-md border border-red-200 bg-white px-3 py-1.5 text-[11px] font-bold text-red-700 hover:bg-red-50 disabled:opacity-50">Отключить</button>
-            </>
-          )}
-        </div>
-
         {diagnostic && (
           <div className="mt-3 rounded-md border border-slate-200 bg-white p-2">
-            <div className="mb-2 text-[11px] font-black uppercase text-slate-500">Диагностика подключения</div>
-            <div className="space-y-1.5">
-              {(diagnostic.steps || []).map((step) => {
-                const stepClass = step.status === 'ok'
-                  ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-                  : step.status === 'warning'
-                    ? 'border-amber-200 bg-amber-50 text-amber-800'
-                    : 'border-red-200 bg-red-50 text-red-800';
-                const dotClass = step.status === 'ok' ? 'bg-emerald-500' : step.status === 'warning' ? 'bg-amber-500' : 'bg-red-500';
-                return (
-                  <div key={step.key} className={'rounded-md border px-2 py-1.5 ' + stepClass}>
-                    <div className="flex items-start gap-2">
-                      <span className={'mt-1 h-2 w-2 shrink-0 rounded-full ' + dotClass}></span>
-                      <div className="min-w-0">
-                        <div className="font-bold text-[11px]">{step.label}</div>
-                        <div className="break-words text-[11px]">{step.message}</div>
+            <div className="text-[11px] font-black uppercase text-slate-500">Диагностика подключения</div>
+            <div className={diagnostic.ok ? 'mt-2 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-[11px] text-emerald-800' : 'mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800'}>{friendlyDiagnosticMessage}</div>
+            <details className="mt-2 rounded-md border border-slate-200 bg-slate-50 p-2">
+              <summary className="cursor-pointer text-[11px] font-bold text-slate-600">Технические детали</summary>
+              <div className="mt-2 space-y-1.5">
+                {(diagnostic.steps || []).map((step) => {
+                  const stepClass = step.status === 'ok'
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                    : step.status === 'warning'
+                      ? 'border-amber-200 bg-amber-50 text-amber-800'
+                      : 'border-red-200 bg-red-50 text-red-800';
+                  const dotClass = step.status === 'ok' ? 'bg-emerald-500' : step.status === 'warning' ? 'bg-amber-500' : 'bg-red-500';
+                  return (
+                    <div key={step.key} className={'rounded-md border px-2 py-1.5 ' + stepClass}>
+                      <div className="flex items-start gap-2">
+                        <span className={'mt-1 h-2 w-2 shrink-0 rounded-full ' + dotClass}></span>
+                        <div className="min-w-0">
+                          <div className="font-bold text-[11px]">{step.label}</div>
+                          <div className="break-words text-[11px]">{step.message}</div>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                );
-              })}
-            </div>
-            {diagnosticNeedsCardDavHint && <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800">Проверьте CardDAV URL и пароль приложения.</div>}
-            {diagnosticNeedsGoogleConfigHint && <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800">Проверьте GOOGLE_CONTACTS_CLIENT_ID, GOOGLE_CONTACTS_CLIENT_SECRET и GOOGLE_CONTACTS_REDIRECT_URI.</div>}
+                  );
+                })}
+              </div>
+            </details>
           </div>
         )}
 
@@ -3823,6 +3929,75 @@ export default function App() {
             </div>
           </div>
         )}
+      </div>
+    );
+  };
+
+  const renderContactFilePreviewPanel = () => {
+    const previewItems = contactSyncPreviewItems.file || [];
+    if (!previewItems.length) return null;
+    const selectedIds = contactSyncSelectedIds.file || [];
+    const selectedCount = selectedIds.length;
+    const isBusy = contactSyncBusyProvider === 'file';
+    return (
+      <div className="rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-650">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <div className="font-black text-slate-800">CSV/vCard</div>
+            <div className="mt-1 text-[11px] text-slate-500">{contactFileName || 'Файл контактов'}: предпросмотр импорта в личный справочник</div>
+          </div>
+          <button type="button" onClick={() => contactFileInputRef.current?.click()} disabled={isBusy} className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-50">
+            <Upload className="h-3.5 w-3.5" />
+            Загрузить другой файл
+          </button>
+        </div>
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <button type="button" onClick={() => handleSelectNewContactSyncItems('file')} className="rounded-md border border-slate-200 px-2 py-1 text-[11px] font-bold text-slate-700 hover:bg-slate-50">Выбрать все новые</button>
+          <button type="button" onClick={() => handleClearContactSyncSelection('file')} className="rounded-md border border-slate-200 px-2 py-1 text-[11px] font-bold text-slate-500 hover:bg-slate-50">Снять выбор</button>
+          <label className="flex items-center gap-1 text-[11px] font-semibold text-slate-600">
+            <input
+              type="checkbox"
+              checked={contactSyncForceDuplicates.file === true}
+              onChange={(e) => setContactSyncForceDuplicates(prev => ({ ...prev, file: e.target.checked }))}
+            />
+            Импортировать возможные дубли как новые
+          </label>
+          <button type="button" onClick={() => handleImportSelectedContactSyncItems('file')} disabled={isBusy || selectedCount === 0} className="rounded-md bg-emerald-600 px-2 py-1 text-[11px] font-bold text-white hover:bg-emerald-700 disabled:opacity-50">Импортировать выбранные ({selectedCount})</button>
+        </div>
+        <div className="max-h-72 overflow-auto rounded border border-slate-100">
+          <table className="min-w-full text-left text-[11px]">
+            <thead className="sticky top-0 bg-slate-100 text-slate-600">
+              <tr>
+                <th className="w-8 p-2"></th>
+                <th className="p-2">Статус</th>
+                <th className="p-2">ФИО</th>
+                <th className="p-2">Телефон</th>
+                <th className="p-2">Email</th>
+                <th className="p-2">Организация</th>
+                <th className="p-2">Проблемы</th>
+              </tr>
+            </thead>
+            <tbody>
+              {previewItems.map((item) => {
+                const id = String(item.externalContactId || '');
+                const isInvalid = item.status === 'invalid';
+                const isSelected = selectedIds.includes(id);
+                const statusLabel = item.status === 'new' ? 'Новый' : item.status === 'possible_duplicate' ? 'Возможный дубль' : item.status === 'invalid' ? 'Ошибка' : item.status;
+                return (
+                  <tr key={id || Math.random()} className="border-t border-slate-100 align-top">
+                    <td className="p-2"><input type="checkbox" disabled={isInvalid} checked={isSelected} onChange={(e) => handleToggleContactSyncItem('file', item, e.target.checked)} /></td>
+                    <td className="p-2 font-semibold text-slate-700">{statusLabel}</td>
+                    <td className="p-2 text-slate-800">{item.fullName || '—'}</td>
+                    <td className="p-2 font-mono text-slate-700">{item.phone || item.phone2 || '—'}</td>
+                    <td className="p-2 text-slate-700">{item.email || '—'}</td>
+                    <td className="p-2 text-slate-700">{item.organization || '—'}</td>
+                    <td className="p-2 text-slate-500">{[...(item.warnings || []), ...(item.errors || [])].join('; ') || '—'}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
     );
   };
@@ -6082,21 +6257,30 @@ export default function App() {
                 <div className="rounded-xl border border-slate-200 bg-white p-3">
                   <div className="mb-3 flex items-start justify-between gap-3">
                     <div>
-                      <h4 className="text-xs font-black text-slate-800">Синхронизация личных контактов</h4>
-                      <p className="mt-1 text-[11px] leading-relaxed text-slate-500">Синхронизация работает только с личными контактами пользователя. Общий справочник не отправляется во внешние сервисы.</p>
+                      <h4 className="text-xs font-black text-slate-800">Импорт контактов</h4>
+                      <p className="mt-1 text-[11px] leading-relaxed text-slate-500">Импортируйте личные контакты в PBXPuls. Общий справочник не отправляется во внешние сервисы.</p>
                     </div>
                     <button type="button" onClick={loadContactSyncAccounts} className="rounded-md border border-slate-200 bg-white p-1.5 text-slate-500 hover:bg-slate-50" title="Обновить подключения">
                       <RefreshCw className="h-3.5 w-3.5" />
                     </button>
                   </div>
+                  <input ref={contactFileInputRef} type="file" accept=".csv,.vcf,text/csv,text/vcard,text/x-vcard" onChange={handleContactFileInputChange} className="hidden" />
                   {contactSyncMessage && (
                     <div className="mb-3 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-[11px] text-blue-800">{contactSyncMessage}</div>
                   )}
+                  <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
+                    <button type="button" onClick={() => contactFileInputRef.current?.click()} disabled={contactSyncBusyProvider === 'file'} className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-blue-700 disabled:opacity-50">
+                      <Upload className="h-3.5 w-3.5" />
+                      {contactSyncBusyProvider === 'file' ? 'Загрузка...' : 'Загрузить CSV/vCard'}
+                    </button>
+                    <span className="text-[11px] text-slate-500">Универсальный импорт для Yandex, Mail.ru и других источников.</span>
+                  </div>
                   <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
                     {renderContactSyncProviderCard('google')}
                     {renderContactSyncProviderCard('yandex')}
                     {renderContactSyncProviderCard('mailru')}
                   </div>
+                  <div className="mt-3">{renderContactFilePreviewPanel()}</div>
                 </div>
               )}
 
