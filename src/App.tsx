@@ -126,6 +126,7 @@ type DirectoryOptionalColumnKey =
 type DirectoryColumnKey = DirectoryRequiredColumnKey | DirectoryOptionalColumnKey | DirectorySystemColumnKey;
 
 type ContactSyncProvider = 'google' | 'yandex' | 'mailru' | 'file';
+type ContactFileSourceFormat = 'google_csv' | 'mailru_csv' | 'generic_csv' | 'yandex_vcf' | 'generic_vcf';
 type DirectoryPageMode = 'list' | 'import' | 'personal_import' | 'contact_new' | 'contact_edit';
 type OnlineContactSyncProvider = Exclude<ContactSyncProvider, 'file'>;
 type ContactSyncStatus = 'connected' | 'disconnected' | 'error' | 'not_configured';
@@ -752,6 +753,7 @@ export default function App() {
   const [contactSyncSelectedIds, setContactSyncSelectedIds] = useState<Record<ContactSyncProvider, string[]>>({ google: [], yandex: [], mailru: [], file: [] });
   const [contactSyncForceDuplicates, setContactSyncForceDuplicates] = useState<Record<ContactSyncProvider, boolean>>({ google: false, yandex: false, mailru: false, file: false });
   const [contactSyncDiagnostics, setContactSyncDiagnostics] = useState<Partial<Record<ContactSyncProvider, ContactSyncDiagnosticResult>>>({});
+  const [contactFileSourceFormat, setContactFileSourceFormat] = useState<ContactFileSourceFormat | ''>('');
 
   // --- ADMIN DIRECTORY IMPORT / EXPORT & NORMALIZATION STATE ---
   const [isAdminPanelExpanded, setIsAdminPanelExpanded] = useState(false);
@@ -1197,6 +1199,22 @@ export default function App() {
     file: 'CSV/vCard'
   };
 
+  const contactFileSourceFormatLabels: Record<ContactFileSourceFormat, string> = {
+    google_csv: 'Google Contacts CSV',
+    mailru_csv: 'Mail.ru CSV',
+    generic_csv: 'Обычный CSV',
+    yandex_vcf: 'vCard',
+    generic_vcf: 'vCard'
+  };
+
+  const getContactFileSourceFormatMessage = (sourceFormat: ContactFileSourceFormat | '') => {
+    if (sourceFormat === 'google_csv') return 'Файл распознан как Google Contacts CSV.';
+    if (sourceFormat === 'mailru_csv') return 'Файл распознан как Mail.ru CSV.';
+    if (sourceFormat === 'yandex_vcf' || sourceFormat === 'generic_vcf') return 'Файл распознан как vCard.';
+    if (sourceFormat === 'generic_csv') return 'Файл распознан как обычный CSV.';
+    return '';
+  };
+
   const contactSyncDirectionLabels: Record<ContactSyncDirection, string> = {
     import_only: 'Импорт в PBXPuls',
     export_only: 'Выгрузка во внешний сервис',
@@ -1370,12 +1388,14 @@ export default function App() {
     setContactSyncBusyProvider('file');
     setContactSyncMessage('');
     setContactFileName(file.name);
+    setContactFileSourceFormat('');
     try {
-      const content = await file.text();
+      const content = await file.arrayBuffer();
       const resp = await fetch('/api/directory/sync/file/preview-import?fileName=' + encodeURIComponent(file.name), {
         method: 'POST',
         headers: {
-          'Content-Type': getContactFileContentType(file),
+          'Content-Type': 'application/octet-stream',
+          'X-Original-Content-Type': getContactFileContentType(file),
           'Authorization': 'Bearer ' + session?.token
         },
         body: content
@@ -1391,10 +1411,13 @@ export default function App() {
         const duplicates = items.filter((item: any) => item.status === 'possible_duplicate').length;
         setContactSyncPreviewItems(prev => ({ ...prev, file: items }));
         setContactSyncSelectedIds(prev => ({ ...prev, file: items.filter((item: any) => item.status === 'new').map((item: any) => String(item.externalContactId || '')).filter(Boolean) }));
-        setContactSyncMessage('Предпросмотр файла: ' + (data.totalPreviewed || 0) + ' контактов, дублей: ' + duplicates + ', ошибок: ' + invalid + '.');
+        setContactFileSourceFormat(data.sourceFormat || '');
+        const sourceFormatMessage = getContactFileSourceFormatMessage(data.sourceFormat || '');
+        setContactSyncMessage((sourceFormatMessage ? sourceFormatMessage + ' ' : '') + 'Предпросмотр файла: ' + (data.totalPreviewed || 0) + ' контактов, дублей: ' + duplicates + ', ошибок: ' + invalid + '.');
       } else {
         setContactSyncPreviewItems(prev => ({ ...prev, file: [] }));
         setContactSyncSelectedIds(prev => ({ ...prev, file: [] }));
+        setContactFileSourceFormat('');
         setContactSyncMessage(data.error || 'Не удалось разобрать CSV/vCard файл.');
       }
     } catch (e: any) {
@@ -4016,6 +4039,7 @@ export default function App() {
           <div>
             <div className="font-black text-slate-800">CSV/vCard</div>
             <div className="mt-1 text-[11px] text-slate-500">{contactFileName || 'Файл контактов'}: предпросмотр импорта в личный справочник</div>
+            {contactFileSourceFormat && <div className="mt-1 text-[11px] font-bold text-blue-700">{contactFileSourceFormatLabels[contactFileSourceFormat]}</div>}
           </div>
           <button type="button" onClick={() => contactFileInputRef.current?.click()} disabled={isBusy || !isContactImportSourceEnabled('file')} className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-50">
             <Upload className="h-3.5 w-3.5" />

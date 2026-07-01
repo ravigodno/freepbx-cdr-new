@@ -370,6 +370,7 @@ type ContactSyncDirection = 'import_only' | 'export_only' | 'two_way';
 type ContactSyncConflictStrategy = 'manual_review' | 'pbxpuls_wins' | 'external_wins' | 'latest_update_wins';
 type ContactPreviewStatus = 'new' | 'possible_duplicate' | 'invalid';
 type ContactSyncDiagnosticStatus = 'ok' | 'warning' | 'error';
+type ContactFileSourceFormat = 'google_csv' | 'mailru_csv' | 'generic_csv' | 'yandex_vcf' | 'generic_vcf';
 
 interface ContactSyncDiagnosticStep {
   key: string;
@@ -395,6 +396,7 @@ interface NormalizedExternalContact {
   tags?: string;
   rawPhones?: string[];
   rawEmails?: string[];
+  sourceFormat?: ContactFileSourceFormat;
   sourceRaw?: unknown;
 }
 
@@ -581,7 +583,7 @@ const normalizeExternalPhones = (phones: any[]): { phone?: string; phone2?: stri
     if (result.valid) {
       if (!valid.includes(phone)) valid.push(phone);
     } else {
-      errors.push('Телефон "' + phone + '" невалиден. ' + DIRECTORY_PHONE_VALIDATION_MESSAGE);
+      warnings.push('Телефон "' + phone + '" невалиден и не будет импортирован. ' + DIRECTORY_PHONE_VALIDATION_MESSAGE);
     }
   });
   const extraPhones = valid.slice(2);
@@ -708,11 +710,31 @@ const normalizeGooglePerson = (person: any): NormalizedExternalContact => {
 
 const parseVCardValue = (line: string): string => {
   const idx = line.indexOf(':');
-  return idx >= 0 ? line.slice(idx + 1).replace(/\\,/g, ',').replace(/\\n/gi, '\n').trim() : '';
+  return idx >= 0 ? line.slice(idx + 1)
+    .replace(/\\,/g, ',')
+    .replace(/\\;/g, ';')
+    .replace(/\\n/gi, '\n')
+    .replace(/\\\\/g, '\\')
+    .trim() : '';
 };
 
-const normalizeVCardContact = (provider: ContactProvider, vcard: string, fallbackKey: string): NormalizedExternalContact => {
-  const lines = vcard.replace(/\r\n[ \t]/g, '').split(/\r?\n/);
+const unfoldVCardLines = (body: string): string[] => {
+  const lines = String(body || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+  const out: string[] = [];
+  lines.forEach((line) => {
+    if (/^[ \t]/.test(line) && out.length) {
+      out[out.length - 1] += line.slice(1);
+    } else {
+      out.push(line);
+    }
+  });
+  return out;
+};
+
+const splitVCardListValue = (value: string): string => String(value || '').split(',').map(item => item.trim()).filter(Boolean).join('; ');
+
+const normalizeVCardContact = (provider: ContactProvider, vcard: string, fallbackKey: string, sourceFormat?: ContactFileSourceFormat): NormalizedExternalContact => {
+  const lines = unfoldVCardLines(vcard);
   const pick = (...names: string[]) => {
     const line = lines.find(item => names.some(name => item.toUpperCase().startsWith(name + ':') || item.toUpperCase().startsWith(name + ';')));
     return line ? parseVCardValue(line) : '';
@@ -721,9 +743,14 @@ const normalizeVCardContact = (provider: ContactProvider, vcard: string, fallbac
   const phones = pickAll('TEL');
   const emails = pickAll('EMAIL');
   const uid = pick('UID');
-  const fullName = pick('FN');
+  const nParts = pick('N').split(';').map(part => part.trim()).filter(Boolean);
+  const fullName = pick('FN') || nParts.join(' ');
   const organization = pick('ORG').replace(/;/g, ' ').trim();
-  const externalContactId = uid || crypto.createHash('sha1').update([provider, emails[0], phones[0], fullName, fallbackKey].join('|')).digest('hex');
+  const bday = pick('BDAY');
+  const note = pick('NOTE');
+  const comment = appendContactComment(note, bday ? 'День рождения: ' + bday : '');
+  const externalContactId = uid || buildStableContactFileId('vcf', fullName, emails[0] || '', phones[0] || '');
+  const categories = splitVCardListValue(pick('CATEGORIES'));
   return {
     provider,
     externalContactId,
@@ -734,24 +761,78 @@ const normalizeVCardContact = (provider: ContactProvider, vcard: string, fallbac
     phone2: phones[1] || '',
     email: emails[0] || '',
     website: pick('URL'),
-    address: pick('ADR').split(';').filter(Boolean).join(', '),
-    comment: pick('NOTE'),
-    group: pick('CATEGORIES'),
-    tags: pick('CATEGORIES'),
+    address: pick('ADR').split(';').map(part => part.trim()).filter(Boolean).join(', '),
+    comment,
+    group: categories,
+    tags: categories,
     rawPhones: phones,
     rawEmails: emails,
+    sourceFormat,
     sourceRaw: vcard
   };
 };
 
-const normalizeVCardContacts = (provider: ContactProvider, body: string): NormalizedExternalContact[] => {
-  const cards = String(body || '').match(/BEGIN:VCARD[\s\S]*?END:VCARD/gi) || [];
-  return cards.map((card, index) => normalizeVCardContact(provider, card, String(index)));
+const detectVCardSourceFormat = (body: string): ContactFileSourceFormat => {
+  const content = String(body || '');
+  if (/^UID(?:;[^:]*)?:YAAB-/im.test(content) || /YAAB-/i.test(content) || /X-YANDEX/i.test(content)) return 'yandex_vcf';
+  return 'generic_vcf';
+};
+
+const normalizeVCardContacts = (provider: ContactProvider, body: string, sourceFormat = detectVCardSourceFormat(body)): NormalizedExternalContact[] => {
+  const unfolded = unfoldVCardLines(body).join('\n');
+  const cards = String(unfolded || '').match(/BEGIN:VCARD[\s\S]*?END:VCARD/gi) || [];
+  return cards.map((card, index) => normalizeVCardContact(provider, card, String(index), sourceFormat));
 };
 
 const CONTACT_FILE_PREVIEW_LIMIT = 50;
 
 const stripUtf8Bom = (value: string): string => String(value || '').replace(/^\uFEFF/, '');
+
+const decodeWindows1251 = (buffer: Buffer): string => {
+  const table = 'ЂЃ‚ѓ„…†‡€‰Љ‹ЊЌЋЏђ‘’“”•–—™љ›њќћџ ЎўЈ¤Ґ¦§Ё©Є«¬­®Ї°±Ііґµ¶·ё№є»јЅѕїАБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдежзийклмнопрстуфхцчшщъыьэюя';
+  let out = '';
+  for (const byte of buffer) {
+    if (byte < 128) out += String.fromCharCode(byte);
+    else out += table[byte - 128] || '?';
+  }
+  return out;
+};
+
+const decodeContactFileBuffer = (buffer: Buffer): string => {
+  if (!buffer.length) return '';
+  if (buffer.length >= 2 && buffer[0] === 0xFF && buffer[1] === 0xFE) return buffer.slice(2).toString('utf16le');
+  if (buffer.length >= 2 && buffer[0] === 0xFE && buffer[1] === 0xFF) {
+    const swapped = Buffer.alloc(buffer.length - 2);
+    for (let i = 2; i + 1 < buffer.length; i += 2) {
+      swapped[i - 2] = buffer[i + 1];
+      swapped[i - 1] = buffer[i];
+    }
+    return swapped.toString('utf16le');
+  }
+  if (buffer.length >= 3 && buffer[0] === 0xEF && buffer[1] === 0xBB && buffer[2] === 0xBF) return buffer.slice(3).toString('utf8');
+  const sampleLength = Math.min(buffer.length, 4096);
+  let evenZero = 0;
+  let oddZero = 0;
+  for (let i = 0; i < sampleLength; i++) {
+    if (buffer[i] === 0) {
+      if (i % 2 === 0) evenZero++;
+      else oddZero++;
+    }
+  }
+  if (oddZero > sampleLength / 8 && oddZero > evenZero * 2) return buffer.toString('utf16le');
+  if (evenZero > sampleLength / 8 && evenZero > oddZero * 2) {
+    const swapped = Buffer.alloc(buffer.length);
+    for (let i = 0; i + 1 < buffer.length; i += 2) {
+      swapped[i] = buffer[i + 1];
+      swapped[i + 1] = buffer[i];
+    }
+    return swapped.toString('utf16le');
+  }
+  const utf8 = buffer.toString('utf8');
+  const replacementCount = (utf8.match(/\uFFFD/g) || []).length;
+  if (replacementCount > 0) return decodeWindows1251(buffer);
+  return utf8;
+};
 
 const parseContactCsvRows = (content: string): string[][] => {
   const raw = stripUtf8Bom(content).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
@@ -789,7 +870,7 @@ const parseContactCsvRows = (content: string): string[][] => {
   return rows;
 };
 
-const normalizeContactFileHeader = (value: any): string => String(value || '').trim().toLowerCase();
+const normalizeContactFileHeader = (value: any): string => String(value || '').trim().replace(/^\uFEFF/, '').toLowerCase();
 
 const getContactCsvValue = (headers: string[], cols: string[], ...names: string[]): string => {
   for (const name of names) {
@@ -799,40 +880,164 @@ const getContactCsvValue = (headers: string[], cols: string[], ...names: string[
   return '';
 };
 
-const normalizeCsvFileContacts = (content: string): NormalizedExternalContact[] => {
+const collectContactCsvValues = (headers: string[], cols: string[], baseName: string, start: number, end: number): string[] => {
+  const values: string[] = [];
+  for (let i = start; i <= end; i++) {
+    const value = getContactCsvValue(headers, cols, baseName.replace('{n}', String(i)));
+    if (value) values.push(value);
+  }
+  return values;
+};
+
+const detectCsvSourceFormat = (headers: string[]): ContactFileSourceFormat => {
+  const has = (...names: string[]) => names.some(name => headers.includes(normalizeContactFileHeader(name)));
+  const googleScore = ['First Name', 'Middle Name', 'Last Name', 'Organization Name', 'E-mail 1 - Value', 'Phone 1 - Value', 'Labels'].filter(name => has(name)).length;
+  const mailruScore = ['Nickname', 'E-Mail 1 - Value', 'E-Mail 1 - Type', 'Phone 1 - Value', 'Address 1 - Formatted'].filter(name => has(name)).length;
+  if (googleScore >= 3) return 'google_csv';
+  if (mailruScore >= 3) return 'mailru_csv';
+  return 'generic_csv';
+};
+
+const cleanContactLabels = (value: string): string => {
+  const labels = String(value || '').split(/[;,|]+/).map(item => item.trim()).filter(Boolean).filter(item => item !== '* myContacts');
+  return labels.join('; ');
+};
+
+const buildAddressFromCsvParts = (headers: string[], cols: string[], prefix: string): string => {
+  return [
+    getContactCsvValue(headers, cols, prefix + ' - Street'),
+    getContactCsvValue(headers, cols, prefix + ' - City'),
+    getContactCsvValue(headers, cols, prefix + ' - Region'),
+    getContactCsvValue(headers, cols, prefix + ' - Postal Code'),
+    getContactCsvValue(headers, cols, prefix + ' - Country')
+  ].filter(Boolean).join(', ');
+};
+
+const buildStableContactFileId = (sourceProvider: string, ...parts: string[]): string => {
+  return crypto.createHash('sha1').update([sourceProvider, ...parts.map(part => String(part || '').trim())].join('|')).digest('hex');
+};
+
+const normalizeGoogleCsvContact = (headers: string[], cols: string[], index: number): NormalizedExternalContact => {
+  const firstName = getContactCsvValue(headers, cols, 'First Name');
+  const middleName = getContactCsvValue(headers, cols, 'Middle Name');
+  const lastName = getContactCsvValue(headers, cols, 'Last Name');
+  const organization = getContactCsvValue(headers, cols, 'Organization Name');
+  const email = getContactCsvValue(headers, cols, 'E-mail 1 - Value', 'E-Mail 1 - Value', 'Email 1 - Value');
+  const phone = getContactCsvValue(headers, cols, 'Phone 1 - Value');
+  let fullName = [firstName, middleName, lastName].filter(Boolean).join(' ').trim()
+    || getContactCsvValue(headers, cols, 'File As')
+    || getContactCsvValue(headers, cols, 'Nickname');
+  if (!fullName && !organization && phone) fullName = phone;
+  if (!fullName && !organization && email) fullName = email;
+  const phone2 = getContactCsvValue(headers, cols, 'Phone 2 - Value');
+  const extraPhones = collectContactCsvValues(headers, cols, 'Phone {n} - Value', 3, 8);
+  const extraEmails = collectContactCsvValues(headers, cols, 'E-mail {n} - Value', 2, 8);
+  const website = getContactCsvValue(headers, cols, 'Website 1 - Value');
+  const extraWebsites = collectContactCsvValues(headers, cols, 'Website {n} - Value', 2, 4);
+  const birthday = getContactCsvValue(headers, cols, 'Birthday');
+  const notes = getContactCsvValue(headers, cols, 'Notes');
+  const comment = appendContactComment(
+    notes,
+    birthday ? 'День рождения: ' + birthday : '',
+    extraEmails.length ? 'Дополнительные email: ' + extraEmails.join(', ') : '',
+    extraPhones.length ? 'Дополнительные телефоны: ' + extraPhones.join(', ') : '',
+    extraWebsites.length ? 'Дополнительные сайты: ' + extraWebsites.join(', ') : ''
+  );
+  const externalContactId = getContactCsvValue(headers, cols, 'ID', 'Contact ID', 'Google ID') || buildStableContactFileId('google_csv', fullName, organization, email, phone);
+  return {
+    provider: 'file',
+    externalContactId,
+    fullName,
+    organization,
+    position: getContactCsvValue(headers, cols, 'Organization Title'),
+    department: getContactCsvValue(headers, cols, 'Organization Department'),
+    phone,
+    phone2,
+    email,
+    website,
+    address: getContactCsvValue(headers, cols, 'Address 1 - Formatted') || buildAddressFromCsvParts(headers, cols, 'Address 1'),
+    comment,
+    tags: cleanContactLabels(getContactCsvValue(headers, cols, 'Labels')),
+    rawPhones: [phone, phone2, ...extraPhones].filter(Boolean),
+    rawEmails: [email, ...extraEmails].filter(Boolean),
+    sourceFormat: 'google_csv',
+    sourceRaw: cols
+  };
+};
+
+const normalizeMailruCsvContact = (headers: string[], cols: string[], index: number): NormalizedExternalContact => {
+  const phone = getContactCsvValue(headers, cols, 'Phone 1 - Value');
+  const email = getContactCsvValue(headers, cols, 'E-Mail 1 - Value', 'E-mail 1 - Value', 'Email 1 - Value');
+  let fullName = getContactCsvValue(headers, cols, 'Nickname') || [
+    getContactCsvValue(headers, cols, 'First Name'),
+    getContactCsvValue(headers, cols, 'Middle Name'),
+    getContactCsvValue(headers, cols, 'Last Name')
+  ].filter(Boolean).join(' ').trim();
+  if (!fullName && phone) fullName = phone;
+  if (!fullName && email) fullName = email;
+  const gender = getContactCsvValue(headers, cols, 'Gender');
+  const notes = getContactCsvValue(headers, cols, 'Notes');
+  const externalContactId = getContactCsvValue(headers, cols, 'ID', 'Contact ID') || buildStableContactFileId('mailru_csv', fullName, email, phone);
+  return {
+    provider: 'file',
+    externalContactId,
+    fullName,
+    organization: getContactCsvValue(headers, cols, 'Organization Name'),
+    position: getContactCsvValue(headers, cols, 'Organization Title'),
+    department: getContactCsvValue(headers, cols, 'Organization Department'),
+    phone,
+    phone2: getContactCsvValue(headers, cols, 'Phone 2 - Value'),
+    email,
+    address: getContactCsvValue(headers, cols, 'Address 1 - Formatted'),
+    comment: appendContactComment(notes, gender ? 'Пол: ' + gender : ''),
+    tags: cleanContactLabels(getContactCsvValue(headers, cols, 'Labels')),
+    rawPhones: [phone, getContactCsvValue(headers, cols, 'Phone 2 - Value')].filter(Boolean),
+    rawEmails: [email].filter(Boolean),
+    sourceFormat: 'mailru_csv',
+    sourceRaw: cols
+  };
+};
+
+const normalizeGenericCsvContact = (headers: string[], cols: string[], index: number): NormalizedExternalContact => {
+  const fullName = getContactCsvValue(headers, cols, 'fullName', 'name', 'ФИО', 'Имя') || cols[0] || '';
+  const organization = getContactCsvValue(headers, cols, 'organization', 'company', 'Компания', 'Организация');
+  const phone = getContactCsvValue(headers, cols, 'phone', 'phone1', 'Телефон') || cols[1] || '';
+  const phone2 = getContactCsvValue(headers, cols, 'phone2', 'Телефон2');
+  const email = getContactCsvValue(headers, cols, 'email', 'Email', 'Почта') || cols[2] || '';
+  return {
+    provider: 'file',
+    externalContactId: buildStableContactFileId('generic_csv', fullName, organization, email, phone, String(index)),
+    fullName,
+    organization,
+    position: getContactCsvValue(headers, cols, 'position', 'Должность'),
+    phone,
+    phone2,
+    email,
+    website: getContactCsvValue(headers, cols, 'website', 'Сайт'),
+    address: getContactCsvValue(headers, cols, 'address', 'Адрес'),
+    comment: getContactCsvValue(headers, cols, 'comment', 'Комментарий'),
+    department: getContactCsvValue(headers, cols, 'department', 'Отдел'),
+    group: getContactCsvValue(headers, cols, 'group', 'Группа'),
+    tags: getContactCsvValue(headers, cols, 'tags', 'Теги'),
+    rawPhones: [phone, phone2].filter(Boolean),
+    rawEmails: [email].filter(Boolean),
+    sourceFormat: 'generic_csv',
+    sourceRaw: cols
+  };
+};
+
+const normalizeCsvFileContacts = (content: string): { sourceFormat: ContactFileSourceFormat; contacts: NormalizedExternalContact[] } => {
   const rows = parseContactCsvRows(content);
-  if (rows.length < 1) return [];
+  if (rows.length < 1) return { sourceFormat: 'generic_csv', contacts: [] };
   const headers = rows[0].map(normalizeContactFileHeader);
-  const knownHeaders = ['fullname', 'name', 'фио', 'имя', 'organization', 'company', 'компания', 'организация', 'phone', 'phone1', 'телефон', 'phone2', 'телефон2', 'email', 'почта'];
-  const hasHeader = headers.some(header => knownHeaders.includes(header));
-  const dataRows = hasHeader ? rows.slice(1) : rows;
-  return dataRows.map((cols, index) => {
-    const fullName = hasHeader ? (getContactCsvValue(headers, cols, 'fullName', 'name', 'ФИО', 'Имя') || cols[0] || '') : (cols[0] || '');
-    const organization = hasHeader ? getContactCsvValue(headers, cols, 'organization', 'company', 'Компания', 'Организация') : '';
-    const phone = hasHeader ? (getContactCsvValue(headers, cols, 'phone', 'phone1', 'Телефон') || cols[1] || '') : (cols[1] || '');
-    const phone2 = hasHeader ? getContactCsvValue(headers, cols, 'phone2', 'Телефон2') : '';
-    const email = hasHeader ? getContactCsvValue(headers, cols, 'email', 'Email', 'Почта') : (cols[2] || '');
-    const base = [fullName, organization, phone, email, index].join('|');
-    return {
-      provider: 'file',
-      externalContactId: crypto.createHash('sha1').update(base).digest('hex'),
-      fullName,
-      organization,
-      position: hasHeader ? getContactCsvValue(headers, cols, 'position', 'Должность') : '',
-      phone,
-      phone2,
-      email,
-      website: hasHeader ? getContactCsvValue(headers, cols, 'website', 'Сайт') : '',
-      address: hasHeader ? getContactCsvValue(headers, cols, 'address', 'Адрес') : '',
-      comment: hasHeader ? getContactCsvValue(headers, cols, 'comment', 'Комментарий') : '',
-      department: hasHeader ? getContactCsvValue(headers, cols, 'department', 'Отдел') : '',
-      group: hasHeader ? getContactCsvValue(headers, cols, 'group', 'Группа') : '',
-      tags: hasHeader ? getContactCsvValue(headers, cols, 'tags', 'Теги') : '',
-      rawPhones: [phone, phone2].filter(Boolean),
-      rawEmails: [email].filter(Boolean),
-      sourceRaw: cols
-    } as NormalizedExternalContact;
-  }).filter(item => item.fullName || item.organization || item.phone || item.email);
+  const sourceFormat = detectCsvSourceFormat(headers);
+  const dataRows = rows.slice(1);
+  const contacts = dataRows.map((cols, index) => {
+    if (sourceFormat === 'google_csv') return normalizeGoogleCsvContact(headers, cols, index);
+    if (sourceFormat === 'mailru_csv') return normalizeMailruCsvContact(headers, cols, index);
+    return normalizeGenericCsvContact(headers, cols, index);
+  }).filter(item => item.fullName || item.organization || item.phone || item.email || item.rawPhones?.length || item.rawEmails?.length);
+  return { sourceFormat, contacts };
 };
 
 const detectContactFileKind = (fileName: string, contentType: string, content: string): 'csv' | 'vcard' => {
@@ -843,26 +1048,33 @@ const detectContactFileKind = (fileName: string, contentType: string, content: s
 };
 
 const getContactFileImportPayload = (req: Request): { fileName: string; contentType: string; content: string } => {
+  const fileName = String(req.query.fileName || req.headers['x-file-name'] || req.body?.fileName || '').trim();
+  const contentType = String(req.headers['x-original-content-type'] || req.headers['content-type'] || req.body?.contentType || '').trim();
+  if (Buffer.isBuffer(req.body)) {
+    return { fileName, contentType, content: decodeContactFileBuffer(req.body) };
+  }
   if (typeof req.body === 'string') {
-    return {
-      fileName: String(req.query.fileName || req.headers['x-file-name'] || '').trim(),
-      contentType: String(req.headers['content-type'] || '').trim(),
-      content: req.body
-    };
+    return { fileName, contentType, content: req.body };
+  }
+  const rawContent = req.body?.content;
+  if (rawContent && typeof rawContent === 'object' && Array.isArray(rawContent.data)) {
+    return { fileName, contentType, content: decodeContactFileBuffer(Buffer.from(rawContent.data)) };
   }
   return {
-    fileName: String(req.body?.fileName || '').trim(),
-    contentType: String(req.body?.contentType || '').trim(),
-    content: String(req.body?.content || '')
+    fileName,
+    contentType,
+    content: String(rawContent || '')
   };
 };
 
-const normalizeContactFileContacts = (payload: { fileName: string; contentType: string; content: string }): NormalizedExternalContact[] => {
+const normalizeContactFileContacts = (payload: { fileName: string; contentType: string; content: string }): { sourceFormat: ContactFileSourceFormat; contacts: NormalizedExternalContact[] } => {
   const content = stripUtf8Bom(payload.content);
-  if (!content.trim()) return [];
-  return detectContactFileKind(payload.fileName, payload.contentType, content) === 'vcard'
-    ? normalizeVCardContacts('file', content)
-    : normalizeCsvFileContacts(content);
+  if (!content.trim()) return { sourceFormat: 'generic_csv', contacts: [] };
+  if (detectContactFileKind(payload.fileName, payload.contentType, content) === 'vcard') {
+    const sourceFormat = detectVCardSourceFormat(content);
+    return { sourceFormat, contacts: normalizeVCardContacts('file', content, sourceFormat) };
+  }
+  return normalizeCsvFileContacts(content);
 };
 
 
@@ -6389,8 +6601,8 @@ app.post('/api/directory/sync/:provider/diagnose', requireAuth(), async (req, re
   }
 });
 
-const contactFileTextParser = express.text({
-  type: ['text/csv', 'text/vcard', 'text/x-vcard', 'text/directory', 'text/plain'],
+const contactFileTextParser = express.raw({
+  type: ['text/csv', 'text/vcard', 'text/x-vcard', 'text/directory', 'text/plain', 'application/octet-stream'],
   limit: '2mb'
 });
 
@@ -6402,11 +6614,12 @@ app.post('/api/directory/sync/file/preview-import', requireAuth(), contactFileTe
     const localDb = await readLocalDb();
     ensureContactImportSourceEnabled(localDb, 'file');
     const payload = getContactFileImportPayload(req);
-    const normalized = normalizeContactFileContacts(payload).slice(0, CONTACT_FILE_PREVIEW_LIMIT);
+    const parsed = normalizeContactFileContacts(payload);
+    const normalized = parsed.contacts.slice(0, CONTACT_FILE_PREVIEW_LIMIT);
     if (!normalized.length) return contactSyncPreviewError(res, 400, 'file', 'parse', 'CSV/vCard file contains no contacts');
     const userId = getCurrentDirectoryUserId(localDb, req);
     const items = buildContactPreviewItems('file', normalized, localDb, userId);
-    res.json({ provider: 'file', source: 'file', fileName: payload.fileName || null, items, totalPreviewed: items.length });
+    res.json({ provider: 'file', source: 'file', sourceFormat: parsed.sourceFormat, fileName: payload.fileName || null, items, totalPreviewed: items.length });
   } catch (error: any) {
     const importDisabled = error?.code === 'CONTACT_IMPORT_SOURCE_DISABLED' || error?.code === 'CONTACT_IMPORT_DISABLED';
     const message = importDisabled ? error.message : 'CSV/vCard file preview failed';
