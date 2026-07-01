@@ -1418,6 +1418,7 @@ export default function App() {
       const data = await resp.json();
       if (resp.ok) {
         const items = Array.isArray(data.items) ? data.items : [];
+        const ready = items.filter((item: any) => item.status === 'new').length;
         const invalid = items.filter((item: any) => item.status === 'invalid').length;
         const duplicates = items.filter((item: any) => item.status === 'possible_duplicate').length;
         setContactSyncPreviewItems(prev => ({ ...prev, file: items }));
@@ -1425,7 +1426,8 @@ export default function App() {
         setContactFileSourceFormat(data.sourceFormat || '');
         setContactFileEncoding(data.encoding || '');
         const sourceFormatMessage = getContactFileSourceFormatMessage(data.sourceFormat || '', data.encoding || '');
-        setContactSyncMessage((sourceFormatMessage ? sourceFormatMessage + ' ' : '') + 'Предпросмотр файла: ' + (data.totalPreviewed || 0) + ' контактов, дублей: ' + duplicates + ', ошибок: ' + invalid + '.');
+        const invalidMessage = invalid > 0 ? ' Контакты без ФИО или телефона не будут импортированы.' : '';
+        setContactSyncMessage((sourceFormatMessage ? sourceFormatMessage + ' ' : '') + 'Предпросмотр: ' + (data.totalPreviewed || 0) + ' контактов, готово к импорту: ' + ready + ', ошибок: ' + invalid + ', дублей: ' + duplicates + '.' + invalidMessage);
       } else {
         setContactSyncPreviewItems(prev => ({ ...prev, file: [] }));
         setContactSyncSelectedIds(prev => ({ ...prev, file: [] }));

@@ -572,23 +572,28 @@ const upsertUserContactSyncAccount = (localDb: any, userId: string, provider: Co
 
 const appendContactComment = (...parts: any[]): string => parts.map(part => String(part || '').trim()).filter(Boolean).join('\n');
 
-const normalizeExternalPhones = (phones: any[]): { phone?: string; phone2?: string; warnings: string[]; errors: string[]; extraPhones: string[] } => {
+const normalizeExternalPhones = (phones: any[]): { phone?: string; phone2?: string; warnings: string[]; errors: string[]; extraPhones: string[]; invalidPhones: string[] } => {
+  const values = Array.from(new Set((phones || []).map((value: any) => String(value || '').trim()).filter(Boolean)));
   const valid: string[] = [];
+  const invalidPhones: string[] = [];
   const warnings: string[] = [];
   const errors: string[] = [];
-  (phones || []).forEach((value: any) => {
-    const phone = String(value || '').trim();
-    if (!phone) return;
+  values.forEach((phone: string) => {
     const result = validateDirectoryPhoneNumber(phone);
     if (result.valid) {
       if (!valid.includes(phone)) valid.push(phone);
     } else {
-      warnings.push('Телефон "' + phone + '" невалиден и не будет импортирован. ' + DIRECTORY_PHONE_VALIDATION_MESSAGE);
+      invalidPhones.push(phone);
     }
   });
+  if (invalidPhones.length && valid.length) {
+    warnings.push(invalidPhones.length === 1 && values[0] === invalidPhones[0] && values[1] === valid[0]
+      ? 'Первый телефон невалиден, использован второй телефон.'
+      : 'Некорректные телефоны пропущены: ' + invalidPhones.join(', '));
+  }
   const extraPhones = valid.slice(2);
   if (extraPhones.length) warnings.push('Дополнительные телефоны добавлены в комментарий.');
-  return { phone: valid[0], phone2: valid[1], warnings, errors, extraPhones };
+  return { phone: valid[0], phone2: valid[1], warnings, errors, extraPhones, invalidPhones };
 };
 
 const normalizeExternalEmails = (emails: any[]): { email?: string; warnings: string[]; extraEmails: string[] } => {
@@ -651,14 +656,28 @@ const contactPreviewDuplicateStatus = (directoryContact: any, normalized: Normal
   return { status: mapped || possibleDuplicate ? 'possible_duplicate' : 'new', warnings };
 };
 
+const getRequiredExternalContactImportErrors = (directoryContact: any, normalized?: NormalizedExternalContact): string[] => {
+  const errors: string[] = [];
+  const name = String(directoryContact?.name || '').trim();
+  const phone = String(directoryContact?.phone || directoryContact?.number || '').trim();
+  const rawPhones = normalized ? [normalized.phone, normalized.phone2, ...(normalized.rawPhones || [])].map(value => String(value || '').trim()).filter(Boolean) : [];
+  const hasAnyRawPhone = rawPhones.length > 0;
+  if (!name) errors.push('Не заполнено ФИО. Контакт не будет импортирован.');
+  if (!phone) {
+    errors.push(hasAnyRawPhone
+      ? 'Телефон должен содержать от 2 до 11 цифр. Допустимы + в начале, пробелы, дефисы и скобки.'
+      : 'Не заполнен телефон. Контакт не будет импортирован.');
+  } else if (!validateDirectoryPhoneNumber(phone).valid) {
+    errors.push('Телефон должен содержать от 2 до 11 цифр. Допустимы + в начале, пробелы, дефисы и скобки.');
+  }
+  return Array.from(new Set(errors));
+};
+
 const buildContactPreviewItems = (provider: ContactProvider, normalizedItems: NormalizedExternalContact[], localDb: any, userId: string) => {
   return normalizedItems.slice(0, 50).map((normalized) => {
     const directoryContact = mapNormalizedContactToDirectoryContact(normalized, { id: userId });
     const duplicate = contactPreviewDuplicateStatus(directoryContact, normalized, localDb, userId);
-    const errors = [...(directoryContact.errors || [])];
-    if (!(directoryContact.name || directoryContact.company) || (!directoryContact.number && !directoryContact.email)) {
-      errors.push('Укажите организацию или ФИО и хотя бы один способ связи: телефон или email');
-    }
+    const errors = [...(directoryContact.errors || []), ...getRequiredExternalContactImportErrors(directoryContact, normalized)];
     const status: ContactPreviewStatus = errors.length ? 'invalid' : duplicate.status;
     return {
       status,
@@ -945,8 +964,6 @@ const normalizeGoogleCsvContact = (headers: string[], cols: string[], index: num
   let fullName = [firstName, middleName, lastName].filter(Boolean).join(' ').trim()
     || getContactCsvValue(headers, cols, 'File As')
     || getContactCsvValue(headers, cols, 'Nickname');
-  if (!fullName && !organization && phone) fullName = phone;
-  if (!fullName && !organization && email) fullName = email;
   const phone2 = getContactCsvValue(headers, cols, 'Phone 2 - Value');
   const extraPhones = collectContactCsvValues(headers, cols, 'Phone {n} - Value', 3, 8);
   const extraEmails = collectContactCsvValues(headers, cols, 'E-mail {n} - Value', 2, 8);
@@ -991,8 +1008,6 @@ const normalizeMailruCsvContact = (headers: string[], cols: string[], index: num
     getContactCsvValue(headers, cols, 'Middle Name'),
     getContactCsvValue(headers, cols, 'Last Name')
   ].filter(Boolean).join(' ').trim();
-  if (!fullName && phone) fullName = phone;
-  if (!fullName && email) fullName = email;
   const gender = getContactCsvValue(headers, cols, 'Gender');
   const notes = getContactCsvValue(headers, cols, 'Notes');
   const externalContactId = getContactCsvValue(headers, cols, 'ID', 'Contact ID') || buildStableContactFileId('mailru_csv', fullName, email, phone);
@@ -1578,8 +1593,9 @@ const buildExternalContactImportRawEntry = (item: any, userId: string): any => {
   const tags = Array.isArray(item?.tags)
     ? item.tags
     : String(item?.tags || '').split(/[;,|]+/).map((tag: string) => tag.trim()).filter(Boolean);
-  const phone = String(item?.phone || '').trim();
-  const phone2 = String(item?.phone2 || '').trim();
+  const normalizedPhones = normalizeExternalPhones([item?.phone, item?.phone2]);
+  const phone = String(normalizedPhones.phone || '').trim();
+  const phone2 = String(normalizedPhones.phone2 || '').trim();
   return {
     type: ['internal', 'client', 'supplier', 'government'].includes(String(item?.type || '').trim()) ? String(item.type).trim() : 'client',
     visibility: 'private',
@@ -1666,12 +1682,18 @@ const importExternalContactItems = (localDb: any, req: Request, provider: Contac
       results.push({ externalContactId, status: 'skipped_existing_mapping', contactId: existingMapping.contactId || null });
       return;
     }
-    if (item?.status === 'invalid') {
-      results.push({ externalContactId, status: 'failed', error: 'Invalid preview contact' });
-      return;
-    }
     try {
       const rawEntry = buildExternalContactImportRawEntry(item, userId);
+      const previewLikeContact = {
+        name: String(rawEntry.name || '').trim(),
+        phone: String(rawEntry.phone || rawEntry.number || '').trim(),
+        number: String(rawEntry.number || rawEntry.phone || '').trim()
+      };
+      const requiredErrors = getRequiredExternalContactImportErrors(previewLikeContact);
+      if (item?.status === 'invalid' || requiredErrors.length) {
+        results.push({ externalContactId, status: 'failed', error: requiredErrors.length ? 'Не заполнено ФИО или телефон.' : 'Invalid preview contact' });
+        return;
+      }
       const prepared = prepareDirectoryEntryForSave(rawEntry, localDb, req);
       prepared.visibility = 'private';
       prepared.ownerUserId = userId;
@@ -1680,8 +1702,9 @@ const importExternalContactItems = (localDb: any, req: Request, provider: Contac
       prepared.internalExtension = '';
       prepared.linkedExternalNumber = '';
       prepared.responsibleUserId = '';
-      if (!(prepared.name || prepared.company) || (!prepared.phones.length && !prepared.email)) {
-        results.push({ externalContactId, status: 'failed', error: 'Укажите организацию или ФИО и хотя бы один способ связи: телефон или email' });
+      const preparedRequiredErrors = getRequiredExternalContactImportErrors({ name: prepared.name, phone: prepared.number || prepared.phones?.[0] || '', number: prepared.number || '' });
+      if (preparedRequiredErrors.length) {
+        results.push({ externalContactId, status: 'failed', error: 'Не заполнено ФИО или телефон.' });
         return;
       }
       const duplicate = findExternalImportPossibleDuplicate(localDb, prepared, userId);
