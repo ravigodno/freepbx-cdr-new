@@ -72,7 +72,6 @@ import QualityTab from './modules/monitoring/tabs/monitoring/QualityTab';
 import DevicesMapTab from './modules/monitoring/tabs/monitoring/DevicesMapTab';
 import { DirectoryStatusIcon } from './modules/directory/components/DirectoryStatusIcon';
 import { fetchDirectory, saveDirectoryEntry, deleteDirectoryEntry, toggleDirectoryBlacklist, toggleDirectorySpam, previewDirectoryImport } from './modules/directory/services/directoryApi';
-import { resetDirFormFieldsHelper, openEditDirEntryHelper, openCreateDirEntryHelper, openAddFromCallHelper } from './modules/directory/utils/directoryFormHelpers';
 import CDRPage from './modules/cdr/pages/CDRPage';
 import LegacyCDRTable from './modules/cdr/components/LegacyCDRTable';
 import CDRProcessModal from './modules/cdr/components/CDRProcessModal';
@@ -127,6 +126,7 @@ type DirectoryOptionalColumnKey =
 type DirectoryColumnKey = DirectoryRequiredColumnKey | DirectoryOptionalColumnKey | DirectorySystemColumnKey;
 
 type ContactSyncProvider = 'google' | 'yandex' | 'mailru' | 'file';
+type DirectoryPageMode = 'list' | 'import' | 'personal_import' | 'contact_new' | 'contact_edit';
 type OnlineContactSyncProvider = Exclude<ContactSyncProvider, 'file'>;
 type ContactSyncStatus = 'connected' | 'disconnected' | 'error' | 'not_configured';
 type ContactSyncAuthType = 'oauth' | 'carddav' | 'file';
@@ -553,9 +553,41 @@ export default function App() {
   };
 
   const isAdminRole = (role?: string | null) => role === 'admin' || role === 'su';
-  const canOpenPersonalContactImport = () => {
-    if (isAdminRole(session?.role)) return true;
-    return settings?.directoryImportEnabled !== false && hasPermission('directory_import_contacts');
+  const isDirectoryContactImportEnabled = () => settings?.directoryImportEnabled !== false;
+  const canOpenPersonalContactImport = () => isDirectoryContactImportEnabled() && (isAdminRole(session?.role) || hasPermission('directory_import_contacts'));
+  const getPersonalContactImportUnavailableMessage = () => {
+    if (!isDirectoryContactImportEnabled()) return 'Импорт контактов отключен администратором.';
+    if (!isAdminRole(session?.role) && !hasPermission('directory_import_contacts')) return 'У вас нет прав на импорт контактов.';
+    return '';
+  };
+  const isContactImportSourceEnabled = (provider: ContactSyncProvider) => {
+    if (!isDirectoryContactImportEnabled()) return false;
+    if (provider === 'google') return settings?.googleImportEnabled !== false;
+    if (provider === 'file') return settings?.fileImportEnabled !== false;
+    if (provider === 'yandex') return settings?.yandexCarddavEnabled !== false;
+    if (provider === 'mailru') return settings?.mailruCarddavEnabled !== false;
+    return false;
+  };
+  const canShowContactImportSource = (provider: ContactSyncProvider) => isAdminRole(session?.role) || isContactImportSourceEnabled(provider);
+  const getContactImportSourceDisabledMessage = (provider: ContactSyncProvider) => {
+    if (!isDirectoryContactImportEnabled()) return 'Импорт контактов отключен администратором.';
+    if (provider === 'google') return 'Google Contacts импорт отключен администратором.';
+    if (provider === 'file') return 'CSV/vCard импорт отключен администратором.';
+    if (provider === 'yandex') return 'Расширенное подключение Yandex отключено администратором.';
+    if (provider === 'mailru') return 'Расширенное подключение Mail.ru отключено администратором.';
+    return 'Источник импорта отключен администратором.';
+  };
+  const guardContactImportSource = (provider: ContactSyncProvider) => {
+    const unavailableMessage = getPersonalContactImportUnavailableMessage();
+    if (unavailableMessage) {
+      setContactSyncMessage(unavailableMessage);
+      return false;
+    }
+    if (!isContactImportSourceEnabled(provider)) {
+      setContactSyncMessage(getContactImportSourceDisabledMessage(provider));
+      return false;
+    }
+    return true;
   };
 
   // Settings Modal state
@@ -619,6 +651,9 @@ export default function App() {
   const [activeView, setActiveView] = useState<'calls' | 'directory' | 'reports' | 'marketing' | 'monitoring' | 'management' | 'balance' | 'settings'>(() => {
     const params = new URLSearchParams(window.location.search);
     if (window.location.pathname === '/management/directory/import') return 'directory';
+    if (window.location.pathname === '/directory/import-contacts') return 'directory';
+    if (/^\/management\/directory\/contact\/new$/.test(window.location.pathname)) return 'directory';
+    if (/^\/management\/directory\/contact\/[^/]+\/edit$/.test(window.location.pathname)) return 'directory';
     if (params.get('tab') === 'marketing' || params.get('yandexOAuth')) return 'marketing';
     const saved = localStorage.getItem('asterisk_cdr_active_view') as 'calls' | 'directory' | 'reports' | 'marketing' | 'monitoring' | 'management' | 'balance' | null;
     return saved || 'calls';
@@ -656,7 +691,6 @@ export default function App() {
 
   const [directory, setDirectory] = useState<DirectoryEntry[]>([]);
   const [isLoadingDirectory, setIsLoadingDirectory] = useState(false);
-  const [isDirFormOpen, setIsDirFormOpen] = useState(false);
   const [editingDirEntry, setEditingDirEntry] = useState<DirectoryEntry | null>(null);
   const [dirName, setDirName] = useState('');
   const [dirNumber, setDirNumber] = useState('');
@@ -681,6 +715,7 @@ export default function App() {
   const [dirVisibility, setDirVisibility] = useState<'shared' | 'private'>('shared');
   const [dirComment, setDirComment] = useState('');
   const [dirError, setDirError] = useState('');
+  const [dirNotice, setDirNotice] = useState('');
   const [isSavingDir, setIsSavingDir] = useState(false);
   const [dirSearchQuery, setDirSearchQuery] = useState('');
   const [dirTypeFilter, setDirTypeFilter] = useState<'all' | 'client' | 'supplier' | 'government'>('all');
@@ -690,7 +725,17 @@ export default function App() {
   const [isDirectoryColumnsPanelOpen, setIsDirectoryColumnsPanelOpen] = useState(false);
   const [selectedDirectoryVisibleColumns, setSelectedDirectoryVisibleColumns] = useState<DirectoryVisibleColumnKey[]>(loadDirectoryVisibleColumns);
   const [draftDirectoryVisibleColumns, setDraftDirectoryVisibleColumns] = useState<DirectoryVisibleColumnKey[]>(selectedDirectoryVisibleColumns);
-  const [directoryPageMode, setDirectoryPageMode] = useState<'list' | 'import' | 'personal_import'>(() => window.location.pathname === '/management/directory/import' ? 'import' : window.location.pathname === '/directory/import-contacts' ? 'personal_import' : 'list');
+  const [directoryPageMode, setDirectoryPageMode] = useState<DirectoryPageMode>(() => {
+    if (window.location.pathname === '/management/directory/import') return 'import';
+    if (window.location.pathname === '/directory/import-contacts') return 'personal_import';
+    if (window.location.pathname === '/management/directory/contact/new') return 'contact_new';
+    if (/^\/management\/directory\/contact\/[^/]+\/edit$/.test(window.location.pathname)) return 'contact_edit';
+    return 'list';
+  });
+  const [directoryContactEditId, setDirectoryContactEditId] = useState<string | null>(() => {
+    const match = window.location.pathname.match(/^\/management\/directory\/contact\/([^/]+)\/edit$/);
+    return match ? decodeURIComponent(match[1]) : null;
+  });
   const [urlImportTestResult, setUrlImportTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [isTestingUrlImport, setIsTestingUrlImport] = useState(false);
   const [isSyncingDirectoryUrl, setIsSyncingDirectoryUrl] = useState(false);
@@ -768,34 +813,6 @@ export default function App() {
 
   const getDirectoryEntryTags = (entry: DirectoryEntry): string[] => {
     return Array.isArray(entry.tags) ? entry.tags : [];
-  };
-
-  const directoryFormSetters = {
-    setEditingDirEntry,
-    setDirName,
-    setDirNumber,
-    setDirPhonesText,
-    setDirCompany,
-    setDirPosition,
-    setDirDepartment,
-    setDirEmail,
-    setDirWebsite,
-    setDirInn,
-    setDirKpp,
-    setDirOgrn,
-    setDirAddress,
-    setDirGroup,
-    setDirInternalExtension,
-    setDirLinkedExternalNumber,
-    setDirResponsibleUserId,
-    setDirTagsText,
-    setDirIsSpam,
-    setDirIsBlacklisted,
-    setDirType,
-    setDirVisibility,
-    setDirComment,
-    setDirError,
-    setIsDirFormOpen
   };
 
   const resetDirFormFields = () => {
@@ -1220,10 +1237,10 @@ export default function App() {
   }, [session?.token]);
 
   useEffect(() => {
-    if ((isDirFormOpen && dirVisibility === 'private') || directoryPageMode === 'personal_import') {
+    if (directoryPageMode === 'personal_import' && canOpenPersonalContactImport()) {
       loadContactSyncAccounts();
     }
-  }, [isDirFormOpen, dirVisibility, directoryPageMode, loadContactSyncAccounts]);
+  }, [directoryPageMode, loadContactSyncAccounts, settings?.directoryImportEnabled]);
 
   const handleContactSyncSettingsChange = async (provider: OnlineContactSyncProvider, syncDirection: ContactSyncDirection) => {
     const account = getContactSyncAccount(provider);
@@ -1263,6 +1280,7 @@ export default function App() {
   };
 
   const handleGoogleContactsConnect = async () => {
+    if (!guardContactImportSource('google')) return;
     setContactSyncBusyProvider('google');
     setContactSyncMessage('');
     try {
@@ -1283,6 +1301,7 @@ export default function App() {
   };
 
   const handleCardDavConnect = async (provider: 'yandex' | 'mailru') => {
+    if (!guardContactImportSource(provider)) return;
     const form = cardDavForms[provider];
     setContactSyncBusyProvider(provider);
     setContactSyncMessage('');
@@ -1311,6 +1330,7 @@ export default function App() {
   };
 
   const handlePreviewContactSyncImport = async (provider: ContactSyncProvider) => {
+    if (!guardContactImportSource(provider)) return;
     setContactSyncBusyProvider(provider);
     setContactSyncMessage('');
     try {
@@ -1346,10 +1366,7 @@ export default function App() {
   };
 
   const handlePreviewContactFileImport = async (file: File) => {
-    if (settings?.fileImportEnabled === false) {
-      setContactSyncMessage('Импорт CSV/vCard отключен администратором.');
-      return;
-    }
+    if (!guardContactImportSource('file')) return;
     setContactSyncBusyProvider('file');
     setContactSyncMessage('');
     setContactFileName(file.name);
@@ -1395,6 +1412,7 @@ export default function App() {
   };
 
   const handleDiagnoseContactSync = async (provider: OnlineContactSyncProvider) => {
+    if (!guardContactImportSource(provider)) return;
     setContactSyncBusyProvider(provider);
     setContactSyncMessage('');
     try {
@@ -1460,6 +1478,7 @@ export default function App() {
   };
 
   const handleImportSelectedContactSyncItems = async (provider: ContactSyncProvider) => {
+    if (!guardContactImportSource(provider)) return;
     const selected = new Set(contactSyncSelectedIds[provider] || []);
     const items = (contactSyncPreviewItems[provider] || []).filter(item => selected.has(String(item.externalContactId || '')));
     if (!items.length) {
@@ -1795,8 +1814,13 @@ export default function App() {
       if (data?.success) {
         await loadDirectory();
         loadCalls(page);
-        setIsDirFormOpen(false);
+        const notice = editingDirEntry ? 'Контакт обновлен.' : 'Контакт создан.';
         resetDirFormFields();
+        setDirectoryContactEditId(null);
+        setDirectoryPageMode('list');
+        setActiveView('directory');
+        setDirNotice(notice);
+        window.history.pushState({}, '', '/');
       } else {
         setDirError(data.error || 'Ошибка при сохранении записи.');
       }
@@ -1839,13 +1863,23 @@ export default function App() {
 
   const openPersonalContactImportPage = () => {
     setDirectoryPageMode('personal_import');
+    setDirectoryContactEditId(null);
     setActiveView('directory');
-    loadContactSyncAccounts();
+    if (canOpenPersonalContactImport()) loadContactSyncAccounts();
     window.history.pushState({}, '', '/directory/import-contacts');
   };
 
   const closeDirectoryImportPage = () => {
     setDirectoryPageMode('list');
+    setDirectoryContactEditId(null);
+    window.history.pushState({}, '', '/');
+  };
+
+  const closeDirectoryContactFormPage = () => {
+    resetDirFormFields();
+    setDirectoryContactEditId(null);
+    setDirectoryPageMode('list');
+    setActiveView('directory');
     window.history.pushState({}, '', '/');
   };
 
@@ -1903,7 +1937,7 @@ export default function App() {
     }
   };
 
-  const openEditDirEntry = (entry: DirectoryEntry) => {
+  const populateDirectoryContactForm = (entry: DirectoryEntry) => {
     const phones = getEntryPhones(entry);
     setEditingDirEntry(entry);
     setDirName(entry.name);
@@ -1930,12 +1964,22 @@ export default function App() {
     setDirComment(entry.comment || '');
     setDirError('');
     setDirFormShowAllFields(false);
-    setIsDirFormOpen(true);
+  };
+
+  const openEditDirEntry = (entry: DirectoryEntry) => {
+    populateDirectoryContactForm(entry);
+    setDirectoryContactEditId(entry.id);
+    setDirectoryPageMode('contact_edit');
+    setActiveView('directory');
+    window.history.pushState({}, '', '/management/directory/contact/' + encodeURIComponent(entry.id) + '/edit');
   };
 
   const openCreateDirEntry = () => {
     resetDirFormFields();
-    setIsDirFormOpen(true);
+    setDirectoryContactEditId(null);
+    setDirectoryPageMode('contact_new');
+    setActiveView('directory');
+    window.history.pushState({}, '', '/management/directory/contact/new');
   };
 
   const openAddFromCall = (number: string, initialName?: string) => {
@@ -1944,7 +1988,10 @@ export default function App() {
     setDirNumber(number);
     setDirType('client');
     setDirComment('Добавлен из реестра звонков');
-    setIsDirFormOpen(true);
+    setDirectoryContactEditId(null);
+    setDirectoryPageMode('contact_new');
+    setActiveView('directory');
+    window.history.pushState({}, '', '/management/directory/contact/new');
   };
 
   // Fetch Dashboard Stats
@@ -2626,12 +2673,19 @@ export default function App() {
 
 
   useEffect(() => {
-    if (!session || activeView !== 'directory' || directoryPageMode !== 'list') return;
+    if (!session || activeView !== 'directory' || !['list', 'contact_edit'].includes(directoryPageMode)) return;
     const timer = window.setTimeout(() => {
       loadDirectory();
     }, dirSearchQuery ? 250 : 0);
     return () => window.clearTimeout(timer);
   }, [session?.token, activeView, directoryPageMode, dirSearchQuery, dirTypeFilter, dirSpamMode, dirVisibilityMode]);
+
+  useEffect(() => {
+    if (directoryPageMode !== 'contact_edit' || !directoryContactEditId) return;
+    if (editingDirEntry?.id === directoryContactEditId) return;
+    const entry = directory.find(item => item.id === directoryContactEditId);
+    if (entry) populateDirectoryContactForm(entry);
+  }, [directoryPageMode, directoryContactEditId, directory, editingDirEntry?.id]);
 
   const getFirstAllowedActiveView = useCallback((): typeof activeView => {
     if (!session) return 'reports';
@@ -3963,7 +4017,7 @@ export default function App() {
             <div className="font-black text-slate-800">CSV/vCard</div>
             <div className="mt-1 text-[11px] text-slate-500">{contactFileName || 'Файл контактов'}: предпросмотр импорта в личный справочник</div>
           </div>
-          <button type="button" onClick={() => contactFileInputRef.current?.click()} disabled={isBusy || settings?.fileImportEnabled === false} className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-50">
+          <button type="button" onClick={() => contactFileInputRef.current?.click()} disabled={isBusy || !isContactImportSourceEnabled('file')} className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-50">
             <Upload className="h-3.5 w-3.5" />
             Загрузить другой файл
           </button>
@@ -3979,7 +4033,7 @@ export default function App() {
             />
             Импортировать возможные дубли как новые
           </label>
-          <button type="button" onClick={() => handleImportSelectedContactSyncItems('file')} disabled={isBusy || selectedCount === 0} className="rounded-md bg-emerald-600 px-2 py-1 text-[11px] font-bold text-white hover:bg-emerald-700 disabled:opacity-50">Импортировать выбранные ({selectedCount})</button>
+          <button type="button" onClick={() => handleImportSelectedContactSyncItems('file')} disabled={isBusy || selectedCount === 0 || !isContactImportSourceEnabled('file')} className="rounded-md bg-emerald-600 px-2 py-1 text-[11px] font-bold text-white hover:bg-emerald-700 disabled:opacity-50">Импортировать выбранные ({selectedCount})</button>
         </div>
         <div className="max-h-72 overflow-auto rounded border border-slate-100">
           <table className="min-w-full text-left text-[11px]">
@@ -4019,36 +4073,47 @@ export default function App() {
     );
   };
 
-  const renderPersonalContactImportPanel = (embedded = false) => (
-    <div className={embedded ? 'rounded-xl border border-slate-200 bg-white p-3' : 'rounded-xl border border-slate-200 bg-white p-4 shadow-sm'}>
-      <div className="mb-3 flex items-start justify-between gap-3">
-        <div>
-          <h4 className={embedded ? 'text-xs font-black text-slate-800' : 'text-sm font-black text-slate-900'}>{embedded ? 'Импорт контактов' : 'Личный импорт контактов'}</h4>
-          <p className="mt-1 text-[11px] leading-relaxed text-slate-500">{embedded ? 'Импортируйте личные контакты в PBXPuls. Общий справочник не отправляется во внешние сервисы.' : 'Контакты будут импортированы только в ваш личный справочник.'}</p>
+  const renderPersonalContactImportPanel = () => {
+    const showFileImport = canShowContactImportSource('file');
+    const visibleProviders = (['google', 'yandex', 'mailru'] as OnlineContactSyncProvider[]).filter(provider => canShowContactImportSource(provider));
+    const noSourcesVisible = !showFileImport && visibleProviders.length === 0;
+
+    return (
+      <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="mb-3 flex items-start justify-between gap-3">
+          <div>
+            <h4 className="text-sm font-black text-slate-900">Личный импорт контактов</h4>
+            <p className="mt-1 text-[11px] leading-relaxed text-slate-500">Контакты будут импортированы только в ваш личный справочник.</p>
+          </div>
+          <button type="button" onClick={loadContactSyncAccounts} className="rounded-md border border-slate-200 bg-white p-1.5 text-slate-500 hover:bg-slate-50" title="Обновить подключения">
+            <RefreshCw className="h-3.5 w-3.5" />
+          </button>
         </div>
-        <button type="button" onClick={loadContactSyncAccounts} className="rounded-md border border-slate-200 bg-white p-1.5 text-slate-500 hover:bg-slate-50" title="Обновить подключения">
-          <RefreshCw className="h-3.5 w-3.5" />
-        </button>
+        <input ref={contactFileInputRef} type="file" accept=".csv,.vcf,text/csv,text/vcard,text/x-vcard" onChange={handleContactFileInputChange} className="hidden" />
+        {contactSyncMessage && (
+          <div className="mb-3 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-[11px] text-blue-800">{contactSyncMessage}</div>
+        )}
+        {noSourcesVisible && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">Доступные источники импорта отключены администратором.</div>
+        )}
+        {showFileImport && (
+          <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
+            <button type="button" onClick={() => contactFileInputRef.current?.click()} disabled={contactSyncBusyProvider === 'file' || !isContactImportSourceEnabled('file')} className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-blue-700 disabled:opacity-50">
+              <Upload className="h-3.5 w-3.5" />
+              {contactSyncBusyProvider === 'file' ? 'Загрузка...' : 'Загрузить CSV/vCard'}
+            </button>
+            <span className="text-[11px] text-slate-500">{isContactImportSourceEnabled('file') ? 'Универсальный импорт для Yandex, Mail.ru и других источников.' : getContactImportSourceDisabledMessage('file')}</span>
+          </div>
+        )}
+        {visibleProviders.length > 0 && (
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+            {visibleProviders.map(provider => <React.Fragment key={provider}>{renderContactSyncProviderCard(provider)}</React.Fragment>)}
+          </div>
+        )}
+        {showFileImport && <div className="mt-3">{renderContactFilePreviewPanel()}</div>}
       </div>
-      <input ref={contactFileInputRef} type="file" accept=".csv,.vcf,text/csv,text/vcard,text/x-vcard" onChange={handleContactFileInputChange} className="hidden" />
-      {contactSyncMessage && (
-        <div className="mb-3 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-[11px] text-blue-800">{contactSyncMessage}</div>
-      )}
-      <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
-        <button type="button" onClick={() => contactFileInputRef.current?.click()} disabled={contactSyncBusyProvider === 'file' || settings?.fileImportEnabled === false} className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-blue-700 disabled:opacity-50">
-          <Upload className="h-3.5 w-3.5" />
-          {contactSyncBusyProvider === 'file' ? 'Загрузка...' : 'Загрузить CSV/vCard'}
-        </button>
-        <span className="text-[11px] text-slate-500">{settings?.fileImportEnabled === false ? 'Импорт CSV/vCard отключен администратором.' : 'Универсальный импорт для Yandex, Mail.ru и других источников.'}</span>
-      </div>
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-        {renderContactSyncProviderCard('google')}
-        {renderContactSyncProviderCard('yandex')}
-        {renderContactSyncProviderCard('mailru')}
-      </div>
-      <div className="mt-3">{renderContactFilePreviewPanel()}</div>
-    </div>
-  );
+    );
+  };
 
   const renderDirectoryContactFormSection = (title: string, fieldKeys: DirectoryVisibleColumnKey[]) => {
     const visibleFields = fieldKeys.filter(hasDirectoryContactFormField);
@@ -4502,7 +4567,7 @@ export default function App() {
                 <div>
                   <h1 className="text-base font-bold text-slate-900 dark:text-slate-100 tracking-tight flex items-center gap-2 font-sans uppercase">
                     {activeView === 'calls' && 'Реестр звонков'}
-                    {activeView === 'directory' && (directoryPageMode === 'import' ? 'Админский CSV импорт' : directoryPageMode === 'personal_import' ? 'Личный импорт контактов' : 'Телефонный справочник')}
+                    {activeView === 'directory' && (directoryPageMode === 'import' ? 'Админский CSV импорт' : directoryPageMode === 'personal_import' ? 'Личный импорт контактов' : directoryPageMode === 'contact_new' ? 'Новый контакт' : directoryPageMode === 'contact_edit' ? 'Редактирование контакта' : 'Телефонный справочник')}
                     {activeView === 'reports' && 'Отчеты и Аналитика'}
                     {activeView === 'marketing' && 'Маркетинг'}
                     {activeView === 'monitoring' && 'Мониторинг звонков'}
@@ -5208,7 +5273,7 @@ export default function App() {
       </>
     )}
 
-      {activeView === 'directory' && directoryPageMode === 'personal_import' && canOpenPersonalContactImport() && (
+      {activeView === 'directory' && directoryPageMode === 'personal_import' && (
         <section className="min-w-0 max-w-full space-y-4">
           <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -5224,7 +5289,74 @@ export default function App() {
               </button>
             </div>
           </div>
-          {renderPersonalContactImportPanel(false)}
+          {getPersonalContactImportUnavailableMessage() ? (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-sm font-bold text-amber-900 shadow-sm">
+              {getPersonalContactImportUnavailableMessage()}
+            </div>
+          ) : renderPersonalContactImportPanel()}
+        </section>
+      )}
+
+      {activeView === 'directory' && (directoryPageMode === 'contact_new' || directoryPageMode === 'contact_edit') && (
+        <section className="mx-auto min-w-0 max-w-6xl space-y-4">
+          <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0">
+                <h2 className="flex items-center gap-2 break-words text-lg font-black text-slate-900">
+                  <BookOpen className="h-5 w-5 text-blue-600" />
+                  {directoryPageMode === 'contact_edit' ? 'Редактирование контакта' : 'Новый контакт'}
+                </h2>
+                <p className="mt-1 max-w-3xl text-xs leading-relaxed text-slate-500">
+                  {directoryPageMode === 'contact_edit' ? 'Обновите данные контакта в справочнике PBXPuls.' : 'Создайте контакт в справочнике PBXPuls.'}
+                </p>
+              </div>
+              <button type="button" onClick={closeDirectoryContactFormPage} className="shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50">
+                Назад к справочнику
+              </button>
+            </div>
+          </div>
+
+          {directoryPageMode === 'contact_edit' && directoryContactEditId && !editingDirEntry ? (
+            <div className="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-600 shadow-sm">
+              {isLoadingDirectory ? 'Загрузка контакта...' : 'Контакт не найден или недоступен для редактирования.'}
+            </div>
+          ) : (
+            <form onSubmit={handleSaveDirEntry} className="rounded-xl border border-slate-200 bg-slate-50 p-4 shadow-sm space-y-4">
+              {dirError && (
+                <div className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-600">
+                  <AlertCircle className="h-4.5 w-4.5 shrink-0" />
+                  <span>{dirError}</span>
+                </div>
+              )}
+
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white p-3">
+                <div className="text-xs text-slate-500">
+                  Сейчас показано полей: <span className="font-bold text-slate-800">{visibleDirectoryContactFormFields.length}</span>. Actions и ownerUserId в форму не выводятся.
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setDirFormShowAllFields(value => !value)}
+                  className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                >
+                  {dirFormShowAllFields ? 'Скрыть дополнительные поля' : 'Показать все поля'}
+                </button>
+              </div>
+
+              {renderDirectoryContactFormSection('Основное', ['type', 'fullName', 'phone'])}
+              {renderDirectoryContactFormSection('Контакты', ['phone2', 'email', 'website'])}
+              {renderDirectoryContactFormSection('Организация', ['organization', 'position', 'department', 'group'])}
+              {renderDirectoryContactFormSection('Дополнительно', ['inn', 'kpp', 'ogrn', 'address', 'comment', 'tags', 'internalExtension', 'linkedExternalNumber', 'responsibleUserId'])}
+              {renderDirectoryContactFormSection('Системные поля / видимость', ['visibility', 'isSpam'])}
+
+              <div className="flex flex-wrap justify-end gap-2 border-t border-slate-200 pt-3">
+                <button type="button" onClick={closeDirectoryContactFormPage} className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-medium text-slate-500 hover:bg-slate-50 hover:text-slate-800">Отмена</button>
+                <button type="submit" disabled={isSavingDir} className="flex min-w-[90px] items-center justify-center gap-1 rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50">
+                  {isSavingDir && <Loader2 className="h-3 w-3 animate-spin" />}
+                  <span>Сохранить</span>
+                </button>
+              </div>
+            </form>
+          )}
         </section>
       )}
 
@@ -5426,6 +5558,12 @@ export default function App() {
                 )}
               </div>
             )}
+          </div>
+        )}
+
+        {dirNotice && (
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-bold text-emerald-800 shadow-sm">
+            {dirNotice}
           </div>
         )}
 
@@ -6300,63 +6438,6 @@ export default function App() {
       />
 
 
-
-      {isDirFormOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4">
-          <div className="relative max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-2xl border border-slate-200 bg-slate-50 p-5 shadow-2xl">
-            <div className="mb-4 flex items-start justify-between gap-3 border-b border-slate-200 pb-3">
-              <div className="min-w-0">
-                <h3 className="flex items-center gap-2 text-base font-bold text-slate-900">
-                  <BookOpen className="h-5 w-5 shrink-0 text-blue-600" />
-                  {editingDirEntry ? 'Редактировать контакт' : 'Новый контакт'}
-                </h3>
-                <p className="mt-0.5 max-w-2xl text-xs font-light leading-relaxed text-slate-500">
-                  Форма показывает обязательные поля, выбранные столбцы таблицы и заполненные поля контакта. Для сохранения укажите ФИО или организацию и телефон или email.
-                </p>
-              </div>
-              <button type="button" onClick={() => setIsDirFormOpen(false)} className="rounded-md p-1 text-slate-400 hover:text-slate-650">✕</button>
-            </div>
-
-            <form onSubmit={handleSaveDirEntry} className="space-y-4">
-              {dirError && (
-                <div className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-600">
-                  <AlertCircle className="h-4.5 w-4.5 shrink-0" />
-                  <span>{dirError}</span>
-                </div>
-              )}
-
-              <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white p-3">
-                <div className="text-xs text-slate-500">
-                  Сейчас показано полей: <span className="font-bold text-slate-800">{visibleDirectoryContactFormFields.length}</span>. Actions и ownerUserId в форму не выводятся.
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setDirFormShowAllFields(value => !value)}
-                  className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
-                >
-                  {dirFormShowAllFields ? 'Скрыть дополнительные поля' : 'Показать все поля'}
-                </button>
-              </div>
-
-              {renderDirectoryContactFormSection('Основное', ['type', 'visibility', 'isSpam', 'fullName', 'organization', 'position'])}
-              {renderDirectoryContactFormSection('Связь', ['phone', 'phone2', 'email', 'website'])}
-              {renderDirectoryContactFormSection('Реквизиты', ['inn', 'kpp', 'ogrn', 'address'])}
-              {renderDirectoryContactFormSection('CRM / телефония', ['department', 'group', 'tags', 'internalExtension', 'linkedExternalNumber', 'responsibleUserId'])}
-              {renderDirectoryContactFormSection('Комментарий', ['comment'])}
-
-              {dirVisibility === 'private' && canOpenPersonalContactImport() && renderPersonalContactImportPanel(true)}
-
-              <div className="flex justify-end gap-2 border-t border-slate-200 pt-3">
-                <button type="button" onClick={() => setIsDirFormOpen(false)} className="rounded-lg border border-slate-200 px-4 py-2 text-xs font-medium text-slate-500 hover:bg-slate-50 hover:text-slate-800">Отмена</button>
-                <button type="submit" disabled={isSavingDir} className="flex min-w-[90px] items-center justify-center gap-1 rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50">
-                  {isSavingDir && <Loader2 className="h-3 w-3 animate-spin" />}
-                  <span>Сохранить</span>
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
 
       {/* CLICK-TO-CALL AMI STATUS LOGS DIALOG */}
       {isCallingModalOpen && session?.role !== 'operator' && (

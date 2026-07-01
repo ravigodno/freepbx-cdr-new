@@ -426,6 +426,11 @@ const getContactImportSourceDisabledMessage = (provider: ContactProvider): strin
 };
 
 const ensureContactImportSourceEnabled = (localDb: any, provider: ContactProvider) => {
+  if (localDb?.settings?.directoryImportEnabled === false) {
+    const error = new Error('Contact import is disabled by administrator') as any;
+    error.code = 'CONTACT_IMPORT_DISABLED';
+    throw error;
+  }
   if (!isContactImportSourceEnabled(localDb?.settings || {}, provider)) {
     const error = new Error(getContactImportSourceDisabledMessage(provider)) as any;
     error.code = 'CONTACT_IMPORT_SOURCE_DISABLED';
@@ -6403,8 +6408,9 @@ app.post('/api/directory/sync/file/preview-import', requireAuth(), contactFileTe
     const items = buildContactPreviewItems('file', normalized, localDb, userId);
     res.json({ provider: 'file', source: 'file', fileName: payload.fileName || null, items, totalPreviewed: items.length });
   } catch (error: any) {
-    const message = error?.code === 'CONTACT_IMPORT_SOURCE_DISABLED' ? error.message : 'CSV/vCard file preview failed';
-    res.status(error?.code === 'CONTACT_IMPORT_SOURCE_DISABLED' ? 403 : 400).json({ provider: 'file', step: 'parse', message, error: message });
+    const importDisabled = error?.code === 'CONTACT_IMPORT_SOURCE_DISABLED' || error?.code === 'CONTACT_IMPORT_DISABLED';
+    const message = importDisabled ? error.message : 'CSV/vCard file preview failed';
+    res.status(importDisabled ? 403 : 400).json({ provider: 'file', step: 'parse', message, error: message });
   }
 });
 
