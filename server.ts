@@ -798,18 +798,45 @@ const decodeWindows1251 = (buffer: Buffer): string => {
   return out;
 };
 
-const decodeContactFileBuffer = (buffer: Buffer): string => {
-  if (!buffer.length) return '';
-  if (buffer.length >= 2 && buffer[0] === 0xFF && buffer[1] === 0xFE) return buffer.slice(2).toString('utf16le');
-  if (buffer.length >= 2 && buffer[0] === 0xFE && buffer[1] === 0xFF) {
-    const swapped = Buffer.alloc(buffer.length - 2);
-    for (let i = 2; i + 1 < buffer.length; i += 2) {
-      swapped[i - 2] = buffer[i + 1];
-      swapped[i - 1] = buffer[i];
-    }
-    return swapped.toString('utf16le');
+const decodeUtf16BeBuffer = (buffer: Buffer): string => {
+  const swapped = Buffer.alloc(buffer.length);
+  for (let i = 0; i + 1 < buffer.length; i += 2) {
+    swapped[i] = buffer[i + 1];
+    swapped[i + 1] = buffer[i];
   }
-  if (buffer.length >= 3 && buffer[0] === 0xEF && buffer[1] === 0xBB && buffer[2] === 0xBF) return buffer.slice(3).toString('utf8');
+  return swapped.toString('utf16le');
+};
+
+const decodeUtf8Strict = (buffer: Buffer): string | null => {
+  const Decoder = (globalThis as any).TextDecoder;
+  if (typeof Decoder === 'function') {
+    try {
+      return new Decoder('utf-8', { fatal: true }).decode(buffer);
+    } catch (error) {
+      return null;
+    }
+  }
+  const text = buffer.toString('utf8');
+  const replacementCount = (text.match(/\uFFFD/g) || []).length;
+  if (replacementCount === 0 || replacementCount <= Math.max(1, Math.floor(buffer.length / 2048))) return text;
+  return null;
+};
+
+const decodeContactsImportBuffer = (buffer: Buffer): { text: string; encoding: string } => {
+  if (!buffer.length) return { text: '', encoding: 'utf8' };
+  if (buffer.length >= 3 && buffer[0] === 0xEF && buffer[1] === 0xBB && buffer[2] === 0xBF) {
+    return { text: buffer.slice(3).toString('utf8'), encoding: 'utf8_bom' };
+  }
+  if (buffer.length >= 2 && buffer[0] === 0xFF && buffer[1] === 0xFE) {
+    return { text: buffer.slice(2).toString('utf16le'), encoding: 'utf16le' };
+  }
+  if (buffer.length >= 2 && buffer[0] === 0xFE && buffer[1] === 0xFF) {
+    return { text: decodeUtf16BeBuffer(buffer.slice(2)), encoding: 'utf16be' };
+  }
+
+  const utf8 = decodeUtf8Strict(buffer);
+  if (utf8 !== null) return { text: utf8, encoding: 'utf8' };
+
   const sampleLength = Math.min(buffer.length, 4096);
   let evenZero = 0;
   let oddZero = 0;
@@ -819,19 +846,10 @@ const decodeContactFileBuffer = (buffer: Buffer): string => {
       else oddZero++;
     }
   }
-  if (oddZero > sampleLength / 8 && oddZero > evenZero * 2) return buffer.toString('utf16le');
-  if (evenZero > sampleLength / 8 && evenZero > oddZero * 2) {
-    const swapped = Buffer.alloc(buffer.length);
-    for (let i = 0; i + 1 < buffer.length; i += 2) {
-      swapped[i] = buffer[i + 1];
-      swapped[i + 1] = buffer[i];
-    }
-    return swapped.toString('utf16le');
-  }
-  const utf8 = buffer.toString('utf8');
-  const replacementCount = (utf8.match(/\uFFFD/g) || []).length;
-  if (replacementCount > 0) return decodeWindows1251(buffer);
-  return utf8;
+  if (oddZero > sampleLength / 8 && oddZero > evenZero * 2) return { text: buffer.toString('utf16le'), encoding: 'utf16le' };
+  if (evenZero > sampleLength / 8 && evenZero > oddZero * 2) return { text: decodeUtf16BeBuffer(buffer), encoding: 'utf16be' };
+
+  return { text: decodeWindows1251(buffer), encoding: 'windows1251' };
 };
 
 const parseContactCsvRows = (content: string): string[][] => {
@@ -1047,27 +1065,30 @@ const detectContactFileKind = (fileName: string, contentType: string, content: s
   return 'csv';
 };
 
-const getContactFileImportPayload = (req: Request): { fileName: string; contentType: string; content: string } => {
+const getContactFileImportPayload = (req: Request): { fileName: string; contentType: string; content: string; encoding: string } => {
   const fileName = String(req.query.fileName || req.headers['x-file-name'] || req.body?.fileName || '').trim();
   const contentType = String(req.headers['x-original-content-type'] || req.headers['content-type'] || req.body?.contentType || '').trim();
   if (Buffer.isBuffer(req.body)) {
-    return { fileName, contentType, content: decodeContactFileBuffer(req.body) };
+    const decoded = decodeContactsImportBuffer(req.body);
+    return { fileName, contentType, content: decoded.text, encoding: decoded.encoding };
   }
   if (typeof req.body === 'string') {
-    return { fileName, contentType, content: req.body };
+    return { fileName, contentType, content: req.body, encoding: 'utf8' };
   }
   const rawContent = req.body?.content;
   if (rawContent && typeof rawContent === 'object' && Array.isArray(rawContent.data)) {
-    return { fileName, contentType, content: decodeContactFileBuffer(Buffer.from(rawContent.data)) };
+    const decoded = decodeContactsImportBuffer(Buffer.from(rawContent.data));
+    return { fileName, contentType, content: decoded.text, encoding: decoded.encoding };
   }
   return {
     fileName,
     contentType,
-    content: String(rawContent || '')
+    content: String(rawContent || ''),
+    encoding: 'utf8'
   };
 };
 
-const normalizeContactFileContacts = (payload: { fileName: string; contentType: string; content: string }): { sourceFormat: ContactFileSourceFormat; contacts: NormalizedExternalContact[] } => {
+const normalizeContactFileContacts = (payload: { fileName: string; contentType: string; content: string; encoding?: string }): { sourceFormat: ContactFileSourceFormat; contacts: NormalizedExternalContact[] } => {
   const content = stripUtf8Bom(payload.content);
   if (!content.trim()) return { sourceFormat: 'generic_csv', contacts: [] };
   if (detectContactFileKind(payload.fileName, payload.contentType, content) === 'vcard') {
@@ -6619,7 +6640,7 @@ app.post('/api/directory/sync/file/preview-import', requireAuth(), contactFileTe
     if (!normalized.length) return contactSyncPreviewError(res, 400, 'file', 'parse', 'CSV/vCard file contains no contacts');
     const userId = getCurrentDirectoryUserId(localDb, req);
     const items = buildContactPreviewItems('file', normalized, localDb, userId);
-    res.json({ provider: 'file', source: 'file', sourceFormat: parsed.sourceFormat, fileName: payload.fileName || null, items, totalPreviewed: items.length });
+    res.json({ provider: 'file', source: 'file', sourceFormat: parsed.sourceFormat, encoding: payload.encoding || 'utf8', fileName: payload.fileName || null, items, totalPreviewed: items.length });
   } catch (error: any) {
     const importDisabled = error?.code === 'CONTACT_IMPORT_SOURCE_DISABLED' || error?.code === 'CONTACT_IMPORT_DISABLED';
     const message = importDisabled ? error.message : 'CSV/vCard file preview failed';

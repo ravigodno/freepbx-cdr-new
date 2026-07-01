@@ -754,6 +754,7 @@ export default function App() {
   const [contactSyncForceDuplicates, setContactSyncForceDuplicates] = useState<Record<ContactSyncProvider, boolean>>({ google: false, yandex: false, mailru: false, file: false });
   const [contactSyncDiagnostics, setContactSyncDiagnostics] = useState<Partial<Record<ContactSyncProvider, ContactSyncDiagnosticResult>>>({});
   const [contactFileSourceFormat, setContactFileSourceFormat] = useState<ContactFileSourceFormat | ''>('');
+  const [contactFileEncoding, setContactFileEncoding] = useState('');
 
   // --- ADMIN DIRECTORY IMPORT / EXPORT & NORMALIZATION STATE ---
   const [isAdminPanelExpanded, setIsAdminPanelExpanded] = useState(false);
@@ -1207,11 +1208,20 @@ export default function App() {
     generic_vcf: 'vCard'
   };
 
-  const getContactFileSourceFormatMessage = (sourceFormat: ContactFileSourceFormat | '') => {
-    if (sourceFormat === 'google_csv') return 'Файл распознан как Google Contacts CSV.';
-    if (sourceFormat === 'mailru_csv') return 'Файл распознан как Mail.ru CSV.';
-    if (sourceFormat === 'yandex_vcf' || sourceFormat === 'generic_vcf') return 'Файл распознан как vCard.';
-    if (sourceFormat === 'generic_csv') return 'Файл распознан как обычный CSV.';
+  const contactFileEncodingLabels: Record<string, string> = {
+    utf8: 'UTF-8',
+    utf8_bom: 'UTF-8 BOM',
+    utf16le: 'UTF-16LE',
+    utf16be: 'UTF-16BE',
+    windows1251: 'Windows-1251'
+  };
+
+  const getContactFileSourceFormatMessage = (sourceFormat: ContactFileSourceFormat | '', encoding = '') => {
+    const encodingText = encoding ? ', кодировка ' + (contactFileEncodingLabels[encoding] || encoding) : '';
+    if (sourceFormat === 'google_csv') return 'Файл распознан как Google Contacts CSV' + encodingText + '.';
+    if (sourceFormat === 'mailru_csv') return 'Файл распознан как Mail.ru CSV' + encodingText + '.';
+    if (sourceFormat === 'yandex_vcf' || sourceFormat === 'generic_vcf') return 'Файл распознан как vCard' + encodingText + '.';
+    if (sourceFormat === 'generic_csv') return 'Файл распознан как обычный CSV' + encodingText + '.';
     return '';
   };
 
@@ -1389,6 +1399,7 @@ export default function App() {
     setContactSyncMessage('');
     setContactFileName(file.name);
     setContactFileSourceFormat('');
+    setContactFileEncoding('');
     try {
       const content = await file.arrayBuffer();
       const resp = await fetch('/api/directory/sync/file/preview-import?fileName=' + encodeURIComponent(file.name), {
@@ -1412,12 +1423,14 @@ export default function App() {
         setContactSyncPreviewItems(prev => ({ ...prev, file: items }));
         setContactSyncSelectedIds(prev => ({ ...prev, file: items.filter((item: any) => item.status === 'new').map((item: any) => String(item.externalContactId || '')).filter(Boolean) }));
         setContactFileSourceFormat(data.sourceFormat || '');
-        const sourceFormatMessage = getContactFileSourceFormatMessage(data.sourceFormat || '');
+        setContactFileEncoding(data.encoding || '');
+        const sourceFormatMessage = getContactFileSourceFormatMessage(data.sourceFormat || '', data.encoding || '');
         setContactSyncMessage((sourceFormatMessage ? sourceFormatMessage + ' ' : '') + 'Предпросмотр файла: ' + (data.totalPreviewed || 0) + ' контактов, дублей: ' + duplicates + ', ошибок: ' + invalid + '.');
       } else {
         setContactSyncPreviewItems(prev => ({ ...prev, file: [] }));
         setContactSyncSelectedIds(prev => ({ ...prev, file: [] }));
         setContactFileSourceFormat('');
+        setContactFileEncoding('');
         setContactSyncMessage(data.error || 'Не удалось разобрать CSV/vCard файл.');
       }
     } catch (e: any) {
@@ -4039,7 +4052,7 @@ export default function App() {
           <div>
             <div className="font-black text-slate-800">CSV/vCard</div>
             <div className="mt-1 text-[11px] text-slate-500">{contactFileName || 'Файл контактов'}: предпросмотр импорта в личный справочник</div>
-            {contactFileSourceFormat && <div className="mt-1 text-[11px] font-bold text-blue-700">{contactFileSourceFormatLabels[contactFileSourceFormat]}</div>}
+            {contactFileSourceFormat && <div className="mt-1 text-[11px] font-bold text-blue-700">{contactFileSourceFormatLabels[contactFileSourceFormat]}{contactFileEncoding ? ' · ' + (contactFileEncodingLabels[contactFileEncoding] || contactFileEncoding) : ''}</div>}
           </div>
           <button type="button" onClick={() => contactFileInputRef.current?.click()} disabled={isBusy || !isContactImportSourceEnabled('file')} className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-50">
             <Upload className="h-3.5 w-3.5" />
