@@ -13,7 +13,15 @@ type BuildCdrQueryParamsInput = {
   onlyMyCalls: boolean;
 };
 
+function parseExactCdrNumberSearch(value: unknown): string {
+  const raw = String(value || '').trim();
+  const match = raw.match(/^(?:=|ext:)(\d{2,8})$/i);
+  return match ? match[1] : '';
+}
+
 export function buildCdrQueryParams(input: BuildCdrQueryParamsInput) {
+  const exactNumberSearch = parseExactCdrNumberSearch(input.searchQuery);
+
   const params: Record<string, string> = {
     demo: input.isDemoModeActive ? 'true' : 'false',
     startDate: input.startDate,
@@ -21,8 +29,8 @@ export function buildCdrQueryParams(input: BuildCdrQueryParamsInput) {
     startTime: input.startTime,
     endTime: input.endTime,
     status: input.statusFilter,
-    search: input.searchQuery,
-    number: input.numberFilter,
+    search: exactNumberSearch ? '' : input.searchQuery,
+    number: exactNumberSearch || input.numberFilter,
     operatorExt: input.myExt,
     onlyMyCalls: input.onlyMyCalls ? 'true' : 'false'
   };

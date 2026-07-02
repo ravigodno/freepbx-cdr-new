@@ -9989,8 +9989,23 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
     const endTime = normalizeTimeFilter(req.query.endTime, '23:59');     // HH:mm, 24-hour
 
     const numberFilter = req.query.number as string; // Caller/callee details
+    let fromExtFilter = String(req.query.fromExt || '').replace(/\D/g, '');
+    let toExtFilter = String(req.query.toExt || '').replace(/\D/g, '');
     const statusFilter = req.query.status as string; // 'ALL', 'ANSWERED', 'MISSED', 'ONLY_UNPROCESSED', 'ONLY_CALLBACKED'
     const searchFilter = req.query.search as string; // general search
+    const exactDirectionSearch = String(searchFilter || '').trim();
+    const exactFromSearchMatch = exactDirectionSearch.match(/^from:(\d{2,8})$/i);
+    const exactToSearchMatch = exactDirectionSearch.match(/^to:(\d{2,8})$/i);
+
+    if (!fromExtFilter && exactFromSearchMatch) {
+      fromExtFilter = exactFromSearchMatch[1];
+    }
+
+    if (!toExtFilter && exactToSearchMatch) {
+      toExtFilter = exactToSearchMatch[1];
+    }
+
+    const shouldSkipGeneralSearch = Boolean(exactFromSearchMatch || exactToSearchMatch);
     const requestedOnlyMyCalls = req.query.onlyMyCalls === 'true';
     const requestedOperatorExt = (req.query.operatorExt as string || '').trim();
     const onlyMyCalls = requestedOnlyMyCalls || isOperatorForcedOwnCalls(localDb, req);
@@ -10047,6 +10062,54 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
 
     // Normalize click-to-call CDR legs where FreePBX stores outbound caller as trunk/outbound_cnum.
     calls = calls.map(c => normalizeClickToCallForDisplay(c));
+
+    // Exact direction filter for from:EXT / to:EXT.
+    // Must run before linkedid collapse, because after aggregation src/dst may be rewritten.
+    if (fromExtFilter || toExtFilter) {
+      const hasExactDigitTokenRaw = (value: any, needle: string) => {
+        const tokens = (String(value || '').match(/\d+/g) || []) as string[];
+        return tokens.includes(needle);
+      };
+
+      const hasAnyExactDigitTokenRaw = (values: any[], needle: string) =>
+        values.some(value => {
+          if (Array.isArray(value)) return value.some(item => hasExactDigitTokenRaw(item, needle));
+          return hasExactDigitTokenRaw(value, needle);
+        });
+
+      const rawDirectionMatches = (c: CallEntry) => {
+        if (fromExtFilter) {
+          return hasAnyExactDigitTokenRaw([
+            c.src,
+            c.cnum,
+            c.outbound_cnum,
+            c.clid,
+            c.channel
+          ], fromExtFilter);
+        }
+
+        if (toExtFilter) {
+          return hasAnyExactDigitTokenRaw([
+            c.dst,
+            c.dstchannel,
+            c.lastdata,
+            (c as any).answeredExts,
+            (c as any).missedExts
+          ], toExtFilter);
+        }
+
+        return true;
+      };
+
+      const matchedLinkedIds = new Set(
+        calls
+          .filter(rawDirectionMatches)
+          .map(c => String(c.linkedid || c.uniqueid || ''))
+          .filter(Boolean)
+      );
+
+      calls = calls.filter(c => matchedLinkedIds.has(String(c.linkedid || c.uniqueid || '')));
+    }
 
     // Collapse queue/ring-group CDR legs into one logical call by linkedid
     const linkedGroups = new Map<string, CallEntry[]>();
@@ -10305,7 +10368,7 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
     }
 
     // General string search
-    if (searchFilter && searchFilter.trim().length > 0) {
+    if (!shouldSkipGeneralSearch && searchFilter && searchFilter.trim().length > 0) {
       const s = searchFilter.toLowerCase();
       filteredCalls = filteredCalls.filter(c => 
         c.src?.toLowerCase().includes(s) || 
@@ -10323,6 +10386,17 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
       const n = numberFilter.replace(/\D/g, '');
       filteredCalls = filteredCalls.filter(c => callHasExactNumber(c, n));
     }
+
+    const hasExactDigitToken = (value: any, needle: string) => {
+      const tokens = (String(value || '').match(/\d+/g) || []) as string[];
+      return tokens.includes(needle);
+    };
+
+    const hasAnyExactDigitToken = (values: any[], needle: string) =>
+      values.some(value => {
+        if (Array.isArray(value)) return value.some(item => hasExactDigitToken(item, needle));
+        return hasExactDigitToken(value, needle);
+      });
 
     // Filter by "My Calls". Use the same exact-number logic as the number search.
     if (onlyMyCalls && operatorExt) {
@@ -10411,6 +10485,8 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
     const startTime = normalizeTimeFilter(req.query.startTime, '00:00');
     const endTime = normalizeTimeFilter(req.query.endTime, '23:59');
     const numberFilter = req.query.number as string;
+    const fromExtFilter = String(req.query.fromExt || '').replace(/\D/g, '');
+    const toExtFilter = String(req.query.toExt || '').replace(/\D/g, '');
     const searchFilter = req.query.search as string;
     const statusFilter = req.query.status as string;
     const requestedOperatorExt = (req.query.operatorExt as string || '').trim();
