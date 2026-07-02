@@ -1,14 +1,16 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Activity, CalendarDays, Clock, Download, Filter, Phone, PhoneIncoming, PhoneMissed, PhoneOutgoing, RefreshCw, ShieldCheck, TrendingUp, XCircle } from 'lucide-react';
+import { Activity, ChevronLeft, ChevronRight, Clock, Phone, PhoneIncoming, PhoneMissed, PhoneOutgoing, RefreshCw, ShieldCheck, TrendingUp, XCircle } from 'lucide-react';
+import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts';
+import RussianDatePicker, { toLocalDateInputValue } from '../common/RussianDatePicker';
 import { DirectoryEntry, AppSettings } from '../../types';
 import { StatsKpiCard } from './dashboard/StatsKpiCard';
 import { CallDirectionChart, ChartMode } from './dashboard/CallDirectionChart';
-import { InsightsPanel } from './dashboard/InsightsPanel';
 import { CallHeatmap } from './dashboard/CallHeatmap';
 import { CallFunnelWidget } from './dashboard/CallFunnelWidget';
 import { ProblemDepartmentsTable, DepartmentSummaryRow } from './dashboard/ProblemDepartmentsTable';
 import { LostCallsTable, LostCallDetail } from './dashboard/LostCallsTable';
 import { TrunkHealthWidget, TrunkSummaryRow } from './dashboard/TrunkHealthWidget';
+import { ClientAnalyticsPanel } from './dashboard/ClientAnalyticsPanel';
 
 type Props = {
   startDate: string;
@@ -83,6 +85,8 @@ interface LostCallSummary {
   callbackAfterMissed: number;
   callbackRate: number;
   notCalledBack: number;
+  pendingCallback?: number;
+  callbackRecoveredWithinSla?: number;
   callbackWindowHours: number;
 }
 
@@ -91,6 +95,10 @@ interface UsedCallQualitySettings {
   missedCallCallbackSlaHours: number;
   calltrackingMatchWindowMinutes: number;
 }
+
+interface HeatmapHour { hour: number; total: number; incoming: number; outgoing: number; answered: number; missed: number; lost: number }
+interface HeatmapData { days: Array<{ day: string; hours: HeatmapHour[] }> }
+interface ClientAnalyticsData { initiative?: any; summary?: any; topClients?: any[]; lostClients?: any[]; lowInterestClients?: any[]; missedWithoutCallback?: any[] }
 
 interface EmployeeSummaryRow {
   extension?: string | null;
@@ -128,11 +136,87 @@ function formatNullableDuration(seconds: number | null | undefined): string {
 }
 
 function controlClass() {
-  return 'h-9 w-full rounded-xl border border-slate-200/80 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:focus:ring-blue-950/40';
+  return 'h-8 w-full rounded-lg border border-slate-200/80 bg-white px-2.5 text-xs font-semibold text-slate-700 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:focus:ring-blue-950/40';
 }
 
-function compactLabelClass() {
-  return 'text-[10px] font-black uppercase tracking-wide text-slate-500 dark:text-slate-400';
+const reportDatePickerButtonClass = 'h-8 w-full rounded-lg border border-slate-200/80 bg-white px-2.5 text-left font-mono text-xs font-semibold text-slate-700 shadow-sm outline-none transition hover:border-slate-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:focus:ring-blue-950/40 flex items-center gap-1.5';
+const periodShiftButtonClass = 'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200/80 bg-white text-slate-600 shadow-sm transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:border-blue-900/60 dark:hover:bg-blue-950/30 dark:hover:text-blue-300';
+const internalExtensionPattern = /^\d{2,6}$/;
+const dayMs = 24 * 60 * 60 * 1000;
+
+function formatEmployeeLabel(name: string, extension: string) {
+  const safeName = String(name || '').trim();
+  const safeExtension = String(extension || '').trim();
+  if (safeName && safeName !== safeExtension) return safeName + ' — ' + safeExtension;
+  return safeExtension;
+}
+
+function parseReportDate(value: string): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(year, month - 1, day);
+  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return null;
+  return date;
+}
+
+function getDateKey(date: Date): number {
+  return Date.UTC(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function getInclusiveDays(start: Date, end: Date): number {
+  return Math.round((getDateKey(end) - getDateKey(start)) / dayMs) + 1;
+}
+
+function isFullCalendarMonth(start: Date, end: Date): boolean {
+  const monthEnd = new Date(start.getFullYear(), start.getMonth() + 1, 0);
+  return start.getDate() === 1
+    && end.getFullYear() === start.getFullYear()
+    && end.getMonth() === start.getMonth()
+    && end.getDate() === monthEnd.getDate();
+}
+
+function isFullCalendarYear(start: Date, end: Date): boolean {
+  return start.getMonth() === 0
+    && start.getDate() === 1
+    && end.getFullYear() === start.getFullYear()
+    && end.getMonth() === 11
+    && end.getDate() === 31;
+}
+
+function addDays(date: Date, days: number): Date {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
+}
+
+function getShiftedPeriod(startDate: string, endDate: string, direction: -1 | 1): { startDate: string; endDate: string } | null {
+  const start = parseReportDate(startDate);
+  const end = parseReportDate(endDate);
+  if (!start || !end) return null;
+  const inclusiveDays = getInclusiveDays(start, end);
+  if (inclusiveDays < 1) return null;
+
+  if (isFullCalendarYear(start, end)) {
+    const shiftedYear = start.getFullYear() + direction;
+    return {
+      startDate: toLocalDateInputValue(new Date(shiftedYear, 0, 1)),
+      endDate: toLocalDateInputValue(new Date(shiftedYear, 11, 31))
+    };
+  }
+
+  if (isFullCalendarMonth(start, end)) {
+    const shiftedStart = new Date(start.getFullYear(), start.getMonth() + direction, 1);
+    return {
+      startDate: toLocalDateInputValue(shiftedStart),
+      endDate: toLocalDateInputValue(new Date(shiftedStart.getFullYear(), shiftedStart.getMonth() + 1, 0))
+    };
+  }
+
+  return {
+    startDate: toLocalDateInputValue(addDays(start, inclusiveDays * direction)),
+    endDate: toLocalDateInputValue(addDays(end, inclusiveDays * direction))
+  };
 }
 
 export default function ReportsTab({
@@ -151,10 +235,10 @@ export default function ReportsTab({
   const [groupType, setGroupType] = useState<'day' | 'week' | 'month' | 'year' | 'hour' | 'weekday'>('day');
   const [department, setDepartment] = useState('all');
   const [employee, setEmployee] = useState('all');
-  const [internalExt, setInternalExt] = useState(operatorExt || '');
-  const [trunkFilter, setTrunkFilter] = useState('all');
-  const [statusFilter, setStatusFilter] = useState('all');
-  const [onlyProblems, setOnlyProblems] = useState(false);
+  const [internalExt, setInternalExt] = useState('');
+  const trunkFilter: string = 'all';
+  const statusFilter: string = 'all';
+  const onlyProblems: boolean = false;
   const [activeTab, setActiveTab] = useState('overview');
   const [chartMode, setChartMode] = useState<ChartMode>('all');
   const [data, setData] = useState<DynamicDatapoint[]>([]);
@@ -166,13 +250,21 @@ export default function ReportsTab({
   const [departmentSummary, setDepartmentSummary] = useState<DepartmentSummaryRow[]>([]);
   const [employeeSummary, setEmployeeSummary] = useState<EmployeeSummaryRow[]>([]);
   const [trunkSummary, setTrunkSummary] = useState<TrunkSummaryRow[]>([]);
+  const [heatmap, setHeatmap] = useState<HeatmapData | null>(null);
+  const [clientAnalytics, setClientAnalytics] = useState<ClientAnalyticsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [refreshes, setRefreshes] = useState(0);
 
-  useEffect(() => {
-    setInternalExt(operatorExt || '');
-  }, [operatorExt]);
+  const canShiftPeriod = Boolean(onStartDateChange && onEndDateChange && getShiftedPeriod(startDate, endDate, -1));
+
+  const shiftPeriod = (direction: -1 | 1) => {
+    const shifted = getShiftedPeriod(startDate, endDate, direction);
+    if (!shifted) return;
+    onStartDateChange?.(shifted.startDate);
+    onEndDateChange?.(shifted.endDate);
+  };
+
 
   useEffect(() => {
     let active = true;
@@ -188,11 +280,12 @@ export default function ReportsTab({
           groupType,
           department,
           employee,
-          extension: internalExt,
-          operatorExt: internalExt || operatorExt,
           trunk: trunkFilter,
           onlyMyCalls: String(onlyMyCalls)
         });
+        const explicitExtension = internalExt.trim();
+        if (explicitExtension) params.set('extension', explicitExtension);
+        if (onlyMyCalls && operatorExt.trim()) params.set('operatorExt', operatorExt.trim());
         const sessionSaved = localStorage.getItem('asterisk_cdr_session');
         let token = '';
         if (sessionSaved) {
@@ -210,6 +303,8 @@ export default function ReportsTab({
         setDepartmentSummary(Array.isArray(json.departmentSummary) ? json.departmentSummary : []);
         setEmployeeSummary(Array.isArray(json.employeeSummary) ? json.employeeSummary : []);
         setTrunkSummary(Array.isArray(json.trunkSummary) ? json.trunkSummary : []);
+        setHeatmap(json.heatmap || null);
+        setClientAnalytics(json.clientAnalytics || null);
         setUsedSettings(json.usedSettings || null);
         setError(json.dbError || '');
       } catch (err: any) {
@@ -264,112 +359,69 @@ export default function ReportsTab({
     statusText: item.totalCalls ? 'Проверить' : 'Нет данных',
     trunkType: 'unknown'
   }));
-  const trunkOptions = useMemo(() => Array.from(new Set(trunks.map(item => String(item.trunkName || '').trim()).filter(Boolean))), [trunks]);
   const employees = useMemo(() => {
-    const fromSummary = employeeSummary.map(item => ({ value: String(item.extension || ''), label: String(item.employeeName || item.extension || 'Сотрудник') })).filter(item => item.value);
-    const fromAccess = accessUsers.map(user => ({ value: String(user.extension || user.username || ''), label: String(user.name || user.username || user.extension || 'Сотрудник') })).filter(item => item.value);
-    const fromDirectory = directory.map(item => ({ value: String(item.number || ''), label: item.name || String(item.number || '') })).filter(item => item.value);
+    const fromSummary = employeeSummary
+      .map(item => ({ value: String(item.extension || '').trim(), label: formatEmployeeLabel(String(item.employeeName || item.extension || ''), String(item.extension || '')) }))
+      .filter(item => internalExtensionPattern.test(item.value));
+    const fromAccess = accessUsers
+      .map(user => ({ value: String(user.extension || '').trim(), label: formatEmployeeLabel(String(user.name || user.username || user.extension || ''), String(user.extension || '')) }))
+      .filter(item => internalExtensionPattern.test(item.value));
+    const fromDirectory = directory
+      .filter(item => item.type === 'internal')
+      .map(item => {
+        const extension = String(item.internalExtension || item.number || '').trim();
+        return { value: extension, label: formatEmployeeLabel(String(item.name || extension), extension) };
+      })
+      .filter(item => internalExtensionPattern.test(item.value));
     const seen = new Set<string>();
     return [...fromSummary, ...fromAccess, ...fromDirectory].filter(item => { if (seen.has(item.value)) return false; seen.add(item.value); return true; }).slice(0, 80);
   }, [accessUsers, directory, employeeSummary]);
 
   const effectiveAnswerSlaSeconds = usedSettings?.answerSlaSeconds ?? settings?.answerSlaSeconds ?? slaSummary?.slaThresholdSeconds ?? 20;
-  const effectiveCallbackSlaHours = usedSettings?.missedCallCallbackSlaHours ?? settings?.missedCallCallbackSlaHours ?? lostCallSummary?.callbackWindowHours ?? 24;
   const slaPercentValue = slaSummary && Number.isFinite(Number(slaSummary.slaPercent)) ? Number(slaSummary.slaPercent) : summary.sla;
   const averageWaitValue = slaSummary ? slaSummary.averageWaitSeconds : summary.avgWait;
   const callbackAfterMissedValue = lostCallSummary && Number.isFinite(Number(lostCallSummary.callbackAfterMissed)) ? Number(lostCallSummary.callbackAfterMissed) : summary.processed;
   const lostCallsValue = lostCallSummary && Number.isFinite(Number(lostCallSummary.lostCalls)) ? Number(lostCallSummary.lostCalls) : summary.lost;
-  const slaOutsideCount = slaSummary ? Math.max(0, safeNumber(slaSummary.answeredInboundCalls) - safeNumber(slaSummary.slaAnsweredCalls)) : 0;
-
-  const insights = [
-    summary.total > 0 ? 'За период обработано ' + summary.total.toLocaleString('ru-RU') + ' звонков.' : 'За выбранный период звонков не найдено.',
-    slaSummary ? 'SLA входящих: ' + slaPercentValue + '% при цели ответа до ' + effectiveAnswerSlaSeconds + ' сек.' : 'SLA по пропущенным: ' + summary.sla + '%',
-    slaSummary ? 'Среднее время ожидания: ' + formatNullableDuration(averageWaitValue) : (summary.outbound > summary.inbound ? 'Исходящая активность выше входящей.' : 'Входящий поток не ниже исходящего.')
-  ];
-  const anomalies = [
-    lostCallsValue > 0 ? 'Есть потерянные звонки: ' + lostCallsValue.toLocaleString('ru-RU') : '',
-    slaSummary && slaPercentValue < 90 ? 'SLA ниже целевого значения 90%.' : '',
-    slaSummary && slaOutsideCount > 0 ? 'Звонков вне SLA: ' + slaOutsideCount.toLocaleString('ru-RU') : '',
-    error ? 'Источник данных вернул предупреждение.' : ''
-  ].filter(Boolean);
-  const recommendations = [
-    lostCallsValue > 0 ? 'Проверьте обратные звонки: SLA перезвона ' + effectiveCallbackSlaHours + ' ч.' : 'Критичных потерь по данным периода не видно.',
-    slaSummary && slaPercentValue < 80 ? 'Разберите маршруты входящих и распределение нагрузки: SLA находится в красной зоне.' : 'Контролируйте интервалы ожидания и пики входящего потока.',
-    trunks.length === 0 ? 'Данных по транкам нет: показан безопасный empty state.' : 'Проверьте транки с низкой долей ответов.'
-  ];
-
-  const handleExportCSV = () => {
-    if (visibleData.length === 0) return;
-    const headers = ['Период', 'Всего звонков', 'Входящие', 'Исходящие', 'Пропущенные', 'Перезвонили', 'Потерянные', 'Разговорное время'];
-    const rows = visibleData.map(item => [item.label, item.totalCalls, item.inboundCalls, item.outboundCalls, item.missedCalls, item.processedCalls, item.lostCalls, item.answeredDuration].join(';'));
-    const csv = [headers.join(';'), ...rows].join('\n');
-    const blob = new Blob([new Uint8Array([0xEF, 0xBB, 0xBF]), csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = 'pbxpuls_statistics_' + startDate + '_' + endDate + '.csv';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-  };
 
   const tabs = [
     ['overview', 'Обзор'],
     ['inbound', 'Входящие'],
     ['departments', 'Отделы'],
     ['employees', 'Сотрудники'],
+    ['clients', 'Клиенты'],
     ['trunks', 'Транки'],
     ['marketing', 'Маркетинг'],
     ['reports', 'Отчеты']
   ];
 
+  const periodLabel = startDate + ' - ' + endDate;
+  const clientInitiative = clientAnalytics?.initiative || { incoming: 0, outgoing: 0, total: 0, incomingPercent: 0, outgoingPercent: 0, interestIndex: 0 };
+  const hasClientInitiative = Number(clientInitiative.total || 0) > 0;
+  const clientInitiativeDonutData = [
+    { name: 'Входящие от клиентов', value: Number(clientInitiative.incoming || 0) },
+    { name: 'Исходящие клиентам', value: Number(clientInitiative.outgoing || 0) }
+  ];
+
   return (
     <div className="w-full space-y-4" id="reports-tab-container">
-      <div className="rounded-2xl border border-slate-200/70 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-5">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-          <div className="min-w-0">
-            <div className="inline-flex items-center gap-2 rounded-full bg-blue-50 px-3 py-1 text-[11px] font-black uppercase tracking-wide text-blue-700 dark:bg-blue-950/30 dark:text-blue-300">
-              <Activity className="h-3.5 w-3.5" /> PBXPuls Analytics
-            </div>
-            <h1 className="mt-3 text-2xl font-black tracking-tight text-slate-950 dark:text-white sm:text-3xl">Статистика и отчеты</h1>
-            <p className="mt-1 max-w-2xl text-sm font-semibold text-slate-500 dark:text-slate-400">Аналитика телефонных коммуникаций и контроль эффективности</p>
-          </div>
-          <div className="flex shrink-0 flex-wrap gap-2 xl:justify-end">
-            <button onClick={() => setRefreshes(v => v + 1)} className="inline-flex h-9 items-center gap-2 rounded-xl bg-blue-600 px-4 text-xs font-black text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-60" disabled={loading}>
+      <div className="rounded-2xl border border-slate-200/70 bg-white p-2.5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <div className="rounded-xl border border-slate-200/70 bg-slate-50/70 p-2.5 dark:border-slate-800 dark:bg-slate-950/30">
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" onClick={() => shiftPeriod(-1)} className={periodShiftButtonClass} disabled={!canShiftPeriod} title="Предыдущий период" aria-label="Предыдущий период">
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+            <div className="w-[130px]"><RussianDatePicker value={startDate} onChange={value => onStartDateChange?.(value)} ariaLabel="Дата начала периода" buttonClassName={reportDatePickerButtonClass} accent="blue" /></div>
+            <div className="w-[130px]"><RussianDatePicker value={endDate} onChange={value => onEndDateChange?.(value)} ariaLabel="Дата окончания периода" buttonClassName={reportDatePickerButtonClass} accent="blue" /></div>
+            <button type="button" onClick={() => shiftPeriod(1)} className={periodShiftButtonClass} disabled={!canShiftPeriod} title="Следующий период" aria-label="Следующий период">
+              <ChevronRight className="h-4 w-4" />
+            </button>
+            <div className="w-[92px]"><select value={groupType} onChange={e => setGroupType(e.target.value as typeof groupType)} className={controlClass()} aria-label="Шаг группировки"><option value="day">День</option><option value="week">Неделя</option><option value="month">Месяц</option><option value="hour">Час</option><option value="weekday">День недели</option><option value="year">Год</option></select></div>
+            <div className="w-[128px]"><select value={department} onChange={e => setDepartment(e.target.value)} className={controlClass()} aria-label="Отдел"><option value="all">Все отделы</option>{departmentOptions.map(item => <option key={item} value={item}>{item}</option>)}<option value="sales">Продажи</option><option value="support">Поддержка</option><option value="accounting">Бухгалтерия</option><option value="logistics">Логистика</option></select></div>
+            <div className="w-[166px]"><select value={employee} onChange={e => setEmployee(e.target.value)} className={controlClass()} aria-label="Сотрудник"><option value="all">Все сотрудники</option>{employees.map(item => <option key={item.value + item.label} value={item.value}>{item.label}</option>)}</select></div>
+            <div className="w-[132px]"><input value={internalExt} onChange={e => setInternalExt(e.target.value.replace(/[^0-9]/g, ''))} placeholder="Все номера" className={controlClass()} aria-label="Внутренний номер" /></div>
+            <button onClick={() => setRefreshes(v => v + 1)} className="ml-auto inline-flex h-8 items-center gap-2 rounded-lg bg-blue-600 px-3.5 text-xs font-black text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-60" disabled={loading}>
               <RefreshCw className={['h-4 w-4', loading ? 'animate-spin' : ''].join(' ')} />Обновить
             </button>
-            <button onClick={handleExportCSV} disabled={visibleData.length === 0} className="inline-flex h-9 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-xs font-black text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">
-              <Download className="h-4 w-4" />Экспорт
-            </button>
-          </div>
-        </div>
-
-        <div className="mt-5 rounded-2xl border border-slate-200/70 bg-slate-50/70 p-3 dark:border-slate-800 dark:bg-slate-950/30">
-          <div className="mb-3 flex items-center gap-2 text-xs font-black text-slate-600 dark:text-slate-300"><Filter className="h-4 w-4 text-blue-600" />Фильтры</div>
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(260px,1.45fr)_minmax(92px,.55fr)_minmax(130px,.8fr)_minmax(150px,.9fr)_minmax(120px,.7fr)_minmax(120px,.7fr)_minmax(130px,.75fr)_auto] xl:items-end">
-            <div className="space-y-1">
-              <label className={compactLabelClass()}>Период</label>
-              <div className="grid grid-cols-2 gap-2">
-                <div className="relative"><CalendarDays className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-slate-400" /><input type="date" value={startDate} onChange={e => onStartDateChange?.(e.target.value)} className={controlClass() + ' pl-8'} /></div>
-                <div className="relative"><CalendarDays className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-slate-400" /><input type="date" value={endDate} onChange={e => onEndDateChange?.(e.target.value)} className={controlClass() + ' pl-8'} /></div>
-              </div>
-            </div>
-            <div className="space-y-1">
-              <label className={compactLabelClass()}>Шаг</label>
-              <select value={groupType} onChange={e => setGroupType(e.target.value as typeof groupType)} className={controlClass()}>
-                <option value="day">День</option><option value="week">Неделя</option><option value="month">Месяц</option><option value="hour">Час</option><option value="weekday">День недели</option><option value="year">Год</option>
-              </select>
-            </div>
-            <div className="space-y-1"><label className={compactLabelClass()}>Отдел</label><select value={department} onChange={e => setDepartment(e.target.value)} className={controlClass()}><option value="all">Все отделы</option>{departmentOptions.map(item => <option key={item} value={item}>{item}</option>)}<option value="sales">Продажи</option><option value="support">Поддержка</option><option value="accounting">Бухгалтерия</option><option value="logistics">Логистика</option></select></div>
-            <div className="space-y-1"><label className={compactLabelClass()}>Сотрудник</label><select value={employee} onChange={e => setEmployee(e.target.value)} className={controlClass()}><option value="all">Все сотрудники</option>{employees.map(item => <option key={item.value + item.label} value={item.value}>{item.label}</option>)}</select></div>
-            <div className="space-y-1"><label className={compactLabelClass()}>Внутренний номер</label><input value={internalExt} onChange={e => setInternalExt(e.target.value.replace(/[^0-9]/g, ''))} placeholder="Все" className={controlClass()} /></div>
-            <div className="space-y-1"><label className={compactLabelClass()}>Транк</label><select value={trunkFilter} onChange={e => setTrunkFilter(e.target.value)} className={controlClass()}><option value="all">Все транки</option>{trunkOptions.map(item => <option key={item} value={item}>{item}</option>)}</select></div>
-            <div className="space-y-1"><label className={compactLabelClass()}>Статус</label><select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className={controlClass()}><option value="all">Все статусы</option><option value="answered">Отвеченные</option><option value="missed">Пропущенные</option><option value="lost">Потерянные</option></select></div>
-            <label className="flex h-9 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-xs font-black text-slate-700 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">
-              <span className={['relative h-4 w-7 rounded-full transition', onlyProblems ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-700'].join(' ')}><span className={['absolute top-0.5 h-3 w-3 rounded-full bg-white transition', onlyProblems ? 'left-3.5' : 'left-0.5'].join(' ')} /></span>
-              <input className="sr-only" type="checkbox" checked={onlyProblems} onChange={e => setOnlyProblems(e.target.checked)} />Проблемные
-            </label>
           </div>
         </div>
       </div>
@@ -382,26 +434,65 @@ export default function ReportsTab({
         </div>
       </div>
 
+      {activeTab === 'clients' ? (
+        <ClientAnalyticsPanel analytics={clientAnalytics} periodLabel={periodLabel} />
+      ) : (
+        <>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
         <StatsKpiCard label="Всего звонков" value={summary.total.toLocaleString('ru-RU')} hint="Общая активность" icon={Phone} tone="blue" badge={loading ? 'Загрузка' : 'Live'} />
         <StatsKpiCard label="Входящие" value={summary.inbound.toLocaleString('ru-RU')} hint="Клиентский поток" icon={PhoneIncoming} tone="green" />
         <StatsKpiCard label="Исходящие" value={summary.outbound.toLocaleString('ru-RU')} hint="Активность операторов" icon={PhoneOutgoing} tone="blue" />
         <StatsKpiCard label="Пропущенные" value={summary.missed.toLocaleString('ru-RU')} hint="Требуют контроля" icon={PhoneMissed} tone="orange" />
-        <StatsKpiCard label="Потерянные" value={lostCallsValue.toLocaleString('ru-RU')} hint={'Без перезвона за ' + effectiveCallbackSlaHours + ' ч'} icon={XCircle} tone="red" />
+        <StatsKpiCard label="Потерянные" value={lostCallsValue.toLocaleString('ru-RU')} hint="Без успешного перезвона" icon={XCircle} tone="red" />
         <StatsKpiCard label="SLA" value={slaPercentValue + '%'} hint={'Ответ до ' + effectiveAnswerSlaSeconds + ' сек'} icon={ShieldCheck} tone="purple" />
         <StatsKpiCard label="Среднее ожидание" value={formatNullableDuration(averageWaitValue)} hint="По отвеченным" icon={Clock} tone="orange" />
-        <StatsKpiCard label="Перезвонили после пропуска" value={callbackAfterMissedValue.toLocaleString('ru-RU')} hint="Обработанные" icon={TrendingUp} tone="green" />
+        <StatsKpiCard label="Обработанные пропущенные" value={callbackAfterMissedValue.toLocaleString('ru-RU')} hint="Был успешный перезвон" icon={TrendingUp} tone="green" />
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-12">
-        <div className="xl:col-span-9"><CallDirectionChart data={visibleData} mode={chartMode} onModeChange={setChartMode} /></div>
-        <div className="xl:col-span-3"><InsightsPanel insights={insights} anomalies={anomalies} recommendations={recommendations} /></div>
-      </div>
-
-      <div className="grid gap-4 xl:grid-cols-2">
-        <CallHeatmap data={visibleData} />
-        <CallFunnelWidget inbound={slaSummary?.inboundCalls ?? summary.inbound} missed={slaSummary?.missedInboundCalls ?? summary.missed} processed={callbackAfterMissedValue} lost={lostCallsValue} />
-      </div>
+      {activeTab === 'overview' ? (
+        <>
+          <div className="grid grid-cols-1 items-stretch gap-4 xl:grid-cols-[minmax(0,3fr)_minmax(320px,1fr)]">
+            <CallDirectionChart data={visibleData} mode={chartMode} onModeChange={setChartMode} groupType={groupType} startDate={startDate} endDate={endDate} />
+            <div className="flex h-full min-h-[420px] flex-col rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+              <div className="text-[10px] font-black uppercase text-slate-500 dark:text-slate-400">Инициатива контакта</div>
+              <div className="mt-1 text-xs font-semibold text-slate-500 dark:text-slate-400">Входящие и исходящие клиентские звонки</div>
+              {hasClientInitiative ? (
+                <div className="mt-4 flex flex-1 flex-col justify-between gap-3">
+                  <div className="flex min-h-[170px] flex-1 items-center justify-center">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie data={clientInitiativeDonutData} dataKey="value" nameKey="name" innerRadius={46} outerRadius={66} paddingAngle={3}>
+                          {clientInitiativeDonutData.map((_, index) => <Cell key={index} fill={index === 0 ? '#2563eb' : '#10b981'} />)}
+                        </Pie>
+                        <Tooltip />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <div className="space-y-2 text-xs font-bold">
+                    <div className="rounded-xl bg-blue-50 p-3 text-blue-700 dark:bg-blue-950/30 dark:text-blue-300">Входящие от клиентов: {Number(clientInitiative.incoming || 0).toLocaleString('ru-RU')} ({Number(clientInitiative.incomingPercent || 0)}%)</div>
+                    <div className="rounded-xl bg-emerald-50 p-3 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300">Исходящие клиентам: {Number(clientInitiative.outgoing || 0).toLocaleString('ru-RU')} ({Number(clientInitiative.outgoingPercent || 0)}%)</div>
+                    <div className="rounded-xl border border-slate-100 p-3 font-black text-slate-700 dark:border-slate-800 dark:text-slate-200">Индекс заинтересованности: {Number(clientInitiative.interestIndex || 0)}%</div>
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-4 flex flex-1 items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50 p-4 text-center text-xs font-semibold text-slate-400 dark:border-slate-800 dark:bg-slate-950/40">Нет данных по инициативе контакта за выбранный период</div>
+              )}
+            </div>
+          </div>
+          <div className="grid grid-cols-1 items-stretch gap-4 xl:grid-cols-2">
+            <CallFunnelWidget inbound={slaSummary?.inboundCalls ?? summary.inbound} missed={slaSummary?.missedInboundCalls ?? summary.missed} processed={callbackAfterMissedValue} lost={lostCallsValue} />
+            <CallHeatmap data={visibleData} heatmap={heatmap} />
+          </div>
+        </>
+      ) : (
+        <>
+          <CallDirectionChart data={visibleData} mode={chartMode} onModeChange={setChartMode} groupType={groupType} startDate={startDate} endDate={endDate} />
+          <div className="grid grid-cols-1 items-stretch gap-4 xl:grid-cols-2">
+            <CallFunnelWidget inbound={slaSummary?.inboundCalls ?? summary.inbound} missed={slaSummary?.missedInboundCalls ?? summary.missed} processed={callbackAfterMissedValue} lost={lostCallsValue} />
+            <CallHeatmap data={visibleData} heatmap={heatmap} />
+          </div>
+        </>
+      )}
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
         <ProblemDepartmentsTable rows={departments} />
@@ -410,6 +501,8 @@ export default function ReportsTab({
       </div>
 
       {visibleData.length === 0 && !loading && <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-8 text-center text-sm font-bold text-slate-400 shadow-sm dark:border-slate-800 dark:bg-slate-900">Нет данных за выбранный период</div>}
+        </>
+      )}
     </div>
   );
 }

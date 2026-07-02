@@ -71,7 +71,7 @@ const DbExplorerTab = lazy(() => import('./modules/monitoring/tabs/monitoring/Db
 import QualityTab from './modules/monitoring/tabs/monitoring/QualityTab';
 import DevicesMapTab from './modules/monitoring/tabs/monitoring/DevicesMapTab';
 import { DirectoryStatusIcon } from './modules/directory/components/DirectoryStatusIcon';
-import { fetchDirectory, saveDirectoryEntry, deleteDirectoryEntry, toggleDirectoryBlacklist, toggleDirectorySpam, previewDirectoryImport } from './modules/directory/services/directoryApi';
+import { fetchDirectory, fetchDirectoryAll, saveDirectoryEntry, deleteDirectoryEntry, toggleDirectoryBlacklist, toggleDirectorySpam, previewDirectoryImport } from './modules/directory/services/directoryApi';
 import CDRPage from './modules/cdr/pages/CDRPage';
 import LegacyCDRTable from './modules/cdr/components/LegacyCDRTable';
 import CDRProcessModal from './modules/cdr/components/CDRProcessModal';
@@ -99,6 +99,14 @@ import {
 import { fetchCdrStats, fetchCdrCalls } from './modules/cdr/services/cdrApi';
 import { processCallSubmit } from './modules/cdr/utils/processCallSubmit';
 import ProvisioningCenter from './modules/management/ProvisioningCenter';
+import {
+  AUTH_EXPIRED_LOGIN_MESSAGE,
+  addAuthExpiredListener,
+  clearStoredAuthSession,
+  handleAuthExpiredResponse,
+  installAuthExpiredFetchInterceptor,
+  resetAuthExpiredHandled
+} from './services/apiClient';
 const BalanceCenter = lazy(() => import('./modules/management/BalanceCenter'));
 
 
@@ -208,6 +216,7 @@ interface DirectoryColumnConfig {
 }
 
 const DIRECTORY_COLUMNS_STORAGE_KEY = 'pbxpuls.directory.columns.personal';
+const DIRECTORY_PAGE_SIZE = 20;
 const requiredDirectoryColumns: DirectoryRequiredColumnKey[] = ['type', 'fullName', 'phone'];
 const systemDirectoryColumns: DirectorySystemColumnKey[] = ['actions'];
 type DirectoryVisibleColumnKey = DirectoryRequiredColumnKey | DirectoryOptionalColumnKey;
@@ -620,13 +629,17 @@ export default function App() {
   });
 
   useEffect(() => {
+    if (!session) {
+      document.documentElement.classList.remove('dark');
+      return;
+    }
     if (darkMode) {
       document.documentElement.classList.add('dark');
     } else {
       document.documentElement.classList.remove('dark');
     }
     localStorage.setItem('asterisk_cdr_dark_mode', String(darkMode));
-  }, [darkMode]);
+  }, [darkMode, session]);
 
   const [accessUsers, setAccessUsers] = useState<AccessUser[]>([]);
   const [isLoadingUsers, setIsLoadingUsers] = useState(false);
@@ -701,6 +714,7 @@ export default function App() {
   }, [monitorMode]);
 
   const [directory, setDirectory] = useState<DirectoryEntry[]>([]);
+  const [directoryLookup, setDirectoryLookup] = useState<DirectoryEntry[]>([]);
   const [isLoadingDirectory, setIsLoadingDirectory] = useState(false);
   const [editingDirEntry, setEditingDirEntry] = useState<DirectoryEntry | null>(null);
   const [dirName, setDirName] = useState('');
@@ -729,9 +743,14 @@ export default function App() {
   const [dirNotice, setDirNotice] = useState('');
   const [isSavingDir, setIsSavingDir] = useState(false);
   const [dirSearchQuery, setDirSearchQuery] = useState('');
-  const [dirTypeFilter, setDirTypeFilter] = useState<'all' | 'client' | 'supplier' | 'government'>('all');
+  const [dirTypeFilter, setDirTypeFilter] = useState<'all' | 'client' | 'supplier' | 'government' | 'internal'>('all');
   const [dirSpamMode, setDirSpamMode] = useState<'all' | 'exclude_spam' | 'only_spam'>('exclude_spam');
   const [dirVisibilityMode, setDirVisibilityMode] = useState<'all' | 'shared_only' | 'private_only' | 'my_private_only' | 'exclude_private' | 'exclude_shared'>('all');
+  const [dirPage, setDirPage] = useState(1);
+  const [dirPageSize] = useState(DIRECTORY_PAGE_SIZE);
+  const [dirTotal, setDirTotal] = useState(0);
+  const [dirTotalPages, setDirTotalPages] = useState(1);
+  const [dirListError, setDirListError] = useState('');
   const [dirFormShowAllFields, setDirFormShowAllFields] = useState(false);
   const [isDirectoryColumnsPanelOpen, setIsDirectoryColumnsPanelOpen] = useState(false);
   const [selectedDirectoryVisibleColumns, setSelectedDirectoryVisibleColumns] = useState<DirectoryVisibleColumnKey[]>(loadDirectoryVisibleColumns);
@@ -858,18 +877,26 @@ export default function App() {
   };
 
 
+  const showAuthExpiredLogin = useCallback(() => {
+    clearStoredAuthSession();
+    setSession(null);
+    if (audioRef.current) {
+      audioRef.current.pause();
+    }
+    setPlayingRecording(null);
+    setPlayingCallId(null);
+    setLoginPassword('');
+    setLoginError(AUTH_EXPIRED_LOGIN_MESSAGE);
+  }, []);
+
+  useEffect(() => {
+    installAuthExpiredFetchInterceptor();
+    return addAuthExpiredListener(showAuthExpiredLogin);
+  }, [showAuthExpiredLogin]);
+
   // Helper to handle unauthorized status (expired/missing token)
   const handleAuthError = (resp?: Response) => {
-    if (session) {
-      setSession(null);
-      localStorage.removeItem('asterisk_cdr_session');
-      if (audioRef.current) {
-        audioRef.current.pause();
-      }
-      setPlayingRecording(null);
-      setPlayingCallId(null);
-      alert('Ваша сессия истекла или недействительна. Пожалуйста, авторизуйтесь заново.');
-    }
+    handleAuthExpiredResponse(resp);
   };
 
   // Simple CSV / Text Parser
@@ -1045,17 +1072,23 @@ export default function App() {
     }
   };
 
-  const handleExportCSV = () => {
+  const handleExportCSV = async () => {
     if (!hasPermission('manage_directory_import')) {
       alert('Нет прав на экспорт справочника.');
       return;
     }
 
     try {
+      const exportRows = await fetchDirectoryAll(session?.token || '', {
+        q: dirSearchQuery,
+        type: dirTypeFilter,
+        spamMode: dirSpamMode,
+        visibilityMode: dirVisibilityMode
+      });
       const BOM = "\uFEFF";
       let csvContent = BOM + "type,visibility,isSpam,organization,fullName,position,phone,phone2,email,website,inn,kpp,ogrn,address,comment,department,group,tags,internalExtension,linkedExternalNumber,responsibleUserId\r\n";
 
-      directory.forEach(entry => {
+      exportRows.forEach(entry => {
         const phones = getEntryPhones(entry);
         const values = [
           entry.type || 'client',
@@ -1091,6 +1124,7 @@ export default function App() {
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
+      URL.revokeObjectURL(url);
     } catch (e: any) {
       alert('Ошибка при экспорте: ' + e.message);
     }
@@ -1122,7 +1156,8 @@ export default function App() {
       const data = await resp.json();
       if (resp.ok) {
         setNormalizedCount(data.updatedCount);
-        await loadDirectory();
+        await loadDirectory(dirPage);
+        await loadDirectoryLookup();
         loadCalls(page);
         setTimeout(() => setNormalizedCount(null), 10000); // clear banner after 10s
       } else {
@@ -1191,7 +1226,9 @@ export default function App() {
       const data = await resp.json();
       if (resp.ok) {
         setUrlImportTestResult({ success: true, message: data.message || `Синхронизация выполнена. Загружено: ${data.count}.` });
-        await loadDirectory();
+        setDirPage(1);
+        await loadDirectory(1);
+        await loadDirectoryLookup();
         await loadAdminSettings();
       } else {
         setUrlImportTestResult({ success: false, message: data.error || 'Ошибка синхронизации.' });
@@ -1567,7 +1604,9 @@ export default function App() {
       if (resp.ok) {
         setContactSyncMessage('Импортировано: ' + (data.imported || 0) + ', пропущено: ' + (data.skipped || 0) + ', ошибок: ' + (data.failed || 0) + '.');
         setContactSyncSelectedIds(prev => ({ ...prev, [provider]: [] }));
-        await loadDirectory();
+        setDirPage(1);
+        await loadDirectory(1);
+        await loadDirectoryLookup();
       } else {
         setContactSyncMessage(data.error || 'Ошибка импорта ' + contactSyncProviderLabels[provider] + '.');
       }
@@ -1607,7 +1646,9 @@ export default function App() {
       if (resp.ok) {
         setContactSyncMessage(contactSyncProviderLabels[provider] + ' отключен. Удалено контактов: ' + (data.deletedContacts || 0) + '.');
         await loadContactSyncAccounts();
-        await loadDirectory();
+        setDirPage(1);
+        await loadDirectory(1);
+        await loadDirectoryLookup();
       } else {
         setContactSyncMessage(data.error || 'Ошибка отключения ' + contactSyncProviderLabels[provider] + '.');
       }
@@ -1654,7 +1695,9 @@ export default function App() {
         setParsedImportEntries([]);
         setImportPreviewRows([]);
         setImportDuplicateCount(0);
-        await loadDirectory();
+        setDirPage(1);
+        await loadDirectory(1);
+        await loadDirectoryLookup();
         loadCalls(page);
         setTimeout(() => {
           setImportSuccessCount(null);
@@ -1805,24 +1848,48 @@ export default function App() {
     }
   };
 
-  const loadDirectory = async () => {
+  const loadDirectory = async (targetPage = dirPage) => {
     if (!session) return;
+    const requestedPage = Math.max(1, Number(targetPage || 1));
     setIsLoadingDirectory(true);
+    setDirListError('');
     try {
       const data = await fetchDirectory(session.token, {
         q: dirSearchQuery,
         type: dirTypeFilter,
         spamMode: dirSpamMode,
-        visibilityMode: dirVisibilityMode
+        visibilityMode: dirVisibilityMode,
+        page: requestedPage,
+        pageSize: dirPageSize
       });
-      setDirectory(Array.isArray(data) ? data : []);
+      const items = Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : []);
+      setDirectory(items);
+      setDirTotal(Number(data?.total ?? items.length) || 0);
+      setDirPage(Number(data?.page ?? requestedPage) || requestedPage);
+      setDirTotalPages(Math.max(1, Number(data?.totalPages ?? 1) || 1));
     } catch (e: any) {
       console.error('Error loading directory:', e);
+      setDirectory([]);
+      setDirTotal(0);
+      setDirTotalPages(1);
+      setDirListError(e?.message === 'UNAUTHORIZED' ? '' : 'Не удалось загрузить справочник.');
       if (e && (e.message === 'UNAUTHORIZED' || e.message === 'Failed to fetch')) {
         handleAuthError();
       }
     } finally {
       setIsLoadingDirectory(false);
+    }
+  };
+
+  const loadDirectoryLookup = async () => {
+    if (!session) return;
+    try {
+      const data = await fetchDirectoryAll(session.token, { spamMode: 'all', visibilityMode: 'all' });
+      setDirectoryLookup(Array.isArray(data) ? data : []);
+    } catch (e: any) {
+      if (e && (e.message === 'UNAUTHORIZED' || e.message === 'Failed to fetch')) {
+        handleAuthError();
+      }
     }
   };
 
@@ -1879,7 +1946,9 @@ export default function App() {
       }
 
       if (data?.success) {
-        await loadDirectory();
+        setDirPage(1);
+        await loadDirectory(1);
+        await loadDirectoryLookup();
         loadCalls(page);
         const notice = editingDirEntry ? 'Контакт обновлен.' : 'Контакт создан.';
         resetDirFormFields();
@@ -1914,7 +1983,8 @@ export default function App() {
     try {
       if (!session?.token) return;
       await deleteDirectoryEntry(session.token, id);
-      await loadDirectory();
+      await loadDirectory(dirPage);
+      await loadDirectoryLookup();
       loadCalls(page);
     } catch (e) {
       console.error(e);
@@ -1977,7 +2047,8 @@ export default function App() {
     }
     try {
       await toggleDirectorySpam(session.token, entry.id, enabled);
-      await loadDirectory();
+      await loadDirectory(dirPage);
+      await loadDirectoryLookup();
     } catch (e: any) {
       if (e?.message === 'UNAUTHORIZED') {
         handleAuthError();
@@ -1997,7 +2068,8 @@ export default function App() {
 
     try {
       await toggleDirectoryBlacklist(session.token, entry.id, enabled, syncAsterisk);
-      await loadDirectory();
+      await loadDirectory(dirPage);
+      await loadDirectoryLookup();
       alert(enabled ? 'Контакт добавлен в черный список.' : 'Контакт удален из черного списка.');
     } catch (e: any) {
       alert(e.message || 'Ошибка связи с сервером.');
@@ -2150,7 +2222,7 @@ export default function App() {
   const reloadData = (targetPage: number = page) => {
     loadCalls(targetPage);
     loadStats();
-    loadDirectory();
+    loadDirectoryLookup();
     setTimeToNextRefresh(autoRefreshInterval);
   };
 
@@ -2175,6 +2247,8 @@ export default function App() {
       const data = await resp.json();
 
       if (resp.ok && data.token) {
+        resetAuthExpiredHandled();
+        setLoginError('');
         const nextSession: UserSession = {
           id: data.user.id,
           token: data.token,
@@ -2199,7 +2273,7 @@ export default function App() {
 
   // Authentication: Logout
   const handleLogout = () => {
-    localStorage.removeItem('asterisk_cdr_session');
+    clearStoredAuthSession();
     window.location.href = '/';
     return;
     // Clear audio states
@@ -2733,7 +2807,7 @@ export default function App() {
   useEffect(() => {
     if (session) {
       reloadData(1);
-      loadDirectory();
+      loadDirectoryLookup();
       loadAdminSettings();
     }
   }, [session, startDate, endDate, startTime, endTime, statusFilter, isDemoModeActive, onlyMyCalls, myExt]);
@@ -2742,17 +2816,17 @@ export default function App() {
   useEffect(() => {
     if (!session || activeView !== 'directory' || !['list', 'contact_edit'].includes(directoryPageMode)) return;
     const timer = window.setTimeout(() => {
-      loadDirectory();
-    }, dirSearchQuery ? 250 : 0);
+      loadDirectory(dirPage);
+    }, dirSearchQuery ? 350 : 0);
     return () => window.clearTimeout(timer);
-  }, [session?.token, activeView, directoryPageMode, dirSearchQuery, dirTypeFilter, dirSpamMode, dirVisibilityMode]);
+  }, [session?.token, activeView, directoryPageMode, dirSearchQuery, dirTypeFilter, dirSpamMode, dirVisibilityMode, dirPage, dirPageSize]);
 
   useEffect(() => {
     if (directoryPageMode !== 'contact_edit' || !directoryContactEditId) return;
     if (editingDirEntry?.id === directoryContactEditId) return;
-    const entry = directory.find(item => item.id === directoryContactEditId);
+    const entry = directory.find(item => item.id === directoryContactEditId) || directoryLookup.find(item => item.id === directoryContactEditId);
     if (entry) populateDirectoryContactForm(entry);
-  }, [directoryPageMode, directoryContactEditId, directory, editingDirEntry?.id]);
+  }, [directoryPageMode, directoryContactEditId, directory, directoryLookup, editingDirEntry?.id]);
 
   const getFirstAllowedActiveView = useCallback((): typeof activeView => {
     if (!session) return 'reports';
@@ -2810,7 +2884,7 @@ export default function App() {
       if (activeView === 'calls' && !hasPermission('view_calls')) {
         if (hasPermission('view_directory')) {
           setActiveView('directory');
-          loadDirectory();
+          loadDirectory(1);
         } else if (hasPermission('view_reports')) {
           setActiveView('reports');
         }
@@ -2900,7 +2974,7 @@ export default function App() {
         operatorExt={myExt}
         onlyMyCalls={onlyMyCalls}
         accessUsers={accessUsers}
-        directory={directory}
+        directory={directoryLookup.length ? directoryLookup : directory}
         settings={settings}
         onStartDateChange={setStartDate}
         onEndDateChange={setEndDate}
@@ -4384,7 +4458,7 @@ export default function App() {
                   setDirectoryPageMode('list');
                   window.history.pushState({}, '', '/');
                   setActiveView('directory');
-                  loadDirectory();
+                  loadDirectory(dirPage);
                 }}
                 className={`flex items-center ${isSidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl transition-all relative group cursor-pointer ${
                   activeView === 'directory'
@@ -4885,7 +4959,7 @@ export default function App() {
               <CDRPage
                 calls={calls}
                 session={session}
-                directory={directory}
+                directory={directoryLookup.length ? directoryLookup : directory}
                 playingCallId={playingCallId}
                 isAudioPaused={isAudioPaused}
                 activeDropdownCallId={activeDropdownCallId}
@@ -5286,7 +5360,7 @@ export default function App() {
               <>
                 <LegacyCDRTable
                   calls={calls}
-                  directory={directory}
+                  directory={directoryLookup.length ? directoryLookup : directory}
                   session={session}
                   copiedNumber={copiedNumber}
                   playingCallId={playingCallId}
@@ -5651,7 +5725,10 @@ export default function App() {
                 <input
                   type="text"
                   value={dirSearchQuery}
-                  onChange={(e) => setDirSearchQuery(e.target.value)}
+                  onChange={(e) => {
+                    setDirSearchQuery(e.target.value);
+                    setDirPage(1);
+                  }}
                   placeholder="Поиск по справочнику..."
                   className="w-full min-w-0 bg-slate-50 border border-slate-200 rounded-lg py-2 pl-9 pr-3 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all font-light"
                 />
@@ -5662,12 +5739,16 @@ export default function App() {
                 <select
                   id="directory-type-filter"
                   value={dirTypeFilter}
-                  onChange={(e) => setDirTypeFilter(e.target.value as typeof dirTypeFilter)}
+                  onChange={(e) => {
+                    setDirTypeFilter(e.target.value as typeof dirTypeFilter);
+                    setDirPage(1);
+                  }}
                   className="h-9 min-w-[116px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm outline-none transition-all focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                   title="Тип контакта"
                 >
                   <option value="all">Тип: Все</option>
                   <option value="client">Тип: Клиенты</option>
+                  <option value="internal">Тип: Внутренние</option>
                   <option value="supplier">Тип: Поставщики</option>
                   <option value="government">Тип: Госорганы</option>
                 </select>
@@ -5676,7 +5757,10 @@ export default function App() {
                 <select
                   id="directory-spam-filter"
                   value={dirSpamMode}
-                  onChange={(e) => setDirSpamMode(e.target.value as typeof dirSpamMode)}
+                  onChange={(e) => {
+                    setDirSpamMode(e.target.value as typeof dirSpamMode);
+                    setDirPage(1);
+                  }}
                   className="h-9 min-w-[130px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm outline-none transition-all focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                   title="Спам"
                 >
@@ -5689,7 +5773,10 @@ export default function App() {
                 <select
                   id="directory-visibility-filter"
                   value={dirVisibilityMode}
-                  onChange={(e) => setDirVisibilityMode(e.target.value as typeof dirVisibilityMode)}
+                  onChange={(e) => {
+                    setDirVisibilityMode(e.target.value as typeof dirVisibilityMode);
+                    setDirPage(1);
+                  }}
                   className="h-9 min-w-[170px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm outline-none transition-all focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                   title="Видимость"
                 >
@@ -5863,6 +5950,20 @@ export default function App() {
               <tbody className="divide-y divide-slate-100">
                 {(() => {
                   const list = Array.isArray(directory) ? directory : [];
+                  const emptyText = dirSearchQuery.trim() ? 'По запросу ничего не найдено' : 'Контакты не найдены';
+
+                  if (dirListError) {
+                    return (
+                      <tr>
+                        <td colSpan={effectiveDirectoryColumnConfigs.length} className="py-8 text-center text-slate-500">
+                          <div className="flex flex-col items-center justify-center gap-3">
+                            <div className="font-bold text-slate-600">{dirListError}</div>
+                            <button type="button" onClick={() => loadDirectory(dirPage)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50">Повторить</button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  }
 
                   if (list.length === 0) {
                     return (
@@ -5874,7 +5975,7 @@ export default function App() {
                               <span>Загрузка данных справочника...</span>
                             </div>
                           ) : (
-                            'Записи не найдены'
+                            emptyText
                           )}
                         </td>
                       </tr>
@@ -5893,6 +5994,34 @@ export default function App() {
                 })()}
               </tbody>
             </table>
+          </div>
+          <div className="flex flex-col gap-2 border-t border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600 sm:flex-row sm:items-center sm:justify-between">
+            <div className="font-semibold">
+              Страница {dirPage} из {dirTotalPages}. Всего контактов: {dirTotal.toLocaleString('ru-RU')}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-medium text-slate-500">
+                Показано {dirTotal === 0 ? 0 : ((dirPage - 1) * dirPageSize) + 1}-{Math.min(dirPage * dirPageSize, dirTotal)} из {dirTotal.toLocaleString('ru-RU')}
+              </span>
+              <button
+                type="button"
+                onClick={() => setDirPage(prev => Math.max(1, prev - 1))}
+                disabled={isLoadingDirectory || dirPage <= 1}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <ChevronLeft className="h-3.5 w-3.5" />
+                Назад
+              </button>
+              <button
+                type="button"
+                onClick={() => setDirPage(prev => Math.min(dirTotalPages, prev + 1))}
+                disabled={isLoadingDirectory || dirPage >= dirTotalPages}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Вперед
+                <ChevronRight className="h-3.5 w-3.5" />
+              </button>
+            </div>
           </div>
         </div>
       </section>

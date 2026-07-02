@@ -1,23 +1,46 @@
+import { handleAuthExpiredResponse } from '../../../services/apiClient';
+
 export interface DirectoryFetchFilters {
   q?: string;
+  search?: string;
   type?: string;
+  department?: string;
+  company?: string;
+  status?: string;
+  responsible?: string;
   spamMode?: 'all' | 'exclude_spam' | 'only_spam';
   visibilityMode?: 'all' | 'shared_only' | 'private_only' | 'my_private_only' | 'exclude_private' | 'exclude_shared';
+  page?: number;
+  pageSize?: number;
+  all?: boolean;
 }
 
-export async function fetchDirectory(token: string, filters: DirectoryFetchFilters = {}) {
+export interface DirectoryPageResponse<T = any> {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
+function buildDirectoryUrl(filters: DirectoryFetchFilters = {}) {
   const params = new URLSearchParams();
   Object.entries(filters).forEach(([key, value]) => {
-    if (value && value !== 'all') params.set(key, String(value));
+    if (value === undefined || value === null || value === '' || value === 'all') return;
+    params.set(key, String(value));
   });
-  const url = params.toString() ? '/api/directory?' + params.toString() : '/api/directory';
-  const resp = await fetch(url, {
+  return params.toString() ? '/api/directory?' + params.toString() : '/api/directory';
+}
+
+export async function fetchDirectory(token: string, filters: DirectoryFetchFilters = {}): Promise<DirectoryPageResponse> {
+  const resp = await fetch(buildDirectoryUrl(filters), {
     headers: {
       Authorization: `Bearer ${token}`
     }
   });
 
   if (resp.status === 401) {
+    handleAuthExpiredResponse(resp);
     throw new Error('UNAUTHORIZED');
   }
 
@@ -26,6 +49,26 @@ export async function fetchDirectory(token: string, filters: DirectoryFetchFilte
   }
 
   return resp.json();
+}
+
+export async function fetchDirectoryAll(token: string, filters: DirectoryFetchFilters = {}) {
+  const resp = await fetch(buildDirectoryUrl({ ...filters, all: true }), {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  if (resp.status === 401) {
+    handleAuthExpiredResponse(resp);
+    throw new Error('UNAUTHORIZED');
+  }
+
+  if (!resp.ok) {
+    throw new Error('Не удалось загрузить справочник');
+  }
+
+  const data = await resp.json();
+  return Array.isArray(data) ? data : [];
 }
 
 export async function saveDirectoryEntry(token: string, payload: any, id?: string) {
@@ -39,6 +82,7 @@ export async function saveDirectoryEntry(token: string, payload: any, id?: strin
   });
 
   if (resp.status === 401) {
+    handleAuthExpiredResponse(resp);
     throw new Error('UNAUTHORIZED');
   }
 
@@ -54,6 +98,7 @@ export async function deleteDirectoryEntry(token: string, id: string) {
   });
 
   if (resp.status === 401) {
+    handleAuthExpiredResponse(resp);
     throw new Error('UNAUTHORIZED');
   }
 
@@ -76,6 +121,7 @@ export async function toggleDirectoryBlacklist(
   });
 
   if (resp.status === 401) {
+    handleAuthExpiredResponse(resp);
     throw new Error('UNAUTHORIZED');
   }
 
@@ -99,6 +145,7 @@ export async function toggleDirectorySpam(token: string, id: string, enabled: bo
   });
 
   if (resp.status === 401) {
+    handleAuthExpiredResponse(resp);
     throw new Error('UNAUTHORIZED');
   }
 
@@ -122,6 +169,7 @@ export async function previewDirectoryImport(token: string, entries: any[]) {
   });
 
   if (resp.status === 401) {
+    handleAuthExpiredResponse(resp);
     throw new Error('UNAUTHORIZED');
   }
 

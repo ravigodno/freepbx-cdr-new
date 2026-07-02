@@ -1,3 +1,5 @@
+import { handleAuthExpiredResponse } from '../../../services/apiClient';
+
 export async function fetchCdrStats(params: URLSearchParams, token: string) {
   const resp = await fetch(`/api/stats?${params.toString()}`, {
     headers: {
@@ -6,6 +8,7 @@ export async function fetchCdrStats(params: URLSearchParams, token: string) {
   });
 
   if (resp.status === 401) {
+    handleAuthExpiredResponse(resp);
     throw new Error('UNAUTHORIZED');
   }
 
@@ -42,6 +45,7 @@ export async function fetchCdrCalls(params: URLSearchParams, token: string) {
   });
 
   if (resp.status === 401) {
+    handleAuthExpiredResponse(resp);
     throw new Error('UNAUTHORIZED');
   }
 

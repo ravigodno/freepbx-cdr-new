@@ -72,20 +72,55 @@ function formatSeconds(value: unknown): string {
   return Math.floor(seconds / 60) + ' мин ' + Math.round(seconds % 60) + ' сек';
 }
 
+function matchConfidenceScore(event: PhoneClickEvent): number {
+  const score = Number(event.matchConfidenceScore);
+  if (Number.isFinite(score)) return score;
+  if (event.matchConfidence === 'high') return 100;
+  if (event.matchConfidence === 'medium') return 80;
+  if (event.matchConfidence === 'low') return 50;
+  return 0;
+}
+
 function matchLabel(event: PhoneClickEvent): string {
   if (event.matchStatus === 'ambiguous') return 'Неоднозначно';
-  if (event.matchConfidence === 'high') return 'Точно';
-  if (event.matchConfidence === 'medium') return 'Вероятно';
-  if (event.matchConfidence === 'low') return 'Слабо';
+  const score = matchConfidenceScore(event);
+  if (score >= 100) return 'Точно';
+  if (score >= 80) return 'DID + время';
+  if (score > 0) return 'По времени';
   return 'Не сопоставлено';
 }
 
 function matchClass(event: PhoneClickEvent): string {
+  const score = matchConfidenceScore(event);
   if (event.matchStatus === 'ambiguous') return 'bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-300';
-  if (event.matchConfidence === 'high') return 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300';
-  if (event.matchConfidence === 'medium') return 'bg-blue-50 text-blue-700 dark:bg-blue-950/30 dark:text-blue-300';
-  if (event.matchConfidence === 'low') return 'bg-purple-50 text-purple-700 dark:bg-purple-950/30 dark:text-purple-300';
+  if (score >= 100) return 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300';
+  if (score >= 80) return 'bg-blue-50 text-blue-700 dark:bg-blue-950/30 dark:text-blue-300';
+  if (score > 0) return 'bg-purple-50 text-purple-700 dark:bg-purple-950/30 dark:text-purple-300';
   return 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300';
+}
+
+function callStatusLabel(value: unknown): string {
+  if (value === 'answered') return 'Отвечен';
+  if (value === 'missed') return 'Пропущен';
+  if (value === 'lost') return 'Потерян';
+  return 'Неизвестно';
+}
+
+function callStatusClass(value: unknown): string {
+  if (value === 'answered') return 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300';
+  if (value === 'missed') return 'bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-300';
+  if (value === 'lost') return 'bg-rose-50 text-rose-700 dark:bg-rose-950/30 dark:text-rose-300';
+  return 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300';
+}
+
+function matchReasonLabel(value: unknown): string {
+  if (value === 'did_time_single_candidate') return 'DID + время, один кандидат';
+  if (value === 'did_time_match') return 'DID + время';
+  if (value === 'nearest_inbound_time') return 'Ближайший по времени';
+  if (value === 'multiple_candidates') return 'Несколько кандидатов';
+  if (value === 'invalid_event_time') return 'Некорректное время';
+  if (value === 'no_candidate') return 'Не найдено';
+  return safeText(value);
 }
 
 function leadStatusLabel(event: PhoneClickEvent): string {
@@ -226,7 +261,7 @@ export function PhoneClicksTable({ events = [], metrikaGoalSummary = null, metri
       <EmptyTableCard
         title="Клики по телефонам"
         description="Основная таблица показывает реальные PBXPuls JS клики и агрегированную сверку из Яндекс.Метрики. CDR-сопоставление выполняется только для PBXPuls JS."
-        columns={['Источник данных', 'Дата/время клика', 'Точность времени', 'Сайт', 'Страница', 'Цель', 'Конверсии', 'Номер на сайте', 'ymClientId', 'utm_source', 'utm_medium', 'utm_campaign', 'Связь со звонком', 'Статус лида', 'Перезвон', 'Звонок', 'Диспозиция', 'Время до звонка', 'Время до перезвона']}
+        columns={['Источник данных', 'Дата/время клика', 'Точность времени', 'Сайт', 'Страница', 'Цель', 'Конверсии', 'Номер на сайте', 'ymClientId', 'utm_source', 'utm_medium', 'utm_campaign', 'Связь со звонком', 'Confidence', 'Причина', 'Статус звонка', 'Статус лида', 'Перезвон', 'UniqueID', 'LinkedID', 'Диспозиция', 'Время до звонка', 'Время до перезвона']}
         emptyTitle="Событий пока нет"
         emptyDescription={emptyDescription}
         hasRows={unifiedRows.length > 0}
@@ -255,6 +290,10 @@ export function PhoneClicksTable({ events = [], metrikaGoalSummary = null, metri
                 <td className="px-3 py-3 text-slate-500">—</td>
                 <td className="px-3 py-3 text-slate-500">—</td>
                 <td className="px-3 py-3 text-slate-500">—</td>
+                <td className="px-3 py-3 text-slate-500">—</td>
+                <td className="px-3 py-3 text-slate-500">—</td>
+                <td className="px-3 py-3 text-slate-500">—</td>
+                <td className="px-3 py-3 text-slate-500">—</td>
               </tr>
             );
           }
@@ -274,9 +313,13 @@ export function PhoneClicksTable({ events = [], metrikaGoalSummary = null, metri
               <td className="px-3 py-3 text-slate-500">{safeText(event.utmMedium)}</td>
               <td className="px-3 py-3 text-slate-500">{safeText(event.utmCampaign)}</td>
               <td className="px-3 py-3"><span className={['rounded-full px-2 py-1 text-[10px] font-black', matchClass(event)].join(' ')}>{matchLabel(event)}</span></td>
+              <td className="px-3 py-3 font-mono font-black text-slate-700 dark:text-slate-200">{matchConfidenceScore(event)}</td>
+              <td className="max-w-[180px] truncate px-3 py-3 text-slate-500" title={safeText(event.matchExplanation || event.matchReason)}>{matchReasonLabel(event.matchReason)}</td>
+              <td className="px-3 py-3"><span className={['rounded-full px-2 py-1 text-[10px] font-black', callStatusClass(event.callStatus)].join(' ')}>{callStatusLabel(event.callStatus)}</span></td>
               <td className="px-3 py-3"><span className={['rounded-full px-2 py-1 text-[10px] font-black', leadStatusClass(event)].join(' ')}>{leadStatusLabel(event)}</span></td>
               <td className="px-3 py-3"><span className={['rounded-full px-2 py-1 text-[10px] font-black', callbackStatusClass(event.callbackStatus)].join(' ')}>{callbackStatusLabel(event.callbackStatus)}</span></td>
-              <td className="px-3 py-3 font-mono text-slate-600 dark:text-slate-300">{safeText(event.matchedCallUniqueid)}</td>
+              <td className="px-3 py-3 font-mono text-slate-600 dark:text-slate-300">{safeText(event.matchedCallUniqueId || event.matchedCallUniqueid)}</td>
+              <td className="px-3 py-3 font-mono text-slate-600 dark:text-slate-300">{safeText(event.matchedLinkedId || event.matchedLinkedid)}</td>
               <td className="px-3 py-3 font-black text-slate-600 dark:text-slate-300">{safeText(event.matchedDisposition)}</td>
               <td className="px-3 py-3 text-slate-500">{formatSeconds(event.secondsToCall)}</td>
               <td className="px-3 py-3 text-slate-500">{formatSeconds(event.callbackSecondsAfterMissed)}</td>
@@ -370,7 +413,7 @@ export function LostLeadsTable({ events = [] }: { events?: PhoneClickEvent[] | n
     <EmptyTableCard
       title="Потерянные лиды"
       description="Сопоставленные звонки с сайта без успешного ответа и без успешного перезвона"
-      columns={['Источник', 'Кампания', 'Страница', 'Время клика', 'Время звонка', 'Номер', 'Статус', 'Перезвон', 'Ответственный', 'Потерянный бюджет']}
+      columns={['Источник', 'Кампания', 'Страница', 'Время клика', 'Время звонка', 'Номер', 'Confidence', 'Причина', 'Статус звонка', 'Статус', 'Перезвон', 'UniqueID', 'LinkedID', 'Ответственный', 'Потерянный бюджет']}
       emptyTitle="Потерянных лидов по коллтрекингу пока нет"
       emptyDescription="Здесь появятся сопоставленные обращения без ответа, по которым не было успешного перезвона."
       hasRows={rows.length > 0}
@@ -383,8 +426,13 @@ export function LostLeadsTable({ events = [] }: { events?: PhoneClickEvent[] | n
           <td className="px-3 py-3 text-slate-600 dark:text-slate-300">{formatDateTime(event.eventTime)}</td>
           <td className="px-3 py-3 text-slate-600 dark:text-slate-300">{formatDateTime(event.matchedCallDate)}</td>
           <td className="px-3 py-3 font-mono font-black text-slate-800 dark:text-slate-100">{safeText(event.matchedExternalNumber || event.phoneText)}</td>
+          <td className="px-3 py-3 font-mono font-black text-slate-700 dark:text-slate-200">{matchConfidenceScore(event)}</td>
+          <td className="max-w-[180px] truncate px-3 py-3 text-slate-500" title={safeText(event.matchExplanation || event.matchReason)}>{matchReasonLabel(event.matchReason)}</td>
+          <td className="px-3 py-3"><span className={['rounded-full px-2 py-1 text-[10px] font-black', callStatusClass(event.callStatus)].join(' ')}>{callStatusLabel(event.callStatus)}</span></td>
           <td className="px-3 py-3"><span className={['rounded-full px-2 py-1 text-[10px] font-black', leadStatusClass(event)].join(' ')}>{leadStatusLabel(event)}</span></td>
           <td className="px-3 py-3"><span className={['rounded-full px-2 py-1 text-[10px] font-black', callbackStatusClass(event.callbackStatus)].join(' ')}>{callbackStatusLabel(event.callbackStatus)}</span></td>
+          <td className="px-3 py-3 font-mono text-slate-600 dark:text-slate-300">{safeText(event.matchedCallUniqueId || event.matchedCallUniqueid)}</td>
+          <td className="px-3 py-3 font-mono text-slate-600 dark:text-slate-300">{safeText(event.matchedLinkedId || event.matchedLinkedid)}</td>
           <td className="px-3 py-3 text-slate-500">{safeText(event.responsibleExtension)}</td>
           <td className="px-3 py-3 text-slate-400">—</td>
         </tr>

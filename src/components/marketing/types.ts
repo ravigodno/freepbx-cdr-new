@@ -30,6 +30,33 @@ export interface CalltrackingSite {
   updatedAt?: string;
 }
 
+export interface CalltrackingPhoneNumber {
+  id: string;
+  siteId: string;
+  phoneLabel: string;
+  phoneDisplay: string;
+  phoneHref: string;
+  did?: string | null;
+  isActive: boolean;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+export type CalltrackingReplacementMatchType = 'utm_source' | 'utm_medium' | 'utm_campaign' | 'referrer' | 'landing_page' | 'default';
+
+export interface CalltrackingReplacementRule {
+  id: string;
+  siteId: string;
+  ruleName: string;
+  priority: number;
+  matchType: CalltrackingReplacementMatchType | string;
+  matchValue: string;
+  phoneNumberId: string;
+  isActive: boolean;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
 export interface PhoneClickEvent {
   id?: string;
   eventId?: string;
@@ -47,9 +74,15 @@ export interface PhoneClickEvent {
   utmCampaign: string;
   matchStatus?: 'matched' | 'unmatched' | 'ambiguous' | string;
   matchConfidence?: 'high' | 'medium' | 'low' | 'none' | string;
+  matchConfidenceScore?: number | null;
   matchReason?: string;
+  matchExplanation?: string;
+  matchedAt?: string | null;
+  candidateCount?: number | null;
   matchedCallUniqueid?: string | null;
+  matchedCallUniqueId?: string | null;
   matchedLinkedid?: string | null;
+  matchedLinkedId?: string | null;
   matchedCallDate?: string | null;
   matchedExternalNumber?: string | null;
   matchedDestinationNumber?: string | null;
@@ -66,6 +99,49 @@ export interface PhoneClickEvent {
   callbackDisposition?: string | null;
   callbackBillsec?: number | null;
   leadStatus?: 'answered' | 'recovered_by_callback' | 'lost' | 'unmatched' | 'ambiguous' | string;
+  callStatus?: 'answered' | 'missed' | 'lost' | 'unknown' | string;
+}
+
+
+export interface MarketingAggregateSummary {
+  visits: number;
+  pageviews: number;
+  adImpressions: number;
+  adClicks: number;
+  adCost: number | null;
+  phoneImpressions: number;
+  phoneClicks: number;
+  formSubmits: number;
+  whatsappClicks: number;
+  telegramClicks: number;
+  emailClicks: number;
+  matchedCalls: number;
+  answeredCalls: number;
+  missedCalls: number;
+  lostCalls: number;
+  callbackCalls: number;
+  costPerCall?: number | null;
+  costPerAnsweredCall?: number | null;
+  costPerLostCall?: number | null;
+  lostBudgetEstimate?: number | null;
+}
+
+export interface MarketingAggregateStatus {
+  lastRebuildAt?: string | null;
+  lastDateFrom?: string | null;
+  lastDateTo?: string | null;
+  lastSiteId?: string | null;
+  lastError?: string | null;
+  rows?: number;
+}
+
+export interface MarketingAggregatesResponse {
+  rows: unknown[];
+  sources: TrafficSourceSummary[];
+  summary: MarketingAggregateSummary;
+  total: number;
+  status?: MarketingAggregateStatus | null;
+  period?: { dateFrom: string; dateTo: string };
 }
 
 export interface TrafficSourceSummary {

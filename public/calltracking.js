@@ -5,6 +5,7 @@
   var memorySessionId = '';
   var ymClientId = null;
   var impressionKeys = {};
+  var resolvedPhone = null;
 
   function getCurrentScript() {
     if (document.currentScript) return document.currentScript;
@@ -17,6 +18,8 @@
   var debug = script ? script.getAttribute('data-debug') === 'true' : false;
   var counterId = script ? (script.getAttribute('data-ym-counter-id') || '').trim() : '';
   var endpoint = script ? (script.getAttribute('data-endpoint') || '').trim() : '';
+  var resolveEndpoint = script ? (script.getAttribute('data-resolve-endpoint') || '').trim() : '';
+  var replaceTelLinks = !script || script.getAttribute('data-replace-tel-links') !== 'false';
 
   function log() {
     if (!debug || !window.console || !console.log) return;
@@ -45,6 +48,7 @@
   }
 
   if (!endpoint) endpoint = scriptOrigin() + '/api/calltracking/event';
+  if (!resolveEndpoint) resolveEndpoint = scriptOrigin() + '/api/calltracking/resolve-number';
 
   function safeStorage(type) {
     try {
@@ -86,7 +90,7 @@
 
   function parseQuery(search) {
     var result = {};
-    var query = String(search || '').replace(/^?/, '');
+    var query = String(search || '').replace(/^\?/, '');
     if (!query) return result;
     query.split('&').forEach(function (part) {
       var idx = part.indexOf('=');
@@ -193,7 +197,7 @@
 
   function eventPayload(eventType, extra) {
     extra = extra || {};
-    return {
+    var payload = {
       siteKey: siteKey,
       eventType: eventType,
       pageUrl: window.location.href,
@@ -205,6 +209,10 @@
       sessionId: getSessionId(),
       timestamp: new Date().toISOString()
     };
+    ['displayedPhone', 'displayedNumber', 'dynamicNumber', 'did', 'phoneNumberId', 'replacementRuleId', 'replacementRuleName'].forEach(function (key) {
+      if (extra[key]) payload[key] = extra[key];
+    });
+    return payload;
   }
 
   function sendEvent(eventType, extra) {
@@ -237,24 +245,44 @@
     } catch (e) {}
   }
 
+  function resolvedExtra() {
+    if (!resolvedPhone) return {};
+    return {
+      displayedPhone: resolvedPhone.phoneDisplay || '',
+      displayedNumber: resolvedPhone.phoneDisplay || '',
+      dynamicNumber: resolvedPhone.phoneDisplay || '',
+      did: resolvedPhone.did || '',
+      phoneNumberId: resolvedPhone.id || '',
+      replacementRuleId: resolvedPhone.ruleId || '',
+      replacementRuleName: resolvedPhone.ruleName || ''
+    };
+  }
+
   function phoneDataFromElement(el) {
     if (!el) return { phoneText: '', phoneHref: '' };
     var href = el.getAttribute && (el.getAttribute('href') || el.getAttribute('data-pbxpuls-phone-link') || '');
     var text = el.getAttribute && (el.getAttribute('data-pbxpuls-phone') || '');
     if (!text) text = cleanText(el.textContent || '');
-    return { phoneText: text, phoneHref: href || '' };
+    var data = { phoneText: text, phoneHref: href || '' };
+    var extra = resolvedExtra();
+    for (var key in extra) data[key] = extra[key];
+    return data;
   }
 
   function impressionKey(data) {
     return (data.phoneHref || '') + '|' + (data.phoneText || '');
   }
 
-  function collectPhoneImpressions() {
-    var nodes = [];
+  function collectPhoneNodes() {
     try {
-      nodes = Array.prototype.slice.call(document.querySelectorAll('a[href^="tel:"], [data-pbxpuls-phone], [data-pbxpuls-phone-link]'));
-    } catch (e) {}
-    nodes.forEach(function (node) {
+      return Array.prototype.slice.call(document.querySelectorAll('a[href^="tel:"], [data-pbxpuls-phone], [data-pbxpuls-phone-link]'));
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function collectPhoneImpressions() {
+    collectPhoneNodes().forEach(function (node) {
       var data = phoneDataFromElement(node);
       var key = impressionKey(data);
       if (!key || impressionKeys[key]) return;
@@ -263,14 +291,93 @@
     });
   }
 
+  function applyResolvedPhone(phone, rule) {
+    if (!phone || !phone.phoneDisplay) return false;
+    resolvedPhone = {
+      id: phone.id || '',
+      phoneDisplay: phone.phoneDisplay || '',
+      phoneHref: phone.phoneHref || '',
+      did: phone.did || '',
+      ruleId: rule && rule.id ? rule.id : '',
+      ruleName: rule && rule.ruleName ? rule.ruleName : ''
+    };
+    collectPhoneNodes().forEach(function (node) {
+      try {
+        var tag = node.tagName ? String(node.tagName).toLowerCase() : '';
+        var isPhoneText = node.hasAttribute && node.hasAttribute('data-pbxpuls-phone');
+        var isPhoneLink = node.hasAttribute && node.hasAttribute('data-pbxpuls-phone-link');
+        var isTelLink = tag === 'a' && String(node.getAttribute('href') || '').toLowerCase().indexOf('tel:') === 0;
+        if (isPhoneText || isPhoneLink || (replaceTelLinks && isTelLink)) {
+          node.textContent = resolvedPhone.phoneDisplay;
+        }
+        if (tag === 'a' && (isPhoneLink || (replaceTelLinks && isTelLink)) && resolvedPhone.phoneHref) {
+          node.setAttribute('href', resolvedPhone.phoneHref);
+        }
+        if (isPhoneText) node.setAttribute('data-pbxpuls-phone', resolvedPhone.phoneDisplay);
+      } catch (e) {}
+    });
+    return true;
+  }
+
+  function buildResolveUrl() {
+    var utm = getUtm();
+    var params = {
+      siteKey: siteKey,
+      utmSource: utm.source || '',
+      utmMedium: utm.medium || '',
+      utmCampaign: utm.campaign || '',
+      referrer: getReferrer(),
+      landingPage: window.location.href,
+      pageUrl: window.location.href
+    };
+    var query = [];
+    for (var key in params) {
+      if (params[key]) query.push(encodeURIComponent(key) + '=' + encodeURIComponent(params[key]));
+    }
+    return resolveEndpoint + (resolveEndpoint.indexOf('?') >= 0 ? '&' : '?') + query.join('&');
+  }
+
+  function resolveNumber(callback) {
+    if (!siteKey || !window.fetch) {
+      callback(false);
+      return;
+    }
+    var done = false;
+    var timer = setTimeout(function () {
+      if (done) return;
+      done = true;
+      callback(false);
+    }, 1500);
+    function finish(value) {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      callback(value);
+    }
+    try {
+      window.fetch(buildResolveUrl(), { method: 'GET', mode: 'cors', credentials: 'omit' })
+        .then(function (response) { return response && response.ok ? response.json() : null; })
+        .then(function (json) {
+          if (json && json.ok && json.resolved && json.phone) {
+            finish(applyResolvedPhone(json.phone, json.rule));
+            return;
+          }
+          finish(false);
+        })
+        .catch(function () { finish(false); });
+    } catch (e) {
+      finish(false);
+    }
+  }
+
   function classifyClick(anchor) {
     if (!anchor) return null;
     var href = String(anchor.getAttribute('href') || '').trim();
     var lower = href.toLowerCase();
     if (lower.indexOf('tel:') === 0) return { type: 'phone_click', goal: 'phone_click', data: phoneDataFromElement(anchor) };
     if (lower.indexOf('mailto:') === 0) return { type: 'email_click', goal: 'email_click', data: {} };
-    if (/^(https?:)?//(www.)?(wa.me|whatsapp.com|api.whatsapp.com)//i.test(href)) return { type: 'whatsapp_click', goal: 'whatsapp_click', data: {} };
-    if (/^(https?:)?//(www.)?(t.me|telegram.me)//i.test(href)) return { type: 'telegram_click', goal: 'telegram_click', data: {} };
+    if (/^(https?:)?\/\/(www\.)?(wa\.me|whatsapp\.com|api\.whatsapp\.com)\//i.test(href)) return { type: 'whatsapp_click', goal: 'whatsapp_click', data: {} };
+    if (/^(https?:)?\/\/(www\.)?(t\.me|telegram\.me)\//i.test(href)) return { type: 'telegram_click', goal: 'telegram_click', data: {} };
     return null;
   }
 
@@ -298,7 +405,9 @@
       ymClientId = clientId;
       sendEvent('page_view');
     });
-    collectPhoneImpressions();
+    resolveNumber(function () {
+      collectPhoneImpressions();
+    });
     bindClicks();
   }
 

@@ -2,12 +2,14 @@ import { useEffect, useMemo, useState } from 'react';
 import { Banknote, BarChart3, CheckCircle2, CircleDollarSign, Loader2, MousePointerClick, PhoneCall, PhoneMissed, Target, TrendingDown } from 'lucide-react';
 import { MarketingFunnelChain } from './MarketingFunnelChain';
 import { MarketingIntegrationsPanel } from './MarketingIntegrationsPanel';
+import { MarketingAggregatesPanel } from './MarketingAggregatesPanel';
+import { CalltrackingNumbersPanel } from './CalltrackingNumbersPanel';
 import { MarketingKpiCard } from './MarketingKpiCard';
 import { CampaignsReportTable, LostLeadsTable, MetrikaPagesTable, PhoneClicksTable, TrafficSourcesTable } from './MarketingTables';
 import { MarketingEmptyState } from './MarketingEmptyState';
-import { CalltrackingSite, CalltrackingSummaryResponse, MarketingOverviewSummary, PhoneClickEvent, TrafficSourceSummary, UsedCallQualitySettings, YandexDirectSourceRow, YandexDirectSummary, YandexMetrikaIntegration, YandexMetrikaPageSummary, YandexMetrikaPhoneGoalEventsResponse, YandexMetrikaPhoneGoalEventRow, YandexMetrikaPhoneGoalSummaryResponse, YandexMetrikaSourceSummary, YandexMetrikaSummary } from './types';
+import { CalltrackingPhoneNumber, CalltrackingReplacementRule, CalltrackingSite, CalltrackingSummaryResponse, MarketingAggregatesResponse, MarketingOverviewSummary, PhoneClickEvent, TrafficSourceSummary, UsedCallQualitySettings, YandexDirectSourceRow, YandexDirectSummary, YandexMetrikaIntegration, YandexMetrikaPageSummary, YandexMetrikaPhoneGoalEventsResponse, YandexMetrikaPhoneGoalEventRow, YandexMetrikaPhoneGoalSummaryResponse, YandexMetrikaSourceSummary, YandexMetrikaSummary } from './types';
 
-type MarketingTabId = 'overview' | 'phone-clicks' | 'sources' | 'campaigns' | 'pages' | 'utm' | 'lost-leads' | 'analytics' | 'integrations';
+type MarketingTabId = 'overview' | 'phone-clicks' | 'sources' | 'campaigns' | 'pages' | 'utm' | 'lost-leads' | 'analytics' | 'integrations' | 'numbers';
 
 const tabs: Array<{ id: MarketingTabId; label: string }> = [
   { id: 'overview', label: 'Обзор' },
@@ -18,6 +20,7 @@ const tabs: Array<{ id: MarketingTabId; label: string }> = [
   { id: 'utm', label: 'UTM' },
   { id: 'lost-leads', label: 'Потерянные лиды' },
   { id: 'analytics', label: 'Сквозная аналитика' },
+  { id: 'numbers', label: 'Номера и подмена' },
   { id: 'integrations', label: 'Интеграции' }
 ];
 
@@ -83,12 +86,26 @@ async function readJsonSafe(response: Response): Promise<any> {
   try { return await response.json(); } catch { return {}; }
 }
 
+function getDefaultMarketingRange() {
+  const today = new Date();
+  const endDate = today.toISOString().slice(0, 10);
+  const start = new Date(today);
+  start.setDate(start.getDate() - 30);
+  return { startDate: start.toISOString().slice(0, 10), endDate };
+}
+
 export default function MarketingTab() {
   const [activeTab, setActiveTab] = useState<MarketingTabId>(() => getInitialMarketingTab());
   const [summaryData, setSummaryData] = useState<CalltrackingSummaryResponse | null>(null);
   const [phoneClicks, setPhoneClicks] = useState<PhoneClickEvent[]>([]);
+  const defaultRange = useMemo(() => getDefaultMarketingRange(), []);
+  const [reportStartDate] = useState(defaultRange.startDate);
+  const [reportEndDate] = useState(defaultRange.endDate);
   const [sources, setSources] = useState<TrafficSourceSummary[]>([]);
+  const [aggregatesData, setAggregatesData] = useState<MarketingAggregatesResponse | null>(null);
   const [sites, setSites] = useState<CalltrackingSite[]>([]);
+  const [calltrackingNumbers, setCalltrackingNumbers] = useState<CalltrackingPhoneNumber[]>([]);
+  const [calltrackingRules, setCalltrackingRules] = useState<CalltrackingReplacementRule[]>([]);
   const [metrikaIntegrations, setMetrikaIntegrations] = useState<YandexMetrikaIntegration[]>([]);
   const [metrikaSummary, setMetrikaSummary] = useState<YandexMetrikaSummary | null>(null);
   const [metrikaSources, setMetrikaSources] = useState<YandexMetrikaSourceSummary[]>([]);
@@ -112,16 +129,16 @@ export default function MarketingTab() {
         setError('');
         const token = getAuthToken();
         const headers = { Authorization: 'Bearer ' + token };
-        const today = new Date();
-        const endDate = today.toISOString().slice(0, 10);
-        const start = new Date(today);
-        start.setDate(start.getDate() - 30);
-        const startDate = start.toISOString().slice(0, 10);
-        const [summaryRes, eventsRes, sourcesRes, sitesRes, metrikaIntegrationsRes, metrikaSummaryRes, metrikaSourcesRes, metrikaPagesRes, directSummaryRes, directSourcesRes, metrikaGoalSummaryRes, metrikaGoalEventsRes] = await Promise.all([
+        const startDate = reportStartDate;
+        const endDate = reportEndDate;
+        const [summaryRes, eventsRes, sourcesRes, aggregatesRes, sitesRes, numbersRes, rulesRes, metrikaIntegrationsRes, metrikaSummaryRes, metrikaSourcesRes, metrikaPagesRes, directSummaryRes, directSourcesRes, metrikaGoalSummaryRes, metrikaGoalEventsRes] = await Promise.all([
           fetch('/api/calltracking/summary?startDate=' + startDate + '&endDate=' + endDate, { headers }),
           fetch('/api/calltracking/matches?limit=100&startDate=' + startDate + '&endDate=' + endDate, { headers }),
           fetch('/api/calltracking/sources?startDate=' + startDate + '&endDate=' + endDate, { headers }),
+          fetch('/api/marketing/aggregates?startDate=' + startDate + '&endDate=' + endDate, { headers }),
           fetch('/api/calltracking/sites', { headers }),
+          fetch('/api/calltracking/phone-numbers', { headers }),
+          fetch('/api/calltracking/replacement-rules', { headers }),
           fetch('/api/marketing/metrika/integrations', { headers }),
           fetch('/api/marketing/metrika/summary?startDate=' + startDate + '&endDate=' + endDate, { headers }),
           fetch('/api/marketing/metrika/sources?startDate=' + startDate + '&endDate=' + endDate, { headers }),
@@ -134,14 +151,17 @@ export default function MarketingTab() {
         if (!summaryRes.ok || !eventsRes.ok || !sourcesRes.ok || !sitesRes.ok || !metrikaIntegrationsRes.ok || !metrikaSummaryRes.ok || !metrikaSourcesRes.ok || !metrikaPagesRes.ok) {
           throw new Error('Не удалось загрузить данные маркетинга.');
         }
-        const [summaryJson, eventsJson, sourcesJson, sitesJson, metrikaIntegrationsJson, metrikaSummaryJson, metrikaSourcesJson, metrikaPagesJson, directSummaryJson, directSourcesJson, metrikaGoalSummaryJson, metrikaGoalEventsJson] = await Promise.all([
-          readJsonSafe(summaryRes), readJsonSafe(eventsRes), readJsonSafe(sourcesRes), readJsonSafe(sitesRes), readJsonSafe(metrikaIntegrationsRes), readJsonSafe(metrikaSummaryRes), readJsonSafe(metrikaSourcesRes), readJsonSafe(metrikaPagesRes), readJsonSafe(directSummaryRes), readJsonSafe(directSourcesRes), readJsonSafe(metrikaGoalSummaryRes), readJsonSafe(metrikaGoalEventsRes)
+        const [summaryJson, eventsJson, sourcesJson, aggregatesJson, sitesJson, numbersJson, rulesJson, metrikaIntegrationsJson, metrikaSummaryJson, metrikaSourcesJson, metrikaPagesJson, directSummaryJson, directSourcesJson, metrikaGoalSummaryJson, metrikaGoalEventsJson] = await Promise.all([
+          readJsonSafe(summaryRes), readJsonSafe(eventsRes), readJsonSafe(sourcesRes), readJsonSafe(aggregatesRes), readJsonSafe(sitesRes), readJsonSafe(numbersRes), readJsonSafe(rulesRes), readJsonSafe(metrikaIntegrationsRes), readJsonSafe(metrikaSummaryRes), readJsonSafe(metrikaSourcesRes), readJsonSafe(metrikaPagesRes), readJsonSafe(directSummaryRes), readJsonSafe(directSourcesRes), readJsonSafe(metrikaGoalSummaryRes), readJsonSafe(metrikaGoalEventsRes)
         ]);
         if (!active) return;
         setSummaryData(summaryJson.summary || null);
         setPhoneClicks(asArray<PhoneClickEvent>(eventsJson.matches));
         setSources(asArray<TrafficSourceSummary>(sourcesJson.sources));
+        setAggregatesData(aggregatesRes.ok ? (aggregatesJson as MarketingAggregatesResponse) : null);
         setSites(asArray<CalltrackingSite>(sitesJson.sites));
+        setCalltrackingNumbers(numbersRes.ok ? asArray<CalltrackingPhoneNumber>(numbersJson.numbers) : []);
+        setCalltrackingRules(rulesRes.ok ? asArray<CalltrackingReplacementRule>(rulesJson.rules) : []);
         setMetrikaIntegrations(asArray<YandexMetrikaIntegration>(metrikaIntegrationsJson.integrations).map(integration => {
           if (['connected', 'connected_limited', 'connected_no_data', 'disabled'].includes(String(directSummaryJson.status || '')) && integration.direct) {
             return { ...integration, direct: { ...integration.direct, lastError: null } };
@@ -185,12 +205,16 @@ export default function MarketingTab() {
 
     loadMarketing();
     return () => { active = false; };
-  }, [refreshKey]);
+  }, [refreshKey, reportEndDate, reportStartDate]);
 
   const callbackSlaHours = usedSettings?.missedCallCallbackSlaHours ?? 24;
+  const aggregateRowsAvailable = Boolean(aggregatesData && Number(aggregatesData.total || 0) > 0);
+  const aggregateSummary = aggregateRowsAvailable ? aggregatesData?.summary : null;
   const useMetrikaVisits = metrikaStatus === 'connected' && Number(metrikaSummary?.visits || 0) > 0;
 
   const mergedSources = useMemo(() => {
+    if (aggregateRowsAvailable) return asArray<TrafficSourceSummary>(aggregatesData?.sources);
+
     const map = new Map<string, TrafficSourceSummary>();
     const keyOf = (source: string, medium?: string | null, campaign?: string | null) => [source || 'direct', medium || '', campaign || ''].join('||');
     asArray<TrafficSourceSummary>(sources).forEach(source => map.set(keyOf(source.source, source.medium, source.campaign), { ...source }));
@@ -238,28 +262,28 @@ export default function MarketingTab() {
       });
     });
     return Array.from(map.values()).sort((a, b) => Number(b.phoneClicks || 0) - Number(a.phoneClicks || 0) || Number(b.visits || 0) - Number(a.visits || 0));
-  }, [directSources, metrikaSources, sources]);
+  }, [aggregateRowsAvailable, aggregatesData?.sources, directSources, metrikaSources, sources]);
 
   const isDirectConnected = directSummary.status === 'connected';
   const isDirectLimited = directSummary.status === 'connected_limited' || directSummary.status === 'connected_no_data';
   const directLimitedWarning = directSummary.warning || directSummary.summary.warning || (directSummary.status === 'connected_no_data' ? 'Директ подключен в ограниченном режиме. Метрика отдала 0 визитов Директа за выбранный период, сумма расходов через текущий API недоступна.' : 'Расходы недоступны, загружены визиты/кампании Директа');
 
   const summary: MarketingOverviewSummary = useMemo(() => ({
-    visits: useMetrikaVisits ? Number(metrikaSummary?.visits || 0) : (summaryData ? Number(summaryData.uniqueSessions || summaryData.visits || 0) : null),
-    phoneClicks: summaryData ? Number(summaryData.phoneClicks || 0) : null,
-    siteCalls: summaryData ? Number(summaryData.siteCalls ?? summaryData.matchedCalls ?? 0) : null,
-    clickToCallConversion: summaryData ? Number(summaryData.clickToCallConversion ?? 0) : null,
-    missedSiteCalls: summaryData ? Number(summaryData.missedSiteCalls ?? 0) : null,
-    lostLeads: summaryData ? Number(summaryData.trueLostLeads ?? summaryData.lostSiteCalls ?? 0) : null,
-    adCost: directSummary.status === 'connected' ? directSummary.summary.cost : null,
-    adClicks: (directSummary.status === 'connected' || directSummary.status === 'connected_limited' || directSummary.status === 'connected_no_data') ? (directSummary.summary.directVisits ?? directSummary.summary.clicks) : null,
-    avgCpc: directSummary.status === 'connected' ? directSummary.summary.avgCpc : null,
-    costPerCall: safeDivide(directSummary.summary.cost, summaryData ? Number(summaryData.siteCalls ?? summaryData.matchedCalls ?? 0) : null),
-    costPerAnsweredCall: safeDivide(directSummary.summary.cost, summaryData ? Number(summaryData.answeredSiteCalls ?? 0) : null),
-    lostBudgetEstimate: directSummary.summary.cost !== null && summaryData && Number(summaryData.trueLostLeads ?? summaryData.lostSiteCalls ?? 0) > 0 && Number(summaryData.siteCalls ?? summaryData.matchedCalls ?? 0) > 0
+    visits: aggregateSummary ? Number(aggregateSummary.visits || 0) : (useMetrikaVisits ? Number(metrikaSummary?.visits || 0) : (summaryData ? Number(summaryData.uniqueSessions || summaryData.visits || 0) : null)),
+    phoneClicks: aggregateSummary ? Number(aggregateSummary.phoneClicks || 0) : (summaryData ? Number(summaryData.phoneClicks || 0) : null),
+    siteCalls: aggregateSummary ? Number(aggregateSummary.matchedCalls || 0) : (summaryData ? Number(summaryData.siteCalls ?? summaryData.matchedCalls ?? 0) : null),
+    clickToCallConversion: aggregateSummary ? (Number(aggregateSummary.phoneClicks || 0) ? Math.round((Number(aggregateSummary.matchedCalls || 0) / Number(aggregateSummary.phoneClicks || 0)) * 1000) / 10 : 0) : (summaryData ? Number(summaryData.clickToCallConversion ?? 0) : null),
+    missedSiteCalls: aggregateSummary ? Number(aggregateSummary.missedCalls || 0) : (summaryData ? Number(summaryData.missedSiteCalls ?? 0) : null),
+    lostLeads: aggregateSummary ? Number(aggregateSummary.lostCalls || 0) : (summaryData ? Number(summaryData.trueLostLeads ?? summaryData.lostSiteCalls ?? 0) : null),
+    adCost: aggregateSummary ? numberOrNull(aggregateSummary.adCost) : (directSummary.status === 'connected' ? directSummary.summary.cost : null),
+    adClicks: aggregateSummary ? Number(aggregateSummary.adClicks || 0) : ((directSummary.status === 'connected' || directSummary.status === 'connected_limited' || directSummary.status === 'connected_no_data') ? (directSummary.summary.directVisits ?? directSummary.summary.clicks) : null),
+    avgCpc: aggregateSummary ? safeDivide(numberOrNull(aggregateSummary.adCost), Number(aggregateSummary.adClicks || 0)) : (directSummary.status === 'connected' ? directSummary.summary.avgCpc : null),
+    costPerCall: aggregateSummary ? numberOrNull(aggregateSummary.costPerCall) : safeDivide(directSummary.summary.cost, summaryData ? Number(summaryData.siteCalls ?? summaryData.matchedCalls ?? 0) : null),
+    costPerAnsweredCall: aggregateSummary ? numberOrNull(aggregateSummary.costPerAnsweredCall) : safeDivide(directSummary.summary.cost, summaryData ? Number(summaryData.answeredSiteCalls ?? 0) : null),
+    lostBudgetEstimate: aggregateSummary ? numberOrNull(aggregateSummary.lostBudgetEstimate) : (directSummary.summary.cost !== null && summaryData && Number(summaryData.trueLostLeads ?? summaryData.lostSiteCalls ?? 0) > 0 && Number(summaryData.siteCalls ?? summaryData.matchedCalls ?? 0) > 0
       ? roundMoney(Number(directSummary.summary.cost) * (Number(summaryData.trueLostLeads ?? summaryData.lostSiteCalls ?? 0) / Number(summaryData.siteCalls ?? summaryData.matchedCalls ?? 0)))
-      : null
-  }), [directSummary, metrikaSummary?.visits, summaryData, useMetrikaVisits]);
+      : null)
+  }), [aggregateSummary, directSummary, metrikaSummary?.visits, summaryData, useMetrikaVisits]);
 
   const kpis = useMemo(() => [
     { label: 'Визиты', value: formatMetric(summary.visits), hint: useMetrikaVisits ? 'Из Яндекс.Метрики' : (summaryData ? 'Fallback: события PBXPuls' : 'Данные появятся после подключения скрипта коллтрекинга'), icon: BarChart3, tone: 'blue' as const },
@@ -282,6 +306,7 @@ export default function MarketingTab() {
     if (activeTab === 'campaigns') return <CampaignsReportTable />;
     if (activeTab === 'lost-leads') return <LostLeadsTable events={phoneClicks.filter(event => event.leadStatus === 'lost')} />;
     if (activeTab === 'integrations') return <MarketingIntegrationsPanel sites={sites} metrikaIntegrations={metrikaIntegrations} loadingIntegrations={loading} integrationsError={error} onMetrikaChanged={() => setRefreshKey(value => value + 1)} />;
+    if (activeTab === 'numbers') return <CalltrackingNumbersPanel sites={sites} numbers={calltrackingNumbers} rules={calltrackingRules} loading={loading} error={error} onChanged={() => setRefreshKey(value => value + 1)} />;
     if (activeTab === 'pages') {
       return <MetrikaPagesTable pages={metrikaPages} connected={metrikaStatus === 'connected'} />;
     }
@@ -289,7 +314,7 @@ export default function MarketingTab() {
       return <MarketingEmptyState title="UTM-данные пока не собираются" description="PBXPuls начнет показывать utm_source, utm_medium и utm_campaign после подключения коллтрекинга." />;
     }
     if (activeTab === 'analytics') {
-      return <MarketingEmptyState title="Сквозная аналитика пока не подключена" description="Следующие этапы свяжут расходы, визиты, звонки, ответы и потерянные обращения." />;
+      return <MarketingAggregatesPanel startDate={reportStartDate} endDate={reportEndDate} status={aggregatesData?.status} sources={mergedSources} totalRows={Number(aggregatesData?.total || 0)} onRebuilt={() => setRefreshKey(value => value + 1)} />;
     }
 
     return (

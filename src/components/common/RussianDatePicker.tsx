@@ -33,9 +33,25 @@ interface RussianDatePickerProps {
   value: string;
   onChange: (value: string) => void;
   ariaLabel: string;
+  className?: string;
+  buttonClassName?: string;
+  accent?: 'blue' | 'red';
+  showClear?: boolean;
 }
 
-export default function RussianDatePicker({ value, onChange, ariaLabel }: RussianDatePickerProps) {
+const defaultButtonClass = 'min-w-[112px] bg-white border border-slate-200 rounded px-2.5 py-1 text-[11px] text-slate-700 font-mono focus:outline-none focus:border-red-500 hover:border-slate-300 transition-all text-left flex items-center gap-1.5 cursor-pointer';
+const accentClasses = {
+  blue: {
+    selected: 'bg-blue-600 text-white shadow-sm',
+    today: 'bg-blue-50 text-blue-700 border border-blue-100'
+  },
+  red: {
+    selected: 'bg-red-600 text-white shadow-sm',
+    today: 'bg-red-50 text-red-700 border border-red-100'
+  }
+};
+
+export default function RussianDatePicker({ value, onChange, ariaLabel, className = '', buttonClassName, accent = 'red', showClear = false }: RussianDatePickerProps) {
   const [isOpen, setIsOpen] = useState(false);
   const selectedDate = parseDateInputValue(value);
   const [visibleMonth, setVisibleMonth] = useState(() => new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1));
@@ -63,13 +79,13 @@ export default function RussianDatePicker({ value, onChange, ariaLabel }: Russia
   };
 
   return (
-    <div className="relative">
+    <div className={['relative', className].filter(Boolean).join(' ')}>
       <button
         type="button"
         lang="ru-RU"
         aria-label={ariaLabel}
         onClick={() => setIsOpen(prev => !prev)}
-        className="min-w-[112px] bg-white border border-slate-200 rounded px-2.5 py-1 text-[11px] text-slate-700 font-mono focus:outline-none focus:border-red-500 hover:border-slate-300 transition-all text-left flex items-center gap-1.5 cursor-pointer"
+        className={buttonClassName || defaultButtonClass}
       >
         <Calendar className="h-3.5 w-3.5 text-slate-400 shrink-0" />
         <span>{formatRussianDate(value)}</span>
@@ -112,9 +128,9 @@ export default function RussianDatePicker({ value, onChange, ariaLabel }: Russia
                   }}
                   className={`h-8 rounded-lg text-xs font-medium transition-all ${
                     isSelected
-                      ? 'bg-red-600 text-white shadow-sm'
+                      ? accentClasses[accent].selected
                       : isToday
-                        ? 'bg-red-50 text-red-700 border border-red-100'
+                        ? accentClasses[accent].today
                         : isOutsideMonth
                           ? 'text-slate-300 hover:bg-slate-50'
                           : 'text-slate-700 hover:bg-slate-100'
@@ -126,17 +142,31 @@ export default function RussianDatePicker({ value, onChange, ariaLabel }: Russia
             })}
           </div>
 
-          <button
-            type="button"
-            onClick={() => {
-              onChange(todayValue);
-              setVisibleMonth(new Date());
-              setIsOpen(false);
-            }}
-            className="mt-3 w-full rounded-lg bg-slate-50 border border-slate-200 px-2 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
-          >
-            Сегодня
-          </button>
+          <div className="mt-3 grid grid-cols-1 gap-2">
+            {showClear && (
+              <button
+                type="button"
+                onClick={() => {
+                  onChange('');
+                  setIsOpen(false);
+                }}
+                className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Очистить
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                onChange(todayValue);
+                setVisibleMonth(new Date());
+                setIsOpen(false);
+              }}
+              className="w-full rounded-lg bg-slate-50 border border-slate-200 px-2 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+            >
+              Сегодня
+            </button>
+          </div>
         </div>
       )}
     </div>

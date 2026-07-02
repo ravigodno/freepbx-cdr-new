@@ -2009,7 +2009,7 @@ const isInternal = (c: any): boolean => {
 };
 
 
-type LostCallCallbackStatus = 'not_called_back' | 'called_back' | 'repeated_inbound';
+type LostCallCallbackStatus = 'not_called_back' | 'called_back' | 'repeated_inbound' | 'pending_callback';
 
 type LostCallAnalyticsItem = {
   externalNumber: string | null;
@@ -2022,6 +2022,8 @@ type LostCallAnalyticsItem = {
   responsibleName: string | null;
   attempts: number;
   callbackStatus: LostCallCallbackStatus;
+  callbackWithinSla: boolean;
+  slaExpired: boolean;
   lastRelatedCallAt: string | null;
   recordingAvailable: boolean;
   uniqueid: string;
@@ -2032,11 +2034,30 @@ type LostCallAnalytics = {
   missedCalls: number;
   lostCalls: number;
   callbackAfterMissed: number;
+  callbackRecoveredWithinSla: number;
+  pendingCallback: number;
   notCalledBack: number;
   callbackRate: number;
   items: LostCallAnalyticsItem[];
 };
 
+type CallBusinessCounters = {
+  totalCalls: number;
+  inboundCalls: number;
+  outboundCalls: number;
+  internalCalls: number;
+  answeredCalls: number;
+  missedCalls: number;
+  processedMissedCalls: number;
+  pendingCallback: number;
+  lostCalls: number;
+  callbackRecovered: number;
+  callbackRecoveredWithinSla: number;
+  callbackRecoveryRate: number;
+  slaRate: number;
+  avgAnswerSeconds: number | null;
+  avgDurationSeconds: number;
+};
 
 type SlaWaitBuckets = {
   under10: number;
@@ -2081,7 +2102,7 @@ const getCallQualitySettings = (settingsOrDb: any): CallQualitySettings => {
   return {
     answerSlaSeconds: clampCallQualityNumber(settings.answerSlaSeconds, 20, 5, 300),
     missedCallCallbackSlaHours: clampCallQualityNumber(settings.missedCallCallbackSlaHours, 24, 1, 168),
-    calltrackingMatchWindowMinutes: clampCallQualityNumber(settings.calltrackingMatchWindowMinutes, 30, 1, 240)
+    calltrackingMatchWindowMinutes: clampCallQualityNumber(settings.calltrackingMatchWindowMinutes, 5, 1, 240)
   };
 };
 
@@ -2189,6 +2210,9 @@ const normalizePhoneNumberForAnalytics = (phone: any): string => {
   if (!digits) return '';
   if (digits.length === 11 && digits.startsWith('8')) {
     digits = '7' + digits.slice(1);
+  }
+  if (digits.length === 10) {
+    digits = '7' + digits;
   }
   if (digits.length === 11 && digits.startsWith('7')) {
     return digits;
@@ -2466,13 +2490,14 @@ const calculateTrunkMetrics = (rows: any[]): TrunkSummaryItem[] => {
       qualityLabel: quality.qualityLabel,
       statusText: quality.statusText,
       lastCallAt: entry.lastCallAt || null,
-      liveStatus: 'unknown'
+      liveStatus: 'unknown' as const
     };
   }).sort((a, b) => b.totalCalls - a.totalCalls || a.trunkName.localeCompare(b.trunkName)).slice(0, 50);
 };
 
-const buildLostCallAnalytics = (calls: any[], options: { startMs: number; endMs: number; callbackWindowHours?: number; directory?: any[]; ownerMap?: Map<string, ExtensionOwner> }): LostCallAnalytics => {
+const buildLostCallAnalytics = (calls: any[], options: { startMs: number; endMs: number; callbackWindowHours?: number; directory?: any[]; ownerMap?: Map<string, ExtensionOwner>; nowMs?: number }): LostCallAnalytics => {
   const callbackWindowMs = Math.max(1, Math.min(168, Number(options.callbackWindowHours || 24))) * 60 * 60 * 1000;
+  const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
   const directory = options.directory || [];
   const ownerMap = options.ownerMap || buildExtensionOwnerMap(directory, []);
   const missedCalls = calls
@@ -2489,11 +2514,12 @@ const buildLostCallAnalytics = (calls: any[], options: { startMs: number; endMs:
   calls.forEach(call => {
     const callMs = getCallDateMs(call.calldate);
     if (!Number.isFinite(callMs)) return;
+    const answered = String(call.disposition || '').toUpperCase() === 'ANSWERED' && Number(call.billsec || 0) > 0;
+    if (!answered) return;
 
     if (isOutgoing(call)) {
       const normalized = normalizePhoneNumberForAnalytics(call.dst);
-      const answered = String(call.disposition || '').toUpperCase() === 'ANSWERED' && Number(call.billsec || 0) > 0;
-      if (normalized && answered) {
+      if (normalized) {
         if (!outboundByNumber.has(normalized)) outboundByNumber.set(normalized, []);
         outboundByNumber.get(normalized)!.push(call);
       }
@@ -2512,23 +2538,40 @@ const buildLostCallAnalytics = (calls: any[], options: { startMs: number; endMs:
   inboundByNumber.forEach(list => list.sort((a, b) => getCallDateMs(a.calldate) - getCallDateMs(b.calldate)));
 
   let callbackAfterMissed = 0;
+  let callbackRecoveredWithinSla = 0;
   let notCalledBack = 0;
+  let pendingCallback = 0;
   const items: LostCallAnalyticsItem[] = missedCalls.map(({ call, normalizedNumber, missedMs }) => {
     const deadline = missedMs + callbackWindowMs;
     const outbound = (outboundByNumber.get(normalizedNumber) || []).filter(candidate => {
       const candidateMs = getCallDateMs(candidate.calldate);
-      return candidateMs > missedMs && candidateMs <= deadline;
+      return candidateMs > missedMs;
     });
     const repeatedInbound = (inboundByNumber.get(normalizedNumber) || []).filter(candidate => {
       const candidateMs = getCallDateMs(candidate.calldate);
-      return candidate.uniqueid !== call.uniqueid && candidateMs > missedMs && candidateMs <= deadline;
+      return candidate.uniqueid !== call.uniqueid && candidateMs > missedMs;
     });
+    const firstOutbound = outbound[0] || null;
+    const firstInboundContact = repeatedInbound[0] || null;
+    const callbackWithinSla = Boolean(firstOutbound && getCallDateMs(firstOutbound.calldate) <= deadline);
+    const slaExpired = nowMs > deadline;
 
-    const callbackStatus: LostCallCallbackStatus = outbound.length ? 'called_back' : repeatedInbound.length ? 'repeated_inbound' : 'not_called_back';
-    if (callbackStatus === 'called_back') callbackAfterMissed++;
-    if (callbackStatus === 'not_called_back') notCalledBack++;
+    let callbackStatus: LostCallCallbackStatus;
+    if (firstOutbound) {
+      callbackStatus = 'called_back';
+      callbackAfterMissed++;
+      if (callbackWithinSla) callbackRecoveredWithinSla++;
+    } else if (firstInboundContact) {
+      callbackStatus = 'repeated_inbound';
+    } else if (slaExpired) {
+      callbackStatus = 'not_called_back';
+      notCalledBack++;
+    } else {
+      callbackStatus = 'pending_callback';
+      pendingCallback++;
+    }
 
-    const related = outbound[0] || repeatedInbound[0] || null;
+    const related = firstOutbound || firstInboundContact || null;
     const responsibleExtension = getResponsibleExtension(call);
     const owner = resolveExtensionOwner(ownerMap, responsibleExtension);
 
@@ -2543,6 +2586,8 @@ const buildLostCallAnalytics = (calls: any[], options: { startMs: number; endMs:
       responsibleName: owner?.employeeName || getDirectoryNameByExtension(directory, responsibleExtension),
       attempts: outbound.length,
       callbackStatus,
+      callbackWithinSla,
+      slaExpired,
       lastRelatedCallAt: related?.calldate || null,
       recordingAvailable: Boolean(call.recordingfile),
       uniqueid: call.uniqueid,
@@ -2554,12 +2599,235 @@ const buildLostCallAnalytics = (calls: any[], options: { startMs: number; endMs:
     missedCalls: missedCalls.length,
     lostCalls: notCalledBack,
     callbackAfterMissed,
+    callbackRecoveredWithinSla,
+    pendingCallback,
     notCalledBack,
     callbackRate: missedCalls.length ? Math.round((callbackAfterMissed / missedCalls.length) * 100) : 0,
     items: items.sort((a, b) => getCallDateMs(b.missedAt) - getCallDateMs(a.missedAt))
   };
 };
 
+const calculateCallBusinessCounters = (rows: any[], options: { callbackWindowHours?: number; lostAnalytics?: LostCallAnalytics; slaThresholdSeconds?: number } = {}): CallBusinessCounters => {
+  const totalCalls = rows.length;
+  let inboundCalls = 0;
+  let outboundCalls = 0;
+  let internalCalls = 0;
+  let answeredCalls = 0;
+  let missedCalls = 0;
+  let answeredDurationTotal = 0;
+  let waitTotal = 0;
+  let waitCount = 0;
+  let answeredWithinSla = 0;
+  const slaThresholdSeconds = Number.isFinite(Number(options.slaThresholdSeconds)) ? Number(options.slaThresholdSeconds) : 20;
+  const rowIds = new Set(rows.map(row => row?.uniqueid).filter(Boolean));
+  const relevantLostItems = (options.lostAnalytics?.items || []).filter(item => rowIds.has(item.uniqueid));
+  const lostByUniqueId = new Map(relevantLostItems.map(item => [item.uniqueid, item]));
+
+  rows.forEach(row => {
+    const disposition = String(row?.disposition || '').toUpperCase();
+    const answered = disposition === 'ANSWERED' && Number(row?.billsec || 0) > 0;
+    const incoming = isIncoming(row);
+    const outgoing = isOutgoing(row);
+    const internal = isInternal(row);
+
+    if (incoming) inboundCalls++;
+    else if (outgoing) outboundCalls++;
+    else if (internal) internalCalls++;
+
+    if (answered) {
+      answeredCalls++;
+      answeredDurationTotal += Number(row?.billsec || 0);
+    }
+
+    if (incoming && isMissedDisposition(disposition)) missedCalls++;
+
+    if (incoming) {
+      const waitSeconds = calculateWaitSeconds(row);
+      if (waitSeconds !== null && Number.isFinite(waitSeconds)) {
+        waitTotal += waitSeconds;
+        waitCount++;
+        if (answered && waitSeconds <= slaThresholdSeconds) answeredWithinSla++;
+      }
+    }
+  });
+
+  const processedMissedCalls = relevantLostItems.filter(item => item.callbackStatus === 'called_back').length;
+  const callbackRecoveredWithinSla = relevantLostItems.filter(item => item.callbackWithinSla === true).length;
+  const pendingCallback = relevantLostItems.filter(item => item.callbackStatus === 'pending_callback').length;
+  const lostCalls = relevantLostItems.filter(item => item.callbackStatus === 'not_called_back').length;
+  const callbackRecoveryRate = missedCalls ? Math.round((processedMissedCalls / missedCalls) * 100) : 0;
+  const slaRate = inboundCalls ? Math.round((answeredWithinSla / inboundCalls) * 100) : 0;
+
+  return {
+    totalCalls,
+    inboundCalls,
+    outboundCalls,
+    internalCalls,
+    answeredCalls,
+    missedCalls,
+    processedMissedCalls,
+    pendingCallback,
+    lostCalls,
+    callbackRecovered: processedMissedCalls,
+    callbackRecoveredWithinSla,
+    callbackRecoveryRate,
+    slaRate,
+    avgAnswerSeconds: waitCount ? Math.round(waitTotal / waitCount) : null,
+    avgDurationSeconds: answeredCalls ? Math.round(answeredDurationTotal / answeredCalls) : 0
+  };
+};
+
+
+const HEATMAP_DAYS = [
+  { label: 'ПН', jsDay: 1 },
+  { label: 'ВТ', jsDay: 2 },
+  { label: 'СР', jsDay: 3 },
+  { label: 'ЧТ', jsDay: 4 },
+  { label: 'ПТ', jsDay: 5 },
+  { label: 'СБ', jsDay: 6 },
+  { label: 'ВС', jsDay: 0 }
+];
+
+const emptyHeatmapHour = (hour: number) => ({ hour, total: 0, incoming: 0, outgoing: 0, answered: 0, missed: 0, lost: 0 });
+
+const buildCallHeatmap24 = (calls: any[], lostByUniqueId?: Map<string, any>) => {
+  const days = HEATMAP_DAYS.map(day => ({
+    day: day.label,
+    jsDay: day.jsDay,
+    hours: Array.from({ length: 24 }, (_, hour) => emptyHeatmapHour(hour))
+  }));
+  const byJsDay = new Map(days.map(day => [day.jsDay, day]));
+
+  calls.forEach(call => {
+    const date = new Date(String(call?.calldate || '').replace(' ', 'T'));
+    if (Number.isNaN(date.getTime())) return;
+    const day = byJsDay.get(date.getDay());
+    if (!day) return;
+    const hour = day.hours[date.getHours()];
+    const disposition = String(call?.disposition || '').toUpperCase();
+    const incoming = isIncoming(call);
+    const outgoing = isOutgoing(call);
+    const answered = disposition === 'ANSWERED' && Number(call?.billsec || 0) > 0;
+    const missed = incoming && isMissedDisposition(disposition);
+
+    hour.total++;
+    if (incoming) hour.incoming++;
+    if (outgoing) hour.outgoing++;
+    if (answered) hour.answered++;
+    if (missed) hour.missed++;
+    if (lostByUniqueId?.get(call.uniqueid)?.callbackStatus === 'not_called_back') hour.lost++;
+  });
+
+  return { days: days.map(({ jsDay: _jsDay, ...day }) => day) };
+};
+
+type ClientAnalyticsRow = {
+  client: string;
+  company: string | null;
+  phone: string;
+  normalizedPhone: string;
+  responsible: string | null;
+  department: string | null;
+  lastCallAt: string | null;
+  daysWithoutContact: number | null;
+  lastContactType: 'incoming' | 'outgoing' | null;
+  totalCalls: number;
+  incomingCalls: number;
+  outgoingCalls: number;
+  interestIndex: number;
+  status: string;
+};
+
+const getLostClientStatus = (days: number): string => {
+  if (days >= 60) return 'Критический';
+  if (days >= 31) return 'Потерянный';
+  if (days >= 15) return 'Требуется контакт';
+  return 'Риск';
+};
+
+const buildDirectoryPhoneIndex = (directory: any[], settings?: AppSettings): Map<string, any> => {
+  const map = new Map<string, any>();
+  (directory || []).forEach(entry => {
+    const normalizedEntry = normalizeDirectoryEntry(entry, settings);
+    if (normalizedEntry.type === 'internal') return;
+    const phones = [normalizedEntry.number, ...(Array.isArray(normalizedEntry.phones) ? normalizedEntry.phones : []), normalizedEntry.linkedExternalNumber];
+    phones.forEach(phone => {
+      const normalized = normalizePhoneNumberForAnalytics(phone);
+      if (normalized && normalized.length >= 7 && !map.has(normalized)) map.set(normalized, normalizedEntry);
+    });
+  });
+  return map;
+};
+
+const getClientNumberForCall = (call: any): string => {
+  if (isIncoming(call)) return normalizePhoneNumberForAnalytics(call.src);
+  if (isOutgoing(call)) return normalizePhoneNumberForAnalytics(call.dst);
+  return '';
+};
+
+const buildClientAnalytics = (allCalls: any[], periodCalls: any[], options: { directory: any[]; settings?: AppSettings; ownerMap: Map<string, ExtensionOwner>; startMs: number; endMs: number; lostAfterDays?: number; lowInterestThreshold?: number }) => {
+  const directoryIndex = buildDirectoryPhoneIndex(options.directory, options.settings);
+  const byPhone = new Map<string, any>();
+  const nowMs = Number.isFinite(options.endMs) ? options.endMs : Date.now();
+  const lostAfterDays = Math.max(1, Math.min(365, Number(options.lostAfterDays || 30)));
+  const lowInterestThreshold = Math.max(0, Math.min(100, Number(options.lowInterestThreshold ?? 20)));
+  const ensure = (phone: string, directoryEntry?: any) => {
+    const contact = directoryEntry || directoryIndex.get(phone) || null;
+    let row = byPhone.get(phone);
+    if (!row) {
+      row = { client: contact?.name || 'Неизвестный клиент', company: contact?.company || null, phone: contact?.number || phone, normalizedPhone: phone, responsible: contact?.responsibleUserId || null, department: contact?.department || null, lastCallAt: null, lastContactType: null, totalCalls: 0, incomingCalls: 0, outgoingCalls: 0, periodCalls: 0 };
+      byPhone.set(phone, row);
+    }
+    return row;
+  };
+  allCalls.forEach(call => {
+    const phone = getClientNumberForCall(call);
+    if (!phone || phone.length < 7) return;
+    const incoming = isIncoming(call);
+    const outgoing = isOutgoing(call);
+    if (!incoming && !outgoing) return;
+    const row = ensure(phone);
+    const callMs = getCallDateMs(call.calldate);
+    row.totalCalls++;
+    if (incoming) row.incomingCalls++;
+    if (outgoing) row.outgoingCalls++;
+    if (Number.isFinite(callMs) && callMs >= options.startMs && callMs <= options.endMs) row.periodCalls++;
+    if (Number.isFinite(callMs) && (!row.lastCallAt || callMs > getCallDateMs(row.lastCallAt))) {
+      row.lastCallAt = call.calldate || null;
+      row.lastContactType = incoming ? 'incoming' : 'outgoing';
+      const responsibleExt = getResponsibleExtensionForCall(call);
+      const owner = resolveExtensionOwner(options.ownerMap, responsibleExt);
+      row.responsible = row.responsible || owner?.employeeName || responsibleExt || null;
+      row.department = row.department || owner?.department || null;
+    }
+  });
+  directoryIndex.forEach((entry, phone) => ensure(phone, entry));
+  const rows: ClientAnalyticsRow[] = Array.from(byPhone.values()).map(row => {
+    const total = Number(row.incomingCalls || 0) + Number(row.outgoingCalls || 0);
+    const interestIndex = total ? Math.round((Number(row.incomingCalls || 0) / total) * 100) : 0;
+    const lastMs = row.lastCallAt ? getCallDateMs(row.lastCallAt) : NaN;
+    const daysWithoutContact = Number.isFinite(lastMs) ? Math.max(0, Math.floor((nowMs - lastMs) / 86400000)) : null;
+    return { client: row.client, company: row.company, phone: row.phone, normalizedPhone: row.normalizedPhone, responsible: row.responsible, department: row.department, lastCallAt: row.lastCallAt, daysWithoutContact, lastContactType: row.lastContactType, totalCalls: Number(row.totalCalls || 0), incomingCalls: Number(row.incomingCalls || 0), outgoingCalls: Number(row.outgoingCalls || 0), interestIndex, status: daysWithoutContact !== null ? getLostClientStatus(daysWithoutContact) : 'Нет звонков' };
+  });
+  const incoming = periodCalls.filter(call => isIncoming(call) && getClientNumberForCall(call)).length;
+  const outgoing = periodCalls.filter(call => isOutgoing(call) && getClientNumberForCall(call)).length;
+  const total = incoming + outgoing;
+  const initiative = { incoming, outgoing, total, incomingPercent: total ? Math.round((incoming / total) * 100) : 0, outgoingPercent: total ? Math.round((outgoing / total) * 100) : 0, interestIndex: total ? Math.round((incoming / total) * 100) : 0 };
+  const periodPhones = new Set(periodCalls.map(getClientNumberForCall).filter(Boolean));
+  const lostClients = rows.filter(row => row.totalCalls > 0 && row.daysWithoutContact !== null && row.daysWithoutContact >= lostAfterDays && !periodPhones.has(row.normalizedPhone)).sort((a, b) => Number(b.daysWithoutContact || 0) - Number(a.daysWithoutContact || 0)).slice(0, 100);
+  const lowInterestClients = rows.filter(row => row.outgoingCalls > 0 && row.interestIndex < lowInterestThreshold).sort((a, b) => a.interestIndex - b.interestIndex || b.outgoingCalls - a.outgoingCalls).slice(0, 100);
+  const missedWithoutCallback = buildLostCallAnalytics(allCalls, { startMs: options.startMs, endMs: options.endMs, callbackWindowHours: getCallQualitySettings(options.settings).missedCallCallbackSlaHours, directory: options.directory, ownerMap: options.ownerMap }).items.filter(item => item.callbackStatus === 'not_called_back').map(item => {
+    const contact = directoryIndex.get(item.normalizedNumber || '');
+    const missedMs = getCallDateMs(item.missedAt);
+    return { client: contact?.name || 'Неизвестный клиент', company: contact?.company || null, phone: contact?.number || item.externalNumber || item.normalizedNumber, normalizedPhone: item.normalizedNumber, missedAt: item.missedAt, daysSinceMissed: Number.isFinite(missedMs) ? Math.max(0, Math.floor((nowMs - missedMs) / 86400000)) : null, did: item.did, responsible: item.responsibleName || item.responsibleExtension || null, department: item.department || contact?.department || null, status: 'Критично' };
+  }).slice(0, 100);
+  const uniqueClients = new Set(periodCalls.map(getClientNumberForCall).filter(Boolean)).size;
+  const repeatClients = Array.from(new Set(periodCalls.map(getClientNumberForCall).filter(Boolean))).filter(phone => {
+    const row = byPhone.get(phone);
+    return row && Number(row.totalCalls || 0) > Number(row.periodCalls || 0);
+  }).length;
+  return { initiative, summary: { totalClientCalls: initiative.total, uniqueClients, newClients: Math.max(0, uniqueClients - repeatClients), repeatClients, lostClients: lostClients.length, riskClients: lostClients.filter(row => row.status === 'Риск').length, averageInterestIndex: rows.length ? Math.round(rows.reduce((sum, row) => sum + row.interestIndex, 0) / rows.length) : 0 }, topClients: rows.filter(row => row.totalCalls > 0).sort((a, b) => b.totalCalls - a.totalCalls).slice(0, 50), lostClients, lowInterestClients, missedWithoutCallback };
+};
 
 const getDirectoryPhones = (entry: any): string[] => {
   const values = [
@@ -2657,13 +2925,69 @@ const canWriteDirectoryEntry = (entry: any, authUser: any, dbUser: any, settings
   return !!normalized.ownerUserId && normalized.ownerUserId === getDirectoryUserId(dbUser, authUser);
 };
 
+const parseDirectoryPaginationNumber = (value: any, fallback: number, max: number): number => {
+  const parsed = Number.parseInt(String(value ?? ''), 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return fallback;
+  return Math.min(parsed, max);
+};
+
+const getDirectorySearchText = (entry: any): string => {
+  return [
+    entry.name,
+    entry.number,
+    ...(entry.phones || []),
+    entry.internalExtension,
+    entry.linkedExternalNumber,
+    entry.company,
+    entry.position,
+    entry.department,
+    entry.group,
+    entry.email,
+    entry.website,
+    entry.inn,
+    entry.kpp,
+    entry.ogrn,
+    entry.address,
+    entry.comment,
+    entry.responsibleUserId,
+    ...(entry.tags || [])
+  ].join(' ').toLowerCase();
+};
+
+const compareDirectoryEntries = (a: any, b: any): number => {
+  const aName = String(a?.name || '').trim().toLowerCase();
+  const bName = String(b?.name || '').trim().toLowerCase();
+  if (aName && bName) {
+    const byName = aName.localeCompare(bName, 'ru');
+    if (byName !== 0) return byName;
+  } else if (aName) {
+    return -1;
+  } else if (bName) {
+    return 1;
+  }
+
+  const byCompany = String(a?.company || '').trim().toLowerCase().localeCompare(String(b?.company || '').trim().toLowerCase(), 'ru');
+  if (byCompany !== 0) return byCompany;
+
+  const aCreated = Date.parse(String(a?.createdAt || '')) || 0;
+  const bCreated = Date.parse(String(b?.createdAt || '')) || 0;
+  if (aCreated !== bCreated) return bCreated - aCreated;
+
+  return String(a?.id || '').localeCompare(String(b?.id || ''));
+};
+
 const applyDirectoryAccessAndFilters = (entries: any[], req: Request, localDb: any): any[] => {
   const authUser = (req as any).user;
   const dbUser = getAuthenticatedDbUser(localDb, req);
   const q = String(req.query.q || req.query.search || '').trim().toLowerCase();
+  const qDigits = onlyDigits(q);
   const type = String(req.query.type || 'all').trim().toLowerCase();
   const spamMode = String(req.query.spamMode || 'exclude_spam').trim().toLowerCase();
   const visibilityMode = String(req.query.visibilityMode || 'all').trim().toLowerCase();
+  const department = String(req.query.department || 'all').trim().toLowerCase();
+  const company = String(req.query.company || 'all').trim().toLowerCase();
+  const status = String(req.query.status || 'all').trim().toLowerCase();
+  const responsible = String(req.query.responsible || req.query.responsibleUserId || 'all').trim().toLowerCase();
   const currentUserId = getDirectoryUserId(dbUser, authUser);
   const superUser = isDirectorySuperUser(authUser);
 
@@ -2674,6 +2998,12 @@ const applyDirectoryAccessAndFilters = (entries: any[], req: Request, localDb: a
       if (['client', 'supplier', 'government', 'internal'].includes(type) && entry.type !== type) return false;
       if (spamMode === 'exclude_spam' && entry.isSpam) return false;
       if (spamMode === 'only_spam' && !entry.isSpam) return false;
+      if (department !== 'all' && String(entry.department || '').trim().toLowerCase() !== department) return false;
+      if (company !== 'all' && String(entry.company || '').trim().toLowerCase() !== company) return false;
+      if (responsible !== 'all' && String(entry.responsibleUserId || '').trim().toLowerCase() !== responsible) return false;
+      if (status === 'spam' && !entry.isSpam) return false;
+      if (status === 'blacklisted' && !entry.isBlacklisted) return false;
+      if (status === 'active' && (entry.isSpam || entry.isBlacklisted)) return false;
 
       if (visibilityMode === 'shared_only' && entry.visibility !== 'shared') return false;
       if (visibilityMode === 'exclude_shared' && entry.visibility === 'shared') return false;
@@ -2685,25 +3015,31 @@ const applyDirectoryAccessAndFilters = (entries: any[], req: Request, localDb: a
       }
 
       if (!q) return true;
-      const haystack = [
-        entry.name,
-        entry.number,
-        ...(entry.phones || []),
-        entry.company,
-        entry.position,
-        entry.department,
-        entry.group,
-        entry.email,
-        entry.website,
-        entry.inn,
-        entry.kpp,
-        entry.ogrn,
-        entry.address,
-        entry.comment,
-        ...(entry.tags || [])
-      ].join(' ').toLowerCase();
-      return haystack.includes(q);
+      const haystack = getDirectorySearchText(entry);
+      if (haystack.includes(q)) return true;
+      if (!qDigits) return false;
+      return [entry.number, entry.internalExtension, entry.linkedExternalNumber, ...(entry.phones || [])]
+        .map((value: any) => onlyDigits(value))
+        .some((digits: string) => digits && (digits.includes(qDigits) || qDigits.includes(digits)));
     });
+};
+
+const buildDirectoryPaginatedResponse = (entries: any[], req: Request, localDb: any) => {
+  const pageSize = parseDirectoryPaginationNumber(req.query.pageSize, 20, 100);
+  const requestedPage = parseDirectoryPaginationNumber(req.query.page, 1, 1000000);
+  const filtered = applyDirectoryAccessAndFilters(entries, req, localDb).sort(compareDirectoryEntries);
+  const total = filtered.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const page = Math.min(requestedPage, totalPages);
+  const offset = (page - 1) * pageSize;
+
+  return {
+    items: filtered.slice(offset, offset + pageSize),
+    total,
+    page,
+    pageSize,
+    totalPages
+  };
 };
 
 const prepareDirectoryEntryForSave = (raw: any, localDb: any, req: Request, existing?: any): any => {
@@ -3202,6 +3538,11 @@ function normalizeLocalDbSchema(db: any): any {
     calltrackingSites: Array.isArray(db?.calltrackingSites) && db.calltrackingSites.length ? db.calltrackingSites : [createDefaultCalltrackingSite()],
     calltrackingEvents: Array.isArray(db?.calltrackingEvents) ? db.calltrackingEvents : [],
     calltrackingSessions: Array.isArray(db?.calltrackingSessions) ? db.calltrackingSessions : [],
+    calltrackingMatches: Array.isArray(db?.calltrackingMatches) ? db.calltrackingMatches : [],
+    calltrackingPhoneNumbers: Array.isArray(db?.calltrackingPhoneNumbers) ? db.calltrackingPhoneNumbers : [],
+    calltrackingReplacementRules: Array.isArray(db?.calltrackingReplacementRules) ? db.calltrackingReplacementRules : [],
+    marketingDailyAggregates: Array.isArray(db?.marketingDailyAggregates) ? db.marketingDailyAggregates : [],
+    marketingAggregateStatus: db?.marketingAggregateStatus && typeof db.marketingAggregateStatus === 'object' ? db.marketingAggregateStatus : null,
     yandexMetrikaIntegrations: Array.isArray(db?.yandexMetrikaIntegrations) ? db.yandexMetrikaIntegrations.map(normalizeStoredYandexMetrikaIntegration) : [],
     yandexOAuthStates: Array.isArray(db?.yandexOAuthStates) ? db.yandexOAuthStates.filter(isActiveYandexOAuthState) : [],
     contactSyncAccounts: Array.isArray(db?.contactSyncAccounts) ? db.contactSyncAccounts : [],
@@ -3255,6 +3596,11 @@ function getDefaultLocalDb(): any {
     calltrackingSites: [createDefaultCalltrackingSite()],
     calltrackingEvents: [],
     calltrackingSessions: [],
+    calltrackingMatches: [],
+    calltrackingPhoneNumbers: [],
+    calltrackingReplacementRules: [],
+    marketingDailyAggregates: [],
+    marketingAggregateStatus: null,
     yandexMetrikaIntegrations: [],
     yandexOAuthStates: [],
     contactSyncAccounts: [],
@@ -3275,7 +3621,7 @@ function getDefaultLocalDb(): any {
       callbackKpiMinutes: 60,
       answerSlaSeconds: 20,
       missedCallCallbackSlaHours: 24,
-      calltrackingMatchWindowMinutes: 30,
+      calltrackingMatchWindowMinutes: 5,
       freepbxExtensionProvider: 'auto',
       normEnabled: true,
       normReplace8With7: true,
@@ -3299,13 +3645,16 @@ function getDefaultLocalDb(): any {
   };
 }
 
-async function readLocalDb(): Promise<{
+type LocalDb = {
   users: WebUser[];
   missedCallStatuses: MissedCallStatus[];
   settings: AppSettings;
   directory?: any[];
   roles?: any[];
-}> {
+  [key: string]: any;
+};
+
+async function readLocalDb(): Promise<LocalDb> {
   await dbLock.acquire();
   try {
     const content = fs.readFileSync(DB_FILE, 'utf8');
@@ -3449,6 +3798,26 @@ async function readLocalDb(): Promise<{
     }
     if (!Array.isArray(data.calltrackingSessions)) {
       data.calltrackingSessions = [];
+      changed = true;
+    }
+    if (!Array.isArray(data.calltrackingMatches)) {
+      data.calltrackingMatches = [];
+      changed = true;
+    }
+    if (!Array.isArray(data.calltrackingPhoneNumbers)) {
+      data.calltrackingPhoneNumbers = [];
+      changed = true;
+    }
+    if (!Array.isArray(data.calltrackingReplacementRules)) {
+      data.calltrackingReplacementRules = [];
+      changed = true;
+    }
+    if (!Array.isArray(data.marketingDailyAggregates)) {
+      data.marketingDailyAggregates = [];
+      changed = true;
+    }
+    if (!data.marketingAggregateStatus || typeof data.marketingAggregateStatus !== 'object') {
+      data.marketingAggregateStatus = null;
       changed = true;
     }
     if (!Array.isArray(data.yandexMetrikaIntegrations)) {
@@ -3911,6 +4280,135 @@ const buildCalltrackingSite = (body: any) => {
   };
 };
 
+type CalltrackingReplacementMatchType = 'utm_source' | 'utm_medium' | 'utm_campaign' | 'referrer' | 'landing_page' | 'default';
+
+const CALLTRACKING_REPLACEMENT_MATCH_TYPES = new Set<CalltrackingReplacementMatchType>([
+  'utm_source',
+  'utm_medium',
+  'utm_campaign',
+  'referrer',
+  'landing_page',
+  'default'
+]);
+
+const normalizeCalltrackingComparable = (value: unknown): string => cleanMarketingString(value, 1000).toLowerCase();
+
+const buildCalltrackingTelHref = (phoneDisplay: unknown, explicitHref?: unknown): string => {
+  const href = cleanMarketingString(explicitHref, 160);
+  if (href) return href.toLowerCase().startsWith('tel:') ? href : 'tel:' + href.replace(/\s+/g, '');
+  const digits = String(phoneDisplay || '').replace(/\D/g, '');
+  return digits ? 'tel:+' + digits : '';
+};
+
+const normalizeCalltrackingPhoneNumberRecord = (record: any) => ({
+  id: cleanMarketingString(record?.id, 80),
+  siteId: cleanMarketingString(record?.siteId, 120),
+  phoneLabel: cleanMarketingString(record?.phoneLabel, 120),
+  phoneDisplay: cleanMarketingString(record?.phoneDisplay, 120),
+  phoneHref: buildCalltrackingTelHref(record?.phoneDisplay, record?.phoneHref),
+  did: cleanMarketingString(record?.did, 120),
+  isActive: record?.isActive !== false,
+  createdAt: cleanMarketingString(record?.createdAt, 40),
+  updatedAt: cleanMarketingString(record?.updatedAt, 40)
+});
+
+const buildCalltrackingPhoneNumberRecord = (body: any) => {
+  const now = new Date().toISOString();
+  return normalizeCalltrackingPhoneNumberRecord({
+    id: 'ctpn_' + crypto.randomBytes(8).toString('hex'),
+    siteId: body?.siteId,
+    phoneLabel: body?.phoneLabel || 'Основной номер',
+    phoneDisplay: body?.phoneDisplay,
+    phoneHref: body?.phoneHref,
+    did: body?.did,
+    isActive: body?.isActive !== false,
+    createdAt: now,
+    updatedAt: now
+  });
+};
+
+const normalizeCalltrackingReplacementRuleRecord = (record: any) => {
+  const rawMatchType = cleanMarketingString(record?.matchType, 40) as CalltrackingReplacementMatchType;
+  const matchType = CALLTRACKING_REPLACEMENT_MATCH_TYPES.has(rawMatchType) ? rawMatchType : 'default';
+  return {
+    id: cleanMarketingString(record?.id, 80),
+    siteId: cleanMarketingString(record?.siteId, 120),
+    ruleName: cleanMarketingString(record?.ruleName, 160),
+    priority: Math.max(0, Math.min(9999, Number(record?.priority ?? 100) || 100)),
+    matchType,
+    matchValue: matchType === 'default' ? '' : cleanMarketingString(record?.matchValue, 500),
+    phoneNumberId: cleanMarketingString(record?.phoneNumberId, 80),
+    isActive: record?.isActive !== false,
+    createdAt: cleanMarketingString(record?.createdAt, 40),
+    updatedAt: cleanMarketingString(record?.updatedAt, 40)
+  };
+};
+
+const buildCalltrackingReplacementRuleRecord = (body: any) => {
+  const now = new Date().toISOString();
+  return normalizeCalltrackingReplacementRuleRecord({
+    id: 'ctrr_' + crypto.randomBytes(8).toString('hex'),
+    siteId: body?.siteId,
+    ruleName: body?.ruleName || 'Правило подмены',
+    priority: body?.priority,
+    matchType: body?.matchType,
+    matchValue: body?.matchValue,
+    phoneNumberId: body?.phoneNumberId,
+    isActive: body?.isActive !== false,
+    createdAt: now,
+    updatedAt: now
+  });
+};
+
+const calltrackingRuleMatches = (rule: any, context: any): boolean => {
+  if (!rule?.isActive) return false;
+  const expected = normalizeCalltrackingComparable(rule.matchValue);
+  if (rule.matchType === 'default') return true;
+  if (!expected) return false;
+  if (rule.matchType === 'utm_source') return normalizeCalltrackingComparable(context.utmSource) === expected;
+  if (rule.matchType === 'utm_medium') return normalizeCalltrackingComparable(context.utmMedium) === expected;
+  if (rule.matchType === 'utm_campaign') return normalizeCalltrackingComparable(context.utmCampaign) === expected;
+  if (rule.matchType === 'referrer') return normalizeCalltrackingComparable(context.referrer).includes(expected);
+  if (rule.matchType === 'landing_page') return normalizeCalltrackingComparable(context.landingPage || context.pageUrl).includes(expected);
+  return false;
+};
+
+function resolveCalltrackingReplacement(localDb: any, query: any) {
+  const siteKey = cleanMarketingString(query?.siteKey, 160);
+  const siteId = cleanMarketingString(query?.siteId, 120);
+  const sites = Array.isArray(localDb.calltrackingSites) ? localDb.calltrackingSites : [];
+  const site = sites.find((item: any) => item.isActive !== false && ((siteKey && item.publicKey === siteKey) || (siteId && item.id === siteId)));
+  if (!site) return { resolved: false, reason: 'site_not_found' };
+
+  const phoneNumbers = (Array.isArray(localDb.calltrackingPhoneNumbers) ? localDb.calltrackingPhoneNumbers : [])
+    .map(normalizeCalltrackingPhoneNumberRecord)
+    .filter((item: any) => item.siteId === site.id && item.isActive && item.phoneDisplay);
+  if (!phoneNumbers.length) return { resolved: false, reason: 'phone_not_found', siteId: site.id };
+
+  const phoneById = new Map(phoneNumbers.map((item: any) => [item.id, item]));
+  const rules = (Array.isArray(localDb.calltrackingReplacementRules) ? localDb.calltrackingReplacementRules : [])
+    .map(normalizeCalltrackingReplacementRuleRecord)
+    .filter((item: any) => item.siteId === site.id && item.isActive)
+    .sort((a: any, b: any) => a.priority - b.priority || (a.matchType === 'default' ? 1 : 0) - (b.matchType === 'default' ? 1 : 0));
+  const context = {
+    utmSource: query?.utmSource || query?.utm_source,
+    utmMedium: query?.utmMedium || query?.utm_medium,
+    utmCampaign: query?.utmCampaign || query?.utm_campaign,
+    referrer: query?.referrer,
+    landingPage: query?.landingPage || query?.landing_page,
+    pageUrl: query?.pageUrl || query?.page_url
+  };
+
+  for (const rule of rules) {
+    if (!calltrackingRuleMatches(rule, context)) continue;
+    const phone = phoneById.get(rule.phoneNumberId);
+    if (!phone) continue;
+    return { resolved: true, reason: 'rule_matched', siteId: site.id, siteName: site.name || '', phone, rule };
+  }
+
+  return { resolved: false, reason: 'rule_not_found', siteId: site.id };
+}
+
 const normalizeCalltrackingDate = (value: any): string => {
   const parsed = value ? new Date(value) : new Date();
   if (Number.isNaN(parsed.getTime())) return new Date().toISOString();
@@ -3935,25 +4433,21 @@ const calltrackingSiteMap = (sites: any[]) => new Map((sites || []).map(site => 
 
 type CalltrackingMatchConfidence = 'high' | 'medium' | 'low' | 'none';
 type CalltrackingMatchStatus = 'matched' | 'unmatched' | 'ambiguous';
-type CalltrackingMatchReason = 'phone_number_match' | 'time_window_inbound' | 'nearest_inbound_time' | 'multiple_candidates' | 'no_candidate';
+type CalltrackingMatchReason = 'did_time_single_candidate' | 'did_time_match' | 'nearest_inbound_time' | 'multiple_candidates' | 'no_candidate' | 'invalid_event_time';
 type CalltrackingCallbackStatus = 'not_required' | 'called_back' | 'not_called_back' | 'unknown';
 type CalltrackingLeadStatus = 'answered' | 'recovered_by_callback' | 'lost' | 'unmatched' | 'ambiguous';
+type CalltrackingCallStatus = 'answered' | 'missed' | 'lost' | 'unknown';
 
 const normalizeCalltrackingPhoneNumber = (value: any): string | null => {
   let digits = String(value || '').replace(/\D/g, '');
   if (!digits) return null;
   if (digits.length === 11 && digits.startsWith('8')) digits = '7' + digits.slice(1);
-  if (digits.length === 10 && digits.startsWith('9')) digits = '7' + digits;
+  if (digits.length === 10) digits = '7' + digits;
   if (digits.length === 11 && digits.startsWith('7')) return digits;
   return digits || null;
 };
 
-const extractClickedPhone = (event: any): string | null => {
-  return normalizeCalltrackingPhoneNumber([event?.phoneHref, event?.phoneText].filter(Boolean).join(' '));
-};
-
-const extractCdrNumbers = (cdrRow: any): string[] => {
-  const values = [cdrRow?.src, cdrRow?.dst, cdrRow?.did, cdrRow?.cnum, cdrRow?.outbound_cnum, cdrRow?.lastdata, cdrRow?.channel, cdrRow?.dstchannel];
+const collectCalltrackingNumbers = (...values: any[]): string[] => {
   const candidates: string[] = [];
   values.forEach(value => {
     const text = String(value || '');
@@ -3961,6 +4455,34 @@ const extractCdrNumbers = (cdrRow: any): string[] => {
     (text.match(/\+?\d[\d\s().-]{5,}\d/g) || []).forEach(match => candidates.push(match));
   });
   return Array.from(new Set(candidates.map(normalizeCalltrackingPhoneNumber).filter((item): item is string => Boolean(item))));
+};
+
+const extractClickedPhone = (event: any): string | null => {
+  return normalizeCalltrackingPhoneNumber([event?.phoneHref, event?.phoneText].filter(Boolean).join(' '));
+};
+
+const extractEventDisplayedNumbers = (event: any): string[] => {
+  const raw = event?.rawPayload && typeof event.rawPayload === 'object' ? event.rawPayload : {};
+  return collectCalltrackingNumbers(
+    event?.phoneHref,
+    event?.phoneText,
+    raw.phoneHref,
+    raw.phoneText,
+    raw.displayedPhone,
+    raw.displayedNumber,
+    raw.companyPhone,
+    raw.companyNumber,
+    raw.did,
+    raw.dynamicNumber
+  );
+};
+
+const extractCdrNumbers = (cdrRow: any): string[] => {
+  return collectCalltrackingNumbers(cdrRow?.src, cdrRow?.dst, cdrRow?.did, cdrRow?.cnum, cdrRow?.outbound_cnum, cdrRow?.lastdata, cdrRow?.channel, cdrRow?.dstchannel);
+};
+
+const extractCdrDestinationNumbers = (cdrRow: any): string[] => {
+  return collectCalltrackingNumbers(cdrRow?.did, cdrRow?.dst, cdrRow?.lastdata, cdrRow?.dstchannel);
 };
 
 const parseCalltrackingMs = (value: any): number => {
@@ -3977,9 +4499,15 @@ const formatCdrDateParam = (date: Date): string => {
 };
 
 const isAnsweredCdr = (cdrRow: any): boolean => String(cdrRow?.disposition || '').toUpperCase() === 'ANSWERED' && Number(cdrRow?.billsec || 0) > 0;
+const getCalltrackingCallStatus = (cdrRow: any | null): CalltrackingCallStatus => {
+  if (!cdrRow) return 'unknown';
+  if (isAnsweredCdr(cdrRow)) return 'answered';
+  if (isMissedDisposition(cdrRow?.disposition) || String(cdrRow?.disposition || '').toUpperCase() === 'CONGESTION') return 'missed';
+  return 'unknown';
+};
 const isProblemSiteMatch = (match: any): boolean => {
   const disposition = String(match?.matchedDisposition || '').toUpperCase();
-  return Boolean(match?.matchedCallUniqueid) && (!isAnsweredCdr({ disposition, billsec: match?.matchedBillsec }) || isMissedDisposition(disposition) || disposition === 'CONGESTION');
+  return Boolean(match?.matchedCallUniqueid || match?.matchedCallUniqueId) && (!isAnsweredCdr({ disposition, billsec: match?.matchedBillsec }) || isMissedDisposition(disposition) || disposition === 'CONGESTION');
 };
 const isLostSiteCall = (match: any): boolean => match?.leadStatus === 'lost';
 
@@ -3999,8 +4527,17 @@ async function loadCalltrackingCdrRows(settings: AppSettings, phoneClicks: any[]
   });
 }
 
-function buildCalltrackingMatch(event: any, site: any, cdrRow: any | null, status: CalltrackingMatchStatus, confidence: CalltrackingMatchConfidence, reason: CalltrackingMatchReason, secondsToCall: number | null) {
-  const leadStatus: CalltrackingLeadStatus = status === 'ambiguous' ? 'ambiguous' : status === 'unmatched' ? 'unmatched' : isAnsweredCdr(cdrRow) ? 'answered' : 'lost';
+const calltrackingConfidenceLabel = (score: number): CalltrackingMatchConfidence => {
+  if (score >= 100) return 'high';
+  if (score >= 80) return 'medium';
+  if (score > 0) return 'low';
+  return 'none';
+};
+
+function buildCalltrackingMatch(event: any, site: any, cdrRow: any | null, status: CalltrackingMatchStatus, confidenceScore: number, reason: CalltrackingMatchReason, secondsToCall: number | null, candidateCount = 0) {
+  const callStatus = getCalltrackingCallStatus(cdrRow);
+  const leadStatus: CalltrackingLeadStatus = status === 'ambiguous' ? 'ambiguous' : status === 'unmatched' ? 'unmatched' : callStatus === 'answered' ? 'answered' : 'lost';
+  const matchedAt = new Date().toISOString();
   return {
     eventId: event.id,
     id: event.id,
@@ -4015,10 +4552,16 @@ function buildCalltrackingMatch(event: any, site: any, cdrRow: any | null, statu
     utmMedium: event.utmMedium || '',
     utmCampaign: event.utmCampaign || '',
     matchStatus: status,
-    matchConfidence: confidence,
+    matchConfidence: calltrackingConfidenceLabel(confidenceScore),
+    matchConfidenceScore: confidenceScore,
     matchReason: reason,
+    matchExplanation: reason + '; candidates=' + candidateCount + (secondsToCall === null ? '' : '; secondsToCall=' + secondsToCall),
+    matchedAt,
+    candidateCount,
     matchedCallUniqueid: cdrRow?.uniqueid || null,
+    matchedCallUniqueId: cdrRow?.uniqueid || null,
     matchedLinkedid: cdrRow?.linkedid || null,
+    matchedLinkedId: cdrRow?.linkedid || null,
     matchedCallDate: cdrRow?.calldate || null,
     matchedExternalNumber: cdrRow ? (normalizeCalltrackingPhoneNumber(cdrRow.src) || normalizeCalltrackingPhoneNumber(cdrRow.cnum) || cdrRow.src || null) : null,
     matchedDestinationNumber: cdrRow ? (normalizeCalltrackingPhoneNumber(cdrRow.did || cdrRow.dst) || cdrRow.did || cdrRow.dst || null) : null,
@@ -4028,6 +4571,7 @@ function buildCalltrackingMatch(event: any, site: any, cdrRow: any | null, statu
     matchedRecordingFile: cdrRow?.recordingfile || null,
     responsibleExtension: cdrRow ? getResponsibleExtension(cdrRow) : null,
     secondsToCall,
+    callStatus,
     callbackStatus: leadStatus === 'answered' ? 'not_required' as CalltrackingCallbackStatus : status === 'matched' ? 'not_called_back' as CalltrackingCallbackStatus : 'unknown' as CalltrackingCallbackStatus,
     callbackCallUniqueid: null,
     callbackCallDate: null,
@@ -4041,7 +4585,7 @@ function buildCalltrackingMatch(event: any, site: any, cdrRow: any | null, statu
 function calculateCalltrackingMatches(events: any[], cdrRows: any[], options: { matchWindowMinutes: number; sites: Map<any, any> }) {
   const inboundRows = cdrRows
     .filter(row => isIncoming(row))
-    .map(row => ({ row, ms: parseCalltrackingMs(row.calldate), numbers: extractCdrNumbers(row) }))
+    .map(row => ({ row, ms: parseCalltrackingMs(row.calldate), numbers: extractCdrNumbers(row), destinationNumbers: extractCdrDestinationNumbers(row) }))
     .filter(item => Number.isFinite(item.ms))
     .sort((a, b) => a.ms - b.ms);
   const windowMs = Math.max(1, options.matchWindowMinutes) * 60 * 1000;
@@ -4050,31 +4594,33 @@ function calculateCalltrackingMatches(events: any[], cdrRows: any[], options: { 
     const eventMs = parseCalltrackingMs(event.eventTime || event.createdAt);
     const site = options.sites.get(event.siteId);
     if (!Number.isFinite(eventMs)) {
-      return buildCalltrackingMatch(event, site, null, 'unmatched', 'none', 'no_candidate', null);
+      return buildCalltrackingMatch(event, site, null, 'unmatched', 0, 'invalid_event_time', null, 0);
     }
 
-    const clickedPhone = extractClickedPhone(event);
-    const candidates = inboundRows.filter(item => item.ms >= eventMs && item.ms <= eventMs + windowMs);
+    const displayedNumbers = extractEventDisplayedNumbers(event);
+    const candidates = inboundRows
+      .filter(item => item.ms >= eventMs && item.ms <= eventMs + windowMs)
+      .map(item => ({ ...item, secondsToCall: Math.max(0, Math.round((item.ms - eventMs) / 1000)), didMatch: displayedNumbers.length > 0 && item.destinationNumbers.some(number => displayedNumbers.includes(number)) }))
+      .sort((a, b) => a.secondsToCall - b.secondsToCall);
+
     if (candidates.length === 0) {
-      return buildCalltrackingMatch(event, site, null, 'unmatched', 'none', 'no_candidate', null);
+      return buildCalltrackingMatch(event, site, null, 'unmatched', 0, 'no_candidate', null, 0);
     }
 
-    if (clickedPhone) {
-      const exact = candidates.find(item => item.numbers.includes(clickedPhone));
-      if (exact) {
-        return buildCalltrackingMatch(event, site, exact.row, 'matched', 'high', 'phone_number_match', Math.max(0, Math.round((exact.ms - eventMs) / 1000)));
-      }
+    const didCandidates = candidates.filter(item => item.didMatch);
+    if (didCandidates.length) {
+      const nearest = didCandidates[0];
+      const score = didCandidates.length === 1 ? 100 : 80;
+      const reason: CalltrackingMatchReason = didCandidates.length === 1 ? 'did_time_single_candidate' : 'did_time_match';
+      return buildCalltrackingMatch(event, site, nearest.row, 'matched', score, reason, nearest.secondsToCall, didCandidates.length);
     }
 
     const nearest = candidates[0];
-    const sameSecond = candidates.filter(item => Math.abs(item.ms - nearest.ms) <= 1000);
-    if (sameSecond.length > 1) {
-      return buildCalltrackingMatch(event, site, nearest.row, 'ambiguous', 'low', 'multiple_candidates', Math.max(0, Math.round((nearest.ms - eventMs) / 1000)));
+    if (candidates.length > 1) {
+      return buildCalltrackingMatch(event, site, nearest.row, 'matched', 50, 'multiple_candidates', nearest.secondsToCall, candidates.length);
     }
 
-    const confidence: CalltrackingMatchConfidence = candidates.length === 1 ? 'medium' : 'low';
-    const reason: CalltrackingMatchReason = candidates.length === 1 ? 'time_window_inbound' : 'nearest_inbound_time';
-    return buildCalltrackingMatch(event, site, nearest.row, 'matched', confidence, reason, Math.max(0, Math.round((nearest.ms - eventMs) / 1000)));
+    return buildCalltrackingMatch(event, site, nearest.row, 'matched', 50, 'nearest_inbound_time', nearest.secondsToCall, 1);
   });
 }
 
@@ -4092,24 +4638,26 @@ function findSuccessfulSiteCallback(match: any, cdrRows: any[], callbackWindowHo
 
 function applyCalltrackingCallbackAnalysis(matches: any[], cdrRows: any[], callbackWindowHours: number) {
   return matches.map(match => {
-    if (match.matchStatus === 'unmatched') return { ...match, leadStatus: 'unmatched', callbackStatus: 'unknown' };
+    if (match.matchStatus === 'unmatched') return { ...match, leadStatus: 'unmatched', callStatus: 'unknown', callbackStatus: 'unknown' };
     if (match.matchStatus === 'ambiguous') return { ...match, leadStatus: 'ambiguous', callbackStatus: 'unknown' };
-    if (!isProblemSiteMatch(match)) return { ...match, leadStatus: 'answered', callbackStatus: 'not_required' };
+    if (!isProblemSiteMatch(match)) return { ...match, leadStatus: 'answered', callStatus: 'answered', callbackStatus: 'not_required' };
     const missedMs = parseCalltrackingMs(match.matchedCallDate);
     const externalNumber = normalizeCalltrackingPhoneNumber(match.matchedExternalNumber);
     if (!externalNumber || !Number.isFinite(missedMs)) {
-      return { ...match, leadStatus: 'lost', callbackStatus: 'unknown' };
+      return { ...match, leadStatus: 'lost', callStatus: 'lost', callbackStatus: 'unknown' };
     }
     const callback = findSuccessfulSiteCallback(match, cdrRows, callbackWindowHours);
     if (!callback) {
-      return { ...match, leadStatus: 'lost', callbackStatus: 'not_called_back' };
+      return { ...match, leadStatus: 'lost', callStatus: 'lost', callbackStatus: 'not_called_back' };
     }
     const callbackMs = parseCalltrackingMs(callback.calldate);
     return {
       ...match,
       leadStatus: 'recovered_by_callback',
+      callStatus: 'missed',
       callbackStatus: 'called_back',
       callbackCallUniqueid: callback.uniqueid || null,
+      callbackCallUniqueId: callback.uniqueid || null,
       callbackCallDate: callback.calldate || null,
       callbackSecondsAfterMissed: Number.isFinite(callbackMs) ? Math.max(0, Math.round((callbackMs - missedMs) / 1000)) : null,
       callbackDisposition: callback.disposition || null,
@@ -4910,6 +5458,337 @@ function findYandexDirectIntegration(localDb: any, siteId?: string) {
   return integration;
 }
 
+type MarketingDailyAggregate = {
+  id: string;
+  date: string;
+  source: string;
+  medium: string;
+  campaign: string;
+  campaignId: string | null;
+  siteId: string;
+  visits: number;
+  pageviews: number;
+  adImpressions: number;
+  adClicks: number;
+  adCost: number | null;
+  phoneImpressions: number;
+  phoneClicks: number;
+  formSubmits: number;
+  whatsappClicks: number;
+  telegramClicks: number;
+  emailClicks: number;
+  matchedCalls: number;
+  answeredCalls: number;
+  missedCalls: number;
+  lostCalls: number;
+  callbackCalls: number;
+  avgCallDuration: number | null;
+  avgWaitTime: number | null;
+  slaPercent: number | null;
+  costPerCall: number | null;
+  costPerAnsweredCall: number | null;
+  costPerLostCall: number | null;
+  lostBudgetEstimate: number | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+const normalizeMarketingAggregateDate = (value: any, fallback = new Date().toISOString().slice(0, 10)): string => {
+  const raw = String(value || '').slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : fallback;
+};
+
+const marketingAggregateDateRange = (dateFrom: any, dateTo: any) => {
+  const from = normalizeMarketingAggregateDate(dateFrom);
+  const to = normalizeMarketingAggregateDate(dateTo, from);
+  return from <= to ? { dateFrom: from, dateTo: to } : { dateFrom: to, dateTo: from };
+};
+
+const addDaysIso = (date: string, days: number): string => {
+  const parsed = new Date(date + 'T00:00:00Z');
+  parsed.setUTCDate(parsed.getUTCDate() + days);
+  return parsed.toISOString().slice(0, 10);
+};
+
+const marketingAggregateKey = (row: any) => [row.date, row.siteId || '', row.source || 'direct', row.medium || '', row.campaign || '', row.campaignId || ''].join('||');
+
+const createMarketingAggregateGroup = (date: string, siteId: string, source: any, medium: any, campaign: any, campaignId: any = null) => ({
+  date,
+  siteId: cleanMarketingString(siteId, 120),
+  source: cleanMarketingString(source, 240) || 'direct',
+  medium: cleanMarketingString(medium, 160),
+  campaign: cleanMarketingString(campaign, 240),
+  campaignId: cleanMarketingString(campaignId, 120) || null,
+  sessions: new Set<string>(),
+  visits: 0,
+  pageviews: 0,
+  adImpressions: 0,
+  adClicks: 0,
+  adCost: null as number | null,
+  phoneImpressions: 0,
+  phoneClicks: 0,
+  formSubmits: 0,
+  whatsappClicks: 0,
+  telegramClicks: 0,
+  emailClicks: 0,
+  matchedCalls: 0,
+  answeredCalls: 0,
+  missedCalls: 0,
+  lostCalls: 0,
+  callbackCalls: 0,
+  callDurationTotal: 0,
+  callDurationCount: 0,
+  waitTimeTotal: 0,
+  waitTimeCount: 0,
+  slaOk: 0,
+  slaTotal: 0
+});
+
+const getMarketingAggregateGroup = (groups: Map<string, any>, date: string, siteId: string, source: any, medium: any, campaign: any, campaignId: any = null) => {
+  const group = createMarketingAggregateGroup(date, siteId, source, medium, campaign, campaignId);
+  const key = marketingAggregateKey(group);
+  if (!groups.has(key)) groups.set(key, group);
+  return groups.get(key);
+};
+
+const finalizeMarketingAggregateGroup = (group: any, existingCreatedAt?: string): MarketingDailyAggregate => {
+  const now = new Date().toISOString();
+  const visits = Math.max(numberOrZero(group.visits), group.sessions instanceof Set ? group.sessions.size : 0);
+  const adCost = group.adCost === null || group.adCost === undefined ? null : roundMoney(group.adCost);
+  const matchedCalls = Math.round(numberOrZero(group.matchedCalls));
+  const answeredCalls = Math.round(numberOrZero(group.answeredCalls));
+  const lostCalls = Math.round(numberOrZero(group.lostCalls));
+  const avgCallDuration = group.callDurationCount ? Math.round(group.callDurationTotal / group.callDurationCount) : null;
+  const avgWaitTime = group.waitTimeCount ? Math.round(group.waitTimeTotal / group.waitTimeCount) : null;
+  const slaPercent = group.slaTotal ? Math.round((group.slaOk / group.slaTotal) * 1000) / 10 : null;
+  return {
+    id: crypto.createHash('sha1').update(marketingAggregateKey(group)).digest('hex'),
+    date: group.date,
+    source: group.source,
+    medium: group.medium,
+    campaign: group.campaign,
+    campaignId: group.campaignId || null,
+    siteId: group.siteId,
+    visits,
+    pageviews: Math.round(numberOrZero(group.pageviews)),
+    adImpressions: Math.round(numberOrZero(group.adImpressions)),
+    adClicks: Math.round(numberOrZero(group.adClicks)),
+    adCost,
+    phoneImpressions: Math.round(numberOrZero(group.phoneImpressions)),
+    phoneClicks: Math.round(numberOrZero(group.phoneClicks)),
+    formSubmits: Math.round(numberOrZero(group.formSubmits)),
+    whatsappClicks: Math.round(numberOrZero(group.whatsappClicks)),
+    telegramClicks: Math.round(numberOrZero(group.telegramClicks)),
+    emailClicks: Math.round(numberOrZero(group.emailClicks)),
+    matchedCalls,
+    answeredCalls,
+    missedCalls: Math.round(numberOrZero(group.missedCalls)),
+    lostCalls,
+    callbackCalls: Math.round(numberOrZero(group.callbackCalls)),
+    avgCallDuration,
+    avgWaitTime,
+    slaPercent,
+    costPerCall: adCost === null ? null : safeDivideMoney(adCost, matchedCalls),
+    costPerAnsweredCall: adCost === null ? null : safeDivideMoney(adCost, answeredCalls),
+    costPerLostCall: adCost === null ? null : safeDivideMoney(adCost, lostCalls),
+    lostBudgetEstimate: adCost === null ? null : (lostCalls > 0 && matchedCalls > 0 ? roundMoney(adCost * (lostCalls / matchedCalls)) : 0),
+    createdAt: existingCreatedAt || now,
+    updatedAt: now
+  };
+};
+
+async function rebuildDailyAggregate(localDb: any, date: string, siteId?: string) {
+  const aggregateDate = normalizeMarketingAggregateDate(date);
+  const siteFilter = cleanMarketingString(siteId, 120);
+  const groups = new Map<string, any>();
+  const query = { startDate: aggregateDate, endDate: aggregateDate, ...(siteFilter ? { siteId: siteFilter } : {}) };
+  const settings = getCallQualitySettings(localDb.settings || {});
+  const events = (Array.isArray(localDb.calltrackingEvents) ? localDb.calltrackingEvents : []).filter((event: any) => {
+    if (siteFilter && event.siteId !== siteFilter) return false;
+    return isWithinDateRange(event.eventTime || event.createdAt, aggregateDate, aggregateDate);
+  });
+  const dataset = await getCalltrackingMatchDataset(localDb, query);
+  const matchesByEventId = new Map(dataset.matches.map((match: any) => [match.eventId, match]));
+
+  events.forEach((event: any) => {
+    const source = event.utmSource || event.referrer || 'direct';
+    const medium = event.utmMedium || '';
+    const campaign = event.utmCampaign || '';
+    const group = getMarketingAggregateGroup(groups, aggregateDate, event.siteId || '', source, medium, campaign, null);
+    if (event.sessionId) group.sessions.add(String(event.sessionId));
+    if (event.eventType === 'page_view') group.pageviews++;
+    if (event.eventType === 'phone_impression') group.phoneImpressions++;
+    if (event.eventType === 'phone_click') {
+      group.phoneClicks++;
+      const match = matchesByEventId.get(event.id);
+      if (match?.matchStatus === 'matched') {
+        group.matchedCalls++;
+        if (match.leadStatus === 'answered') group.answeredCalls++;
+        if (isProblemSiteMatch(match)) group.missedCalls++;
+        if (match.leadStatus === 'recovered_by_callback') group.callbackCalls++;
+        if (isLostSiteCall(match)) group.lostCalls++;
+        const duration = Number(match.matchedBillsec ?? match.matchedDuration);
+        if (Number.isFinite(duration) && duration >= 0) {
+          group.callDurationTotal += duration;
+          group.callDurationCount++;
+        }
+        const wait = Number(match.secondsToCall);
+        if (Number.isFinite(wait) && wait >= 0) {
+          group.waitTimeTotal += wait;
+          group.waitTimeCount++;
+          group.slaTotal++;
+          if (wait <= settings.answerSlaSeconds) group.slaOk++;
+        }
+      }
+    }
+    if (event.eventType === 'form_submit') group.formSubmits++;
+    if (event.eventType === 'whatsapp_click') group.whatsappClicks++;
+    if (event.eventType === 'telegram_click') group.telegramClicks++;
+    if (event.eventType === 'email_click') group.emailClicks++;
+  });
+
+  const metrikaIntegrations = (Array.isArray(localDb.yandexMetrikaIntegrations) ? localDb.yandexMetrikaIntegrations : [])
+    .filter((integration: any) => integration.isActive !== false && integration.accessToken && integration.counterId && (!siteFilter || integration.siteId === siteFilter));
+
+  for (const integration of metrikaIntegrations) {
+    try {
+      const metrikaSources = await fetchYandexMetrikaSources(integration, aggregateDate, aggregateDate);
+      metrikaSources.forEach((row: any) => {
+        const group = getMarketingAggregateGroup(groups, aggregateDate, integration.siteId || '', row.source || 'direct', row.medium || '', row.campaign || '', null);
+        group.visits = Math.max(numberOrZero(group.visits), Math.round(numberOrZero(row.visits)));
+      });
+      integration.lastSyncAt = new Date().toISOString();
+      integration.lastError = null;
+    } catch (error: any) {
+      integration.lastError = normalizeYandexMetrikaError(error);
+    }
+
+    const direct = normalizeYandexDirectSettings(integration.direct);
+    if (direct.enabled) {
+      try {
+        const directRows = aggregateYandexDirectSources(await fetchYandexDirectCostsViaMetrika(integration, aggregateDate, aggregateDate));
+        directRows.forEach((row: any) => {
+          const group = getMarketingAggregateGroup(groups, aggregateDate, integration.siteId || '', row.source || 'yandex', row.medium || 'cpc', row.campaignName || row.campaignId || '', row.campaignId || null);
+          group.adClicks += Math.round(numberOrZero(row.clicks));
+          if (row.cost !== null && row.cost !== undefined) group.adCost = roundMoney(numberOrZero(group.adCost) + numberOrZero(row.cost));
+        });
+        integration.direct = { ...direct, lastSyncAt: new Date().toISOString(), lastError: null };
+      } catch (error: any) {
+        integration.direct = { ...direct, lastError: normalizeYandexMetrikaError(error) };
+      }
+    }
+  }
+
+  const existingByKey = new Map<string, any>((Array.isArray(localDb.marketingDailyAggregates) ? localDb.marketingDailyAggregates : []).map((row: any) => [marketingAggregateKey(row), row]));
+  const nextRows = Array.from(groups.values()).map(group => finalizeMarketingAggregateGroup(group, existingByKey.get(marketingAggregateKey(group))?.createdAt));
+  if (!Array.isArray(localDb.marketingDailyAggregates)) localDb.marketingDailyAggregates = [];
+  localDb.marketingDailyAggregates = localDb.marketingDailyAggregates.filter((row: any) => {
+    if (row.date !== aggregateDate) return true;
+    if (siteFilter && row.siteId !== siteFilter) return true;
+    return false;
+  });
+  localDb.marketingDailyAggregates.push(...nextRows);
+  localDb.marketingAggregateStatus = {
+    ...(localDb.marketingAggregateStatus || {}),
+    lastRebuildAt: new Date().toISOString(),
+    lastDateFrom: aggregateDate,
+    lastDateTo: aggregateDate,
+    lastSiteId: siteFilter || null,
+    lastError: null
+  };
+  return { date: aggregateDate, siteId: siteFilter || null, rows: nextRows.length };
+}
+
+async function rebuildPeriodAggregates(localDb: any, dateFrom: string, dateTo: string, siteId?: string) {
+  const range = marketingAggregateDateRange(dateFrom, dateTo);
+  const results: any[] = [];
+  for (let day = range.dateFrom; day <= range.dateTo; day = addDaysIso(day, 1)) {
+    results.push(await rebuildDailyAggregate(localDb, day, siteId));
+  }
+  localDb.marketingAggregateStatus = {
+    ...(localDb.marketingAggregateStatus || {}),
+    lastRebuildAt: new Date().toISOString(),
+    lastDateFrom: range.dateFrom,
+    lastDateTo: range.dateTo,
+    lastSiteId: cleanMarketingString(siteId, 120) || null,
+    lastError: null,
+    rows: results.reduce((sum, item) => sum + numberOrZero(item.rows), 0)
+  };
+  return { ...range, siteId: cleanMarketingString(siteId, 120) || null, days: results.length, rows: results.reduce((sum, item) => sum + numberOrZero(item.rows), 0), results };
+}
+
+function getAggregates(localDb: any, period: { dateFrom: string; dateTo: string }, filters: any = {}) {
+  const siteId = cleanMarketingString(filters.siteId, 120);
+  const sourceFilter = cleanMarketingString(filters.source, 240).toLowerCase();
+  const mediumFilter = cleanMarketingString(filters.medium, 160).toLowerCase();
+  const campaignFilter = cleanMarketingString(filters.campaign, 240).toLowerCase();
+  const rows = (Array.isArray(localDb.marketingDailyAggregates) ? localDb.marketingDailyAggregates : []).filter((row: any) => {
+    if (row.date < period.dateFrom || row.date > period.dateTo) return false;
+    if (siteId && row.siteId !== siteId) return false;
+    if (sourceFilter && String(row.source || '').toLowerCase() !== sourceFilter) return false;
+    if (mediumFilter && String(row.medium || '').toLowerCase() !== mediumFilter) return false;
+    if (campaignFilter && String(row.campaign || '').toLowerCase() !== campaignFilter) return false;
+    return true;
+  });
+
+  const summary = rows.reduce((acc: any, row: any) => {
+    acc.visits += numberOrZero(row.visits);
+    acc.pageviews += numberOrZero(row.pageviews);
+    acc.adImpressions += numberOrZero(row.adImpressions);
+    acc.adClicks += numberOrZero(row.adClicks);
+    acc.adCost = roundMoney(numberOrZero(acc.adCost) + numberOrZero(row.adCost)) || 0;
+    acc.phoneImpressions += numberOrZero(row.phoneImpressions);
+    acc.phoneClicks += numberOrZero(row.phoneClicks);
+    acc.formSubmits += numberOrZero(row.formSubmits);
+    acc.whatsappClicks += numberOrZero(row.whatsappClicks);
+    acc.telegramClicks += numberOrZero(row.telegramClicks);
+    acc.emailClicks += numberOrZero(row.emailClicks);
+    acc.matchedCalls += numberOrZero(row.matchedCalls);
+    acc.answeredCalls += numberOrZero(row.answeredCalls);
+    acc.missedCalls += numberOrZero(row.missedCalls);
+    acc.lostCalls += numberOrZero(row.lostCalls);
+    acc.callbackCalls += numberOrZero(row.callbackCalls);
+    return acc;
+  }, { visits: 0, pageviews: 0, adImpressions: 0, adClicks: 0, adCost: 0, phoneImpressions: 0, phoneClicks: 0, formSubmits: 0, whatsappClicks: 0, telegramClicks: 0, emailClicks: 0, matchedCalls: 0, answeredCalls: 0, missedCalls: 0, lostCalls: 0, callbackCalls: 0 });
+
+  summary.costPerCall = safeDivideMoney(summary.adCost, summary.matchedCalls);
+  summary.costPerAnsweredCall = safeDivideMoney(summary.adCost, summary.answeredCalls);
+  summary.costPerLostCall = safeDivideMoney(summary.adCost, summary.lostCalls);
+  summary.lostBudgetEstimate = summary.lostCalls > 0 && summary.matchedCalls > 0 ? roundMoney(summary.adCost * (summary.lostCalls / summary.matchedCalls)) : 0;
+
+  const sourceGroups = new Map<string, any>();
+  rows.forEach((row: any) => {
+    const key = [row.source || 'direct', row.medium || '', row.campaign || '', row.campaignId || ''].join('||');
+    if (!sourceGroups.has(key)) sourceGroups.set(key, { source: row.source || 'direct', medium: row.medium || '', campaign: row.campaign || '', campaignId: row.campaignId || null, visits: 0, phoneClicks: 0, formSubmits: 0, calls: 0, answeredCalls: 0, missedCalls: 0, recoveredByCallback: 0, trueLostLeads: 0, cost: null, directClicks: 0 });
+    const group = sourceGroups.get(key);
+    group.visits += numberOrZero(row.visits);
+    group.phoneClicks += numberOrZero(row.phoneClicks);
+    group.formSubmits += numberOrZero(row.formSubmits);
+    group.calls += numberOrZero(row.matchedCalls);
+    group.answeredCalls += numberOrZero(row.answeredCalls);
+    group.missedCalls += numberOrZero(row.missedCalls);
+    group.recoveredByCallback += numberOrZero(row.callbackCalls);
+    group.trueLostLeads += numberOrZero(row.lostCalls);
+    group.lostCalls += numberOrZero(row.lostCalls);
+    group.cost = roundMoney(numberOrZero(group.cost) + numberOrZero(row.adCost));
+    group.directClicks += numberOrZero(row.adClicks);
+  });
+  const sources = Array.from(sourceGroups.values()).map(group => attachCostMetrics({
+    ...group,
+    matchRate: group.phoneClicks ? Math.round((group.calls / group.phoneClicks) * 1000) / 10 : 0,
+    clickToCallConversion: group.phoneClicks ? Math.round((group.calls / group.phoneClicks) * 1000) / 10 : 0,
+    callbackRecoveryRate: group.missedCalls ? Math.round((group.recoveredByCallback / group.missedCalls) * 1000) / 10 : 0
+  })).sort((a, b) => Number(b.cost || 0) - Number(a.cost || 0) || Number(b.phoneClicks || 0) - Number(a.phoneClicks || 0) || Number(b.visits || 0) - Number(a.visits || 0));
+
+  return { rows, sources, summary, status: localDb.marketingAggregateStatus || null };
+}
+
+const marketingAggregationService = {
+  rebuildDailyAggregate,
+  rebuildPeriodAggregates,
+  getAggregates
+};
+
 async function markYandexDirectIntegration(localDb: any, integrationId: string, patch: any) {
   if (!Array.isArray(localDb.yandexMetrikaIntegrations)) return;
   const integration = localDb.yandexMetrikaIntegrations.find((item: any) => item.id === integrationId);
@@ -4952,6 +5831,41 @@ async function markYandexMetrikaIntegration(localDb: any, integrationId: string,
 // API ROUTER START
 const app = express();
 app.use(express.json({ limit: '25mb' }));
+
+app.options('/api/calltracking/resolve-number', (_req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.status(204).end();
+});
+
+app.get('/api/calltracking/resolve-number', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  try {
+    const localDb = await readLocalDb();
+    const result = resolveCalltrackingReplacement(localDb, req.query);
+    if (!result.resolved) {
+      return res.json({ ok: true, resolved: false, reason: result.reason, siteId: result.siteId || null });
+    }
+    res.json({
+      ok: true,
+      resolved: true,
+      reason: result.reason,
+      siteId: result.siteId,
+      siteName: result.siteName,
+      phone: result.phone,
+      rule: result.rule ? {
+        id: result.rule.id,
+        ruleName: result.rule.ruleName,
+        priority: result.rule.priority,
+        matchType: result.rule.matchType,
+        matchValue: result.rule.matchValue
+      } : null
+    });
+  } catch (error: any) {
+    res.json({ ok: false, resolved: false, reason: 'internal_error' });
+  }
+});
 
 app.options('/api/calltracking/event', (_req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -5076,6 +5990,89 @@ app.post('/api/calltracking/sites', requireAuth(), async (req, res) => {
   res.json({ ok: true, site });
 });
 
+app.get('/api/calltracking/phone-numbers', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
+  const localDb = await readLocalDb();
+  const siteId = cleanMarketingString(req.query.siteId, 120);
+  let numbers = (Array.isArray(localDb.calltrackingPhoneNumbers) ? localDb.calltrackingPhoneNumbers : []).map(normalizeCalltrackingPhoneNumberRecord);
+  if (siteId) numbers = numbers.filter((item: any) => item.siteId === siteId);
+  res.json({ numbers });
+});
+
+app.post('/api/calltracking/phone-numbers', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
+  const payloadSize = Buffer.byteLength(JSON.stringify(req.body || {}), 'utf8');
+  if (payloadSize > CALLTRACKING_MAX_PAYLOAD_BYTES) return res.status(413).json({ error: 'payload_too_large' });
+  const localDb = await readLocalDb();
+  const siteId = cleanMarketingString(req.body?.siteId, 120);
+  const site = (Array.isArray(localDb.calltrackingSites) ? localDb.calltrackingSites : []).find((item: any) => item.id === siteId);
+  if (!site) return res.status(400).json({ error: 'site_not_found' });
+  const phone = buildCalltrackingPhoneNumberRecord(req.body);
+  if (!phone.phoneDisplay) return res.status(400).json({ error: 'phone_display_required' });
+  if (!Array.isArray(localDb.calltrackingPhoneNumbers)) localDb.calltrackingPhoneNumbers = [];
+  localDb.calltrackingPhoneNumbers.push(phone);
+  await writeLocalDb(localDb);
+  res.json({ ok: true, phone });
+});
+
+app.patch('/api/calltracking/phone-numbers/:id', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
+  const localDb = await readLocalDb();
+  if (!Array.isArray(localDb.calltrackingPhoneNumbers)) localDb.calltrackingPhoneNumbers = [];
+  const index = localDb.calltrackingPhoneNumbers.findIndex((item: any) => item.id === req.params.id);
+  if (index < 0) return res.status(404).json({ error: 'phone_not_found' });
+  const current = normalizeCalltrackingPhoneNumberRecord(localDb.calltrackingPhoneNumbers[index]);
+  const next = normalizeCalltrackingPhoneNumberRecord({ ...current, ...req.body, id: current.id, siteId: current.siteId, updatedAt: new Date().toISOString() });
+  if (!next.phoneDisplay) return res.status(400).json({ error: 'phone_display_required' });
+  localDb.calltrackingPhoneNumbers[index] = next;
+  await writeLocalDb(localDb);
+  res.json({ ok: true, phone: next });
+});
+
+app.get('/api/calltracking/replacement-rules', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
+  const localDb = await readLocalDb();
+  const siteId = cleanMarketingString(req.query.siteId, 120);
+  let rules = (Array.isArray(localDb.calltrackingReplacementRules) ? localDb.calltrackingReplacementRules : []).map(normalizeCalltrackingReplacementRuleRecord);
+  if (siteId) rules = rules.filter((item: any) => item.siteId === siteId);
+  rules.sort((a: any, b: any) => a.priority - b.priority);
+  res.json({ rules });
+});
+
+app.post('/api/calltracking/replacement-rules', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
+  const payloadSize = Buffer.byteLength(JSON.stringify(req.body || {}), 'utf8');
+  if (payloadSize > CALLTRACKING_MAX_PAYLOAD_BYTES) return res.status(413).json({ error: 'payload_too_large' });
+  const localDb = await readLocalDb();
+  const siteId = cleanMarketingString(req.body?.siteId, 120);
+  const site = (Array.isArray(localDb.calltrackingSites) ? localDb.calltrackingSites : []).find((item: any) => item.id === siteId);
+  if (!site) return res.status(400).json({ error: 'site_not_found' });
+  const rule = buildCalltrackingReplacementRuleRecord(req.body);
+  const phoneExists = (Array.isArray(localDb.calltrackingPhoneNumbers) ? localDb.calltrackingPhoneNumbers : []).some((item: any) => item.id === rule.phoneNumberId && item.siteId === siteId);
+  if (!phoneExists) return res.status(400).json({ error: 'phone_not_found' });
+  if (rule.matchType !== 'default' && !rule.matchValue) return res.status(400).json({ error: 'match_value_required' });
+  if (!Array.isArray(localDb.calltrackingReplacementRules)) localDb.calltrackingReplacementRules = [];
+  localDb.calltrackingReplacementRules.push(rule);
+  await writeLocalDb(localDb);
+  res.json({ ok: true, rule });
+});
+
+app.patch('/api/calltracking/replacement-rules/:id', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
+  const localDb = await readLocalDb();
+  if (!Array.isArray(localDb.calltrackingReplacementRules)) localDb.calltrackingReplacementRules = [];
+  const index = localDb.calltrackingReplacementRules.findIndex((item: any) => item.id === req.params.id);
+  if (index < 0) return res.status(404).json({ error: 'rule_not_found' });
+  const current = normalizeCalltrackingReplacementRuleRecord(localDb.calltrackingReplacementRules[index]);
+  const next = normalizeCalltrackingReplacementRuleRecord({ ...current, ...req.body, id: current.id, siteId: current.siteId, updatedAt: new Date().toISOString() });
+  const phoneExists = (Array.isArray(localDb.calltrackingPhoneNumbers) ? localDb.calltrackingPhoneNumbers : []).some((item: any) => item.id === next.phoneNumberId && item.siteId === next.siteId);
+  if (!phoneExists) return res.status(400).json({ error: 'phone_not_found' });
+  if (next.matchType !== 'default' && !next.matchValue) return res.status(400).json({ error: 'match_value_required' });
+  localDb.calltrackingReplacementRules[index] = next;
+  await writeLocalDb(localDb);
+  res.json({ ok: true, rule: next });
+});
+
 app.get('/api/calltracking/events', requireAuth(), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
   const localDb = await readLocalDb();
@@ -5120,6 +6117,67 @@ app.get('/api/calltracking/matches', requireAuth(), async (req, res) => {
     if (callbackStatus) filtered = filtered.filter((match: any) => match.callbackStatus === callbackStatus);
     const sorted = filtered.sort((a: any, b: any) => parseCalltrackingMs(b.eventTime) - parseCalltrackingMs(a.eventTime));
     res.json({
+      matches: sorted.slice(offset, offset + limit),
+      total: sorted.length,
+      summary: dataset.summary,
+      matchWindowMinutes: dataset.matchWindowMinutes,
+      callbackWindowHours: dataset.callbackWindowHours,
+      usedSettings: dataset.usedSettings
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'internal_error' });
+  }
+});
+
+
+app.post('/api/calltracking/match', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
+  try {
+    const localDb = await readLocalDb();
+    const query = { ...(req.query || {}), ...(req.body || {}) };
+    const dataset = await getCalltrackingMatchDataset(localDb, query);
+    const syncedAt = new Date().toISOString();
+    const nextMatches = dataset.matches.map((match: any) => ({ ...match, syncedAt }));
+    if (!Array.isArray(localDb.calltrackingMatches)) localDb.calltrackingMatches = [];
+    const incomingIds = new Set(nextMatches.map((match: any) => String(match.eventId || match.id || '')));
+    localDb.calltrackingMatches = [
+      ...localDb.calltrackingMatches.filter((match: any) => !incomingIds.has(String(match.eventId || match.id || ''))),
+      ...nextMatches
+    ].slice(-5000);
+    await writeLocalDb(localDb);
+    res.json({
+      ok: true,
+      matched: nextMatches.filter((match: any) => match.matchStatus === 'matched').length,
+      ambiguous: nextMatches.filter((match: any) => match.matchStatus === 'ambiguous').length,
+      unmatched: nextMatches.filter((match: any) => match.matchStatus === 'unmatched').length,
+      total: nextMatches.length,
+      syncedAt,
+      matchWindowMinutes: dataset.matchWindowMinutes,
+      callbackWindowHours: dataset.callbackWindowHours,
+      usedSettings: dataset.usedSettings,
+      summary: dataset.summary,
+      matches: nextMatches.slice(0, 100)
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'internal_error' });
+  }
+});
+
+app.get('/api/calltracking/matched-calls', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
+  try {
+    const localDb = await readLocalDb();
+    const limit = Math.max(1, Math.min(500, Number(req.query.limit || 100)));
+    const offset = Math.max(0, Number(req.query.offset || 0));
+    const callStatus = cleanMarketingString(req.query.callStatus, 60);
+    const matchStatus = cleanMarketingString(req.query.matchStatus, 60);
+    const dataset = await getCalltrackingMatchDataset(localDb, req.query);
+    let filtered = dataset.matches;
+    if (callStatus) filtered = filtered.filter((match: any) => match.callStatus === callStatus);
+    if (matchStatus) filtered = filtered.filter((match: any) => match.matchStatus === matchStatus);
+    const sorted = filtered.sort((a: any, b: any) => parseCalltrackingMs(b.eventTime) - parseCalltrackingMs(a.eventTime));
+    res.json({
+      matchedCalls: sorted.slice(offset, offset + limit),
       matches: sorted.slice(offset, offset + limit),
       total: sorted.length,
       summary: dataset.summary,
@@ -5195,6 +6253,13 @@ app.get('/api/calltracking/sources', requireAuth(), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
   const localDb = await readLocalDb();
   const siteId = cleanMarketingString(req.query.siteId, 120);
+  if (String(req.query.fresh || '') !== 'true') {
+    const { startDate, endDate } = getYandexMetrikaDateRange(req.query);
+    const aggregateDataset = marketingAggregationService.getAggregates(localDb, { dateFrom: startDate, dateTo: endDate }, { siteId });
+    if (aggregateDataset.rows.length) {
+      return res.json({ sources: aggregateDataset.sources, summary: aggregateDataset.summary, aggregateStatus: aggregateDataset.status, source: 'marketing_daily_aggregates' });
+    }
+  }
   const events = (Array.isArray(localDb.calltrackingEvents) ? localDb.calltrackingEvents : []).filter((event: any) => {
     if (siteId && event.siteId !== siteId) return false;
     return isWithinDateRange(event.eventTime || event.createdAt, req.query.startDate, req.query.endDate);
@@ -5273,6 +6338,48 @@ app.get('/api/calltracking/sources', requireAuth(), async (req, res) => {
   res.json({ sources, usedSettings: dataset.usedSettings });
 });
 
+app.post('/api/marketing/aggregates/rebuild', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
+  const payloadSize = Buffer.byteLength(JSON.stringify(req.body || {}), 'utf8');
+  if (payloadSize > CALLTRACKING_MAX_PAYLOAD_BYTES) return res.status(413).json({ error: 'payload_too_large' });
+  const { startDate: fallbackStart, endDate: fallbackEnd } = getYandexMetrikaDateRange(req.body || {});
+  const dateFrom = normalizeMarketingAggregateDate(req.body?.dateFrom || req.body?.startDate || fallbackStart);
+  const dateTo = normalizeMarketingAggregateDate(req.body?.dateTo || req.body?.endDate || fallbackEnd, dateFrom);
+  const siteId = cleanMarketingString(req.body?.siteId || req.query.siteId, 120);
+  const localDb = await readLocalDb();
+  try {
+    const result = await marketingAggregationService.rebuildPeriodAggregates(localDb, dateFrom, dateTo, siteId || undefined);
+    await writeLocalDb(localDb);
+    res.json({ ok: true, ...result, status: localDb.marketingAggregateStatus || null });
+  } catch (error: any) {
+    localDb.marketingAggregateStatus = {
+      ...(localDb.marketingAggregateStatus || {}),
+      lastRebuildAt: new Date().toISOString(),
+      lastDateFrom: dateFrom,
+      lastDateTo: dateTo,
+      lastSiteId: siteId || null,
+      lastError: normalizeYandexMetrikaError(error)
+    };
+    await writeLocalDb(localDb);
+    res.status(500).json({ ok: false, error: localDb.marketingAggregateStatus.lastError, status: localDb.marketingAggregateStatus });
+  }
+});
+
+app.get('/api/marketing/aggregates', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
+  const localDb = await readLocalDb();
+  const { startDate, endDate } = getYandexMetrikaDateRange(req.query);
+  const aggregateDataset = marketingAggregationService.getAggregates(localDb, { dateFrom: startDate, dateTo: endDate }, req.query);
+  res.json({
+    rows: aggregateDataset.rows,
+    sources: aggregateDataset.sources,
+    summary: aggregateDataset.summary,
+    total: aggregateDataset.rows.length,
+    status: aggregateDataset.status,
+    period: { dateFrom: startDate, dateTo: endDate }
+  });
+});
+
 app.post('/api/marketing/direct/settings', requireAuth(), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
   const payloadSize = Buffer.byteLength(JSON.stringify(req.body || {}), 'utf8');
@@ -5330,6 +6437,29 @@ app.get('/api/marketing/direct/summary', requireAuth(), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
   const localDb = await readLocalDb();
   const siteId = cleanMarketingString(req.query.siteId, 120);
+  if (String(req.query.fresh || '') !== 'true') {
+    const { startDate, endDate } = getYandexMetrikaDateRange(req.query);
+    const aggregateDataset = marketingAggregationService.getAggregates(localDb, { dateFrom: startDate, dateTo: endDate }, { siteId });
+    if (aggregateDataset.rows.length) {
+      const directRows = aggregateDataset.sources.filter((item: any) => numberOrZero(item.directClicks) > 0 || item.cost !== null);
+      const cost = aggregateDataset.summary.adCost;
+      const clicks = aggregateDataset.summary.adClicks;
+      return res.json({
+        status: 'connected',
+        source: 'marketing_daily_aggregates',
+        lastError: aggregateDataset.status?.lastError || null,
+        summary: {
+          cost,
+          clicks,
+          directVisits: clicks,
+          avgCpc: cost === null ? null : safeDivideMoney(cost, clicks),
+          campaigns: new Set(directRows.map((item: any) => item.campaignId || item.campaign).filter(Boolean)).size,
+          noData: clicks <= 0,
+          warning: null
+        }
+      });
+    }
+  }
   const integration = findYandexDirectIntegration(localDb, siteId);
   if (!integration) return res.json({ status: 'not_configured', lastError: null, summary: { cost: 0, clicks: 0, avgCpc: null, campaigns: 0 } });
   if (!integration.direct.enabled) return res.json({ status: 'disabled', lastError: null, summary: { cost: null, clicks: null, avgCpc: null, campaigns: 0 } });
@@ -5351,6 +6481,25 @@ app.get('/api/marketing/direct/sources', requireAuth(), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
   const localDb = await readLocalDb();
   const siteId = cleanMarketingString(req.query.siteId, 120);
+  if (String(req.query.fresh || '') !== 'true') {
+    const { startDate, endDate } = getYandexMetrikaDateRange(req.query);
+    const aggregateDataset = marketingAggregationService.getAggregates(localDb, { dateFrom: startDate, dateTo: endDate }, { siteId });
+    if (aggregateDataset.rows.length) {
+      const items = aggregateDataset.sources
+        .filter((item: any) => numberOrZero(item.directClicks) > 0 || item.cost !== null)
+        .map((item: any) => ({
+          source: item.source || 'yandex',
+          medium: item.medium || 'cpc',
+          campaignId: item.campaignId || null,
+          campaignName: item.campaign || item.campaignId || '',
+          clicks: Math.round(numberOrZero(item.directClicks)),
+          cost: item.cost ?? null,
+          currency: null,
+          avgCpc: item.cost === null || item.cost === undefined ? null : safeDivideMoney(item.cost, item.directClicks)
+        }));
+      return res.json({ status: 'connected', source: 'marketing_daily_aggregates', lastError: aggregateDataset.status?.lastError || null, items });
+    }
+  }
   const integration = findYandexDirectIntegration(localDb, siteId);
   if (!integration) return res.json({ status: 'not_configured', lastError: null, items: [] });
   if (!integration.direct.enabled) return res.json({ status: 'disabled', lastError: null, items: [] });
@@ -5757,6 +6906,29 @@ app.get('/api/marketing/metrika/summary', requireAuth(), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
   const localDb = await readLocalDb();
   const siteId = cleanMarketingString(req.query.siteId, 120);
+  if (String(req.query.fresh || '') !== 'true') {
+    const { startDate, endDate } = getYandexMetrikaDateRange(req.query);
+    const aggregateDataset = marketingAggregationService.getAggregates(localDb, { dateFrom: startDate, dateTo: endDate }, { siteId });
+    if (aggregateDataset.rows.length) {
+      return res.json({
+        status: 'connected',
+        source: 'marketing_daily_aggregates',
+        lastError: aggregateDataset.status?.lastError || null,
+        summary: {
+          visits: aggregateDataset.summary.visits,
+          users: 0,
+          pageViews: aggregateDataset.summary.pageviews,
+          bounceRate: null,
+          avgVisitDurationSeconds: null,
+          phoneClickGoals: null,
+          whatsappClickGoals: null,
+          telegramClickGoals: null,
+          emailClickGoals: null,
+          goalsConfigured: false
+        }
+      });
+    }
+  }
   const integration = findYandexMetrikaIntegration(localDb, siteId);
   if (!integration) return res.json({ summary: emptyYandexMetrikaSummary(), status: 'not_configured', lastError: null });
   const { startDate, endDate } = getYandexMetrikaDateRange(req.query);
@@ -5775,6 +6947,22 @@ app.get('/api/marketing/metrika/sources', requireAuth(), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
   const localDb = await readLocalDb();
   const siteId = cleanMarketingString(req.query.siteId, 120);
+  if (String(req.query.fresh || '') !== 'true') {
+    const { startDate, endDate } = getYandexMetrikaDateRange(req.query);
+    const aggregateDataset = marketingAggregationService.getAggregates(localDb, { dateFrom: startDate, dateTo: endDate }, { siteId });
+    if (aggregateDataset.rows.length) {
+      const sources = aggregateDataset.sources.map((item: any) => ({
+        source: item.source || 'direct',
+        medium: item.medium || '',
+        campaign: item.campaign || '',
+        visits: Math.round(numberOrZero(item.visits)),
+        users: 0,
+        bounceRate: null,
+        avgVisitDurationSeconds: null
+      }));
+      return res.json({ status: 'connected', source: 'marketing_daily_aggregates', lastError: aggregateDataset.status?.lastError || null, sources });
+    }
+  }
   const integration = findYandexMetrikaIntegration(localDb, siteId);
   if (!integration) return res.json({ sources: [], status: 'not_configured', lastError: null });
   const { startDate, endDate } = getYandexMetrikaDateRange(req.query);
@@ -6463,7 +7651,7 @@ app.post('/api/settings/test-freepbx-api', requireAuth(), async (req, res) => {
 
 // --- TELEPHONE DIRECTORY ENDPOINTS ---
 
-// Get all directory entries
+// Get directory entries. Defaults to server-side pagination for the UI list.
 app.get('/api/directory', requireAuth(), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_directory'))) {
     return res.status(403).json({ error: 'Access denied: view_directory permission required' });
@@ -6471,7 +7659,11 @@ app.get('/api/directory', requireAuth(), async (req, res) => {
 
   try {
     const localDb = await readLocalDb();
-    res.json(applyDirectoryAccessAndFilters(localDb.directory || [], req, localDb));
+    const all = ['1', 'true', 'yes'].includes(String(req.query.all || '').trim().toLowerCase());
+    if (all) {
+      return res.json(applyDirectoryAccessAndFilters(localDb.directory || [], req, localDb).sort(compareDirectoryEntries));
+    }
+    res.json(buildDirectoryPaginatedResponse(localDb.directory || [], req, localDb));
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -8448,6 +9640,8 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
     const requestedOperatorExt = (req.query.operatorExt as string || '').trim();
     const onlyMyCalls = requestedOnlyMyCalls || isOperatorForcedOwnCalls(localDb, req);
     const operatorExt = getEffectiveOperatorExt(localDb, req, requestedOperatorExt);
+    const qualitySettings = getCallQualitySettings(localDb.settings);
+    const callbackWindowHours = qualitySettings.missedCallCallbackSlaHours;
 
     let calls: CallEntry[] = [];
 
@@ -8465,8 +9659,9 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
         sqlParams.push(buildDateTimeFilter(startDate, startTime));
       }
       if (endDate) {
-        sql += ' AND calldate <= ?';
+        sql += ' AND calldate <= DATE_ADD(?, INTERVAL ? HOUR)';
         sqlParams.push(buildDateTimeFilter(endDate, endTime, true));
+        sqlParams.push(callbackWindowHours);
       }
 
       sql += ' ORDER BY calldate DESC LIMIT 1000'; // Guard database read limits
@@ -8779,6 +9974,18 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
       filteredCalls = filteredCalls.filter(c => callHasExactNumber(c, operatorExt));
     }
 
+    const callsStartMs = startDate ? getDateTimeFilterMs(startDate, startTime) : -Infinity;
+    const callsEndMs = endDate ? getDateTimeFilterMs(endDate, endTime, true) : Infinity;
+    const callsOwnerMap = buildExtensionOwnerMap(localDb.directory || [], localDb.users || []);
+    const callsLostAnalytics = buildLostCallAnalytics(calls, {
+      startMs: callsStartMs,
+      endMs: callsEndMs,
+      callbackWindowHours,
+      directory: localDb.directory || [],
+      ownerMap: callsOwnerMap
+    });
+    const callsLostByUniqueId = new Map(callsLostAnalytics.items.map(item => [item.uniqueid, item]));
+
     // Status filtering logic
     if (statusFilter && statusFilter !== 'ALL') {
       if (statusFilter === 'ANSWERED') {
@@ -8804,25 +10011,9 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
       } else if (statusFilter === 'INTERNAL') {
         filteredCalls = filteredCalls.filter(c => isInternal(c));
       } else if (statusFilter === 'PROCESSED') {
-        filteredCalls = filteredCalls.filter(c => {
-          const disposition = c.disposition?.toUpperCase();
-          const isMissedType = disposition === 'NO ANSWER' || disposition === 'BUSY' || disposition === 'FAILED';
-          const isHandledInSla = c.wasKpiResolved === true;
-          return isIncoming(c) && isMissedType && isHandledInSla;
-        });
+        filteredCalls = filteredCalls.filter(c => callsLostByUniqueId.get(c.uniqueid)?.callbackStatus === 'called_back');
       } else if (statusFilter === 'LOST') {
-        filteredCalls = filteredCalls.filter(c => {
-          const disposition = c.disposition?.toUpperCase();
-          const isMissedType = disposition === 'NO ANSWER' || disposition === 'BUSY' || disposition === 'FAILED';
-          const kpiMinutes = settings && settings.callbackKpiMinutes !== undefined
-            ? Number(settings.callbackKpiMinutes)
-            : 60;
-          const callTime = new Date(c.calldate).getTime();
-          const slaExpired = Number.isFinite(callTime) && (Date.now() - callTime) > kpiMinutes * 60 * 1000;
-          const isHandledInSla = c.wasKpiResolved === true;
-          const isLateCallback = c.wasCallbacked && !c.wasKpiResolved;
-          return isIncoming(c) && isMissedType && !isHandledInSla && (isLateCallback || slaExpired);
-        });
+        filteredCalls = filteredCalls.filter(c => callsLostByUniqueId.get(c.uniqueid)?.callbackStatus === 'not_called_back');
       }
     }
 
@@ -8871,6 +10062,8 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
     const requestedOnlyMyCalls = req.query.onlyMyCalls === 'true';
     const operatorExt = getEffectiveOperatorExt(localDb, req, requestedOperatorExt);
     const onlyMyCalls = requestedOnlyMyCalls || isOperatorForcedOwnCalls(localDb, req);
+    const qualitySettings = getCallQualitySettings(localDb.settings);
+    const callbackWindowHours = qualitySettings.missedCallCallbackSlaHours;
     
     let calls: CallEntry[] = [];
     if (isDemo) {
@@ -8886,8 +10079,9 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
         sql += ' AND calldate >= DATE_SUB(NOW(), INTERVAL 7 DAY)';
       }
       if (endDate) {
-        sql += ' AND calldate <= ?';
+        sql += ' AND calldate <= DATE_ADD(?, INTERVAL ? HOUR)';
         sqlParams.push(buildDateTimeFilter(endDate, endTime, true));
+        sqlParams.push(callbackWindowHours);
       }
 
       sql += ' ORDER BY calldate DESC LIMIT 1000';
@@ -9092,69 +10286,49 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
       filteredCalls = filteredCalls.filter(c => callHasExactNumber(c, operatorExt));
     }
 
-    // Now calculate actual stats based on filtered list of calls
-    let inboundCalls = 0;
-    let outboundCalls = 0;
-    let internalCalls = 0;
-    let missedCalls = 0;
-    let processedCalls = 0;
-    let lostCalls = 0;
-
-    filteredCalls.forEach(c => {
-      const isIncomingCall = isIncoming(c);
-      const isOutgoingCall = isOutgoing(c);
-      const isInternalCall = isInternal(c);
-
-      if (isIncomingCall) {
-        inboundCalls++;
-      } else if (isOutgoingCall) {
-        outboundCalls++;
-      } else if (isInternalCall) {
-        internalCalls++;
-      }
-
-      const disposition = c.disposition?.toUpperCase();
-      const isMissedType = disposition === 'NO ANSWER' || disposition === 'BUSY' || disposition === 'FAILED';
-      const isIncomingMissed = isIncomingCall && isMissedType;
-
-      if (isIncomingMissed) {
-        missedCalls++;
-
-        const kpiMinutes = localDb.settings && localDb.settings.callbackKpiMinutes !== undefined
-          ? Number(localDb.settings.callbackKpiMinutes)
-          : 60;
-
-        const callTime = new Date(c.calldate).getTime();
-        const slaExpired = Number.isFinite(callTime) && (Date.now() - callTime) > kpiMinutes * 60 * 1000;
-
-        const isHandledInSla = c.wasKpiResolved === true;
-        const isLateCallback = c.wasCallbacked === true && c.wasKpiResolved !== true;
-
-        if (isHandledInSla) {
-          processedCalls++;
-        } else if (isLateCallback || slaExpired) {
-          lostCalls++;
-        }
-      }
+    const statsStartMs = startDate ? getDateTimeFilterMs(startDate, startTime) : -Infinity;
+    const statsEndMs = endDate ? getDateTimeFilterMs(endDate, endTime, true) : Infinity;
+    const ownerMap = buildExtensionOwnerMap(localDb.directory || [], localDb.users || []);
+    const lostCallAnalytics = buildLostCallAnalytics(calls, {
+      startMs: statsStartMs,
+      endMs: statsEndMs,
+      callbackWindowHours,
+      directory: localDb.directory || [],
+      ownerMap
+    });
+    const counters = calculateCallBusinessCounters(filteredCalls, {
+      lostAnalytics: lostCallAnalytics,
+      slaThresholdSeconds: qualitySettings.answerSlaSeconds
     });
 
-    // Если активна карточка "Обработанные", принудительно синхронизируем её число
-    // с тем же видимым набором, который отдаёт /api/calls?status=PROCESSED.
-    if (statusFilter === 'PROCESSED') {
-      processedCalls = filteredCalls.filter(c => {
-        const disposition = c.disposition?.toUpperCase();
-        const isMissedType = disposition === 'NO ANSWER' || disposition === 'BUSY' || disposition === 'FAILED';
-        return isIncoming(c) && isMissedType && c.wasKpiResolved === true;
-      }).length;
+    if (req.query.debugCounters === 'true' || (localDb.settings as any)?.debugCallCounters === true) {
+      console.log('[CALL_COUNTERS_COMPARE]', JSON.stringify({
+        source: 'registry',
+        dateFrom: startDate || null,
+        dateTo: endDate || null,
+        extension: onlyMyCalls ? operatorExt || null : null,
+        myCallsMode: onlyMyCalls,
+        rowsCount: filteredCalls.length,
+        totalCalls: counters.totalCalls,
+        inboundCalls: counters.inboundCalls,
+        outboundCalls: counters.outboundCalls,
+        internalCalls: counters.internalCalls,
+        missedCalls: counters.missedCalls,
+        processedMissedCalls: counters.processedMissedCalls,
+        pendingCallback: counters.pendingCallback,
+        lostCalls: counters.lostCalls,
+        callbackRecovered: counters.callbackRecovered
+      }));
     }
 
     res.json({
-      inboundCalls,
-      outboundCalls,
-      internalCalls,
-      missedCalls,
-      processedCalls,
-      lostCalls,
+      inboundCalls: counters.inboundCalls,
+      outboundCalls: counters.outboundCalls,
+      internalCalls: counters.internalCalls,
+      missedCalls: counters.missedCalls,
+      processedCalls: counters.processedMissedCalls,
+      pendingCallback: counters.pendingCallback,
+      lostCalls: counters.lostCalls,
       dbError: (req as any).dbError || undefined,
       demoModeActive: isDemo
     });
@@ -9574,7 +10748,33 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
       directory: localDb.directory || [],
       ownerMap
     });
+    const reportRowIds = new Set(reportFilteredCalls.map(call => call.uniqueid).filter(Boolean));
+    const reportLostItems = lostCallAnalytics.items.filter(item => reportRowIds.has(item.uniqueid));
+    const businessCounters = calculateCallBusinessCounters(reportFilteredCalls, {
+      lostAnalytics: lostCallAnalytics,
+      slaThresholdSeconds
+    });
     const lostByUniqueId = new Map(lostCallAnalytics.items.map(item => [item.uniqueid, item]));
+
+    if (req.query.debugCounters === 'true' || (localDb.settings as any)?.debugCallCounters === true) {
+      console.log('[CALL_COUNTERS_COMPARE]', JSON.stringify({
+        source: 'reports',
+        dateFrom: startDate || null,
+        dateTo: endDate || null,
+        extension: requestedExtensionFilter || (onlyMyCalls ? operatorExt || null : null),
+        myCallsMode: onlyMyCalls,
+        rowsCount: reportFilteredCalls.length,
+        totalCalls: businessCounters.totalCalls,
+        inboundCalls: businessCounters.inboundCalls,
+        outboundCalls: businessCounters.outboundCalls,
+        internalCalls: businessCounters.internalCalls,
+        missedCalls: businessCounters.missedCalls,
+        processedMissedCalls: businessCounters.processedMissedCalls,
+        pendingCallback: businessCounters.pendingCallback,
+        lostCalls: businessCounters.lostCalls,
+        callbackRecovered: businessCounters.callbackRecovered
+      }));
+    }
 
     // Classify calls into bins
     reportFilteredCalls.forEach(c => {
@@ -9858,22 +11058,38 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
       outboundRules: Array.from(detailing.outboundRules.values()).sort((a, b) => b.totalCalls - a.totalCalls).slice(0, 30)
     };
 
+    const heatmap = buildCallHeatmap24(reportFilteredCalls, lostByUniqueId);
+    const clientAnalytics = buildClientAnalytics(calls, reportFilteredCalls, {
+      directory: localDb.directory || [],
+      settings: localDb.settings,
+      ownerMap,
+      startMs: reportStartMs,
+      endMs: reportEndMs,
+      lostAfterDays: 30,
+      lowInterestThreshold: 20
+    });
+
     res.json({
       dynamics: resultList,
       detailing: detailingResults,
       lostCallSummary: {
-        missedCalls: lostCallAnalytics.missedCalls,
-        lostCalls: lostCallAnalytics.lostCalls,
-        callbackAfterMissed: lostCallAnalytics.callbackAfterMissed,
-        callbackRate: lostCallAnalytics.callbackRate,
-        notCalledBack: lostCallAnalytics.notCalledBack,
+        missedCalls: businessCounters.missedCalls,
+        lostCalls: businessCounters.lostCalls,
+        callbackAfterMissed: businessCounters.processedMissedCalls,
+        callbackRecoveredWithinSla: businessCounters.callbackRecoveredWithinSla,
+        pendingCallback: businessCounters.pendingCallback,
+        callbackRate: businessCounters.callbackRecoveryRate,
+        notCalledBack: businessCounters.lostCalls,
         callbackWindowHours
       },
-      lostCallDetails: lostCallAnalytics.items.slice(0, 200),
+      businessCounters,
+      lostCallDetails: reportLostItems.slice(0, 200),
       slaSummary,
       departmentSummary,
       employeeSummary,
       trunkSummary,
+      heatmap,
+      clientAnalytics,
       usedSettings,
       dbError: (req as any).dbError || undefined,
       demoModeActive: isDemo
