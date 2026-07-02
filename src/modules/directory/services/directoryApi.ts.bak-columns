@@ -23,29 +23,6 @@ export interface DirectoryPageResponse<T = any> {
   totalPages: number;
 }
 
-export interface DirectoryColumnSettingsResponse {
-  visibleColumns: string[];
-  source: 'user' | 'global' | 'system';
-  canManageGlobal: boolean;
-  updatedAt?: string | null;
-  updatedBy?: string | null;
-}
-
-async function parseDirectorySettingsResponse(resp: Response, fallbackError: string) {
-  if (resp.status === 401) {
-    handleAuthExpiredResponse(resp);
-    throw new Error('UNAUTHORIZED');
-  }
-
-  const data = await resp.json().catch(() => ({}));
-
-  if (!resp.ok) {
-    throw new Error(data.error || fallbackError);
-  }
-
-  return data;
-}
-
 function buildDirectoryUrl(filters: DirectoryFetchFilters = {}) {
   const params = new URLSearchParams();
   Object.entries(filters).forEach(([key, value]) => {
@@ -203,63 +180,4 @@ export async function previewDirectoryImport(token: string, entries: any[]) {
   }
 
   return data;
-}
-
-
-export async function fetchDirectoryColumnSettings(token: string): Promise<DirectoryColumnSettingsResponse> {
-  const resp = await fetch('/api/directory/column-settings', {
-    headers: {
-      Authorization: `Bearer ${token}`
-    }
-  });
-
-  return parseDirectorySettingsResponse(resp, 'Не удалось загрузить настройки столбцов');
-}
-
-export async function saveMyDirectoryColumnSettings(token: string, visibleColumns: string[]): Promise<DirectoryColumnSettingsResponse> {
-  const resp = await fetch('/api/directory/column-settings/me', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`
-    },
-    body: JSON.stringify({ visibleColumns })
-  });
-
-  return parseDirectorySettingsResponse(resp, 'Не удалось сохранить личные настройки столбцов');
-}
-
-export async function resetMyDirectoryColumnSettings(token: string): Promise<DirectoryColumnSettingsResponse> {
-  const resp = await fetch('/api/directory/column-settings/me', {
-    method: 'DELETE',
-    headers: {
-      Authorization: `Bearer ${token}`
-    }
-  });
-
-  return parseDirectorySettingsResponse(resp, 'Не удалось сбросить личные настройки столбцов');
-}
-
-export async function saveGlobalDirectoryColumnSettings(token: string, visibleColumns: string[]): Promise<DirectoryColumnSettingsResponse> {
-  const resp = await fetch('/api/directory/column-settings/global', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`
-    },
-    body: JSON.stringify({ visibleColumns })
-  });
-
-  return parseDirectorySettingsResponse(resp, 'Не удалось сохранить базовые настройки столбцов');
-}
-
-export async function resetGlobalDirectoryColumnSettings(token: string): Promise<DirectoryColumnSettingsResponse> {
-  const resp = await fetch('/api/directory/column-settings/global', {
-    method: 'DELETE',
-    headers: {
-      Authorization: `Bearer ${token}`
-    }
-  });
-
-  return parseDirectorySettingsResponse(resp, 'Не удалось сбросить базовые настройки столбцов');
 }

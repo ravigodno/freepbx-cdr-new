@@ -50,50 +50,6 @@ export interface PermissionSession {
   permissions?: UserPermissions;
 }
 
-type OptionalModuleKey = 'marketing' | 'monitoring' | 'management' | 'balance';
-
-const PERMISSION_MODULE_MAP: Partial<Record<PermissionKey, OptionalModuleKey>> = {
-  view_marketing: 'marketing',
-  manage_marketing: 'marketing',
-  manage_calltracking: 'marketing',
-  manage_yandex_metrika: 'marketing',
-  manage_yandex_direct: 'marketing',
-
-  view_monitoring: 'monitoring',
-  view_active_calls: 'monitoring',
-  view_tcpdump: 'monitoring',
-  view_sngrep: 'monitoring',
-  view_cli: 'monitoring',
-  view_sip_devices_map: 'monitoring',
-
-  view_management: 'management',
-  dangerous_pbx_write: 'management',
-  bulk_extensions: 'management',
-  manage_trunks: 'management',
-  manage_outbound_routes: 'management',
-  manage_numbering_capacity: 'management',
-
-  view_balance: 'balance',
-  view_balance_analytics: 'balance',
-  manage_balance_sources: 'balance',
-  view_balance_alerts: 'balance',
-  manage_balance_providers: 'balance'
-};
-
-function isPermissionAllowedByModuleVisibility(
-  session: PermissionSession,
-  settings: Partial<AppSettings> | null | undefined,
-  perm: PermissionKey
-): boolean {
-  if (session.role === 'su') return true;
-
-  const moduleKey = PERMISSION_MODULE_MAP[perm];
-  if (!moduleKey) return true;
-
-  const moduleVisibility = (settings as any)?.moduleVisibility || {};
-  return moduleVisibility[moduleKey] !== false;
-}
-
 function customRoleHasPermission(
   session: PermissionSession,
   settings: Partial<AppSettings> | null | undefined,
@@ -123,8 +79,6 @@ export function hasUserPermission(
   if (!session) return false;
 
   if (session.role === 'su') return true;
-
-  if (!isPermissionAllowedByModuleVisibility(session, settings, perm)) return false;
 
   if (session.permissions && Object.prototype.hasOwnProperty.call(session.permissions, perm)) {
     return session.permissions[perm] === true;

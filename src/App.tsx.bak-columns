@@ -71,7 +71,7 @@ const DbExplorerTab = lazy(() => import('./modules/monitoring/tabs/monitoring/Db
 import QualityTab from './modules/monitoring/tabs/monitoring/QualityTab';
 import DevicesMapTab from './modules/monitoring/tabs/monitoring/DevicesMapTab';
 import { DirectoryStatusIcon } from './modules/directory/components/DirectoryStatusIcon';
-import { fetchDirectory, fetchDirectoryAll, saveDirectoryEntry, deleteDirectoryEntry, toggleDirectoryBlacklist, toggleDirectorySpam, previewDirectoryImport, fetchDirectoryColumnSettings, saveMyDirectoryColumnSettings, resetMyDirectoryColumnSettings, saveGlobalDirectoryColumnSettings, resetGlobalDirectoryColumnSettings } from './modules/directory/services/directoryApi';
+import { fetchDirectory, fetchDirectoryAll, saveDirectoryEntry, deleteDirectoryEntry, toggleDirectoryBlacklist, toggleDirectorySpam, previewDirectoryImport } from './modules/directory/services/directoryApi';
 import CDRPage from './modules/cdr/pages/CDRPage';
 import LegacyCDRTable from './modules/cdr/components/LegacyCDRTable';
 import CDRProcessModal from './modules/cdr/components/CDRProcessModal';
@@ -215,12 +215,11 @@ interface DirectoryColumnConfig {
   className?: string;
 }
 
+const DIRECTORY_COLUMNS_STORAGE_KEY = 'pbxpuls.directory.columns.personal';
 const DIRECTORY_PAGE_SIZE = 20;
 const requiredDirectoryColumns: DirectoryRequiredColumnKey[] = ['type', 'fullName', 'phone'];
 const systemDirectoryColumns: DirectorySystemColumnKey[] = ['actions'];
 type DirectoryVisibleColumnKey = DirectoryRequiredColumnKey | DirectoryOptionalColumnKey;
-
-type DirectoryColumnSettingsSource = 'user' | 'global' | 'system';
 const defaultDirectoryVisibleColumns: DirectoryVisibleColumnKey[] = ['type', 'fullName', 'phone', 'email', 'organization', 'visibility', 'isSpam'];
 const directoryContactFormFieldOrder: DirectoryVisibleColumnKey[] = [
   'type',
@@ -296,12 +295,17 @@ const sanitizeDirectoryVisibleColumns = (columns: unknown): DirectoryVisibleColu
   ];
 };
 
-const loadDirectoryVisibleColumns = (): DirectoryVisibleColumnKey[] => defaultDirectoryVisibleColumns;
-
-const getDirectoryColumnSettingsSourceLabel = (source: DirectoryColumnSettingsSource) => {
-  if (source === 'user') return 'личная настройка';
-  if (source === 'global') return 'базовая настройка';
-  return 'системная настройка';
+const loadDirectoryVisibleColumns = (): DirectoryVisibleColumnKey[] => {
+  try {
+    const raw = localStorage.getItem(DIRECTORY_COLUMNS_STORAGE_KEY);
+    if (!raw) return defaultDirectoryVisibleColumns;
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed?.visibleColumns)) return sanitizeDirectoryVisibleColumns(parsed.visibleColumns);
+    if (Array.isArray(parsed?.optionalColumns)) return sanitizeDirectoryVisibleColumns([...requiredDirectoryColumns, ...parsed.optionalColumns]);
+    return defaultDirectoryVisibleColumns;
+  } catch {
+    return defaultDirectoryVisibleColumns;
+  }
 };
 
 const RU_MONTHS = [
@@ -750,10 +754,6 @@ export default function App() {
   const [dirFormShowAllFields, setDirFormShowAllFields] = useState(false);
   const [isDirectoryColumnsPanelOpen, setIsDirectoryColumnsPanelOpen] = useState(false);
   const [selectedDirectoryVisibleColumns, setSelectedDirectoryVisibleColumns] = useState<DirectoryVisibleColumnKey[]>(loadDirectoryVisibleColumns);
-
-  const [directoryColumnSettingsSource, setDirectoryColumnSettingsSource] = useState<DirectoryColumnSettingsSource>('system');
-  const [canManageGlobalDirectoryColumns, setCanManageGlobalDirectoryColumns] = useState(false);
-  const [directoryColumnSettingsStatus, setDirectoryColumnSettingsStatus] = useState('');
   const [draftDirectoryVisibleColumns, setDraftDirectoryVisibleColumns] = useState<DirectoryVisibleColumnKey[]>(selectedDirectoryVisibleColumns);
   const [directoryPageMode, setDirectoryPageMode] = useState<DirectoryPageMode>(() => {
     if (window.location.pathname === '/management/directory/import') return 'import';
@@ -2834,7 +2834,6 @@ export default function App() {
     if (hasPermission('view_calls')) return 'calls';
     if (hasPermission('view_directory')) return 'directory';
     if (hasPermission('view_reports')) return 'reports';
-    if (hasPermission('view_marketing')) return 'marketing';
     if (hasPermission('view_monitoring')) return 'monitoring';
     if (hasPermission('view_management')) return 'management';
     if (hasPermission('view_balance')) return 'balance';
@@ -2849,7 +2848,7 @@ export default function App() {
     if (view === 'calls') return hasPermission('view_calls');
     if (view === 'directory') return hasPermission('view_directory');
     if (view === 'reports') return hasPermission('view_reports');
-    if (view === 'marketing') return hasPermission('view_marketing');
+    if (view === 'marketing') return hasPermission('view_reports');
     if (view === 'monitoring') return hasPermission('view_monitoring');
     if (view === 'management') return hasPermission('view_management');
     if (view === 'balance') return hasPermission('view_balance');
@@ -3628,87 +3627,18 @@ export default function App() {
     });
   };
 
-  const loadDirectoryColumnSettingsFromApi = async () => {
-    if (!session?.token) return;
-    try {
-      const response = await fetchDirectoryColumnSettings(session.token);
-      const visibleColumns = sanitizeDirectoryVisibleColumns(response.visibleColumns);
-      setSelectedDirectoryVisibleColumns(visibleColumns);
-      setDraftDirectoryVisibleColumns(visibleColumns);
-      setDirectoryColumnSettingsSource(response.source || 'system');
-      setCanManageGlobalDirectoryColumns(!!response.canManageGlobal);
-      setDirectoryColumnSettingsStatus('');
-    } catch (error: any) {
-      setDirectoryColumnSettingsStatus(error?.message || 'Не удалось загрузить настройки столбцов');
-    }
-  };
-
-  useEffect(() => {
-    if (activeView === 'directory' && session?.token) {
-      loadDirectoryColumnSettingsFromApi();
-    }
-  }, [activeView, session?.token]);
-
-  const saveDirectoryColumnSettings = async () => {
-    if (!session?.token) return;
+  const saveDirectoryColumnSettings = () => {
     const visibleColumns = sanitizeDirectoryVisibleColumns(draftDirectoryVisibleColumns);
-    try {
-      const response = await saveMyDirectoryColumnSettings(session.token, visibleColumns);
-      const nextVisibleColumns = sanitizeDirectoryVisibleColumns(response.visibleColumns);
-      setSelectedDirectoryVisibleColumns(nextVisibleColumns);
-      setDraftDirectoryVisibleColumns(nextVisibleColumns);
-      setDirectoryColumnSettingsSource(response.source || 'user');
-      setCanManageGlobalDirectoryColumns(!!response.canManageGlobal);
-      setDirectoryColumnSettingsStatus('Личные настройки столбцов сохранены.');
-      setIsDirectoryColumnsPanelOpen(false);
-    } catch (error: any) {
-      setDirectoryColumnSettingsStatus(error?.message || 'Не удалось сохранить настройки столбцов');
-    }
+    setSelectedDirectoryVisibleColumns(visibleColumns);
+    localStorage.setItem(DIRECTORY_COLUMNS_STORAGE_KEY, JSON.stringify({ visibleColumns }));
+    setIsDirectoryColumnsPanelOpen(false);
   };
 
-  const resetDirectoryColumnSettings = async () => {
-    if (!session?.token) return;
-    try {
-      const response = await resetMyDirectoryColumnSettings(session.token);
-      const nextVisibleColumns = sanitizeDirectoryVisibleColumns(response.visibleColumns);
-      setSelectedDirectoryVisibleColumns(nextVisibleColumns);
-      setDraftDirectoryVisibleColumns(nextVisibleColumns);
-      setDirectoryColumnSettingsSource(response.source || 'system');
-      setCanManageGlobalDirectoryColumns(!!response.canManageGlobal);
-      setDirectoryColumnSettingsStatus('Личные настройки сброшены.');
-      setIsDirectoryColumnsPanelOpen(false);
-    } catch (error: any) {
-      setDirectoryColumnSettingsStatus(error?.message || 'Не удалось сбросить настройки столбцов');
-    }
-  };
-
-  const saveGlobalDirectoryColumnSettingsForAll = async () => {
-    if (!session?.token) return;
-    const visibleColumns = sanitizeDirectoryVisibleColumns(draftDirectoryVisibleColumns);
-    try {
-      const response = await saveGlobalDirectoryColumnSettings(session.token, visibleColumns);
-      setCanManageGlobalDirectoryColumns(!!response.canManageGlobal);
-      setDirectoryColumnSettingsStatus('Базовые настройки столбцов для всех сохранены.');
-    } catch (error: any) {
-      setDirectoryColumnSettingsStatus(error?.message || 'Не удалось сохранить базовые настройки столбцов');
-    }
-  };
-
-  const resetGlobalDirectoryColumnSettingsForAll = async () => {
-    if (!session?.token) return;
-    try {
-      const response = await resetGlobalDirectoryColumnSettings(session.token);
-      const nextVisibleColumns = sanitizeDirectoryVisibleColumns(response.visibleColumns);
-      if (directoryColumnSettingsSource !== 'user') {
-        setSelectedDirectoryVisibleColumns(nextVisibleColumns);
-        setDraftDirectoryVisibleColumns(nextVisibleColumns);
-        setDirectoryColumnSettingsSource(response.source || 'system');
-      }
-      setCanManageGlobalDirectoryColumns(!!response.canManageGlobal);
-      setDirectoryColumnSettingsStatus('Базовые настройки столбцов сброшены.');
-    } catch (error: any) {
-      setDirectoryColumnSettingsStatus(error?.message || 'Не удалось сбросить базовые настройки столбцов');
-    }
+  const resetDirectoryColumnSettings = () => {
+    localStorage.removeItem(DIRECTORY_COLUMNS_STORAGE_KEY);
+    setSelectedDirectoryVisibleColumns(defaultDirectoryVisibleColumns);
+    setDraftDirectoryVisibleColumns(defaultDirectoryVisibleColumns);
+    setIsDirectoryColumnsPanelOpen(false);
   };
 
   const renderDirectoryDash = () => <span className="text-slate-350 italic">—</span>;
@@ -4576,7 +4506,7 @@ export default function App() {
               </button>
             )}
 
-            {hasPermission('view_marketing') && (
+            {hasPermission('view_reports') && (
               <button
                 onClick={() => setActiveView('marketing')}
                 className={`flex items-center ${isSidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl transition-all relative group cursor-pointer ${
@@ -4599,9 +4529,9 @@ export default function App() {
                 )}
               </button>
             )}
-
+          
               {/* SIDEBAR_MONITORING */}
-              {hasPermission('view_monitoring') && (
+              {hasPermission('view_reports') && (
                 <button
                   onClick={() => setActiveView('monitoring')}
                   className={`flex items-center ${isSidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl transition-all relative group cursor-pointer ${
@@ -4614,11 +4544,6 @@ export default function App() {
                   <Activity className="h-5 w-5 shrink-0" />
                   {isSidebarExpanded && (
                     <span className="text-xs font-semibold truncate animate-fade-in text-slate-705 dark:text-slate-200">
-                      Мониторинг
-                    </span>
-                  )}
-                  {!isSidebarExpanded && (
-                    <span className="absolute left-full ml-3 px-2 py-1 rounded bg-slate-950 text-white text-[10px] font-bold opacity-0 group-hover:opacity-100 transition-opacity z-50 whitespace-nowrap shadow-md pointer-events-none">
                       Мониторинг
                     </span>
                   )}
@@ -5907,14 +5832,6 @@ export default function App() {
                 <p className="mt-1 max-w-3xl text-xs leading-relaxed text-slate-500">
                   Выберите дополнительные поля и задайте порядок столбцов. Экспорт CSV выгружает полный набор полей, даже если часть столбцов скрыта или изменен порядок таблицы.
                 </p>
-                <p className="mt-2 text-[11px] font-semibold text-slate-500">
-                  Текущий источник столбцов: {getDirectoryColumnSettingsSourceLabel(directoryColumnSettingsSource)}.
-                </p>
-                {directoryColumnSettingsStatus && (
-                  <p className="mt-2 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-[11px] font-bold text-blue-700">
-                    {directoryColumnSettingsStatus}
-                  </p>
-                )}
               </div>
             </div>
 
@@ -5999,24 +5916,6 @@ export default function App() {
             </div>
 
             <div className="mt-4 flex flex-wrap justify-end gap-2">
-              {canManageGlobalDirectoryColumns && (
-                <>
-                  <button
-                    type="button"
-                    onClick={saveGlobalDirectoryColumnSettingsForAll}
-                    className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700 transition-colors hover:bg-emerald-100"
-                  >
-                    Сохранить как базовые для всех
-                  </button>
-                  <button
-                    type="button"
-                    onClick={resetGlobalDirectoryColumnSettingsForAll}
-                    className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700 transition-colors hover:bg-amber-100"
-                  >
-                    Сбросить базовые
-                  </button>
-                </>
-              )}
               <button
                 type="button"
                 onClick={resetDirectoryColumnSettings}
@@ -6131,9 +6030,9 @@ export default function App() {
 
     {activeView === 'reports' && renderReportsView()}
 
-    {activeView === 'marketing' && hasPermission('view_marketing') && <MarketingTab />}
+    {activeView === 'marketing' && <MarketingTab />}
 
-    {activeView === 'monitoring' && hasPermission('view_monitoring') && renderMonitoringView()}
+    {activeView === 'monitoring' && renderMonitoringView()}
 
     {activeView === 'management' && (
       <ProvisioningCenter session={session} hasPermission={hasPermission} />

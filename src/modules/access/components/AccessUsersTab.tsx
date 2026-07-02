@@ -37,6 +37,8 @@ export default function AccessUsersTab({
     { key: 'view_calls', label: 'Просмотр звонков', description: 'Доступ к журналу CDR и списку вызовов' },
     { key: 'view_directory', label: 'Просмотр справочника', description: 'Доступ к телефонному справочнику' },
     { key: 'view_reports', label: 'Просмотр отчетов', description: 'Доступ к отчетам и статистике' },
+    { key: 'view_marketing', label: 'Просмотр маркетинга', description: 'Доступ к вкладке Маркетинг' },
+    { key: 'manage_marketing', label: 'Управление маркетингом', description: 'Настройки маркетинговых интеграций' },
     { key: 'listen_recordings', label: 'Прослушивание записей', description: 'Доступ к аудиозаписям разговоров' },
     { key: 'make_calls', label: 'Click2Call', description: 'Возможность инициировать звонки' },
     { key: 'edit_directory', label: 'Редактирование справочника', description: 'Создание и изменение контактов' },

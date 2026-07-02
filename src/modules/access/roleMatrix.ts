@@ -16,9 +16,6 @@ export const ROLE_PERMISSIONS: Partial<Record<UserRole, PermissionKey[]>> = {
     'view_sngrep',
     'view_cli',
     'view_sip_devices_map',
-    'view_balance',
-    'view_balance_analytics',
-    'manage_balance_sources',
     'view_balance_alerts'
   ],
   manager: [

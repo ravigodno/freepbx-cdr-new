@@ -3525,77 +3525,6 @@ function createDefaultCalltrackingSite() {
   };
 }
 
-type OptionalModuleKey = 'marketing' | 'monitoring' | 'management' | 'balance';
-
-const OPTIONAL_MODULE_KEYS: OptionalModuleKey[] = ['marketing', 'monitoring', 'management', 'balance'];
-const getOptionalModuleKeys = (): OptionalModuleKey[] => ['marketing', 'monitoring', 'management', 'balance'];
-
-
-const DEFAULT_MODULE_VISIBILITY: Record<OptionalModuleKey, boolean> = {
-  marketing: true,
-  monitoring: true,
-  management: true,
-  balance: true
-};
-
-const PERMISSION_MODULE_MAP: Record<string, OptionalModuleKey> = {
-  view_marketing: 'marketing',
-  manage_marketing: 'marketing',
-  manage_calltracking: 'marketing',
-  manage_yandex_metrika: 'marketing',
-  manage_yandex_direct: 'marketing',
-
-  view_monitoring: 'monitoring',
-  view_active_calls: 'monitoring',
-  view_tcpdump: 'monitoring',
-  view_sngrep: 'monitoring',
-  view_cli: 'monitoring',
-  view_sip_devices_map: 'monitoring',
-
-  view_management: 'management',
-  dangerous_pbx_write: 'management',
-  bulk_extensions: 'management',
-  manage_trunks: 'management',
-  manage_outbound_routes: 'management',
-  manage_numbering_capacity: 'management',
-
-  view_balance: 'balance',
-  view_balance_analytics: 'balance',
-  manage_balance_sources: 'balance',
-  view_balance_alerts: 'balance',
-  manage_balance_providers: 'balance'
-};
-
-function normalizeModuleVisibilitySettings(value: any): Record<OptionalModuleKey, boolean> {
-  const next: Record<OptionalModuleKey, boolean> = {
-    marketing: true,
-    monitoring: true,
-    management: true,
-    balance: true
-  };
-
-  const source = value && typeof value === 'object' ? value : {};
-
-  if (typeof source.marketing === 'boolean') next.marketing = source.marketing;
-  if (typeof source.monitoring === 'boolean') next.monitoring = source.monitoring;
-  if (typeof source.management === 'boolean') next.management = source.management;
-  if (typeof source.balance === 'boolean') next.balance = source.balance;
-
-  return next;
-}
-function isModuleVisibleForAuthUser(authUser: any, localDb: any, moduleKey: OptionalModuleKey): boolean {
-  if (authUser?.role === 'su') return true;
-  const visibility = normalizeModuleVisibilitySettings(localDb?.settings?.moduleVisibility);
-  return visibility[moduleKey] !== false;
-}
-
-function isPermissionAllowedByModuleVisibility(authUser: any, localDb: any, permission: string): boolean {
-  if (authUser?.role === 'su') return true;
-  const moduleKey = PERMISSION_MODULE_MAP[permission];
-  if (!moduleKey) return true;
-  return isModuleVisibleForAuthUser(authUser, localDb, moduleKey);
-}
-
 function normalizeLocalDbSchema(db: any): any {
   const defaults = getDefaultLocalDb();
 
@@ -3625,8 +3554,6 @@ function normalizeLocalDbSchema(db: any): any {
     contactSyncMappings: Array.isArray(db?.contactSyncMappings) ? db.contactSyncMappings : [],
     directoryColumnSettings: db?.directoryColumnSettings && typeof db.directoryColumnSettings === 'object' ? db.directoryColumnSettings : {}
   };
-
-  next.settings.moduleVisibility = normalizeModuleVisibilitySettings(next.settings?.moduleVisibility);
 
   return next;
 }
@@ -3720,13 +3647,7 @@ function getDefaultLocalDb(): any {
       directorySyncAsteriskBlacklist: false,
       showSuRoleToAdmin: false,
       showSuPermissionsToAdmin: false,
-      allowAdminEditSuPermissions: false,
-      moduleVisibility: {
-        marketing: true,
-        monitoring: true,
-        management: true,
-        balance: true
-      }
+      allowAdminEditSuPermissions: false
     }
   };
 }
@@ -3758,13 +3679,6 @@ async function readLocalDb(): Promise<LocalDb> {
     }
     if (!Array.isArray((data as any).contactSyncMappings)) {
       (data as any).contactSyncMappings = [];
-      changed = true;
-    }
-
-    const normalizedModuleVisibility = normalizeModuleVisibilitySettings(data.settings?.moduleVisibility);
-    if (JSON.stringify(data.settings?.moduleVisibility || {}) !== JSON.stringify(normalizedModuleVisibility)) {
-      if (!data.settings || typeof data.settings !== 'object') data.settings = {};
-      data.settings.moduleVisibility = normalizedModuleVisibility;
       changed = true;
     }
 
@@ -4298,10 +4212,6 @@ async function checkUserPermission(req: Request, perm: string): Promise<boolean>
     if (!dbUser) return false;
     if (dbUser.disabled) return false;
     if (dbUser.role === 'su') return true;
-
-    if (!isPermissionAllowedByModuleVisibility(dbUser || sessionUser, localDb, perm)) {
-      return false;
-    }
 
     const roleConfig = (localDb.roles || getDefaultAccessRoles()).find((item: any) => item.id === dbUser.role);
     const permissions = {
@@ -7185,48 +7095,6 @@ const SU_PERMISSION_KEYS = [
 ];
 
 // --- ACCESS ROLES MANAGEMENT ENDPOINTS ---
-app.get('/api/settings/module-visibility', requireAuth(), async (req, res) => {
-  try {
-    const localDb = await readLocalDb();
-    res.json({
-      moduleVisibility: normalizeModuleVisibilitySettings(localDb.settings?.moduleVisibility)
-    });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Не удалось загрузить видимость разделов' });
-  }
-});
-
-app.put('/api/settings/module-visibility', requireAuth(), async (req, res) => {
-  const authUser = (req as any).user;
-
-  if (authUser?.role !== 'su') {
-    return res.status(403).json({ error: 'Only SU can manage module visibility' });
-  }
-
-  try {
-    const localDb = await readLocalDb();
-    const current = normalizeModuleVisibilitySettings(localDb.settings?.moduleVisibility);
-    const incoming = req.body?.moduleVisibility && typeof req.body.moduleVisibility === 'object'
-      ? req.body.moduleVisibility
-      : req.body;
-
-    const next = { ...current };
-
-    for (const key of getOptionalModuleKeys()) {
-      if (typeof incoming?.[key] === 'boolean') {
-        next[key] = incoming[key];
-      }
-    }
-
-    localDb.settings.moduleVisibility = next;
-    await writeLocalDb(localDb);
-
-    res.json({ moduleVisibility: next });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Не удалось сохранить видимость разделов' });
-  }
-});
-
 app.get('/api/roles', requireAuth(), async (req, res) => {
   const authUser = (req as any).user;
   if (authUser?.role !== 'su' && authUser?.permissions?.manage_roles !== true) {

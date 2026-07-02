@@ -66,6 +66,12 @@ export interface MissedCallStatus {
 }
 
 export interface AppSettings {
+  moduleVisibility?: {
+    marketing?: boolean;
+    monitoring?: boolean;
+    management?: boolean;
+    balance?: boolean;
+  };
   showSuRoleToAdmin?: boolean;
   showSuPermissionsToAdmin?: boolean;
   allowAdminEditSuPermissions?: boolean;
