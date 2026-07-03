@@ -3000,7 +3000,6 @@ export default function App() {
 
 
   const loadLiveSessions = async () => {
-    console.log('[LIVE_LOAD_DEBUG] loadLiveSessions called');
     setIsLoadingLiveSessions(true);
     setLiveSessionsError('');
 

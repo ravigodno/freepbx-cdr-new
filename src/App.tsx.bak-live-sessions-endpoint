@@ -3000,12 +3000,11 @@ export default function App() {
 
 
   const loadLiveSessions = async () => {
-    console.log('[LIVE_LOAD_DEBUG] loadLiveSessions called');
     setIsLoadingLiveSessions(true);
     setLiveSessionsError('');
 
     try {
-      const response = await fetch('/api/live-sessions', {
+      const response = await fetch('/api/live-sessions-test', {
         headers: { Authorization: `Bearer ${session?.token || ''}` }
       });
       const data = await response.json();

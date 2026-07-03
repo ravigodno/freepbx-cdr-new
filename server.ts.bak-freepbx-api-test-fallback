@@ -7766,29 +7766,10 @@ app.post('/api/settings/test-freepbx-api', requireAuth(), async (req, res) => {
         return res.status(400).json({ error: `Ошибка FreePBX GraphQL API: ${response.status} - ${typeof body === 'string' ? body : JSON.stringify(body)}` });
       }
       if (body?.errors?.length) {
-        const errorText = JSON.stringify(body.errors);
-        const sourceMode = String(settings.freepbxExtensionsSource || 'auto').toLowerCase();
-
-        if (sourceMode === 'auto' && errorText.includes('fetchAllExtensions')) {
-          return res.json({
-            success: true,
-            message: 'FreePBX API отвечает, но GraphQL метод fetchAllExtensions недоступен в этой версии FreePBX. Для extensions будет использован Auto/BMO/AMI fallback.'
-          });
-        }
-
-        return res.status(400).json({ error: 'Ошибка GraphQL fetchAllExtensions: ' + errorText });
+        return res.status(400).json({ error: 'Ошибка GraphQL fetchAllExtensions: ' + JSON.stringify(body.errors) });
       }
       const result = body?.data?.fetchAllExtensions;
       if (!result) {
-        const sourceMode = String(settings.freepbxExtensionsSource || 'auto').toLowerCase();
-
-        if (sourceMode === 'auto') {
-          return res.json({
-            success: true,
-            message: 'FreePBX API отвечает, но data.fetchAllExtensions отсутствует. Для extensions будет использован Auto/BMO/AMI fallback.'
-          });
-        }
-
         return res.status(400).json({ error: 'GraphQL ответ не содержит data.fetchAllExtensions' });
       }
 
@@ -11742,14 +11723,6 @@ app.get('/api/live-sessions', requireAuth(), async (req, res) => {
     const pjsipChannels = await runAMICommand(rawSettings, 'pjsip show channels');
 
     const sessions = channels.success ? parseCoreShowChannelsConcise(channels.message) : [];
-
-    console.log('[LIVE_SESSIONS_DEBUG]', {
-      channelsSuccess: channels.success,
-      rawLength: String(channels.message || '').length,
-      sessionsCount: sessions.length,
-      firstRawLine: String(channels.message || '').split(/\\r?\\n/).find(line => line.includes('!')) || '',
-      firstSession: sessions[0] || null
-    });
 
     const summary = {
       total: sessions.length,

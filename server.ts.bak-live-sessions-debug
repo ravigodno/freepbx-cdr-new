@@ -11743,14 +11743,6 @@ app.get('/api/live-sessions', requireAuth(), async (req, res) => {
 
     const sessions = channels.success ? parseCoreShowChannelsConcise(channels.message) : [];
 
-    console.log('[LIVE_SESSIONS_DEBUG]', {
-      channelsSuccess: channels.success,
-      rawLength: String(channels.message || '').length,
-      sessionsCount: sessions.length,
-      firstRawLine: String(channels.message || '').split(/\\r?\\n/).find(line => line.includes('!')) || '',
-      firstSession: sessions[0] || null
-    });
-
     const summary = {
       total: sessions.length,
       ringing: sessions.filter(s => String(s.state).toLowerCase().includes('ring')).length,

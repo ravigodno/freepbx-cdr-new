@@ -2570,20 +2570,6 @@ export default function App() {
     }
   };
 
-  const fetchWithTimeout = async (url: string, options: RequestInit = {}, timeoutMs = 9000) => {
-    const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
-
-    try {
-      return await fetch(url, {
-        ...options,
-        signal: controller.signal
-      });
-    } finally {
-      window.clearTimeout(timeoutId);
-    }
-  };
-
   // Connection Test routine for MariaDB
   const testDbConnection = async () => {
     if (!draftSettings || !session) return;
@@ -2591,14 +2577,14 @@ export default function App() {
     setDbTestResult(null);
     
     try {
-      const resp = await fetchWithTimeout('/api/settings/test-db', {
+      const resp = await fetch('/api/settings/test-db', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${session.token}`
         },
         body: JSON.stringify(draftSettings)
-      }, 9000);
+      });
       
       if (resp.status === 401) {
         handleAuthError(resp);
@@ -2620,7 +2606,7 @@ export default function App() {
     } catch (err: any) {
       setDbTestResult({
         success: false,
-        message: err?.name === 'AbortError' ? 'Таймаут проверки связи: сервер не ответил за 9 секунд.' : `Ошибка сокета: ${err.message || 'сервер недоступен'}`
+        message: `Ошибка сокета: ${err.message || 'сервер недоступен'}`
       });
     } finally {
       setIsTestingDb(false);
@@ -2634,14 +2620,14 @@ export default function App() {
     setAmiTestResult(null);
     
     try {
-      const resp = await fetchWithTimeout('/api/settings/test-ami', {
+      const resp = await fetch('/api/settings/test-ami', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${session.token}`
         },
         body: JSON.stringify(draftSettings)
-      }, 9000);
+      });
       
       if (resp.status === 401) {
         handleAuthError(resp);
@@ -2663,7 +2649,7 @@ export default function App() {
     } catch (err: any) {
       setAmiTestResult({
         success: false,
-        message: err?.name === 'AbortError' ? 'Таймаут проверки связи: сервер не ответил за 9 секунд.' : `Ошибка сокета: ${err.message || 'сервер недоступен'}`
+        message: `Ошибка сокета: ${err.message || 'сервер недоступен'}`
       });
     } finally {
       setIsTestingAmi(false);
@@ -2675,14 +2661,14 @@ export default function App() {
     setIsTestingFreePBXApi(true);
     setFreePBXApiTestResult(null);
     try {
-      const resp = await fetchWithTimeout('/api/settings/test-freepbx-api', {
+      const resp = await fetch('/api/settings/test-freepbx-api', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${session.token}`
         },
         body: JSON.stringify(draftSettings)
-      }, 9000);
+      });
       if (resp.status === 401) {
         handleAuthError(resp);
         return;
@@ -2702,7 +2688,7 @@ export default function App() {
     } catch (err: any) {
       setFreePBXApiTestResult({
         success: false,
-        message: err?.name === 'AbortError' ? 'Таймаут проверки связи: сервер не ответил за 9 секунд.' : `Ошибка сокета: ${err.message || 'сервер недоступен'}`
+        message: `Ошибка сокета: ${err.message || 'сервер недоступен'}`
       });
     } finally {
       setIsTestingFreePBXApi(false);
@@ -3000,12 +2986,11 @@ export default function App() {
 
 
   const loadLiveSessions = async () => {
-    console.log('[LIVE_LOAD_DEBUG] loadLiveSessions called');
     setIsLoadingLiveSessions(true);
     setLiveSessionsError('');
 
     try {
-      const response = await fetch('/api/live-sessions', {
+      const response = await fetch('/api/live-sessions-test', {
         headers: { Authorization: `Bearer ${session?.token || ''}` }
       });
       const data = await response.json();
