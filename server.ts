@@ -14915,44 +14915,66 @@ function initDevicesMapFiles() {
 
 function parsePjsipContacts(output: string): Map<string, any> {
   const map = new Map<string, any>();
-  const lines = output.split('\n');
+  const lines = output.split(/\r?\n/);
+
   for (const line of lines) {
-    const match = line.match(/Contact:\s+(\w+)\/sips?:(\w+)@([\d\.]+):(\d+)\s+([a-f\d]+)?\s+(\w+)(?:\s+([\d\.]+))?/i);
+    // Examples:
+    // Contact:  200/sip:200@192.168.1.222:5060                 7b99311db9 Avail         7.451
+    // Contact:  sevtelecom-pjsip/sip:213.59.160.214:5073       8e6bdc0332 NonQual       nan
+    // Contact:  trunk-name/sip:user@host:5060                  abcdef1234 Avail         12.345
+    const match = line.match(/Contact:\s+([^\/\s]+)\/sips?:([^\s@]+@)?([A-Za-z0-9_.:-]+):(\d+)\s+([a-f\d]+)?\s+([A-Za-z]+)(?:\s+([\d.]+|nan))?/i);
+
     if (match) {
-      const ext = match[1];
-      const ip = match[3];
+      const ext = String(match[1] || '').trim();
+      const host = String(match[3] || '').trim();
+      const ip = host.replace(/^\[/, '').replace(/\]$/, '');
       const port = parseInt(match[4], 10);
-      const isAvail = match[6].toLowerCase().startsWith('avail');
-      const rtt = match[7] ? parseFloat(match[7]) : undefined;
+      const rawStatus = String(match[6] || '').trim();
+      const rttRaw = String(match[7] || '').trim();
+      const rtt = rttRaw && rttRaw.toLowerCase() !== 'nan' ? parseFloat(rttRaw) : undefined;
+      const isAvail = rawStatus.toLowerCase().startsWith('avail');
+      const isTrunk = !/^\d{2,6}$/.test(ext);
+
       map.set(ext, {
         ext,
+        name: isTrunk ? ext : undefined,
         tech: 'PJSIP',
+        deviceRole: isTrunk ? 'trunk' : 'extension',
+        typeLabel: isTrunk ? 'PJSIP Trunk' : 'PJSIP Extension',
         ip,
-        port,
-        status: isAvail ? 'Online' : 'Offline',
-        sipQualify: rtt !== undefined ? `${Math.round(rtt)} ms` : 'OK',
+        port: Number.isFinite(port) ? port : 5060,
+        status: isAvail ? 'Online' : (rawStatus.toLowerCase() === 'nonqual' ? 'Warning' : 'Offline'),
+        pjsipStatus: rawStatus,
+        sipQualify: rtt !== undefined ? `${Math.round(rtt)} ms` : rawStatus,
         rtt: rtt !== undefined ? Math.round(rtt) : 0,
-        responseTime: rtt !== undefined ? `${Math.round(rtt)} ms` : 'OK',
-        userAgent: 'SIP Contact'
+        responseTime: rtt !== undefined ? `${Math.round(rtt)} ms` : rawStatus,
+        userAgent: isTrunk ? `PJSIP Trunk / ${ip}` : 'SIP Contact'
       });
     } else {
-      const unspecMatch = line.match(/Contact:\s+(\w+)\s+\(Unspecified\)\s+(\w+)/i);
+      const unspecMatch = line.match(/Contact:\s+([^\s]+)\s+\(Unspecified\)\s+([A-Za-z]+)/i);
       if (unspecMatch) {
-        const ext = unspecMatch[1];
+        const ext = String(unspecMatch[1] || '').trim();
+        const isTrunk = !/^\d{2,6}$/.test(ext);
+
         map.set(ext, {
           ext,
+          name: isTrunk ? ext : undefined,
           tech: 'PJSIP',
+          deviceRole: isTrunk ? 'trunk' : 'extension',
+          typeLabel: isTrunk ? 'PJSIP Trunk' : 'PJSIP Extension',
           ip: '',
           port: 0,
           status: 'Offline',
+          pjsipStatus: 'UNKNOWN',
           sipQualify: 'UNKNOWN',
           rtt: 0,
           responseTime: 'N/A',
-          userAgent: 'SIP Contact'
+          userAgent: isTrunk ? 'PJSIP Trunk' : 'SIP Contact'
         });
       }
     }
   }
+
   return map;
 }
 
@@ -15162,14 +15184,16 @@ async function getRealVoIPDevices(settings: AppSettings): Promise<any[]> {
     
     finalDevicesMap.set(ext, {
       ext,
-      name: dbExt.name,
+      name: amiInfo.name || dbExt.name,
       tech: amiInfo.tech || dbExt.tech || 'PJSIP',
+      deviceRole: amiInfo.deviceRole || 'extension',
+      typeLabel: amiInfo.typeLabel || ((amiInfo.tech || dbExt.tech || 'PJSIP') === 'PJSIP' ? 'PJSIP Extension' : 'SIP Extension'),
       ip: amiInfo.ip || '',
       port: amiInfo.port || 0,
       status: status,
       userAgent: amiInfo.userAgent || 'Sip Device',
-      manufacturer: 'Generic',
-      model: 'VoIP Terminal',
+      manufacturer: amiInfo.deviceRole === 'trunk' ? 'SIP Provider' : 'Generic',
+      model: amiInfo.typeLabel || (amiInfo.deviceRole === 'trunk' ? 'PJSIP Trunk' : 'VoIP Terminal'),
       regTime: new Date().toISOString(),
       lastContact: new Date().toISOString(),
       ipChanges: 0,
@@ -15210,14 +15234,16 @@ async function getRealVoIPDevices(settings: AppSettings): Promise<any[]> {
       const status = amiInfo.status || 'Offline';
       finalDevicesMap.set(ext, {
         ext,
-        name: `Абонент ${ext}`,
+        name: amiInfo.name || (amiInfo.deviceRole === 'trunk' ? String(ext) : `Абонент ${ext}`),
         tech: amiInfo.tech || 'PJSIP',
+        deviceRole: amiInfo.deviceRole || 'extension',
+        typeLabel: amiInfo.typeLabel || (amiInfo.deviceRole === 'trunk' ? 'PJSIP Trunk' : 'PJSIP Extension'),
         ip: amiInfo.ip || '',
         port: amiInfo.port || 0,
         status: status,
         userAgent: amiInfo.userAgent || 'Sip Device',
-        manufacturer: 'Generic',
-        model: 'VoIP Terminal',
+        manufacturer: amiInfo.deviceRole === 'trunk' ? 'SIP Provider' : 'Generic',
+        model: amiInfo.typeLabel || (amiInfo.deviceRole === 'trunk' ? 'PJSIP Trunk' : 'VoIP Terminal'),
         regTime: new Date().toISOString(),
         lastContact: new Date().toISOString(),
         ipChanges: 0,
