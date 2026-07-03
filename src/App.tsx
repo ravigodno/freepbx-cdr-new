@@ -3026,7 +3026,7 @@ export default function App() {
     setLiveSessionsError('');
 
     try {
-      const response = await fetch('/api/live-sessions-test', {
+      const response = await fetch('/api/live-sessions', {
         headers: { Authorization: `Bearer ${session?.token || ''}` }
       });
       const data = await response.json();

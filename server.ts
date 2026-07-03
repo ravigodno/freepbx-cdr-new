@@ -16,6 +16,7 @@ import mysql from 'mysql2/promise';
 import bcrypt from 'bcryptjs';
 import dotenv from 'dotenv';
 import net from 'net';
+import { execFile } from 'child_process';
 import { spawn, spawnSync } from 'child_process';
 import crypto from 'crypto';
 import http from 'http';
@@ -3268,6 +3269,18 @@ const parseDirectoryPayload = (text: string, format: string, settings?: AppSetti
   return parseDirectoryText(text, settings);
 };
 
+function runAsteriskCliCommand(command: string, timeoutMs = 15000): Promise<{ success: boolean; message: string }> {
+  return new Promise((resolve) => {
+    execFile('asterisk', ['-rx', command], { timeout: timeoutMs, maxBuffer: 1024 * 1024 * 5 }, (error, stdout, stderr) => {
+      if (error) {
+        resolve({ success: false, message: stderr || error.message || String(error) });
+        return;
+      }
+      resolve({ success: true, message: stdout || '' });
+    });
+  });
+}
+
 function runAMICommand(settings: AppSettings, command: string): Promise<{ success: boolean; message: string }> {
   return new Promise((resolve) => {
     const host = settings.amiHost || 'localhost';
@@ -3280,7 +3293,7 @@ function runAMICommand(settings: AppSettings, command: string): Promise<{ succes
     }
 
     const socket = new net.Socket();
-    socket.setTimeout(6000);
+    socket.setTimeout(20000);
     let buffer = '';
     let stage = 'greeting';
 
@@ -12115,11 +12128,13 @@ app.get('/api/live-sessions', requireAuth(), async (req, res) => {
       amiUsername: rawSettings.amiUsername || rawSettings.amiUser,
       amiPassword: rawSettings.amiPassword || rawSettings.amiPass,
     };
-    const channels = await runAMICommand(rawSettings, 'core show channels concise');
-    const verbose = await runAMICommand(rawSettings, 'core show channels verbose');
-    const queues = await runAMICommand(rawSettings, 'queue show');
-    const sipChannels = await runAMICommand(rawSettings, 'sip show channels');
-    const pjsipChannels = await runAMICommand(rawSettings, 'pjsip show channels');
+    const [channels, verbose, queues, sipChannels, pjsipChannels] = await Promise.all([
+      runAsteriskCliCommand('core show channels concise', 5000),
+      runAsteriskCliCommand('core show channels verbose', 5000),
+      runAsteriskCliCommand('queue show', 5000),
+      runAsteriskCliCommand('sip show channels', 5000),
+      runAsteriskCliCommand('pjsip show channels', 5000),
+    ]);
 
     const sessions = channels.success ? parseCoreShowChannelsConcise(channels.message) : [];
 
@@ -14450,15 +14465,37 @@ function parseSipPeers(output: string): Map<string, any> {
   return map;
 }
 
+function parsePjsipRegistrarContacts(output: string): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const line of output.split(/\r?\n/)) {
+    const extMatch = line.match(/\/registrar\/contact\/([^;\s]+);/);
+    if (!extMatch) continue;
+    const ext = extMatch[1];
+    const jsonStart = line.indexOf("{");
+    if (jsonStart === -1) continue;
+    try {
+      const data = JSON.parse(line.slice(jsonStart));
+      if (data.user_agent) map.set(String(ext), String(data.user_agent));
+    } catch (e) {}
+  }
+  return map;
+}
+function parseSipPeerDetails(output: string): { userAgent?: string } {
+  const uaMatch = output.match(/Useragent[ \t]*:[ \t]*([^\r\n]*)/i);
+  const userAgent = uaMatch ? uaMatch[1].trim() : '';
+  return {
+    userAgent: userAgent || undefined
+  };
+}
 function guessManufacturerAndModel(ua: string) {
   const uaLower = (ua || '').toLowerCase();
   if (uaLower.includes('yealink')) {
-    const modelMatch = ua.match(/Yealink\s+([A-Z\d\-]+)/i);
-    return { manufacturer: 'Yealink', model: modelMatch ? modelMatch[1] : 'SIP Device' };
+    const modelMatch = ua.match(/Yealink\s+(.+)/i);
+    return { manufacturer: 'Yealink', model: modelMatch ? modelMatch[1].trim() : 'SIP Device' };
   }
   if (uaLower.includes('grandstream')) {
-    const modelMatch = ua.match(/Grandstream\s+([A-Z\d\-]+)/i);
-    return { manufacturer: 'Grandstream', model: modelMatch ? modelMatch[1] : 'SIP Device' };
+    const modelMatch = ua.match(/Grandstream\s+(.+)/i);
+    return { manufacturer: 'Grandstream', model: modelMatch ? modelMatch[1].trim() : 'SIP Device' };
   }
   if (uaLower.includes('cisco')) {
     return { manufacturer: 'Cisco', model: 'IP Phone' };
@@ -14521,22 +14558,48 @@ async function getRealVoIPDevices(settings: AppSettings): Promise<any[]> {
 
   const amiStatuses = new Map<string, any>();
   try {
-    const pjsipRes = await runAMICommand(settings, 'pjsip show contacts');
+    let pjsipAgents = new Map<string, string>();
+    try {
+      const registrarRes = await runAsteriskCliCommand('database show registrar/contact', 8000);
+      if (registrarRes.success && registrarRes.message) {
+        pjsipAgents = parsePjsipRegistrarContacts(registrarRes.message);
+      }
+    } catch (e) {}
+
+    let pjsipRes = await runAsteriskCliCommand('pjsip show contacts');
+    if (!pjsipRes.success || !pjsipRes.message) {
+      pjsipRes = await runAMICommand(settings, 'pjsip show contacts');
+    }
     if (pjsipRes.success && pjsipRes.message) {
       const pjsipMap = parsePjsipContacts(pjsipRes.message);
       for (const [ext, dev] of pjsipMap.entries()) {
+        const ua = pjsipAgents.get(String(ext));
+        if (ua) dev.userAgent = ua;
         amiStatuses.set(ext, dev);
       }
     }
   } catch (e) {
-    console.error("Failed to query PJSIP contacts via AMI:", e);
+    console.error("Failed to query PJSIP contacts:", e);
   }
 
-  try {
-    const sipRes = await runAMICommand(settings, 'sip show peers');
+  try {    let sipRes = await runAsteriskCliCommand('sip show peers');
+    if (!sipRes.success || !sipRes.message) {
+      sipRes = await runAMICommand(settings, 'sip show peers');
+    }
     if (sipRes.success && sipRes.message) {
       const sipMap = parseSipPeers(sipRes.message);
       for (const [ext, dev] of sipMap.entries()) {
+        if (dev.tech === 'SIP' && dev.ip && dev.status === 'Online') {
+          try {
+            const peerDetails = await runAsteriskCliCommand('sip show peer ' + ext, 8000);
+            if (peerDetails.success && peerDetails.message) {
+              const details = parseSipPeerDetails(peerDetails.message);
+              if (details.userAgent) {
+                dev.userAgent = details.userAgent;
+              }
+            }
+          } catch (e) {}
+        }
         amiStatuses.set(ext, dev);
       }
     }
