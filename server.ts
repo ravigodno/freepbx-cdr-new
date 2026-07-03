@@ -15030,6 +15030,21 @@ function parsePjsipRegistrarContacts(output: string): Map<string, string> {
   }
   return map;
 }
+async function pingHostForTrunkMonitor(host: string): Promise<{ ok: boolean; avgMs?: number; raw: string }> {
+  const cleanHost = String(host || "").trim().replace(/^\[/, "").replace(/\]$/, "");
+  if (!cleanHost) return { ok: false, raw: "" };
+
+  return new Promise((resolve) => {
+    execFile("ping", ["-c", "2", "-W", "2", cleanHost], { timeout: 6000 }, (error, stdout, stderr) => {
+      const raw = String(stdout || stderr || "");
+      const ok = !error && /0%\s*packet loss|0\.0%\s*packet loss/i.test(raw);
+      const avgMatch = raw.match(/=\s*[\d.]+\/([\d.]+)\/[\d.]+\/[\d.]+\s*ms/i);
+      const avgMs = avgMatch ? Math.round(parseFloat(avgMatch[1])) : undefined;
+      resolve({ ok, avgMs, raw });
+    });
+  });
+}
+
 function parseSipPeerDetails(output: string): { userAgent?: string; toHost?: string; fromUser?: string } {
   const uaMatch = output.match(/Useragent[ \t]*:[ \t]*([^\r\n]*)/i);
   const toHostMatch = output.match(/ToHost[ \t]*:[ \t]*([^\r\n]*)/i);
@@ -15141,6 +15156,37 @@ async function getRealVoIPDevices(settings: AppSettings): Promise<any[]> {
       for (const [ext, dev] of pjsipMap.entries()) {
         const ua = pjsipAgents.get(String(ext));
         if (ua) dev.userAgent = ua;
+
+        // IP-auth PJSIP trunk without SIP OPTIONS:
+        // operator may require OPTIONS disabled, so NonQual is not a hard failure.
+        if (
+          dev.deviceRole === "trunk" &&
+          String(dev.pjsipStatus || "").toLowerCase() === "nonqual" &&
+          dev.ip
+        ) {
+          try {
+            const ping = await pingHostForTrunkMonitor(dev.ip);
+            dev.monitorMode = "NO_OPTIONS_ICMP_CDR";
+            dev.optionsDisabled = true;
+            dev.pingOk = ping.ok;
+            dev.pingMs = ping.avgMs || 0;
+            dev.operationalStatus = ping.ok ? "Работает без OPTIONS" : "Нет ответа ICMP, OPTIONS выключен";
+            dev.status = ping.ok ? "Online" : "Warning";
+            dev.sipQualify = ping.ok
+              ? "OPTIONS выключен, ICMP OK" + (ping.avgMs ? " " + ping.avgMs + " ms" : "")
+              : "OPTIONS выключен, ICMP нет ответа";
+            dev.responseTime = ping.ok
+              ? "ICMP " + (ping.avgMs ? ping.avgMs + " ms" : "OK")
+              : "ICMP no reply";
+            dev.userAgent = dev.userAgent || ("PJSIP Trunk / " + dev.ip);
+          } catch (e) {
+            dev.monitorMode = "NO_OPTIONS_ICMP_CDR";
+            dev.optionsDisabled = true;
+            dev.operationalStatus = "OPTIONS выключен, ICMP проверить не удалось";
+            dev.status = "Warning";
+          }
+        }
+
         amiStatuses.set(ext, dev);
       }
     }
@@ -15188,6 +15234,12 @@ async function getRealVoIPDevices(settings: AppSettings): Promise<any[]> {
       tech: amiInfo.tech || dbExt.tech || 'PJSIP',
       deviceRole: amiInfo.deviceRole || 'extension',
       typeLabel: amiInfo.typeLabel || ((amiInfo.tech || dbExt.tech || 'PJSIP') === 'PJSIP' ? 'PJSIP Extension' : 'SIP Extension'),
+      monitorMode: amiInfo.monitorMode,
+      optionsDisabled: amiInfo.optionsDisabled || false,
+      pingOk: amiInfo.pingOk || false,
+      pingMs: amiInfo.pingMs || 0,
+      pjsipStatus: amiInfo.pjsipStatus,
+      operationalStatus: amiInfo.operationalStatus,
       ip: amiInfo.ip || '',
       port: amiInfo.port || 0,
       status: status,
@@ -15238,6 +15290,12 @@ async function getRealVoIPDevices(settings: AppSettings): Promise<any[]> {
         tech: amiInfo.tech || 'PJSIP',
         deviceRole: amiInfo.deviceRole || 'extension',
         typeLabel: amiInfo.typeLabel || (amiInfo.deviceRole === 'trunk' ? 'PJSIP Trunk' : 'PJSIP Extension'),
+        monitorMode: amiInfo.monitorMode,
+        optionsDisabled: amiInfo.optionsDisabled || false,
+        pingOk: amiInfo.pingOk || false,
+        pingMs: amiInfo.pingMs || 0,
+        pjsipStatus: amiInfo.pjsipStatus,
+        operationalStatus: amiInfo.operationalStatus,
         ip: amiInfo.ip || '',
         port: amiInfo.port || 0,
         status: status,
