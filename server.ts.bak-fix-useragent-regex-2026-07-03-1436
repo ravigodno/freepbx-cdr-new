@@ -12082,470 +12082,6 @@ app.get('/api/recordings/:filename', (req, _res, next) => {
 
 
 
-
-// --- PBXPULS HEALTH REPORT API ---
-app.get('/api/health-report', requireAuth(['su', 'admin']), async (req, res) => {
-  const run = (cmd: string, args: string[] = [], timeoutMs = 5000) => {
-    try {
-      const r = spawnSync(cmd, args, {
-        encoding: 'utf8',
-        timeout: timeoutMs,
-        maxBuffer: 1024 * 1024 * 5
-      });
-      return {
-        ok: r.status === 0,
-        status: r.status,
-        stdout: String(r.stdout || '').trim(),
-        stderr: String(r.stderr || '').trim()
-      };
-    } catch (e: any) {
-      return { ok: false, status: -1, stdout: '', stderr: e.message || String(e) };
-    }
-  };
-
-  const parsePing = (target: string) => {
-    const out = run('ping', ['-c', '3', '-W', '2', target], 8000);
-    const text = (out.stdout || '') + '\n' + (out.stderr || '');
-    const lossMatch = text.match(/(\d+(?:\.\d+)?)%\s*packet loss/i);
-    const avgMatch = text.match(/(?:rtt|round-trip).*?=\s*[\d.]+\/([\d.]+)\/([\d.]+)\/([\d.]+)/i);
-    const loss = lossMatch ? Number(lossMatch[1]) : 100;
-    const avgMs = avgMatch ? Number(avgMatch[1]) : null;
-    return {
-      target,
-      ok: out.ok && loss < 100,
-      packetLoss: Number.isFinite(loss) ? loss : 100,
-      avgMs,
-      raw: text.split('\n').slice(-6).join('\n')
-    };
-  };
-
-  try {
-    const generatedAt = new Date().toISOString();
-
-    const uptime = run('uptime', [], 3000).stdout;
-    const free = run('free', ['-m'], 3000).stdout;
-    const df = run('df', ['-PTh'], 5000).stdout;
-    const inodes = run('df', ['-Pi'], 5000).stdout;
-    const ipAddr = run('ip', ['-o', 'addr', 'show'], 5000).stdout;
-    const ipLinks = run('ip', ['-s', 'link'], 5000).stdout;
-    const routes = run('ip', ['route'], 3000).stdout;
-    const dateInfo = run('timedatectl', [], 3000).stdout || run('date', [], 3000).stdout;
-
-    const memLine = free.split('\n').find(l => /^Mem:/i.test(l)) || '';
-    const memParts = memLine.trim().split(/\s+/);
-    const memTotal = Number(memParts[1] || 0);
-    const memUsed = Number(memParts[2] || 0);
-    const memFree = Number(memParts[3] || 0);
-    const memUsedPercent = memTotal ? Math.round((memUsed / memTotal) * 100) : 0;
-
-    const swapLine = free.split('\n').find(l => /^Swap:/i.test(l)) || '';
-    const swapParts = swapLine.trim().split(/\s+/);
-    const swapTotal = Number(swapParts[1] || 0);
-    const swapUsed = Number(swapParts[2] || 0);
-    const swapUsedPercent = swapTotal ? Math.round((swapUsed / swapTotal) * 100) : 0;
-
-    const disks = df.split('\n').slice(1).filter(Boolean).map(line => {
-      const p = line.trim().split(/\s+/);
-      return {
-        filesystem: p[0],
-        type: p[1],
-        size: p[2],
-        used: p[3],
-        available: p[4],
-        usedPercent: Number(String(p[5] || '').replace('%', '')) || 0,
-        mount: p.slice(6).join(' ')
-      };
-    });
-
-    const inodeRows = inodes.split('\n').slice(1).filter(Boolean).map(line => {
-      const p = line.trim().split(/\s+/);
-      return {
-        filesystem: p[0],
-        inodes: p[1],
-        used: p[2],
-        free: p[3],
-        usedPercent: Number(String(p[4] || '').replace('%', '')) || 0,
-        mount: p.slice(5).join(' ')
-      };
-    });
-
-    const servicesToCheck = ['mariadb', 'mysqld', 'httpd', 'apache2', 'nginx', 'fail2ban', 'crond', 'cron'];
-    let services = servicesToCheck.map(name => {
-      const active = run('systemctl', ['is-active', name], 3000);
-      const enabled = run('systemctl', ['is-enabled', name], 3000);
-      return {
-        name,
-        active: active.stdout || active.stderr || 'unknown',
-        enabled: enabled.stdout || enabled.stderr || 'unknown',
-        ok: String(active.stdout || '').trim() === 'active'
-      };
-    });
-
-    const asteriskVersion = await runAsteriskCliCommand('core show version', 5000);
-
-    services.unshift({
-      name: 'asterisk',
-      active: asteriskVersion.success ? 'active' : 'inactive',
-      enabled: 'fwconsole/asterisk-cli',
-      ok: Boolean(asteriskVersion.success)
-    });
-    const asteriskUptime = await runAsteriskCliCommand('core show uptime', 5000);
-    const asteriskChannels = await runAsteriskCliCommand('core show channels count', 5000);
-    const sipPeers = await runAsteriskCliCommand('sip show peers', 5000);
-    const pjsipContacts = await runAsteriskCliCommand('pjsip show contacts', 5000);
-    const fwconsoleVersion = run('fwconsole', ['--version'], 8000).stdout || run('fwconsole', ['-V'], 8000).stdout;
-
-    const internet = [
-      parsePing('8.8.8.8'),
-      parsePing('77.88.8.8'),
-      parsePing('google.com'),
-      parsePing('ya.ru')
-    ];
-
-    const dnsGoogle = run('getent', ['hosts', 'google.com'], 5000);
-    const dnsYandex = run('getent', ['hosts', 'ya.ru'], 5000);
-
-    const criticalDisk = disks.some(d => d.usedPercent >= 90);
-    const warningDisk = disks.some(d => d.usedPercent >= 80);
-    const criticalInodes = inodeRows.some(d => d.usedPercent >= 90);
-    const internetOk = internet.filter(p => p.ok).length >= 2;
-    const asteriskOk = services.some(s => s.name === 'asterisk' && s.ok) || asteriskVersion.success;
-
-    let score = 100;
-    if (memUsedPercent >= 90) score -= 15;
-    else if (memUsedPercent >= 80) score -= 8;
-    if (swapUsedPercent >= 50) score -= 10;
-    if (criticalDisk) score -= 25;
-    else if (warningDisk) score -= 10;
-    if (criticalInodes) score -= 15;
-    if (!internetOk) score -= 20;
-    if (!asteriskOk) score -= 30;
-    score = Math.max(0, Math.min(100, score));
-
-    const status =
-      score >= 90 ? 'Отлично' :
-      score >= 70 ? 'Нормально' :
-      score >= 50 ? 'Требует внимания' :
-      'Критично';
-
-    res.json({
-      success: true,
-      generatedAt,
-      score,
-      status,
-      summary: {
-        uptime,
-        memoryUsedPercent: memUsedPercent,
-        swapUsedPercent,
-        internetOk,
-        asteriskOk,
-        disksTotal: disks.length,
-        servicesChecked: services.length
-      },
-      system: {
-        uptime,
-        dateInfo,
-        memory: {
-          totalMb: memTotal,
-          usedMb: memUsed,
-          freeMb: memFree,
-          usedPercent: memUsedPercent
-        },
-        swap: {
-          totalMb: swapTotal,
-          usedMb: swapUsed,
-          usedPercent: swapUsedPercent
-        }
-      },
-      disks,
-      inodes: inodeRows,
-      network: {
-        addresses: ipAddr,
-        links: ipLinks,
-        routes
-      },
-      internet: {
-        ping: internet,
-        dns: {
-          google: { ok: dnsGoogle.ok, output: dnsGoogle.stdout || dnsGoogle.stderr },
-          yandex: { ok: dnsYandex.ok, output: dnsYandex.stdout || dnsYandex.stderr }
-        }
-      },
-      services,
-      asterisk: {
-        version: asteriskVersion.message || '',
-        uptime: asteriskUptime.message || '',
-        channels: asteriskChannels.message || '',
-        sipPeers: sipPeers.success ? sipPeers.message.split('\n').slice(-5).join('\n') : '',
-        pjsipContacts: pjsipContacts.success ? pjsipContacts.message.split('\n').slice(-8).join('\n') : '',
-        freepbxVersion: fwconsoleVersion || ''
-      }
-    });
-  } catch (e: any) {
-    res.status(500).json({ success: false, error: e.message || String(e) });
-  }
-});
-
-
-
-// --- PBXPULS HEALTH HISTORY ---
-const HEALTH_HISTORY_FILE = path.join(DATA_DIR, 'health-history.json');
-
-let lastHealthNetSample: any = null;
-
-function readHealthHistory(): any[] {
-  try {
-    const raw = fs.readFileSync(HEALTH_HISTORY_FILE, 'utf8');
-    const arr = JSON.parse(raw);
-    return Array.isArray(arr) ? arr : [];
-  } catch (e) {
-    return [];
-  }
-}
-
-function writeHealthHistory(history: any[]) {
-  try {
-    fs.writeFileSync(HEALTH_HISTORY_FILE, JSON.stringify(history, null, 2));
-  } catch (e) {
-    console.warn('[HEALTH_HISTORY] write failed', e);
-  }
-}
-
-function runHealthCommand(cmd: string, args: string[] = [], timeoutMs = 5000) {
-  try {
-    const r = spawnSync(cmd, args, {
-      encoding: 'utf8',
-      timeout: timeoutMs,
-      maxBuffer: 1024 * 1024 * 5
-    });
-    return {
-      ok: r.status === 0,
-      stdout: String(r.stdout || '').trim(),
-      stderr: String(r.stderr || '').trim()
-    };
-  } catch (e: any) {
-    return { ok: false, stdout: '', stderr: e.message || String(e) };
-  }
-}
-
-function parseHealthPing(target: string) {
-  const out = runHealthCommand('ping', ['-c', '2', '-W', '2', target], 6000);
-  const text = (out.stdout || '') + '\n' + (out.stderr || '');
-  const lossMatch = text.match(/(\d+(?:\.\d+)?)%\s*packet loss/i);
-  const avgMatch = text.match(/(?:rtt|round-trip).*?=\s*[\d.]+\/([\d.]+)\/([\d.]+)\/([\d.]+)/i);
-  const loss = lossMatch ? Number(lossMatch[1]) : 100;
-  const avgMs = avgMatch ? Number(avgMatch[1]) : null;
-  return {
-    target,
-    ok: out.ok && loss < 100,
-    packetLoss: Number.isFinite(loss) ? loss : 100,
-    avgMs
-  };
-}
-
-function getDefaultInterface() {
-  const out = runHealthCommand('bash', ['-lc', "ip route show default 2>/dev/null | awk '{print $5}' | head -1"], 3000);
-  return (out.stdout || '').split(/\s+/)[0] || '';
-}
-
-function getInterfaceBytes(iface: string) {
-  if (!iface) return { rxBytes: 0, txBytes: 0 };
-  const rx = Number(runHealthCommand('cat', [`/sys/class/net/${iface}/statistics/rx_bytes`], 2000).stdout || 0);
-  const tx = Number(runHealthCommand('cat', [`/sys/class/net/${iface}/statistics/tx_bytes`], 2000).stdout || 0);
-  return {
-    rxBytes: Number.isFinite(rx) ? rx : 0,
-    txBytes: Number.isFinite(tx) ? tx : 0
-  };
-}
-
-function parseCpuPercentFromTop() {
-  const out = runHealthCommand('bash', ['-lc', "top -bn1 | grep -E 'Cpu\\(s\\)|%Cpu' | head -1"], 5000).stdout;
-  if (!out) return null;
-
-  const idleMatch = out.match(/([0-9]+(?:\.[0-9]+)?)\s*(?:id|idle)/i);
-  if (idleMatch) {
-    const idle = Number(idleMatch[1]);
-    if (Number.isFinite(idle)) return Math.max(0, Math.min(100, Math.round((100 - idle) * 10) / 10));
-  }
-
-  const parts = out.match(/[0-9]+(?:\.[0-9]+)?/g) || [];
-  if (parts.length >= 4) {
-    const idle = Number(parts[3]);
-    if (Number.isFinite(idle)) return Math.max(0, Math.min(100, Math.round((100 - idle) * 10) / 10));
-  }
-
-  return null;
-}
-
-async function collectHealthHistoryPoint() {
-  const now = new Date();
-  const timestamp = now.toISOString();
-
-  const loadRaw = runHealthCommand('cat', ['/proc/loadavg'], 2000).stdout;
-  const loadParts = loadRaw.split(/\s+/);
-  const load1 = Number(loadParts[0] || 0);
-  const load5 = Number(loadParts[1] || 0);
-  const load15 = Number(loadParts[2] || 0);
-
-  const uptimeRaw = runHealthCommand('cat', ['/proc/uptime'], 2000).stdout;
-  const uptimeSeconds = Number((uptimeRaw.split(/\s+/)[0] || 0));
-
-  const bootId = runHealthCommand('cat', ['/proc/sys/kernel/random/boot_id'], 2000).stdout || '';
-
-  const cpuPercent = parseCpuPercentFromTop();
-
-  const free = runHealthCommand('free', ['-m'], 3000).stdout;
-  const memLine = free.split('\n').find(l => /^Mem:/i.test(l)) || '';
-  const memParts = memLine.trim().split(/\s+/);
-  const memTotal = Number(memParts[1] || 0);
-  const memUsed = Number(memParts[2] || 0);
-  const memoryPercent = memTotal ? Math.round((memUsed / memTotal) * 100) : 0;
-
-  const swapLine = free.split('\n').find(l => /^Swap:/i.test(l)) || '';
-  const swapParts = swapLine.trim().split(/\s+/);
-  const swapTotal = Number(swapParts[1] || 0);
-  const swapUsed = Number(swapParts[2] || 0);
-  const swapPercent = swapTotal ? Math.round((swapUsed / swapTotal) * 100) : 0;
-
-  const rootDf = runHealthCommand('df', ['-P', '/'], 3000).stdout.split('\n')[1] || '';
-  const rootParts = rootDf.trim().split(/\s+/);
-  const diskRootPercent = Number(String(rootParts[4] || '').replace('%', '')) || 0;
-
-  const googlePing = parseHealthPing('8.8.8.8');
-  const yandexPing = parseHealthPing('77.88.8.8');
-
-  const iface = getDefaultInterface();
-  const bytes = getInterfaceBytes(iface);
-  const currentMs = Date.now();
-
-  let rxKbps = 0;
-  let txKbps = 0;
-
-  if (lastHealthNetSample && lastHealthNetSample.iface === iface) {
-    const seconds = Math.max(1, (currentMs - lastHealthNetSample.ts) / 1000);
-    rxKbps = Math.max(0, Math.round(((bytes.rxBytes - lastHealthNetSample.rxBytes) * 8 / 1000 / seconds) * 10) / 10);
-    txKbps = Math.max(0, Math.round(((bytes.txBytes - lastHealthNetSample.txBytes) * 8 / 1000 / seconds) * 10) / 10);
-  }
-
-  lastHealthNetSample = {
-    iface,
-    ts: currentMs,
-    rxBytes: bytes.rxBytes,
-    txBytes: bytes.txBytes
-  };
-
-  let activeChannels = 0;
-  let activeCalls = 0;
-  try {
-    const channelsRes = await runAsteriskCliCommand('core show channels count', 5000);
-    const text = channelsRes.message || '';
-    const chMatch = text.match(/(\d+)\s+active channels?/i);
-    const callMatch = text.match(/(\d+)\s+active calls?/i);
-    activeChannels = chMatch ? Number(chMatch[1]) : 0;
-    activeCalls = callMatch ? Number(callMatch[1]) : 0;
-  } catch (e) {}
-
-  return {
-    timestamp,
-    bootId,
-    uptimeSeconds: Number.isFinite(uptimeSeconds) ? uptimeSeconds : 0,
-    load1,
-    load5,
-    load15,
-    cpuPercent,
-    memoryPercent,
-    swapPercent,
-    diskRootPercent,
-    internet: {
-      googleAvgMs: googlePing.avgMs,
-      googleLoss: googlePing.packetLoss,
-      yandexAvgMs: yandexPing.avgMs,
-      yandexLoss: yandexPing.packetLoss
-    },
-    network: {
-      iface,
-      rxKbps,
-      txKbps,
-      rxBytes: bytes.rxBytes,
-      txBytes: bytes.txBytes
-    },
-    asterisk: {
-      activeChannels,
-      activeCalls
-    }
-  };
-}
-
-async function updateHealthHistory() {
-  try {
-    const point = await collectHealthHistoryPoint();
-    const history = readHealthHistory();
-
-    history.push(point);
-
-    const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
-    const cleaned = history.filter((p: any) => {
-      const ts = new Date(p.timestamp).getTime();
-      return Number.isFinite(ts) && ts >= cutoff;
-    });
-
-    writeHealthHistory(cleaned);
-    console.log('[HEALTH_HISTORY] saved point', point.timestamp, 'calls=' + point.asterisk.activeCalls, 'cpu=' + point.cpuPercent, 'ram=' + point.memoryPercent);
-  } catch (e) {
-    console.warn('[HEALTH_HISTORY] update failed', e);
-  }
-}
-
-setTimeout(() => {
-  updateHealthHistory();
-  setInterval(updateHealthHistory, 15000);
-}, 10000);
-
-app.get('/api/health-report/history', requireAuth(['su', 'admin']), async (req, res) => {
-  try {
-    let history = readHealthHistory();
-
-    const period = String(req.query.period || '24h');
-    const now = Date.now();
-
-    let periodMs = 24 * 60 * 60 * 1000;
-    if (period === '1h') periodMs = 60 * 60 * 1000;
-    else if (period === '7d') periodMs = 7 * 24 * 60 * 60 * 1000;
-    else if (period === '30d') periodMs = 30 * 24 * 60 * 60 * 1000;
-
-    const limit = now - periodMs;
-
-    history = history
-      .filter((p: any) => {
-        const ts = new Date(p.timestamp).getTime();
-        return Number.isFinite(ts) && ts >= limit;
-      })
-      .sort((a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-
-    const reboots = [];
-    for (let i = 1; i < history.length; i++) {
-      if (history[i].bootId && history[i - 1].bootId && history[i].bootId !== history[i - 1].bootId) {
-        reboots.push({
-          timestamp: history[i].timestamp,
-          previousBootId: history[i - 1].bootId,
-          bootId: history[i].bootId
-        });
-      }
-    }
-
-    res.json({
-      success: true,
-      period,
-      count: history.length,
-      reboots,
-      history
-    });
-  } catch (e: any) {
-    res.status(500).json({ success: false, error: e.message || String(e) });
-  }
-});
-
-
 // --- LIVE ASTERISK SESSIONS MONITORING ---
 function parseCoreShowChannelsConcise(raw: string): any[] {
   return String(raw || '')
@@ -12592,13 +12128,11 @@ app.get('/api/live-sessions', requireAuth(), async (req, res) => {
       amiUsername: rawSettings.amiUsername || rawSettings.amiUser,
       amiPassword: rawSettings.amiPassword || rawSettings.amiPass,
     };
-    const [channels, verbose, queues, sipChannels, pjsipChannels] = await Promise.all([
-      runAsteriskCliCommand('core show channels concise', 5000),
-      runAsteriskCliCommand('core show channels verbose', 5000),
-      runAsteriskCliCommand('queue show', 5000),
-      runAsteriskCliCommand('sip show channels', 5000),
-      runAsteriskCliCommand('pjsip show channels', 5000),
-    ]);
+    const channels = await runAMICommand(rawSettings, 'core show channels concise');
+    const verbose = await runAMICommand(rawSettings, 'core show channels verbose');
+    const queues = await runAMICommand(rawSettings, 'queue show');
+    const sipChannels = await runAMICommand(rawSettings, 'sip show channels');
+    const pjsipChannels = await runAMICommand(rawSettings, 'pjsip show channels');
 
     const sessions = channels.success ? parseCoreShowChannelsConcise(channels.message) : [];
 
@@ -13959,11 +13493,6 @@ setInterval(async () => {
       // Add to history (only for active or if we want historical tracking)
       history.push({
         ext: dev.ext,
-        name: dev.name || '',
-        ip: dev.ip || '',
-        userAgent: dev.userAgent || '',
-        status: dev.status === 'Offline' ? 'Offline' : 'Online',
-        qualityStatus: metric.status,
         timestamp: now,
         latency: metric.latency,
         jitter: metric.jitter,
@@ -14007,16 +13536,9 @@ setInterval(async () => {
       }
     }
 
-    // Keep quality history by retention period instead of a small fixed buffer.
-    // Default: 30 days. Later this can be exposed in admin settings.
-    const qualityHistoryRetentionDays = Math.max(1, Number(settings.qualityHistoryRetentionDays || 30));
-    const qualityHistoryCutoff = Date.now() - qualityHistoryRetentionDays * 24 * 60 * 60 * 1000;
-
-    for (let i = history.length - 1; i >= 0; i--) {
-      const ts = new Date((history[i] as any).timestamp).getTime();
-      if (!Number.isFinite(ts) || ts < qualityHistoryCutoff) {
-        history.splice(i, 1);
-      }
+    // Keep history clean (keep last 1000 records to load faster)
+    if (history.length > 1000) {
+      history.splice(0, history.length - 1000);
     }
     // Cap alerts at 200 items
     if (alerts.length > 200) {
@@ -14058,68 +13580,16 @@ app.get('/api/quality/history', requireAuth(), async (req, res) => {
   try {
     const localDb = await readLocalDb();
     const settings = localDb.settings;
-    let history: any[] = [];
-
+    let history = [];
     if (fs.existsSync(QUALITY_HISTORY_FILE)) {
       history = JSON.parse(fs.readFileSync(QUALITY_HISTORY_FILE, 'utf8') || '[]');
     }
-
     if (!isDemoMode(settings)) {
       const realDevices = await getRealVoIPDevices(settings);
-      const realExts = new Set(realDevices.map((d: any) => String(d.ext)));
-      history = history.filter((pt: any) => realExts.has(String(pt.ext)));
+      const realExts = new Set(realDevices.map(d => d.ext));
+      history = history.filter((pt: any) => realExts.has(pt.ext));
     }
-
-    const ext = String(req.query.ext || '').trim();
-    if (ext && ext !== 'all') {
-      history = history.filter((pt: any) => String(pt.ext) === ext);
-    }
-
-    const period = String(req.query.period || req.query.range || '').trim();
-    let periodMs = 0;
-
-    if (period === '1h') periodMs = 60 * 60 * 1000;
-    else if (period === '24h') periodMs = 24 * 60 * 60 * 1000;
-    else if (period === '7d') periodMs = 7 * 24 * 60 * 60 * 1000;
-    else if (period === '30d') periodMs = 30 * 24 * 60 * 60 * 1000;
-
-    const from = String(req.query.from || '').trim();
-    const to = String(req.query.to || '').trim();
-
-    let fromMs = from ? Date.parse(from) : 0;
-    let toMs = to ? Date.parse(to) : 0;
-
-    if (periodMs > 0) {
-      fromMs = Date.now() - periodMs;
-    }
-
-    if (Number.isFinite(fromMs) && fromMs > 0) {
-      history = history.filter((pt: any) => {
-        const ts = Date.parse(String(pt.timestamp || ''));
-        return Number.isFinite(ts) && ts >= fromMs;
-      });
-    }
-
-    if (Number.isFinite(toMs) && toMs > 0) {
-      history = history.filter((pt: any) => {
-        const ts = Date.parse(String(pt.timestamp || ''));
-        return Number.isFinite(ts) && ts <= toMs;
-      });
-    }
-
-    history.sort((a: any, b: any) => Date.parse(String(a.timestamp || '')) - Date.parse(String(b.timestamp || '')));
-
-    res.json({
-      success: true,
-      count: history.length,
-      filters: {
-        ext: ext || 'all',
-        period: period || null,
-        from: from || null,
-        to: to || null
-      },
-      history
-    });
+    res.json({ success: true, count: history.length, history });
   } catch (e: any) {
     res.status(500).json({ success: false, error: e.message || String(e) });
   }
@@ -14993,53 +14463,22 @@ function parseSipPeers(output: string): Map<string, any> {
   return map;
 }
 
-function parsePjsipRegistrarContacts(output: string): Map<string, string> {
-  const map = new Map<string, string>();
-  for (const line of output.split(/\r?\n/)) {
-    const extMatch = line.match(/\/registrar\/contact\/([^;\s]+);/);
-    if (!extMatch) continue;
-    const ext = extMatch[1];
-    const jsonStart = line.indexOf("{");
-    if (jsonStart === -1) continue;
-    try {
-      const data = JSON.parse(line.slice(jsonStart));
-      if (data.user_agent) map.set(String(ext), String(data.user_agent));
-    } catch (e) {}
-  }
-  return map;
-}
-function parseSipPeerDetails(output: string): { userAgent?: string; toHost?: string; fromUser?: string } {
-  const uaMatch = output.match(/Useragent[ \t]*:[ \t]*([^\r\n]*)/i);
-  const toHostMatch = output.match(/ToHost[ \t]*:[ \t]*([^\r\n]*)/i);
-  const fromUserMatch = output.match(/FromUser[ \t]*:[ \t]*([^\r\n]*)/i);
-
+function parseSipPeerDetails(output: string): { userAgent?: string } {
+  const uaMatch = output.match(/Useragent\s*:\s*(.+)/i);
   const userAgent = uaMatch ? uaMatch[1].trim() : '';
-  const toHost = toHostMatch ? toHostMatch[1].trim() : '';
-  const fromUser = fromUserMatch ? fromUserMatch[1].trim() : '';
-
   return {
-    userAgent: userAgent || undefined,
-    toHost: toHost || undefined,
-    fromUser: fromUser || undefined
+    userAgent: userAgent || undefined
   };
 }
 function guessManufacturerAndModel(ua: string) {
   const uaLower = (ua || '').toLowerCase();
   if (uaLower.includes('yealink')) {
-    const modelMatch = ua.match(/Yealink\s+(.+)/i);
-    return { manufacturer: 'Yealink', model: modelMatch ? modelMatch[1].trim() : 'SIP Device' };
+    const modelMatch = ua.match(/Yealink\s+([A-Z\d\-]+)/i);
+    return { manufacturer: 'Yealink', model: modelMatch ? modelMatch[1] : 'SIP Device' };
   }
-  if (uaLower.includes('novofon') || uaLower.includes('sip.novofon.ru')) {
-    return { manufacturer: 'Novofon', model: 'SIP Trunk / sip.novofon.ru' };
-  }
-
-  if (uaLower.includes('sip trunk')) {
-    return { manufacturer: 'SIP Provider', model: ua.replace(/^SIP Trunk\s*\/\s*/i, 'SIP Trunk / ') };
-  }
-
   if (uaLower.includes('grandstream')) {
-    const modelMatch = ua.match(/Grandstream\s+(.+)/i);
-    return { manufacturer: 'Grandstream', model: modelMatch ? modelMatch[1].trim() : 'SIP Device' };
+    const modelMatch = ua.match(/Grandstream\s+([A-Z\d\-]+)/i);
+    return { manufacturer: 'Grandstream', model: modelMatch ? modelMatch[1] : 'SIP Device' };
   }
   if (uaLower.includes('cisco')) {
     return { manufacturer: 'Cisco', model: 'IP Phone' };
@@ -15101,29 +14540,18 @@ async function getRealVoIPDevices(settings: AppSettings): Promise<any[]> {
   }
 
   const amiStatuses = new Map<string, any>();
-  try {
-    let pjsipAgents = new Map<string, string>();
-    try {
-      const registrarRes = await runAsteriskCliCommand('database show registrar/contact', 8000);
-      if (registrarRes.success && registrarRes.message) {
-        pjsipAgents = parsePjsipRegistrarContacts(registrarRes.message);
-      }
-    } catch (e) {}
-
-    let pjsipRes = await runAsteriskCliCommand('pjsip show contacts');
+  try {    let pjsipRes = await runAsteriskCliCommand('pjsip show contacts');
     if (!pjsipRes.success || !pjsipRes.message) {
       pjsipRes = await runAMICommand(settings, 'pjsip show contacts');
     }
     if (pjsipRes.success && pjsipRes.message) {
       const pjsipMap = parsePjsipContacts(pjsipRes.message);
       for (const [ext, dev] of pjsipMap.entries()) {
-        const ua = pjsipAgents.get(String(ext));
-        if (ua) dev.userAgent = ua;
         amiStatuses.set(ext, dev);
       }
     }
   } catch (e) {
-    console.error("Failed to query PJSIP contacts:", e);
+    console.error("Failed to query PJSIP contacts via AMI:", e);
   }
 
   try {    let sipRes = await runAsteriskCliCommand('sip show peers');
@@ -15140,8 +14568,6 @@ async function getRealVoIPDevices(settings: AppSettings): Promise<any[]> {
               const details = parseSipPeerDetails(peerDetails.message);
               if (details.userAgent) {
                 dev.userAgent = details.userAgent;
-              } else if (details.toHost) {
-                dev.userAgent = 'SIP Trunk / ' + details.toHost;
               }
             }
           } catch (e) {}

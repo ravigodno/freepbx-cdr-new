@@ -77,7 +77,6 @@ import CommandCenterTab from './modules/monitoring/tabs/monitoring/CommandCenter
 const DbExplorerTab = lazy(() => import('./modules/monitoring/tabs/monitoring/DbExplorerTab'));
 import QualityTab from './modules/monitoring/tabs/monitoring/QualityTab';
 import DevicesMapTab from './modules/monitoring/tabs/monitoring/DevicesMapTab';
-import HealthReportTab from './modules/monitoring/tabs/monitoring/HealthReportTab';
 import { DirectoryStatusIcon } from './modules/directory/components/DirectoryStatusIcon';
 import { fetchDirectory, fetchDirectoryAll, saveDirectoryEntry, deleteDirectoryEntry, toggleDirectoryBlacklist, toggleDirectorySpam, previewDirectoryImport, fetchDirectoryColumnSettings, saveMyDirectoryColumnSettings, resetMyDirectoryColumnSettings, saveGlobalDirectoryColumnSettings, resetGlobalDirectoryColumnSettings } from './modules/directory/services/directoryApi';
 import CDRPage from './modules/cdr/pages/CDRPage';
@@ -3027,7 +3026,7 @@ export default function App() {
     setLiveSessionsError('');
 
     try {
-      const response = await fetch('/api/live-sessions', {
+      const response = await fetch('/api/live-sessions-test', {
         headers: { Authorization: `Bearer ${session?.token || ''}` }
       });
       const data = await response.json();
@@ -3198,7 +3197,6 @@ export default function App() {
       monitorMode === 'db' ? 'DB Explorer' :
       monitorMode === 'devices' ? 'Карта IP / SIP устройств' :
       monitorMode === 'quality' ? 'Качество связи' :
-      monitorMode === 'health' ? 'Состояние АТС' :
       'Мониторинг';
 
     const monitoringSubtitle =
@@ -3208,8 +3206,7 @@ export default function App() {
       monitorMode === 'cli' ? 'Единое пространство диагностики, администрирования и справочной информации Asterisk & FreePBX' :
       monitorMode === 'db' ? 'Просмотр CDR/CEL и таблиц FreePBX/Asterisk' :
       monitorMode === 'devices' ? 'Карта регистраций SIP/PJSIP, IP-адресов и конфликтующих устройств' :
-      monitorMode === 'quality' ? 'Интегрированная IP/RTP-телеметрия качества связи Asterisk,\nдиагностика джиттера, RTT, потерь пакетов и MOS' :
-      monitorMode === 'health' ? 'Health Report сервера FreePBX/Asterisk: железо, диски, сеть, интернет, службы и общее состояние АТС' :
+      monitorMode === 'quality' ? 'Интегрированная IP/RTP-телеметрия качества связи Asterisk, диагностика джиттера, RTT, потерь пакетов и MOS' :
       '';
     const sessions = liveSessionsData?.sessions || [];
     const q = liveSearch.trim().toLowerCase();
@@ -3532,17 +3529,6 @@ export default function App() {
                 Качество связи
               </button>
               )}
-
-              {hasPermission('view_cli') && (
-              <button
-                onClick={() => setMonitorMode('health')}
-                className={`px-3 py-2 rounded-lg text-xs font-bold border ${monitorMode === 'health'
-                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300'
-                  : 'bg-white text-slate-600 border-slate-200'}`}
-              >
-                Состояние АТС
-              </button>
-              )}
               </div>
             </div>
 
@@ -3550,7 +3536,7 @@ export default function App() {
               <div className="text-sm font-black text-slate-900 dark:text-white text-left xl:text-right">
                 {monitoringTitle}
               </div>
-              <div className="mt-1 text-xs text-slate-500 dark:text-slate-400 text-left xl:text-right whitespace-pre-line">
+              <div className="mt-1 text-xs text-slate-500 dark:text-slate-400 text-left xl:text-right">
                 {monitoringSubtitle}
               </div>
             </div>
@@ -3586,10 +3572,6 @@ export default function App() {
 
           {monitorMode === 'quality' && hasPermission('view_active_calls') && (
             <QualityTab token={session?.token || ''} />
-          )}
-
-          {monitorMode === 'health' && hasPermission('view_cli') && (
-            <HealthReportTab token={session?.token || ''} />
           )}
 
           {monitorMode === 'devices' && hasPermission('view_sip_devices_map') && (

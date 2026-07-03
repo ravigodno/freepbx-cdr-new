@@ -12439,8 +12439,8 @@ async function collectHealthHistoryPoint() {
   try {
     const channelsRes = await runAsteriskCliCommand('core show channels count', 5000);
     const text = channelsRes.message || '';
-    const chMatch = text.match(/(\d+)\s+active channels?/i);
-    const callMatch = text.match(/(\d+)\s+active calls?/i);
+    const chMatch = text.match(/(\d+)\s+active channels/i);
+    const callMatch = text.match(/(\d+)\s+active calls/i);
     activeChannels = chMatch ? Number(chMatch[1]) : 0;
     activeCalls = callMatch ? Number(callMatch[1]) : 0;
   } catch (e) {}
@@ -12498,7 +12498,7 @@ async function updateHealthHistory() {
 
 setTimeout(() => {
   updateHealthHistory();
-  setInterval(updateHealthHistory, 15000);
+  setInterval(updateHealthHistory, 60000);
 }, 10000);
 
 app.get('/api/health-report/history', requireAuth(['su', 'admin']), async (req, res) => {
