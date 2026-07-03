@@ -51,7 +51,9 @@ function CustomMiniAreaChart({
 
   const points = data.map((d, idx) => {
     const x = padding.left + (idx / (data.length - 1 || 1)) * chartWidth;
-    const y = padding.top + chartHeight - (((d[dataKey] || 0) - minVal) / range) * chartHeight;
+    const rawValue = Number(d[dataKey] ?? 0);
+    const safeValue = Math.max(minVal, Math.min(maxVal, Number.isFinite(rawValue) ? rawValue : minVal));
+    const y = padding.top + chartHeight - ((safeValue - minVal) / range) * chartHeight;
     return { x, y, item: d };
   });
 
@@ -419,7 +421,7 @@ export default function QualityTab({ token }: Props) {
       const [devsRes, alertsRes, histRes] = await Promise.all([
         fetch('/api/quality/devices', { headers: headersStr }).then(r => r.json()),
         fetch('/api/quality/alerts', { headers: headersStr }).then(r => r.json()),
-        fetch('/api/quality/history', { headers: headersStr }).then(r => r.json())
+        fetch(`/api/quality/history?ext=${encodeURIComponent(selectedExt || 'all')}&period=${encodeURIComponent(historyPeriod)}`, { headers: headersStr }).then(r => r.json())
       ]);
 
       if (devsRes.success) setDevices(devsRes.devices);
@@ -437,7 +439,7 @@ export default function QualityTab({ token }: Props) {
     loadData();
     const interval = setInterval(loadData, 12000);
     return () => clearInterval(interval);
-  }, [token]);
+  }, [token, selectedExt, historyPeriod]);
 
   // Handle selected device
   const selectedDevice = useMemo(() => {
@@ -464,8 +466,9 @@ export default function QualityTab({ token }: Props) {
       .filter(pt => new Date(pt.timestamp).getTime() >= limitTime)
       .map(pt => ({
         ...pt,
-        formattedTime: new Date(pt.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        formattedDate: new Date(pt.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit' })
+        formattedTime: new Date(pt.timestamp).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', hour12: false }),
+        formattedDate: new Date(pt.timestamp).toLocaleString('ru-RU', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }),
+        onlineValue: pt.status === 'Offline' ? 0 : 1
       }))
       .sort((a,b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
   }, [deviceHistory, historyPeriod]);
@@ -993,6 +996,24 @@ export default function QualityTab({ token }: Props) {
               ) : (
                 <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
                   
+                  {/* ONLINE / OFFLINE CHART */}
+                  <div className="space-y-1">
+                    <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Доступность Online / Offline</div>
+                    <div className="h-48">
+                      <CustomMiniAreaChart
+                        data={filteredHistoryData}
+                        dataKey="onlineValue"
+                        strokeColor="#22c55e"
+                        fillColor="#22c55e"
+                        yDomain={[0, 1]}
+                      />
+                    </div>
+                    <div className="flex items-center justify-between text-[10px] text-slate-400 font-bold">
+                      <span>0 — Offline</span>
+                      <span>1 — Online</span>
+                    </div>
+                  </div>
+
                   {/* LATENCY CHART */}
                   <div className="space-y-1">
                     <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">RTT Сетевая задержка (мсек)</div>
@@ -1034,7 +1055,7 @@ export default function QualityTab({ token }: Props) {
                   </div>
 
                   {/* HISTORY SUMMARY STATS */}
-                  <div className="bg-slate-50 dark:bg-slate-900/40 rounded-xl p-3 flex flex-col justify-between border border-slate-200 dark:border-slate-800">
+                  <div className="xl:col-span-2 bg-slate-50 dark:bg-slate-900/40 rounded-xl p-3 flex flex-col justify-between border border-slate-200 dark:border-slate-800">
                     <div>
                       <div className="text-[10px] uppercase font-black tracking-wider text-slate-400">Сводные показатели за выбранный период:</div>
                       <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mt-2 text-xs">

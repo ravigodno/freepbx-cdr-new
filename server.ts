@@ -13495,6 +13495,11 @@ setInterval(async () => {
       // Add to history (only for active or if we want historical tracking)
       history.push({
         ext: dev.ext,
+        name: dev.name || '',
+        ip: dev.ip || '',
+        userAgent: dev.userAgent || '',
+        status: dev.status === 'Offline' ? 'Offline' : 'Online',
+        qualityStatus: metric.status,
         timestamp: now,
         latency: metric.latency,
         jitter: metric.jitter,
@@ -13538,9 +13543,16 @@ setInterval(async () => {
       }
     }
 
-    // Keep history clean (keep last 1000 records to load faster)
-    if (history.length > 1000) {
-      history.splice(0, history.length - 1000);
+    // Keep quality history by retention period instead of a small fixed buffer.
+    // Default: 30 days. Later this can be exposed in admin settings.
+    const qualityHistoryRetentionDays = Math.max(1, Number(settings.qualityHistoryRetentionDays || 30));
+    const qualityHistoryCutoff = Date.now() - qualityHistoryRetentionDays * 24 * 60 * 60 * 1000;
+
+    for (let i = history.length - 1; i >= 0; i--) {
+      const ts = new Date((history[i] as any).timestamp).getTime();
+      if (!Number.isFinite(ts) || ts < qualityHistoryCutoff) {
+        history.splice(i, 1);
+      }
     }
     // Cap alerts at 200 items
     if (alerts.length > 200) {
@@ -13582,16 +13594,68 @@ app.get('/api/quality/history', requireAuth(), async (req, res) => {
   try {
     const localDb = await readLocalDb();
     const settings = localDb.settings;
-    let history = [];
+    let history: any[] = [];
+
     if (fs.existsSync(QUALITY_HISTORY_FILE)) {
       history = JSON.parse(fs.readFileSync(QUALITY_HISTORY_FILE, 'utf8') || '[]');
     }
+
     if (!isDemoMode(settings)) {
       const realDevices = await getRealVoIPDevices(settings);
-      const realExts = new Set(realDevices.map(d => d.ext));
-      history = history.filter((pt: any) => realExts.has(pt.ext));
+      const realExts = new Set(realDevices.map((d: any) => String(d.ext)));
+      history = history.filter((pt: any) => realExts.has(String(pt.ext)));
     }
-    res.json({ success: true, count: history.length, history });
+
+    const ext = String(req.query.ext || '').trim();
+    if (ext && ext !== 'all') {
+      history = history.filter((pt: any) => String(pt.ext) === ext);
+    }
+
+    const period = String(req.query.period || req.query.range || '').trim();
+    let periodMs = 0;
+
+    if (period === '1h') periodMs = 60 * 60 * 1000;
+    else if (period === '24h') periodMs = 24 * 60 * 60 * 1000;
+    else if (period === '7d') periodMs = 7 * 24 * 60 * 60 * 1000;
+    else if (period === '30d') periodMs = 30 * 24 * 60 * 60 * 1000;
+
+    const from = String(req.query.from || '').trim();
+    const to = String(req.query.to || '').trim();
+
+    let fromMs = from ? Date.parse(from) : 0;
+    let toMs = to ? Date.parse(to) : 0;
+
+    if (periodMs > 0) {
+      fromMs = Date.now() - periodMs;
+    }
+
+    if (Number.isFinite(fromMs) && fromMs > 0) {
+      history = history.filter((pt: any) => {
+        const ts = Date.parse(String(pt.timestamp || ''));
+        return Number.isFinite(ts) && ts >= fromMs;
+      });
+    }
+
+    if (Number.isFinite(toMs) && toMs > 0) {
+      history = history.filter((pt: any) => {
+        const ts = Date.parse(String(pt.timestamp || ''));
+        return Number.isFinite(ts) && ts <= toMs;
+      });
+    }
+
+    history.sort((a: any, b: any) => Date.parse(String(a.timestamp || '')) - Date.parse(String(b.timestamp || '')));
+
+    res.json({
+      success: true,
+      count: history.length,
+      filters: {
+        ext: ext || 'all',
+        period: period || null,
+        from: from || null,
+        to: to || null
+      },
+      history
+    });
   } catch (e: any) {
     res.status(500).json({ success: false, error: e.message || String(e) });
   }

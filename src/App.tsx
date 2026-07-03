@@ -3206,7 +3206,7 @@ export default function App() {
       monitorMode === 'cli' ? 'Единое пространство диагностики, администрирования и справочной информации Asterisk & FreePBX' :
       monitorMode === 'db' ? 'Просмотр CDR/CEL и таблиц FreePBX/Asterisk' :
       monitorMode === 'devices' ? 'Карта регистраций SIP/PJSIP, IP-адресов и конфликтующих устройств' :
-      monitorMode === 'quality' ? 'Интегрированная IP/RTP-телеметрия качества связи Asterisk, диагностика джиттера, RTT, потерь пакетов и MOS' :
+      monitorMode === 'quality' ? 'Интегрированная IP/RTP-телеметрия качества связи Asterisk,\nдиагностика джиттера, RTT, потерь пакетов и MOS' :
       '';
     const sessions = liveSessionsData?.sessions || [];
     const q = liveSearch.trim().toLowerCase();
@@ -3536,7 +3536,7 @@ export default function App() {
               <div className="text-sm font-black text-slate-900 dark:text-white text-left xl:text-right">
                 {monitoringTitle}
               </div>
-              <div className="mt-1 text-xs text-slate-500 dark:text-slate-400 text-left xl:text-right">
+              <div className="mt-1 text-xs text-slate-500 dark:text-slate-400 text-left xl:text-right whitespace-pre-line">
                 {monitoringSubtitle}
               </div>
             </div>
