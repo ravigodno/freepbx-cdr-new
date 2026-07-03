@@ -14480,11 +14480,19 @@ function parsePjsipRegistrarContacts(output: string): Map<string, string> {
   }
   return map;
 }
-function parseSipPeerDetails(output: string): { userAgent?: string } {
+function parseSipPeerDetails(output: string): { userAgent?: string; toHost?: string; fromUser?: string } {
   const uaMatch = output.match(/Useragent[ \t]*:[ \t]*([^\r\n]*)/i);
+  const toHostMatch = output.match(/ToHost[ \t]*:[ \t]*([^\r\n]*)/i);
+  const fromUserMatch = output.match(/FromUser[ \t]*:[ \t]*([^\r\n]*)/i);
+
   const userAgent = uaMatch ? uaMatch[1].trim() : '';
+  const toHost = toHostMatch ? toHostMatch[1].trim() : '';
+  const fromUser = fromUserMatch ? fromUserMatch[1].trim() : '';
+
   return {
-    userAgent: userAgent || undefined
+    userAgent: userAgent || undefined,
+    toHost: toHost || undefined,
+    fromUser: fromUser || undefined
   };
 }
 function guessManufacturerAndModel(ua: string) {
@@ -14493,6 +14501,14 @@ function guessManufacturerAndModel(ua: string) {
     const modelMatch = ua.match(/Yealink\s+(.+)/i);
     return { manufacturer: 'Yealink', model: modelMatch ? modelMatch[1].trim() : 'SIP Device' };
   }
+  if (uaLower.includes('novofon') || uaLower.includes('sip.novofon.ru')) {
+    return { manufacturer: 'Novofon', model: 'SIP Trunk / sip.novofon.ru' };
+  }
+
+  if (uaLower.includes('sip trunk')) {
+    return { manufacturer: 'SIP Provider', model: ua.replace(/^SIP Trunk\s*\/\s*/i, 'SIP Trunk / ') };
+  }
+
   if (uaLower.includes('grandstream')) {
     const modelMatch = ua.match(/Grandstream\s+(.+)/i);
     return { manufacturer: 'Grandstream', model: modelMatch ? modelMatch[1].trim() : 'SIP Device' };
@@ -14596,6 +14612,8 @@ async function getRealVoIPDevices(settings: AppSettings): Promise<any[]> {
               const details = parseSipPeerDetails(peerDetails.message);
               if (details.userAgent) {
                 dev.userAgent = details.userAgent;
+              } else if (details.toHost) {
+                dev.userAgent = 'SIP Trunk / ' + details.toHost;
               }
             }
           } catch (e) {}
