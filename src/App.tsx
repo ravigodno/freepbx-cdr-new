@@ -57,14 +57,21 @@ import {
   Wallet,
   Cpu,
   Wrench,
-  ShieldCheck
+  ShieldCheck,
+  Palette,
+  Scroll,
+  Bot
 } from 'lucide-react';
 import { CallEntry, DashboardStats, AppSettings, UserRole, DirectoryEntry } from './types';
+import ScriptsTab from './components/ScriptsTab';
+import AiAssistantTab from './components/AiAssistantTab';
+import AIPBXAdminTab from './components/AIPBXAdminTab';
 import packageJson from '../package.json';
 import SngrepTab from './modules/monitoring/tabs/monitoring/SngrepTab';
 import TcpdumpTab from './modules/monitoring/tabs/monitoring/TcpdumpTab';
 import ReportsTab from './components/reports/ReportsTab';
 import MarketingTab from './components/marketing/MarketingTab';
+import { AboutSystemTab } from './components/AboutSystemTab';
 import ActiveCallsTab from './modules/monitoring/tabs/monitoring/ActiveCallsTab';
 import CommandCenterTab from './modules/monitoring/tabs/monitoring/CommandCenterTab';
 const DbExplorerTab = lazy(() => import('./modules/monitoring/tabs/monitoring/DbExplorerTab'));
@@ -465,8 +472,8 @@ interface UserSession {
   permissions?: UserPermissions;
 }
 
-const Logo3D = ({ className = "h-5 w-5" }: { className?: string }) => (
-  <img src="/freepbx-cdr-logo.svg" className={className} alt="PBXPULS" />
+const Logo3D = ({ className = "h-5 w-5", logoUrl }: { className?: string; logoUrl?: string }) => (
+  <img src={logoUrl || "/freepbx-cdr-logo.svg"} className={className} alt="PBXPULS" />
 );
 
 
@@ -617,7 +624,25 @@ export default function App() {
   const [isTestingFreePBXApi, setIsTestingFreePBXApi] = useState(false);
   const [freepbxApiTestResult, setFreePBXApiTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<'pbx' | 'directory' | 'access' | 'permissions' | 'appearance'>('pbx');
+  const [settingsTab, setSettingsTab] = useState<'pbx' | 'directory' | 'access' | 'permissions' | 'design' | 'appearance'>('pbx');
+
+  // Load public settings for logo and copyright customization
+  const [publicSettings, setPublicSettings] = useState<{ customLogoUrl?: string; customCopyright?: string } | null>(null);
+
+  useEffect(() => {
+    const fetchPublicSettings = async () => {
+      try {
+        const resp = await fetch('/api/settings/public');
+        if (resp.ok) {
+          const data = await resp.json();
+          setPublicSettings(data);
+        }
+      } catch (err) {
+        console.error('Failed to load public settings:', err);
+      }
+    };
+    fetchPublicSettings();
+  }, []);
 
   // Dark environment / theme settings
   const [darkMode, setDarkMode] = useState<boolean>(() => {
@@ -668,14 +693,14 @@ export default function App() {
   const [timeToNextRefresh, setTimeToNextRefresh] = useState<number>(30);
 
   // --- TELEPHONE DIRECTORY STATE & HANDLERS ---
-  const [activeView, setActiveView] = useState<'calls' | 'directory' | 'reports' | 'marketing' | 'monitoring' | 'management' | 'balance' | 'settings'>(() => {
+  const [activeView, setActiveView] = useState<'calls' | 'directory' | 'reports' | 'marketing' | 'monitoring' | 'management' | 'balance' | 'settings' | 'about' | 'scripts' | 'ai-assistant' | 'ai-pbx-admin'>(() => {
     const params = new URLSearchParams(window.location.search);
     if (window.location.pathname === '/management/directory/import') return 'directory';
     if (window.location.pathname === '/directory/import-contacts') return 'directory';
     if (/^\/management\/directory\/contact\/new$/.test(window.location.pathname)) return 'directory';
     if (/^\/management\/directory\/contact\/[^/]+\/edit$/.test(window.location.pathname)) return 'directory';
     if (params.get('tab') === 'marketing' || params.get('yandexOAuth')) return 'marketing';
-    const saved = localStorage.getItem('asterisk_cdr_active_view') as 'calls' | 'directory' | 'reports' | 'marketing' | 'monitoring' | 'management' | 'balance' | null;
+    const saved = localStorage.getItem('asterisk_cdr_active_view') as 'calls' | 'directory' | 'reports' | 'marketing' | 'monitoring' | 'management' | 'balance' | 'about' | 'scripts' | 'ai-assistant' | 'ai-pbx-admin' | null;
     return saved || 'calls';
   });
   const [liveSessionsData, setLiveSessionsData] = useState<any>(null);
@@ -2502,6 +2527,10 @@ export default function App() {
         setIsSettingsOpen(false);
         setDbTestResult(null);
         setSettings(draftSettings);
+        setPublicSettings({
+          customLogoUrl: draftSettings.customLogoUrl,
+          customCopyright: draftSettings.customCopyright
+        });
         setDbTestResult({ success: true, message: 'Настройки успешно применены.' });
         reloadData();
       } else {
@@ -2570,20 +2599,6 @@ export default function App() {
     }
   };
 
-  const fetchWithTimeout = async (url: string, options: RequestInit = {}, timeoutMs = 9000) => {
-    const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
-
-    try {
-      return await fetch(url, {
-        ...options,
-        signal: controller.signal
-      });
-    } finally {
-      window.clearTimeout(timeoutId);
-    }
-  };
-
   // Connection Test routine for MariaDB
   const testDbConnection = async () => {
     if (!draftSettings || !session) return;
@@ -2591,14 +2606,14 @@ export default function App() {
     setDbTestResult(null);
     
     try {
-      const resp = await fetchWithTimeout('/api/settings/test-db', {
+      const resp = await fetch('/api/settings/test-db', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${session.token}`
         },
         body: JSON.stringify(draftSettings)
-      }, 9000);
+      });
       
       if (resp.status === 401) {
         handleAuthError(resp);
@@ -2620,7 +2635,7 @@ export default function App() {
     } catch (err: any) {
       setDbTestResult({
         success: false,
-        message: err?.name === 'AbortError' ? 'Таймаут проверки связи: сервер не ответил за 9 секунд.' : `Ошибка сокета: ${err.message || 'сервер недоступен'}`
+        message: `Ошибка сокета: ${err.message || 'сервер недоступен'}`
       });
     } finally {
       setIsTestingDb(false);
@@ -2634,14 +2649,14 @@ export default function App() {
     setAmiTestResult(null);
     
     try {
-      const resp = await fetchWithTimeout('/api/settings/test-ami', {
+      const resp = await fetch('/api/settings/test-ami', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${session.token}`
         },
         body: JSON.stringify(draftSettings)
-      }, 9000);
+      });
       
       if (resp.status === 401) {
         handleAuthError(resp);
@@ -2663,7 +2678,7 @@ export default function App() {
     } catch (err: any) {
       setAmiTestResult({
         success: false,
-        message: err?.name === 'AbortError' ? 'Таймаут проверки связи: сервер не ответил за 9 секунд.' : `Ошибка сокета: ${err.message || 'сервер недоступен'}`
+        message: `Ошибка сокета: ${err.message || 'сервер недоступен'}`
       });
     } finally {
       setIsTestingAmi(false);
@@ -2675,14 +2690,14 @@ export default function App() {
     setIsTestingFreePBXApi(true);
     setFreePBXApiTestResult(null);
     try {
-      const resp = await fetchWithTimeout('/api/settings/test-freepbx-api', {
+      const resp = await fetch('/api/settings/test-freepbx-api', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${session.token}`
         },
         body: JSON.stringify(draftSettings)
-      }, 9000);
+      });
       if (resp.status === 401) {
         handleAuthError(resp);
         return;
@@ -2702,7 +2717,7 @@ export default function App() {
     } catch (err: any) {
       setFreePBXApiTestResult({
         success: false,
-        message: err?.name === 'AbortError' ? 'Таймаут проверки связи: сервер не ответил за 9 секунд.' : `Ошибка сокета: ${err.message || 'сервер недоступен'}`
+        message: `Ошибка сокета: ${err.message || 'сервер недоступен'}`
       });
     } finally {
       setIsTestingFreePBXApi(false);
@@ -2852,6 +2867,9 @@ export default function App() {
     if (hasPermission('view_monitoring')) return 'monitoring';
     if (hasPermission('view_management')) return 'management';
     if (hasPermission('view_balance')) return 'balance';
+    if (hasPermission('view_scripts')) return 'scripts';
+    if (hasPermission('view_ai_assistant')) return 'ai-assistant';
+    if (hasPermission('view_ai_pbx_admin')) return 'ai-pbx-admin';
     if (hasPermission('view_settings') || hasPermission('manage_users') || hasPermission('manage_roles')) return 'settings';
 
     return 'reports';
@@ -2867,7 +2885,11 @@ export default function App() {
     if (view === 'monitoring') return hasPermission('view_monitoring');
     if (view === 'management') return hasPermission('view_management');
     if (view === 'balance') return hasPermission('view_balance');
+    if (view === 'scripts') return hasPermission('view_scripts');
+    if (view === 'ai-assistant') return hasPermission('view_ai_assistant');
+    if (view === 'ai-pbx-admin') return hasPermission('view_ai_pbx_admin');
     if (view === 'settings') return hasPermission('view_settings') || hasPermission('manage_users') || hasPermission('manage_roles');
+    if (view === 'about') return true;
 
     return false;
   }, [session, settings]);
@@ -3000,12 +3022,11 @@ export default function App() {
 
 
   const loadLiveSessions = async () => {
-    console.log('[LIVE_LOAD_DEBUG] loadLiveSessions called');
     setIsLoadingLiveSessions(true);
     setLiveSessionsError('');
 
     try {
-      const response = await fetch('/api/live-sessions', {
+      const response = await fetch('/api/live-sessions-test', {
         headers: { Authorization: `Bearer ${session?.token || ''}` }
       });
       const data = await response.json();
@@ -4408,7 +4429,7 @@ export default function App() {
         <div className="relative z-10 min-h-screen flex flex-col px-6 py-8">
           <header className="flex flex-col items-center text-center pt-14">
             <div className="flex items-center justify-center gap-4">
-              <Logo3D className="h-8 w-8" />
+              <Logo3D className="h-8 w-8" logoUrl={settings?.customLogoUrl || publicSettings?.customLogoUrl} />
               <div className="text-3xl font-black tracking-tight text-blue-600 leading-none">PBXPULS</div>
             </div>
             <div className="mt-2 text-sm font-semibold text-slate-600">
@@ -4473,7 +4494,7 @@ export default function App() {
           </main>
 
           <footer className="pb-3 text-center text-sm text-slate-500">
-            <div>© 2026 PBXPULS. Все права защищены. Грунин К.В. ИНН 9102057404</div>
+            <div>{settings?.customCopyright || publicSettings?.customCopyright || "© 2026 PBXPULS. Все права защищены. Грунин К.В. ИНН 9102057404"}</div>
             <div className="mt-2">
               Внедрение, разработка и поддержка VOIP-проектов
               <span className="mx-2">•</span>
@@ -4502,7 +4523,7 @@ export default function App() {
           {/* Logo Element resembling high-end layers icon */}
           <div className={`flex items-center ${isSidebarExpanded ? 'gap-2 w-full' : 'justify-center w-full'}`}>
             <div className="h-[45px] w-[45px] flex items-center justify-center active:scale-95 transition-transform cursor-pointer shrink-0">
-              <Logo3D className="h-[45px] w-[45px]" /></div>
+              <Logo3D className="h-[45px] w-[45px]" logoUrl={settings?.customLogoUrl || publicSettings?.customLogoUrl} /></div>
             {isSidebarExpanded && (
               <div className="min-w-0 animate-fade-in">
                 <span className="font-bold text-[#0f2557] dark:text-slate-100 text-[24px] tracking-tight uppercase block leading-none">PBXPULS</span></div>
@@ -4678,6 +4699,78 @@ export default function App() {
                 </button>
               )}
 
+              {hasPermission('view_scripts') && (
+                <button
+                  onClick={() => setActiveView('scripts')}
+                  className={`flex items-center ${isSidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl transition-all relative group cursor-pointer ${
+                    activeView === 'scripts'
+                      ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-900/30 shadow-inner'
+                      : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent'
+                  }`}
+                  title={isSidebarExpanded ? "" : "Скрипты разговоров"}
+                >
+                  <Scroll className="h-5 w-5 shrink-0" />
+                  {isSidebarExpanded && (
+                    <span className="text-xs font-semibold truncate animate-fade-in text-slate-705 dark:text-slate-200">
+                      Скрипты разговоров
+                    </span>
+                  )}
+                  {!isSidebarExpanded && (
+                    <span className="absolute left-full ml-3 px-2 py-1 rounded bg-slate-950 text-white text-[10px] font-bold opacity-0 group-hover:opacity-100 transition-opacity z-50 whitespace-nowrap shadow-md pointer-events-none">
+                      Скрипты разговоров
+                    </span>
+                  )}
+                </button>
+              )}
+
+              {hasPermission('view_ai_assistant') && (
+                <button
+                  onClick={() => setActiveView('ai-assistant')}
+                  className={`flex items-center ${isSidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl transition-all relative group cursor-pointer ${
+                    activeView === 'ai-assistant'
+                      ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-900/30 shadow-inner'
+                      : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent'
+                  }`}
+                  title={isSidebarExpanded ? "" : "AI-автоответчик"}
+                >
+                  <Bot className="h-5 w-5 shrink-0" />
+                  {isSidebarExpanded && (
+                    <span className="text-xs font-semibold truncate animate-fade-in text-slate-705 dark:text-slate-200">
+                      AI-автоответчик
+                    </span>
+                  )}
+                  {!isSidebarExpanded && (
+                    <span className="absolute left-full ml-3 px-2 py-1 rounded bg-slate-950 text-white text-[10px] font-bold opacity-0 group-hover:opacity-100 transition-opacity z-50 whitespace-nowrap shadow-md pointer-events-none">
+                      AI-автоответчик
+                    </span>
+                  )}
+                </button>
+              )}
+
+              {hasPermission('view_ai_pbx_admin') && (
+                <button
+                  onClick={() => setActiveView('ai-pbx-admin')}
+                  className={`flex items-center ${isSidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl transition-all relative group cursor-pointer ${
+                    activeView === 'ai-pbx-admin'
+                      ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-900/30 shadow-inner'
+                      : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent'
+                  }`}
+                  title={isSidebarExpanded ? "" : "AI-администратор АТС"}
+                >
+                  <Bot className="h-5 w-5 shrink-0" />
+                  {isSidebarExpanded && (
+                    <span className="text-xs font-semibold truncate animate-fade-in text-slate-705 dark:text-slate-200">
+                      AI-администратор АТС
+                    </span>
+                  )}
+                  {!isSidebarExpanded && (
+                    <span className="absolute left-full ml-3 px-2 py-1 rounded bg-slate-950 text-white text-[10px] font-bold opacity-0 group-hover:opacity-100 transition-opacity z-50 whitespace-nowrap shadow-md pointer-events-none">
+                      AI-администратор АТС
+                    </span>
+                  )}
+                </button>
+              )}
+
           </div></div>
 
         {/* Bottom controls */}
@@ -4730,9 +4823,13 @@ export default function App() {
 
           {/* Help panel triggers general guidelines */}
           <button
-            onClick={() => alert(`PBXPULS v${packageJson.version}. Разработано для корпоративных телефонных сетей.`)}
-            className={`flex items-center ${isSidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent transition-all relative group cursor-pointer`}
-            title={isSidebarExpanded ? "" : "Справка"}
+            onClick={() => setActiveView('about')}
+            className={`flex items-center ${isSidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl transition-all relative group cursor-pointer ${
+              activeView === 'about'
+                ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-900/30 shadow-inner'
+                : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent'
+            }`}
+            title={isSidebarExpanded ? "" : "О системе"}
           >
             <HelpCircle className="h-5 w-5 shrink-0" />
             {isSidebarExpanded && (
@@ -6160,6 +6257,18 @@ export default function App() {
       </Suspense>
     )}
 
+    {activeView === 'scripts' && hasPermission('view_scripts') && (
+      <ScriptsTab session={session} hasPermission={hasPermission} />
+    )}
+
+    {activeView === 'ai-assistant' && hasPermission('view_ai_assistant') && (
+      <AiAssistantTab session={session} hasPermission={hasPermission} />
+    )}
+
+    {activeView === 'ai-pbx-admin' && hasPermission('view_ai_pbx_admin') && (
+      <AIPBXAdminTab session={session} hasPermission={hasPermission} />
+    )}
+
 
       {/* SYSTEM SETTINGS FULL PAGE */}
       {activeView === 'settings' && (
@@ -6186,6 +6295,9 @@ export default function App() {
                     directory: 'Телефонный справочник',
                     access: 'Доступ и пользователи',
                     permissions: 'Права доступа',
+                  } : {}),
+                  ...(session?.role === 'su' ? {
+                    design: 'Дизайн',
                   } : {}),
                   appearance: 'Интерфейс'
                 }).map(([tab, label]) => (
@@ -6532,6 +6644,57 @@ export default function App() {
                       allowAdminEditSuPermissions={settings?.allowAdminEditSuPermissions === true}
                     />
                   )}
+                  {settingsTab === 'design' && session?.role === 'su' && draftSettings && (
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 space-y-4">
+                      <h4 className="flex min-w-0 items-center gap-2 break-words text-sm font-black text-slate-900">
+                        <Palette className="h-4 w-4 text-blue-600" />
+                        Брендирование и дизайн системы
+                      </h4>
+                      <p className="text-xs text-slate-500">
+                        Настройте логотип и копирайт для всей системы (доступно только пользователю su).
+                      </p>
+
+                      <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-4">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                            Ссылка на логотип (изображение или SVG)
+                          </label>
+                          <div className="flex gap-3 items-center">
+                            <input
+                              type="text"
+                              value={draftSettings.customLogoUrl || ''}
+                              onChange={(e) => setDraftSettings({ ...draftSettings, customLogoUrl: e.target.value })}
+                              placeholder="Например: /freepbx-cdr-logo.svg или URL"
+                              className="flex-1 min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900 focus:border-blue-500 focus:outline-none"
+                            />
+                            <div className="h-10 w-10 flex items-center justify-center bg-white border border-slate-200 rounded-lg p-1 shrink-0 overflow-hidden">
+                              <Logo3D className="h-8 w-8 max-h-full max-w-full object-contain" logoUrl={draftSettings.customLogoUrl || '/freepbx-cdr-logo.svg'} />
+                            </div>
+                          </div>
+                          <span className="text-[10px] text-slate-500 mt-1 block">
+                            Оставьте пустым, чтобы использовать стандартный логотип PBXPULS.
+                          </span>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                            Копирайт в подвале (footer)
+                          </label>
+                          <textarea
+                            value={draftSettings.customCopyright || ''}
+                            onChange={(e) => setDraftSettings({ ...draftSettings, customCopyright: e.target.value })}
+                            placeholder="Например: © 2026 МояКомпания. Все права защищены."
+                            rows={2}
+                            className="w-full min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 font-sans focus:border-blue-500 focus:outline-none"
+                          />
+                          <span className="text-[10px] text-slate-500 mt-1 block">
+                            Оставьте пустым для отображения стандартного копирайта ИП Грунин К.В.
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   {settingsTab === 'appearance' && (
                     <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 space-y-4">
                       <h4 className="flex min-w-0 items-center gap-2 break-words text-sm font-black text-slate-900">
@@ -6590,10 +6753,14 @@ export default function App() {
         </section>
       )}
 
+      {activeView === 'about' && (
+        <AboutSystemTab currentVersion={packageJson.version} onNavigate={setActiveView} />
+      )}
+
   </main>
 
       <footer className="border-t border-slate-200 bg-white py-3 text-center text-[11px] text-slate-500">
-        © 2026 PBXPULS. Все права защищены. Грунин К.В. ИНН 9102057404.
+        {settings?.customCopyright || publicSettings?.customCopyright || "© 2026 PBXPULS. Все права защищены. Грунин К.В. ИНН 9102057404."}
         <a href="https://grunin.org" target="_blank" rel="noopener noreferrer" className="mx-1 text-slate-700 hover:text-blue-600 underline">grunin.org</a>
         Внедрение, разработка и поддержка VOIP-проектов •
         <a href="tel:+79787437943" className="ml-1 text-slate-700 hover:text-blue-600 underline">+7 (978) 743-79-43</a>

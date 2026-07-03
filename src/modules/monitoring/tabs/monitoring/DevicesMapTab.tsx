@@ -990,7 +990,7 @@ export default function DevicesMapTab({ token }: DevicesMapTabProps) {
                     </div>
 
                     <div className="text-xs font-bold text-slate-700 dark:text-slate-300">
-                      Список зарегистрированных устройств за: <span className="text-rose-600 dark:text-rose-400 underline">{historicDate}</span>
+                      Список зарегист��ированных устройств за: <span className="text-rose-600 dark:text-rose-400 underline">{historicDate}</span>
                     </div>
 
                     <div className="overflow-x-auto border border-slate-100 dark:border-slate-800 rounded-xl">

@@ -1,0 +1,806 @@
+import { Express, Request, Response } from 'express';
+import { spawnSync } from 'child_process';
+import { GoogleGenAI } from '@google/genai';
+import * as crypto from 'crypto';
+import fetch from 'node-fetch';
+
+// Helper to clean markdown block tags from JSON response
+function cleanJsonResponseText(raw: string): string {
+  let cleaned = raw.trim();
+  if (cleaned.startsWith('```')) {
+    cleaned = cleaned.replace(/^```[a-zA-Z]*\n/, '');
+    cleaned = cleaned.replace(/\n```$/, '');
+  }
+  return cleaned.trim();
+}
+
+// Unified multi-provider AI text completion engine
+async function generateAIResponse(params: {
+  provider: string;
+  model: string;
+  temperature: number;
+  systemPrompt: string;
+  messages: Array<{ role: 'user' | 'assistant', text: string }>;
+  responseType?: 'json' | 'text';
+}): Promise<string> {
+  const { provider, model, temperature, systemPrompt, messages, responseType = 'text' } = params;
+
+  // 1. Google Gemini
+  if (provider === 'gemini') {
+    const key = process.env.GEMINI_API_KEY;
+    if (!key) {
+      throw new Error('Укажите GEMINI_API_KEY в настройках (Secrets) вашего приложения в AI Studio.');
+    }
+    const ai = new GoogleGenAI({ apiKey: key });
+    
+    // Compile history
+    const promptHistory = messages.map(m => {
+      return `${m.role === 'user' ? 'Пользователь' : 'AI-Консультант'}: ${m.text}`;
+    }).join('\n\n');
+
+    const config: any = {
+      systemInstruction: systemPrompt,
+      temperature: Number(temperature)
+    };
+
+    if (responseType === 'json') {
+      config.responseMimeType = 'application/json';
+    }
+
+    const res = await ai.models.generateContent({
+      model: model || 'gemini-3.5-flash',
+      contents: promptHistory,
+      config
+    });
+
+    return res.text || '';
+  }
+
+  // 2. OpenAI ChatGPT
+  if (provider === 'openai') {
+    const key = process.env.OPENAI_API_KEY;
+    if (!key) {
+      throw new Error('Укажите OPENAI_API_KEY в настройках (Secrets) вашего приложения в AI Studio.');
+    }
+
+    const payload = {
+      model: model || 'gpt-4o-mini',
+      temperature: Number(temperature),
+      messages: [
+        { role: 'system', content: systemPrompt },
+        ...messages.map(m => ({
+          role: m.role === 'user' ? 'user' : 'assistant',
+          content: m.text
+        }))
+      ],
+      ...(responseType === 'json' ? { response_format: { type: 'json_object' } } : {})
+    };
+
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${key}`
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`OpenAI API error (${res.status}): ${errText}`);
+    }
+
+    const data: any = await res.json();
+    return data?.choices?.[0]?.message?.content || '';
+  }
+
+  // 3. Anthropic Claude
+  if (provider === 'anthropic' || provider === 'claude') {
+    const key = process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY;
+    if (!key) {
+      throw new Error('Укажите ANTHROPIC_API_KEY в настройках (Secrets) вашего приложения в AI Studio.');
+    }
+
+    const payload = {
+      model: model || 'claude-3-5-sonnet-20241022',
+      max_tokens: 4096,
+      temperature: Number(temperature),
+      system: systemPrompt,
+      messages: messages.map(m => ({
+        role: m.role === 'user' ? 'user' : 'assistant',
+        content: m.text
+      }))
+    };
+
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': key,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Anthropic API error (${res.status}): ${errText}`);
+    }
+
+    const data: any = await res.json();
+    return data?.content?.[0]?.text || '';
+  }
+
+  // 4. DeepSeek
+  if (provider === 'deepseek') {
+    const key = process.env.DEEPSEEK_API_KEY;
+    if (!key) {
+      throw new Error('Укажите DEEPSEEK_API_KEY в настройках (Secrets) вашего приложения в AI Studio.');
+    }
+
+    const payload = {
+      model: model || 'deepseek-chat',
+      temperature: Number(temperature),
+      messages: [
+        { role: 'system', content: systemPrompt },
+        ...messages.map(m => ({
+          role: m.role === 'user' ? 'user' : 'assistant',
+          content: m.text
+        }))
+      ],
+      ...(responseType === 'json' ? { response_format: { type: 'json_object' } } : {})
+    };
+
+    const res = await fetch('https://api.deepseek.com/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${key}`
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`DeepSeek API error (${res.status}): ${errText}`);
+    }
+
+    const data: any = await res.json();
+    return data?.choices?.[0]?.message?.content || '';
+  }
+
+  throw new Error(`Неизвестный провайдер: ${provider}`);
+}
+
+// Predefined list of safe diagnostic commands allowed to run on the server
+const ALLOWED_SAFE_COMMANDS = [
+  'asterisk -rx "pjsip show registration"',
+  'asterisk -rx "pjsip show endpoints"',
+  'asterisk -rx "pjsip show registry"',
+  'asterisk -rx "core show channels"',
+  'asterisk -rx "sip show registry"',
+  'asterisk -rx "sip show peers"',
+  'asterisk -rx "iax2 show registry"',
+  'asterisk -rx "iax2 show peers"',
+  'asterisk -rx "core show translation"',
+  'asterisk -rx "core show codecs"',
+  'fwconsole systeminfo',
+  'fwconsole certificates',
+  'ip route show',
+  'ip address show',
+  'df -h',
+  'free -m'
+];
+
+// Helper to sanitize secrets in terminal output and logs
+function maskSecretsInText(text: string): string {
+  if (!text) return '';
+  let masked = text;
+  // Mask generic assignments
+  masked = masked.replace(/(secret\s*=\s*)([^\s\r\n;]+)/gi, '$1********');
+  masked = masked.replace(/(password\s*=\s*)([^\s\r\n;]+)/gi, '$1********');
+  masked = masked.replace(/(passwd\s*=\s*)([^\s\r\n;]+)/gi, '$1********');
+  masked = masked.replace(/(secret_key\s*=\s*)([^\s\r\n;]+)/gi, '$1********');
+  masked = masked.replace(/(token\s*=\s*)([^\s\r\n;]+)/gi, '$1********');
+  masked = masked.replace(/(auth_key\s*=\s*)([^\s\r\n;]+)/gi, '$1********');
+  masked = masked.replace(/(secret\s+)([^\s\r\n;]+)/gi, '$1********');
+  masked = masked.replace(/(password\s+)([^\s\r\n;]+)/gi, '$1********');
+  return masked;
+}
+
+export function registerAiPbxAdminRoutes(
+  app: Express,
+  requireAuth: any,
+  readLocalDb: () => Promise<any>,
+  writeLocalDb: (data: any) => Promise<void>
+) {
+  // 1. Get Sessions
+  app.get('/api/ai-pbx-admin/sessions', requireAuth, async (req: Request, res: Response) => {
+    try {
+      const db = await readLocalDb();
+      if (!Array.isArray(db.ai_pbx_sessions)) {
+        db.ai_pbx_sessions = [];
+      }
+      res.json(db.ai_pbx_sessions);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // 2. Get Session by ID
+  app.get('/api/ai-pbx-admin/sessions/:id', requireAuth, async (req: Request, res: Response) => {
+    try {
+      const db = await readLocalDb();
+      const session = (db.ai_pbx_sessions || []).find((s: any) => s.id === req.params.id);
+      if (!session) {
+        return res.status(404).json({ error: 'Session not found' });
+      }
+      res.json(session);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // 3. Create Session
+  app.post('/api/ai-pbx-admin/sessions', requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { title, category } = req.body;
+      const db = await readLocalDb();
+      if (!Array.isArray(db.ai_pbx_sessions)) {
+        db.ai_pbx_sessions = [];
+      }
+
+      const newSession = {
+        id: 'session_' + crypto.randomBytes(6).toString('hex'),
+        title: title || 'Новое обращение',
+        category: category || 'other',
+        status: 'open',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        messages: [],
+        attachments: []
+      };
+
+      db.ai_pbx_sessions.push(newSession);
+      await writeLocalDb(db);
+      res.status(201).json(newSession);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // 4. Update Session status or details
+  app.put('/api/ai-pbx-admin/sessions/:id', requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { title, category, status } = req.body;
+      const db = await readLocalDb();
+      const session = (db.ai_pbx_sessions || []).find((s: any) => s.id === req.params.id);
+      if (!session) {
+        return res.status(404).json({ error: 'Session not found' });
+      }
+
+      if (title !== undefined) session.title = title;
+      if (category !== undefined) session.category = category;
+      if (status !== undefined) session.status = status;
+      session.updatedAt = new Date().toISOString();
+
+      await writeLocalDb(db);
+      res.json(session);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // 5. Delete Session
+  app.delete('/api/ai-pbx-admin/sessions/:id', requireAuth, async (req: Request, res: Response) => {
+    try {
+      const db = await readLocalDb();
+      if (!Array.isArray(db.ai_pbx_sessions)) {
+        db.ai_pbx_sessions = [];
+      }
+
+      const originalLength = db.ai_pbx_sessions.length;
+      db.ai_pbx_sessions = db.ai_pbx_sessions.filter((s: any) => s.id !== req.params.id);
+      
+      if (db.ai_pbx_sessions.length === originalLength) {
+        return res.status(404).json({ error: 'Session not found' });
+      }
+
+      await writeLocalDb(db);
+      res.json({ success: true, message: 'Session archived/deleted' });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // 6. Post message and get AI reply (multi-provider support)
+  app.post('/api/ai-pbx-admin/sessions/:id/messages', requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { text, attachments } = req.body;
+      if (!text) {
+        return res.status(400).json({ error: 'Message text is required' });
+      }
+
+      const db = await readLocalDb();
+      const session = (db.ai_pbx_sessions || []).find((s: any) => s.id === req.params.id);
+      if (!session) {
+        return res.status(404).json({ error: 'Session not found' });
+      }
+
+      // Add user message
+      const userMsg = {
+        id: 'msg_' + crypto.randomBytes(6).toString('hex'),
+        role: 'user',
+        text,
+        attachments: attachments || [],
+        createdAt: new Date().toISOString()
+      };
+      session.messages.push(userMsg);
+      session.updatedAt = new Date().toISOString();
+
+      // Read AIPBXAdmin settings (provider, model, temperature, etc.)
+      const settings = db.ai_pbx_settings || {
+        provider: 'gemini',
+        model: 'gemini-3.5-flash',
+        temperature: 0.4,
+        systemPrompt: 'You are AIPBXAdmin, a world-class senior Asterisk, FreePBX, PJSIP, dialplan, and Linux networking support specialist. Help users troubleshoot FreePBX issues step-by-step. Provide clean markdown format with bullet points, code blocks for terminal commands or configurations, and exact explanations. Always write your response in Russian.'
+      };
+
+      // Compile message list for history context
+      const formattedMessages = session.messages.map((m: any) => {
+        const attachmentCtx = (m.attachments || []).map((a: any) => `[Вложение "${a.name}" (${a.type}): ${a.content}]`).join('\n');
+        return {
+          role: m.role === 'user' ? 'user' : 'assistant',
+          text: `${m.text}${attachmentCtx ? '\n' + attachmentCtx : ''}`
+        };
+      });
+
+      // Add grounding with existing knowledge base articles if any are relevant
+      const articles = db.ai_pbx_knowledge || [];
+      const kbContext = articles.length > 0 
+        ? `\nДоступные статьи Базы Знаний, которые могут помочь:\n` + articles.map((art: any) => `[Тема: ${art.title}\nКатегория: ${art.category}\nСодержание: ${art.content}]`).join('\n\n')
+        : '';
+
+      const finalSystemInstruction = `${settings.systemPrompt}\n${kbContext}`;
+
+      let aiText = '';
+      try {
+        aiText = await generateAIResponse({
+          provider: settings.provider || 'gemini',
+          model: settings.model || 'gemini-3.5-flash',
+          temperature: settings.temperature !== undefined ? Number(settings.temperature) : 0.4,
+          systemPrompt: finalSystemInstruction,
+          messages: formattedMessages
+        });
+      } catch (aiErr: any) {
+        // Return a helper assistant message when the requested key or connection fails
+        const fallbackMsg = {
+          id: 'msg_' + crypto.randomBytes(6).toString('hex'),
+          role: 'assistant',
+          text: `Ошибка подключения к AI-провайдеру (${settings.provider}): ${aiErr.message}\n\nПожалуйста, проверьте правильность настройки API-ключей в Secrets (в правом верхнем углу интерфейса AI Studio) и выберите корректную модель в Настройках AI-Администратора.`,
+          createdAt: new Date().toISOString()
+        };
+        session.messages.push(fallbackMsg);
+        await writeLocalDb(db);
+        return res.json({ userMessage: userMsg, aiMessage: fallbackMsg });
+      }
+
+      // Add assistant message
+      const assistantMsg = {
+        id: 'msg_' + crypto.randomBytes(6).toString('hex'),
+        role: 'assistant',
+        text: aiText || 'К сожалению, не удалось получить ответ от AI. Попробуйте другой запрос.',
+        createdAt: new Date().toISOString()
+      };
+      session.messages.push(assistantMsg);
+      await writeLocalDb(db);
+
+      res.json({ userMessage: userMsg, aiMessage: assistantMsg });
+    } catch (error: any) {
+      console.error('AI call error:', error);
+      res.status(500).json({ error: 'Не удалось получить ответ от AI: ' + error.message });
+    }
+  });
+
+  // 7. Add raw file/log attachment to session
+  app.post('/api/ai-pbx-admin/sessions/:id/attachments', requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { name, type, content } = req.body;
+      if (!name || !content) {
+        return res.status(400).json({ error: 'Attachment name and content are required' });
+      }
+
+      const db = await readLocalDb();
+      const session = (db.ai_pbx_sessions || []).find((s: any) => s.id === req.params.id);
+      if (!session) {
+        return res.status(404).json({ error: 'Session not found' });
+      }
+
+      if (!Array.isArray(session.attachments)) {
+        session.attachments = [];
+      }
+
+      const newAttachment = {
+        id: 'attach_' + crypto.randomBytes(6).toString('hex'),
+        name,
+        type: type || 'text/plain',
+        content: maskSecretsInText(content), // Sanitize immediately on upload!
+        createdAt: new Date().toISOString()
+      };
+
+      session.attachments.push(newAttachment);
+      session.updatedAt = new Date().toISOString();
+      await writeLocalDb(db);
+
+      res.status(201).json(newAttachment);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // 8. Suggest terminal diagnostic commands
+  app.post('/api/ai-pbx-admin/diagnostics/suggest', requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { category, customProblem } = req.body;
+      const db = await readLocalDb();
+      const settings = db.ai_pbx_settings || {
+        provider: 'gemini',
+        model: 'gemini-3.5-flash',
+        temperature: 0.4
+      };
+      
+      const prompt = `Пользователь описывает проблему: "${customProblem || 'Общая диагностика АТС'}" в категории "${category || 'other'}". 
+Выдай JSON-массив из 4-6 наиболее подходящих терминальных команд диагностики для Asterisk/Linux, которые помогут исследовать эту проблему.
+Каждая команда в списке ДОЛЖНА БЫТЬ из списка разрешенных команд PBXPuls или относиться к базовым командам проверки (ping, traceroute, asterisk, ip, df, free).
+Разрешенные команды АТС:
+- asterisk -rx "pjsip show registration"
+- asterisk -rx "pjsip show endpoints"
+- asterisk -rx "pjsip show registry"
+- asterisk -rx "core show channels"
+- asterisk -rx "sip show registry"
+- asterisk -rx "sip show peers"
+- asterisk -rx "iax2 show registry"
+- asterisk -rx "iax2 show peers"
+- asterisk -rx "core show translation"
+- asterisk -rx "core show codecs"
+- fwconsole systeminfo
+- fwconsole certificates
+- ping -c 4 [ip/host]
+- ip route show
+- ip address show
+- df -h
+- free -m
+
+Верни СТРОГО валидный JSON в следующем формате (без каких-либо markdown-тегов \`\`\`json, только чистый JSON-массив):
+[
+  { "command": "команда", "description": "краткое пояснение на русском языке" }
+]`;
+
+      let text = '[]';
+      try {
+        text = await generateAIResponse({
+          provider: settings.provider || 'gemini',
+          model: settings.model || 'gemini-3.5-flash',
+          temperature: 0.1,
+          systemPrompt: 'You are an Asterisk diagnostic assistant. Return raw JSON arrays only.',
+          messages: [{ role: 'user', text: prompt }],
+          responseType: 'json'
+        });
+      } catch (err: any) {
+        const fallbackCommands = [
+          { command: 'asterisk -rx "pjsip show registration"', description: 'Показать статус регистрации PJSIP-транков' },
+          { command: 'asterisk -rx "pjsip show endpoints"', description: 'Список всех активных PJSIP-экстеншенов АТС' },
+          { command: 'ip route show', description: 'Показать таблицу маршрутизации Linux-сервера' },
+          { command: 'df -h', description: 'Проверка свободного места на дисках' }
+        ];
+        return res.json({ commands: fallbackCommands, note: `Внимание: Показаны стандартные команды (Ошибка AI: ${err.message})` });
+      }
+
+      const cleanedText = cleanJsonResponseText(text);
+      try {
+        const parsed = JSON.parse(cleanedText);
+        res.json({ commands: parsed });
+      } catch (err) {
+        res.json({
+          commands: [
+            { command: 'asterisk -rx "pjsip show registration"', description: 'Показать статус регистрации PJSIP-транков' },
+            { command: 'asterisk -rx "pjsip show endpoints"', description: 'Список всех активных PJSIP-экстеншенов АТС' },
+            { command: 'ip route show', description: 'Показать таблицу маршрутизации Linux-сервера' }
+          ]
+        });
+      }
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // 9. Execute secure diagnostic commands on the server!
+  app.post('/api/ai-pbx-admin/diagnostics/collect-safe', requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { command, args } = req.body;
+      if (!command) {
+        return res.status(400).json({ error: 'Command is required' });
+      }
+
+      // Check if command is safe & allowed
+      const isAllowed = ALLOWED_SAFE_COMMANDS.some(allowed => command.startsWith(allowed.split(' ')[0])) || 
+                        ALLOWED_SAFE_COMMANDS.includes(command);
+
+      if (!isAllowed) {
+        return res.status(403).json({ 
+          error: 'Доступ заблокирован'
+        });
+      }
+      const { exec } = require('child_process');
+      exec(command, (err, stdout, stderr) => {
+        const resultText = (stdout || '') + (stderr || '');
+        res.json({ output: maskSecretsInText(resultText) || 'Команда выполнена успешно, вывод пуст.' });
+      });
+    } catch (error) { 
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // 10. AI analysis of logs / diagnostics
+  app.post('/api/ai-pbx-admin/diagnostics/analyze', requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { sourceTitle, content } = req.body;
+      if (!content) {
+        return res.status(400).json({ error: 'Content is required' });
+      }
+
+      const db = await readLocalDb();
+      const settings = db.ai_pbx_settings || {
+        provider: 'gemini',
+        model: 'gemini-3.5-flash',
+        temperature: 0.4
+      };
+
+      const prompt = `Проанализируй следующий диагностический вывод или лог-файл "${sourceTitle || 'Логи АТС'}". 
+Объясни понятным языком, в чем может быть причина проблемы, укажи на критические ошибки в логах, если они есть, и предложи пошаговые инструкции по их исправлению.
+Лог/Контент:
+\`\`\`
+${maskSecretsInText(content)}
+\`\`\`
+
+Ответ дай на русском языке в красивом markdown-формате.`;
+
+      const analysis = await generateAIResponse({
+        provider: settings.provider || 'gemini',
+        model: settings.model || 'gemini-3.5-flash',
+        temperature: 0.2,
+        systemPrompt: 'You are an expert Asterisk, FreePBX, and Linux system logging analyzer.',
+        messages: [{ role: 'user', text: prompt }]
+      });
+
+      res.json({ analysis });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // 11. Get Knowledge Base Articles
+  app.get('/api/ai-pbx-admin/knowledge', requireAuth, async (req: Request, res: Response) => {
+    try {
+      const db = await readLocalDb();
+      if (!Array.isArray(db.ai_pbx_knowledge)) {
+        db.ai_pbx_knowledge = [
+          {
+            id: 'kb_1',
+            title: 'Устранение неполадок с регистрацией PJSIP транка',
+            category: 'trunk',
+            content: '### Симптомы:\nТранк переходит в статус Unregistered или Rejected.\n\n### Решение:\n1. Проверьте адрес SIP-сервера в настройках транка.\n2. Убедитесь, что порт 5060/5061 не блокируется файрволом.\n3. Запустите `asterisk -rx "pjsip show registration"` для диагностики.\n4. Проверьте правильность auth_username и пароля.',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          },
+          {
+            id: 'kb_2',
+            title: 'Предотвращение SIP-сканирования и атак подбора паролей',
+            category: 'security',
+            content: '### Защита АТС:\n1. Никогда не используйте стандартный порт 5060 для открытых SIP-подключений.\n2. Включите и настройте сервис Fail2ban.\n3. Установите сложные пароли на экстеншены (минимум 12 символов, буквы и цифры).\n4. Ограничьте IP-адреса в настройках PJSIP (параметр Permit/Deny).',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          }
+        ];
+        db.ai_pbx_knowledge = db.ai_pbx_knowledge;
+        await writeLocalDb(db);
+      }
+      res.json(db.ai_pbx_knowledge);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // 12. Create Knowledge Base Article
+  app.post('/api/ai-pbx-admin/knowledge', requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { title, category, content } = req.body;
+      if (!title || !content) {
+        return res.status(400).json({ error: 'Title and content are required' });
+      }
+
+      const db = await readLocalDb();
+      if (!Array.isArray(db.ai_pbx_knowledge)) {
+        db.ai_pbx_knowledge = [];
+      }
+
+      const newArticle = {
+        id: 'kb_' + crypto.randomBytes(6).toString('hex'),
+        title,
+        category: category || 'other',
+        content,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      db.ai_pbx_knowledge.push(newArticle);
+      await writeLocalDb(db);
+      res.status(201).json(newArticle);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // 13. Update Knowledge Base Article
+  app.put('/api/ai-pbx-admin/knowledge/:id', requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { title, category, content } = req.body;
+      const db = await readLocalDb();
+      const article = (db.ai_pbx_knowledge || []).find((a: any) => a.id === req.params.id);
+      if (!article) {
+        return res.status(404).json({ error: 'Article not found' });
+      }
+
+      if (title !== undefined) article.title = title;
+      if (category !== undefined) article.category = category;
+      if (content !== undefined) article.content = content;
+      article.updatedAt = new Date().toISOString();
+
+      await writeLocalDb(db);
+      res.json(article);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // 14. Delete Knowledge Base Article
+  app.delete('/api/ai-pbx-admin/knowledge/:id', requireAuth, async (req: Request, res: Response) => {
+    try {
+      const db = await readLocalDb();
+      if (!Array.isArray(db.ai_pbx_knowledge)) {
+        db.ai_pbx_knowledge = [];
+      }
+
+      const originalLength = db.ai_pbx_knowledge.length;
+      db.ai_pbx_knowledge = db.ai_pbx_knowledge.filter((a: any) => a.id !== req.params.id);
+
+      if (db.ai_pbx_knowledge.length === originalLength) {
+        return res.status(404).json({ error: 'Article not found' });
+      }
+
+      await writeLocalDb(db);
+      res.json({ success: true, message: 'Article deleted' });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // 15. Create Article from support session dialog!
+  app.post('/api/ai-pbx-admin/knowledge/from-session/:sessionId', requireAuth, async (req: Request, res: Response) => {
+    try {
+      const db = await readLocalDb();
+      const session = (db.ai_pbx_sessions || []).find((s: any) => s.id === req.params.sessionId);
+      if (!session) {
+        return res.status(404).json({ error: 'Session not found' });
+      }
+
+      const settings = db.ai_pbx_settings || {
+        provider: 'gemini',
+        model: 'gemini-3.5-flash',
+        temperature: 0.4
+      };
+
+      const history = session.messages.map((m: any) => `${m.role === 'user' ? 'Пользователь' : 'AI-Консультант'}: ${m.text}`).join('\n\n');
+
+      const prompt = `На основе следующего диалога технической поддержки АТС Asterisk составь структурированную статью для корпоративной базы знаний на русском языке.
+Статья должна содержать:
+1. Краткое описание проблемы и симптомов.
+2. Пошаговое руководство по исправлению (решение).
+3. Дополнительные рекомендации для избежания повторения этой проблемы.
+
+Диалог поддержки:
+${history}
+
+Верни только готовую статью в markdown-формате.`;
+
+      const responseText = await generateAIResponse({
+        provider: settings.provider || 'gemini',
+        model: settings.model || 'gemini-3.5-flash',
+        temperature: 0.3,
+        systemPrompt: 'You are an expert at creating beautiful technical knowledge base documentation in markdown format.',
+        messages: [{ role: 'user', text: prompt }]
+      });
+
+      if (!Array.isArray(db.ai_pbx_knowledge)) {
+        db.ai_pbx_knowledge = [];
+      }
+
+      const newArticle = {
+        id: 'kb_' + crypto.randomBytes(6).toString('hex'),
+        title: `Решение проблемы: ${session.title}`,
+        category: session.category || 'other',
+        content: responseText || 'Не удалось сгенерировать контент.',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      db.ai_pbx_knowledge.push(newArticle);
+      await writeLocalDb(db);
+
+      res.status(201).json(newArticle);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // 16. Get AIPBXAdmin Settings
+  app.get('/api/ai-pbx-admin/settings', requireAuth, async (req: Request, res: Response) => {
+    try {
+      const db = await readLocalDb();
+      const settings = db.ai_pbx_settings || {
+        provider: 'gemini',
+        model: 'gemini-3.5-flash',
+        temperature: 0.4,
+        systemPrompt: 'You are AIPBXAdmin, a world-class senior Asterisk, FreePBX, PJSIP, dialplan, and Linux networking support specialist. Help users troubleshoot FreePBX issues step-by-step. Provide clean markdown format with bullet points, code blocks for terminal commands or configurations, and exact explanations. Always write your response in Russian.'
+      };
+      res.json(settings);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // 17. Put AIPBXAdmin Settings
+  app.put('/api/ai-pbx-admin/settings', requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { provider, model, temperature, systemPrompt } = req.body;
+      const db = await readLocalDb();
+      
+      db.ai_pbx_settings = {
+        provider: provider || 'gemini',
+        model: model || 'gemini-3.5-flash',
+        temperature: temperature !== undefined ? Number(temperature) : 0.4,
+        systemPrompt: systemPrompt || 'You are AIPBXAdmin, a world-class senior Asterisk, FreePBX, PJSIP, dialplan, and Linux networking support specialist. Help users troubleshoot FreePBX issues step-by-step. Provide clean markdown format with bullet points, code blocks for terminal commands or configurations, and exact explanations. Always write your response in Russian.'
+      };
+
+      await writeLocalDb(db);
+      res.json(db.ai_pbx_settings);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // 18. Test Connection
+  app.post('/api/ai-pbx-admin/settings/test-provider', requireAuth, async (req: Request, res: Response) => {
+    try {
+      const db = await readLocalDb();
+      const settings = db.ai_pbx_settings || {
+        provider: 'gemini',
+        model: 'gemini-3.5-flash',
+        temperature: 0.4
+      };
+
+      const testResult = await generateAIResponse({
+        provider: settings.provider || 'gemini',
+        model: settings.model || 'gemini-3.5-flash',
+        temperature: 0.1,
+        systemPrompt: 'Say exactly: Connection OK',
+        messages: [{ role: 'user', text: 'Respond with exactly "Connection OK"' }]
+      });
+
+      res.json({ success: true, message: `Соединение с провайдером AI (${settings.provider}) успешно установлено!`, raw: testResult });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+}
+

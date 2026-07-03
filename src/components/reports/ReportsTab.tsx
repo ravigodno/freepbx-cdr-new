@@ -11,6 +11,10 @@ import { ProblemDepartmentsTable, DepartmentSummaryRow } from './dashboard/Probl
 import { LostCallsTable, LostCallDetail } from './dashboard/LostCallsTable';
 import { TrunkHealthWidget, TrunkSummaryRow } from './dashboard/TrunkHealthWidget';
 import { ClientAnalyticsPanel } from './dashboard/ClientAnalyticsPanel';
+import { InboundDashboard } from './dashboard/InboundDashboard';
+import { EmployeesDashboard } from './dashboard/EmployeesDashboard';
+import { DepartmentsDashboard } from './dashboard/DepartmentsDashboard';
+import { LinesDashboard } from './dashboard/LinesDashboard';
 
 type Props = {
   startDate: string;
@@ -389,7 +393,7 @@ export default function ReportsTab({
     ['departments', 'Отделы'],
     ['employees', 'Сотрудники'],
     ['clients', 'Клиенты'],
-    ['trunks', 'Транки'],
+    ['trunks', 'Линии'],
     ['marketing', 'Маркетинг'],
     ['reports', 'Отчеты']
   ];
@@ -436,6 +440,34 @@ export default function ReportsTab({
 
       {activeTab === 'clients' ? (
         <ClientAnalyticsPanel analytics={clientAnalytics} periodLabel={periodLabel} />
+      ) : activeTab === 'inbound' ? (
+        <InboundDashboard 
+          slaSummary={slaSummary}
+          lostCallSummary={lostCallSummary}
+          detailingData={detailingData}
+          employeeSummary={employeeSummary}
+          heatmap={heatmap}
+          loading={loading}
+          effectiveAnswerSlaSeconds={effectiveAnswerSlaSeconds}
+        />
+      ) : activeTab === 'departments' ? (
+        <DepartmentsDashboard 
+          departmentSummary={departments}
+          loading={loading}
+          effectiveAnswerSlaSeconds={effectiveAnswerSlaSeconds}
+        />
+      ) : activeTab === 'employees' ? (
+        <EmployeesDashboard 
+          employeeSummary={employeeSummary}
+          loading={loading}
+          effectiveAnswerSlaSeconds={effectiveAnswerSlaSeconds}
+        />
+      ) : activeTab === 'trunks' ? (
+        <LinesDashboard 
+          trunks={trunks}
+          loading={loading}
+          effectiveAnswerSlaSeconds={effectiveAnswerSlaSeconds}
+        />
       ) : (
         <>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">

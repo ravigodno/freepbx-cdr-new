@@ -71,6 +71,9 @@ export interface AppSettings {
     monitoring?: boolean;
     management?: boolean;
     balance?: boolean;
+    scripts?: boolean;
+    ai_assistant?: boolean;
+    ai_pbx_admin?: boolean;
   };
   showSuRoleToAdmin?: boolean;
   showSuPermissionsToAdmin?: boolean;
@@ -136,6 +139,10 @@ export interface AppSettings {
   customCanListenRecordings?: boolean;
   customCanMakeCalls?: boolean;
   customCanEditDirectory?: boolean;
+
+  // Custom Design Settings
+  customLogoUrl?: string;
+  customCopyright?: string;
 }
 
 export interface DashboardStats {
@@ -214,4 +221,114 @@ export interface ContactSyncMapping {
   createdAt?: string;
   updatedAt?: string;
 }
+
+export type CallScriptType = 'inbound' | 'outbound' | 'internal' | 'universal';
+export type CallScriptStatus = 'draft' | 'active' | 'archive';
+
+export interface CallScript {
+  id: string;
+  title: string;
+  description?: string;
+  type: CallScriptType;
+  status: CallScriptStatus;
+  department?: string;
+  queue?: string;
+  didNumber?: string;
+  operators?: string[]; // IDs or extensions
+  innerNumbers?: string;
+  isRequired?: boolean;
+  language?: string;
+  tags?: string[];
+  createdBy?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  version?: number; // current active version number
+}
+
+export interface CallScriptNode {
+  id: string;
+  type: 'operator_text' | 'question' | 'choice' | 'objection' | 'hint' | 'checklist' | 'input_field' | 'finish';
+  title: string;
+  text?: string;
+  required?: boolean;
+  next?: string;
+  
+  // Field-specific settings:
+  answerType?: 'text' | 'number' | 'phone' | 'list' | 'date' | 'boolean';
+  options?: { label: string; next: string }[];
+  objectionType?: 'expensive' | 'think' | 'has_provider' | 'not_interested' | 'no_time' | 'send_info' | 'callback_later';
+  arguments?: string; // arguments for objection
+  importance?: 'normal' | 'important' | 'critical';
+  checklistItems?: { id: string; text: string; checkedByDefault?: boolean }[];
+  inputFieldName?: string; // FIO, phone, email, etc.
+  inputFieldType?: string;
+  resultType?: 'success' | 'consultation' | 'refusal' | 'callback' | 'not_target' | 'wrong_number' | 'resolved' | 'transfer';
+  commentRequired?: boolean;
+  taskRequired?: boolean;
+  callbackRequired?: boolean;
+  color?: string;
+  hintText?: string;
+}
+
+export interface CallScriptSchema {
+  nodes: CallScriptNode[];
+}
+
+export interface CallScriptVersion {
+  id: string;
+  scriptId: string;
+  versionNumber: number;
+  schemaJson: string; // JSON string of CallScriptSchema
+  createdBy?: string;
+  createdAt?: string;
+  comment?: string;
+  isActive: boolean;
+}
+
+export interface CallScriptRun {
+  id: string;
+  scriptId: string;
+  scriptVersionId: string;
+  callUniqueid?: string;
+  callLinkedid?: string;
+  operatorExtension?: string;
+  operatorName?: string;
+  clientPhone?: string;
+  queue?: string;
+  didNumber?: string;
+  startedAt: string;
+  finishedAt?: string;
+  durationSec?: number;
+  completed: boolean;
+  result?: string;
+  comment?: string;
+}
+
+export interface CallScriptRunStep {
+  id: string;
+  runId: string;
+  stepId: string;
+  stepTitle: string;
+  stepType: string;
+  answerValue?: string;
+  selectedOption?: string;
+  startedAt: string;
+  completedAt?: string;
+  skipped: boolean;
+  comment?: string;
+}
+
+export interface CallScriptAssignment {
+  id: string;
+  scriptId: string;
+  priority: number;
+  callType?: CallScriptType;
+  queue?: string;
+  didNumber?: string;
+  department?: string;
+  operatorExtension?: string;
+  workingHours?: string;
+  isActive: boolean;
+}
+
 

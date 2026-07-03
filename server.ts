@@ -23,6 +23,7 @@ import https from 'https';
 import { CallEntry, MissedCallStatus, AppSettings, DashboardStats, UserRole, WebUser } from './src/types.js';
 import os from 'os';
 import { registerManagementRoutes } from './server-management.js';
+import { registerAiPbxAdminRoutes } from './server/aiPbxAdmin.js';
 
 // Load environment variables
 dotenv.config();
@@ -30,10 +31,13 @@ dotenv.config();
 let myFilename = '';
 let myDirname = '';
 
-try {
-  myFilename = eval('__filename');
-  myDirname = eval('__dirname');
-} catch (e) {
+// @ts-ignore
+if (typeof __filename !== 'undefined') {
+  // @ts-ignore
+  myFilename = __filename;
+  // @ts-ignore
+  myDirname = __dirname;
+} else {
   myFilename = fileURLToPath(import.meta.url);
   myDirname = path.dirname(myFilename);
 }
@@ -1452,7 +1456,7 @@ const diagnoseGoogleContacts = async (localDb: any, userId: string): Promise<{ p
       return { provider, ok: false, steps };
     }
   } else {
-    addContactSyncDiagnosticStep(steps, 'refresh', 'Обновление access token', 'ok', 'Access token действителен');
+    addContactSyncDiagnosticStep(steps, 'refresh', 'Об��овление access token', 'ok', 'Access token действителен');
   }
 
   let payload: any = null;
@@ -3525,17 +3529,20 @@ function createDefaultCalltrackingSite() {
   };
 }
 
-type OptionalModuleKey = 'marketing' | 'monitoring' | 'management' | 'balance';
+type OptionalModuleKey = 'marketing' | 'monitoring' | 'management' | 'balance' | 'scripts' | 'ai_assistant' | 'ai_pbx_admin';
 
-const OPTIONAL_MODULE_KEYS: OptionalModuleKey[] = ['marketing', 'monitoring', 'management', 'balance'];
-const getOptionalModuleKeys = (): OptionalModuleKey[] => ['marketing', 'monitoring', 'management', 'balance'];
+const OPTIONAL_MODULE_KEYS: OptionalModuleKey[] = ['marketing', 'monitoring', 'management', 'balance', 'scripts', 'ai_assistant', 'ai_pbx_admin'];
+const getOptionalModuleKeys = (): OptionalModuleKey[] => ['marketing', 'monitoring', 'management', 'balance', 'scripts', 'ai_assistant', 'ai_pbx_admin'];
 
 
 const DEFAULT_MODULE_VISIBILITY: Record<OptionalModuleKey, boolean> = {
   marketing: true,
   monitoring: true,
   management: true,
-  balance: true
+  balance: true,
+  scripts: false,
+  ai_assistant: false,
+  ai_pbx_admin: false
 };
 
 const PERMISSION_MODULE_MAP: Record<string, OptionalModuleKey> = {
@@ -3563,7 +3570,16 @@ const PERMISSION_MODULE_MAP: Record<string, OptionalModuleKey> = {
   view_balance_analytics: 'balance',
   manage_balance_sources: 'balance',
   view_balance_alerts: 'balance',
-  manage_balance_providers: 'balance'
+  manage_balance_providers: 'balance',
+
+  view_scripts: 'scripts',
+  manage_scripts: 'scripts',
+
+  view_ai_assistant: 'ai_assistant',
+  manage_ai_assistant: 'ai_assistant',
+
+  view_ai_pbx_admin: 'ai_pbx_admin',
+  manage_ai_pbx_admin: 'ai_pbx_admin'
 };
 
 function normalizeModuleVisibilitySettings(value: any): Record<OptionalModuleKey, boolean> {
@@ -3571,7 +3587,10 @@ function normalizeModuleVisibilitySettings(value: any): Record<OptionalModuleKey
     marketing: true,
     monitoring: true,
     management: true,
-    balance: true
+    balance: true,
+    scripts: false,
+    ai_assistant: false,
+    ai_pbx_admin: false
   };
 
   const source = value && typeof value === 'object' ? value : {};
@@ -3580,6 +3599,9 @@ function normalizeModuleVisibilitySettings(value: any): Record<OptionalModuleKey
   if (typeof source.monitoring === 'boolean') next.monitoring = source.monitoring;
   if (typeof source.management === 'boolean') next.management = source.management;
   if (typeof source.balance === 'boolean') next.balance = source.balance;
+  if (typeof source.scripts === 'boolean') next.scripts = source.scripts;
+  if (typeof source.ai_assistant === 'boolean') next.ai_assistant = source.ai_assistant;
+  if (typeof source.ai_pbx_admin === 'boolean') next.ai_pbx_admin = source.ai_pbx_admin;
 
   return next;
 }
@@ -3623,7 +3645,242 @@ function normalizeLocalDbSchema(db: any): any {
     yandexOAuthStates: Array.isArray(db?.yandexOAuthStates) ? db.yandexOAuthStates.filter(isActiveYandexOAuthState) : [],
     contactSyncAccounts: Array.isArray(db?.contactSyncAccounts) ? db.contactSyncAccounts : [],
     contactSyncMappings: Array.isArray(db?.contactSyncMappings) ? db.contactSyncMappings : [],
-    directoryColumnSettings: db?.directoryColumnSettings && typeof db.directoryColumnSettings === 'object' ? db.directoryColumnSettings : {}
+    directoryColumnSettings: db?.directoryColumnSettings && typeof db.directoryColumnSettings === 'object' ? db.directoryColumnSettings : {},
+    callScripts: Array.isArray(db?.callScripts) && db.callScripts.length ? db.callScripts : [
+      {
+        id: "s1",
+        title: "Входящий звонок отдела продаж",
+        description: "Скрипт первичной обработки входящего обращения клиента",
+        type: "inbound",
+        status: "active",
+        department: "Sales",
+        queue: "100",
+        didNumber: "",
+        isRequired: true,
+        language: "ru",
+        tags: ["продажи", "первичный"],
+        createdBy: "su",
+        createdAt: "2026-07-03T00:00:00.000Z",
+        updatedAt: "2026-07-03T00:00:00.000Z",
+        version: 1
+      },
+      {
+        id: "s2",
+        title: "Входящий звонок техподдержки",
+        description: "Сценарий работы с техническими проблемами пользователей",
+        type: "inbound",
+        status: "active",
+        department: "IT Support",
+        queue: "101",
+        didNumber: "",
+        isRequired: true,
+        language: "ru",
+        tags: ["поддержка", "проблемы"],
+        createdBy: "su",
+        createdAt: "2026-07-03T00:00:00.000Z",
+        updatedAt: "2026-07-03T00:00:00.000Z",
+        version: 1
+      }
+    ],
+    callScriptVersions: Array.isArray(db?.callScriptVersions) && db.callScriptVersions.length ? db.callScriptVersions : [
+      {
+        id: "v1",
+        scriptId: "s1",
+        versionNumber: 1,
+        schemaJson: JSON.stringify({
+          nodes: [
+            {
+              id: "start",
+              type: "operator_text",
+              title: "Приветствие",
+              text: "Здравствуйте! Меня зовут {operator_name}, компания {company_name}. Подскажите, пожалуйста, как я могу к вам обращаться?",
+              required: true,
+              next: "ask_need"
+            },
+            {
+              id: "ask_need",
+              type: "question",
+              title: "Выяснение потребности",
+              text: "Какой продукт или услуга вас интересует?",
+              answerType: "text",
+              required: true,
+              next: "ready_to_order"
+            },
+            {
+              id: "ready_to_order",
+              type: "choice",
+              title: "Готовность оформить",
+              text: "Клиент готов оформить заявку прямо сейчас?",
+              options: [
+                { label: "Да, оформляем", next: "create_order" },
+                { label: "Нет, дорого / думает", next: "handle_objection" },
+                { label: "Просит перезвонить позже", next: "schedule_callback" }
+              ]
+            },
+            {
+              id: "handle_objection",
+              type: "objection",
+              title: "Обработка возражения",
+              text: "Понимаю вас. Давайте уточню, с чем вы сравниваете. Наша цена включает полную техподдержку и расширенную гарантию.",
+              objectionType: "expensive",
+              next: "ask_again"
+            },
+            {
+              id: "ask_again",
+              type: "choice",
+              title: "Повторное предложение",
+              text: "Удалось убедить клиента?",
+              options: [
+                { label: "Да, готов", next: "create_order" },
+                { label: "Нет, окончательный отказ", next: "refusal_finish" }
+              ]
+            },
+            {
+              id: "create_order",
+              type: "input_field",
+              title: "Оформление заказа",
+              text: "Зафиксируйте контактные данные для доставки",
+              inputFieldName: "ФИО и адрес доставки",
+              required: true,
+              next: "success_finish"
+            },
+            {
+              id: "schedule_callback",
+              type: "finish",
+              title: "Назначен перезвон",
+              text: "Договорились о повторном звонке. Спасибо за обращение!",
+              resultType: "callback"
+            },
+            {
+              id: "refusal_finish",
+              type: "finish",
+              title: "Отказ клиента",
+              text: "Спасибо за ваше время. Если передумаете — мы всегда на связи.",
+              resultType: "refusal"
+            },
+            {
+              id: "success_finish",
+              type: "finish",
+              title: "Успешная продажа",
+              text: "Заявка оформлена. Отличная работа!",
+              resultType: "success"
+            }
+          ]
+        }),
+        createdBy: "su",
+        createdAt: "2026-07-03T00:00:00.000Z",
+        comment: "Первая рабочая версия скрипта отдела продаж",
+        isActive: true
+      },
+      {
+        id: "v2",
+        scriptId: "s2",
+        versionNumber: 1,
+        schemaJson: JSON.stringify({
+          nodes: [
+            {
+              id: "start",
+              type: "operator_text",
+              title: "Приветствие техподдержки",
+              text: "Здравствуйте! Служба технической поддержки, меня зовут {operator_name}. Чем я могу помочь?",
+              required: true,
+              next: "ask_problem"
+            },
+            {
+              id: "ask_problem",
+              type: "question",
+              title: "Описание проблемы",
+              text: "Пожалуйста, опишите кратко, какая возникла проблема?",
+              answerType: "text",
+              required: true,
+              next: "diagnostics_choice"
+            },
+            {
+              id: "diagnostics_choice",
+              type: "choice",
+              title: "Тип неисправности",
+              text: "К чему относится проблема клиента?",
+              options: [
+                { label: "Нет интернета / связи", next: "no_internet" },
+                { label: "Проблема с телефонией", next: "pbx_issue" },
+                { label: "Другое", next: "other_issue" }
+              ]
+            },
+            {
+              id: "no_internet",
+              type: "operator_text",
+              title: "Перезагрузка роутера",
+              text: "Попробуйте, пожалуйста, перезагрузить сетевой роутер или кабель питания. Проблема устранилась?",
+              next: "router_test_choice"
+            },
+            {
+              id: "router_test_choice",
+              type: "choice",
+              title: "Результат перезагрузки",
+              text: "Заработало ли соединение?",
+              options: [
+                { label: "Да, всё в порядке", next: "resolved_finish" },
+                { label: "Нет, по-прежнему не работает", next: "escalate_ticket" }
+              ]
+            },
+            {
+              id: "pbx_issue",
+              type: "operator_text",
+              title: "Проверка SIP-регистрации",
+              text: "Проверьте статус индикатора на телефоне. Давайте попробуем перерегистрировать аппарат.",
+              next: "resolved_finish"
+            },
+            {
+              id: "other_issue",
+              type: "input_field",
+              title: "Сбор деталей",
+              text: "Уточните серийный номер договора или устройства для передачи инженерам.",
+              inputFieldName: "Серийный номер / договор",
+              required: true,
+              next: "escalate_ticket"
+            },
+            {
+              id: "resolved_finish",
+              type: "finish",
+              title: "Вопрос решен",
+              text: "Проблема успешно устранена на первом уровне техподдержки.",
+              resultType: "resolved"
+            },
+            {
+              id: "escalate_ticket",
+              type: "finish",
+              title: "Передача на 2-й уровень",
+              text: "Оформили инцидент. Передаем дежурным инженерам для детальной диагностики.",
+              resultType: "transfer"
+            }
+          ]
+        }),
+        createdBy: "su",
+        createdAt: "2026-07-03T00:00:00.000Z",
+        comment: "Базовый сценарий диагностики техподдержки",
+        isActive: true
+      }
+    ],
+    callScriptRuns: Array.isArray(db?.callScriptRuns) ? db.callScriptRuns : [],
+    callScriptRunSteps: Array.isArray(db?.callScriptRunSteps) ? db.callScriptRunSteps : [],
+    callScriptAssignments: Array.isArray(db?.callScriptAssignments) && db.callScriptAssignments.length ? db.callScriptAssignments : [
+      {
+        id: "a1",
+        scriptId: "s1",
+        priority: 2,
+        callType: "inbound",
+        queue: "100",
+        isActive: true
+      },
+      {
+        id: "a2",
+        scriptId: "s2",
+        priority: 2,
+        callType: "inbound",
+        queue: "101",
+        isActive: true
+      }
+    ]
   };
 
   next.settings.moduleVisibility = normalizeModuleVisibilitySettings(next.settings?.moduleVisibility);
@@ -3932,6 +4189,140 @@ async function readLocalDb(): Promise<LocalDb> {
         data.directory = migratedDirectory;
         changed = true;
       }
+    }
+
+    if (!Array.isArray(data.aiAssistants)) {
+      data.aiAssistants = [
+        {
+          id: 'ai_1',
+          name: 'Умный автоответчик отдела продаж',
+          description: 'Принимает входящие звонки, отвечает на частые вопросы по прайс-листу и переводит на отдел продаж (очередь 600) при запросе специалиста.',
+          status: 'active',
+          language: 'ru',
+          timezone: 'Europe/Moscow',
+          greetingText: 'Здравствуйте! Вы позвонили в компанию {company_name}. Я виртуальный AI-помощник. Подскажите, пожалуйста, по какому вопросу вы обращаетесь?',
+          behaviorStyle: 'friendly',
+          llmProvider: 'google_gemini',
+          llmModel: 'gemini-2.5-flash',
+          sttProvider: 'openai_whisper',
+          ttsProvider: 'openai_tts',
+          voiceId: 'alloy',
+          fallbackRoute: 'queue_600',
+          callsToday: 14,
+          successRate: 78,
+          transferredCount: 3,
+          errorsCount: 0,
+          updatedAt: new Date().toISOString()
+        },
+        {
+          id: 'ai_2',
+          name: 'Ночной автоответчик поддержки',
+          description: 'Работает вне рабочего времени, фиксирует имя, номер телефона и суть обращения для обратного звонка менеджера утром.',
+          status: 'stopped',
+          language: 'ru',
+          timezone: 'Europe/Moscow',
+          greetingText: 'Здравствуйте! Вы позвонили в компанию в нерабочее время. Оставьте вашу заявку, я запишу её и передам менеджеру.',
+          behaviorStyle: 'official',
+          llmProvider: 'openai',
+          llmModel: 'gpt-4o-mini',
+          sttProvider: 'openai_whisper',
+          ttsProvider: 'openai_tts',
+          voiceId: 'nova',
+          fallbackRoute: 'queue_600',
+          callsToday: 0,
+          successRate: 100,
+          transferredCount: 0,
+          errorsCount: 0,
+          updatedAt: new Date().toISOString()
+        }
+      ];
+      changed = true;
+    }
+
+    if (!Array.isArray(data.aiAssistantRoutes)) {
+      data.aiAssistantRoutes = [
+        {
+          id: 'r_1',
+          assistantId: 'ai_1',
+          routeType: 'did',
+          didNumber: '+7 (495) 123-45-67',
+          fallbackDestination: 'queue_600',
+          isActive: true
+        }
+      ];
+      changed = true;
+    }
+
+    if (!Array.isArray(data.aiKnowledgeSources)) {
+      data.aiKnowledgeSources = [
+        {
+          id: 'k_1',
+          assistantId: 'ai_1',
+          title: 'Режим работы и адреса филиалов',
+          sourceType: 'manual',
+          content: 'Компания PBXPuls работает с понедельника по пятницу с 09:00 до 18:00 без перерыва. Наш главный офис находится в Москве по адресу: ул. Ленина, д. 10, офис 404. Также есть филиал в Симферополе по адресу: ул. Киевская, д. 20.',
+          status: 'indexed',
+          updatedAt: new Date().toISOString()
+        },
+        {
+          id: 'k_2',
+          assistantId: 'ai_1',
+          title: 'Прайс-лист доставки воды и услуг 2026',
+          sourceType: 'pdf',
+          content: 'Стоимость доставки воды по городу составляет 150 рублей за бутыль 19 литров. При заказе от 3-х бутылей доставка осуществляется бесплатно. Доставка в Киевский район Симферополя производится по вторникам и четвергам с 10:00 до 16:00.',
+          status: 'indexed',
+          updatedAt: new Date().toISOString()
+        }
+      ];
+      changed = true;
+    }
+
+    if (!Array.isArray(data.aiDialogs)) {
+      data.aiDialogs = [
+        {
+          id: 'dlg_1',
+          assistantId: 'ai_1',
+          callerNumber: '+7 (978) 123-45-67',
+          didNumber: '+7 (495) 123-45-67',
+          startedAt: new Date(Date.now() - 3600000).toISOString(),
+          durationSec: 45,
+          intent: 'sales',
+          confidence: 0.94,
+          result: 'completed',
+          transferredTo: '',
+          recordingPath: '/assets/sample_voip_recording.mp3',
+          transcriptText: 'Приветствие бота, вопрос про доставку воды, ответ бота.',
+          operatorComment: 'Клиент удовлетворен ответом бота про бесплатную доставку от 3 бутылей.',
+          messages: [
+            { role: 'assistant', text: 'Здравствуйте! Вы позвонили в компанию PBXPuls. Я виртуальный AI-помощник. Подскажите, пожалуйста, по какому вопросу вы обращаетесь?', createdAt: new Date(Date.now() - 3600000).toISOString() },
+            { role: 'caller', text: 'Здравствуйте, подскажите, сколько стоит доставка воды в Симферополь?', createdAt: new Date(Date.now() - 3590000).toISOString() },
+            { role: 'assistant', text: 'Доставка воды стоит 150 рублей за одну бутыль. Если вы заказываете от 3-х бутылей, мы привезём её абсолютно бесплатно!', createdAt: new Date(Date.now() - 3580000).toISOString() },
+            { role: 'caller', text: 'Отлично, спасибо, я закажу позже.', createdAt: new Date(Date.now() - 3570000).toISOString() },
+            { role: 'assistant', text: 'Будем рады вашему заказу! Всего доброго, до свидания.', createdAt: new Date(Date.now() - 3560000).toISOString() }
+          ]
+        },
+        {
+          id: 'dlg_2',
+          assistantId: 'ai_1',
+          callerNumber: '+7 (495) 987-65-43',
+          didNumber: '+7 (495) 123-45-67',
+          startedAt: new Date(Date.now() - 7200000).toISOString(),
+          durationSec: 32,
+          intent: 'operator',
+          confidence: 0.98,
+          result: 'transferred',
+          transferredTo: 'queue_600',
+          recordingPath: '/assets/sample_voip_recording.mp3',
+          transcriptText: 'Приветствие бота, запрос оператора, перевод бота.',
+          operatorComment: 'Переведен на Ирину (отдел продаж). Выставлен счет на 5000 руб.',
+          messages: [
+            { role: 'assistant', text: 'Здравствуйте! Вы позвонили в компанию PBXPuls. Я виртуальный AI-помощник. Подскажите, пожалуйста, по какому вопросу вы обращаетесь?', createdAt: new Date(Date.now() - 7200000).toISOString() },
+            { role: 'caller', text: 'Алло, позовите пожалуйста менеджера по продажам.', createdAt: new Date(Date.now() - 7190000).toISOString() },
+            { role: 'assistant', text: 'Секунду, соединяю вас с менеджером отдела продаж. Пожалуйста, оставайтесь на линии.', createdAt: new Date(Date.now() - 7180000).toISOString() }
+          ]
+        }
+      ];
+      changed = true;
     }
 
     if (changed) {
@@ -7499,6 +7890,19 @@ app.delete('/api/users/:id', requireAuth(), async (req, res) => {
   }
 });
 
+// Public settings for customized logo and copyright
+app.get('/api/settings/public', async (req, res) => {
+  try {
+    const localDb = await readLocalDb();
+    res.json({
+      customLogoUrl: localDb.settings?.customLogoUrl || '',
+      customCopyright: localDb.settings?.customCopyright || ''
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Error loading public settings' });
+  }
+});
+
 // Settings endpoint
 app.get('/api/settings', requireAuth(), async (req, res) => {
   const localDb = await readLocalDb();
@@ -7519,6 +7923,8 @@ app.get('/api/settings', requireAuth(), async (req, res) => {
       fileImportEnabled: localDb.settings.fileImportEnabled !== false,
       yandexCarddavEnabled: localDb.settings.yandexCarddavEnabled !== false,
       mailruCarddavEnabled: localDb.settings.mailruCarddavEnabled !== false,
+      customLogoUrl: localDb.settings.customLogoUrl,
+      customCopyright: localDb.settings.customCopyright,
     };
     res.json(safeSettings);
   }
@@ -7534,6 +7940,8 @@ app.post('/api/settings', requireAuth(), async (req, res) => {
     delete settingsUpdate.showSuRoleToAdmin;
     delete settingsUpdate.showSuPermissionsToAdmin;
     delete settingsUpdate.allowAdminEditSuPermissions;
+    delete settingsUpdate.customLogoUrl;
+    delete settingsUpdate.customCopyright;
   }
 
   const localDb = await readLocalDb();
@@ -7701,23 +8109,14 @@ app.post('/api/settings/test-freepbx-api', requireAuth(), async (req, res) => {
           client_id: settings.freepbxApiClientId,
           client_secret: settings.freepbxApiClientSecret
         });
-        const tokenController = new AbortController();
-        const tokenTimeoutId = setTimeout(() => tokenController.abort(), 7000);
-        let tokenRes: any;
-
-        try {
-          tokenRes = await fetch(tokenUrl, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/x-www-form-urlencoded',
-              Accept: 'application/json'
-            },
-            body: tokenBody.toString(),
-            signal: tokenController.signal
-          });
-        } finally {
-          clearTimeout(tokenTimeoutId);
-        }
+        const tokenRes = await fetch(tokenUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            Accept: 'application/json'
+          },
+          body: tokenBody.toString()
+        });
         if (!tokenRes.ok) {
           const errText = await tokenRes.text().catch(() => '');
           return res.status(400).json({ error: `Ошибка получения OAuth token через ${tokenUrl} [Код: ${tokenRes.status}]: ${errText || tokenRes.statusText}` });
@@ -7766,29 +8165,10 @@ app.post('/api/settings/test-freepbx-api', requireAuth(), async (req, res) => {
         return res.status(400).json({ error: `Ошибка FreePBX GraphQL API: ${response.status} - ${typeof body === 'string' ? body : JSON.stringify(body)}` });
       }
       if (body?.errors?.length) {
-        const errorText = JSON.stringify(body.errors);
-        const sourceMode = String(settings.freepbxExtensionsSource || 'auto').toLowerCase();
-
-        if (sourceMode === 'auto' && errorText.includes('fetchAllExtensions')) {
-          return res.json({
-            success: true,
-            message: 'FreePBX API отвечает, но GraphQL метод fetchAllExtensions недоступен в этой версии FreePBX. Для extensions будет использован Auto/BMO/AMI fallback.'
-          });
-        }
-
-        return res.status(400).json({ error: 'Ошибка GraphQL fetchAllExtensions: ' + errorText });
+        return res.status(400).json({ error: 'Ошибка GraphQL fetchAllExtensions: ' + JSON.stringify(body.errors) });
       }
       const result = body?.data?.fetchAllExtensions;
       if (!result) {
-        const sourceMode = String(settings.freepbxExtensionsSource || 'auto').toLowerCase();
-
-        if (sourceMode === 'auto') {
-          return res.json({
-            success: true,
-            message: 'FreePBX API отвечает, но data.fetchAllExtensions отсутствует. Для extensions будет использован Auto/BMO/AMI fallback.'
-          });
-        }
-
         return res.status(400).json({ error: 'GraphQL ответ не содержит data.fetchAllExtensions' });
       }
 
@@ -8910,7 +9290,7 @@ app.delete('/api/directory/:id', requireAuth(), async (req, res) => {
   try {
     const authUser = (req as any).user;
     if (authUser?.role !== 'su' && authUser?.permissions?.edit_directory !== true) {
-      res.status(403).json({ error: 'Нет прав на удаление записей справочника' });
+      res.status(403).json({ error: 'Нет прав на удаление записей ��правочника' });
       return;
     }
 
@@ -11743,14 +12123,6 @@ app.get('/api/live-sessions', requireAuth(), async (req, res) => {
 
     const sessions = channels.success ? parseCoreShowChannelsConcise(channels.message) : [];
 
-    console.log('[LIVE_SESSIONS_DEBUG]', {
-      channelsSuccess: channels.success,
-      rawLength: String(channels.message || '').length,
-      sessionsCount: sessions.length,
-      firstRawLine: String(channels.message || '').split(/\\r?\\n/).find(line => line.includes('!')) || '',
-      firstSession: sessions[0] || null
-    });
-
     const summary = {
       total: sessions.length,
       ringing: sessions.filter(s => String(s.state).toLowerCase().includes('ring')).length,
@@ -14531,10 +14903,865 @@ app.post('/api/devices-map/snapshot', requireAuth(), (req, res) => {
     res.status(500).json({ success: false, error: e.message || String(e) });
   }
 });
-// --- END OF VoIP DEVICES MAP SUB-SYSTEM ---
+
+// --- CALL SCRIPTS SUB-SYSTEM ENDPOINTS ---
+
+// GET /api/call-scripts - List all scripts
+app.get('/api/call-scripts', requireAuth(), async (req, res) => {
+  try {
+    const { q, type, status, queue, department } = req.query;
+    const db = await readLocalDb();
+    let list = db.callScripts || [];
+
+    if (q) {
+      const search = String(q).toLowerCase();
+      list = list.filter((s: any) => 
+        (s.title && s.title.toLowerCase().includes(search)) || 
+        (s.description && s.description.toLowerCase().includes(search))
+      );
+    }
+    if (type) {
+      list = list.filter((s: any) => s.type === type);
+    }
+    if (status) {
+      list = list.filter((s: any) => s.status === status);
+    } else {
+      // By default hide archived
+      list = list.filter((s: any) => s.status !== 'archive');
+    }
+    if (queue) {
+      list = list.filter((s: any) => s.queue === queue);
+    }
+    if (department) {
+      list = list.filter((s: any) => s.department === department);
+    }
+
+    res.json(list);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/call-scripts/resolve - Auto-resolve best script
+app.get('/api/call-scripts/resolve', requireAuth(), async (req, res) => {
+  try {
+    const { callType, queue, did, extension, department } = req.query;
+    const db = await readLocalDb();
+    const activeScripts = (db.callScripts || []).filter((s: any) => s.status === 'active');
+
+    if (!activeScripts.length) {
+      return res.json(null);
+    }
+
+    // Resolve by Priority:
+    // 1. DID / incoming number
+    if (did) {
+      const byDid = activeScripts.find((s: any) => s.didNumber && s.didNumber === did);
+      if (byDid) return res.json(byDid);
+    }
+
+    // 2. Queue
+    if (queue) {
+      const byQueue = activeScripts.find((s: any) => s.queue && s.queue === queue);
+      if (byQueue) return res.json(byQueue);
+    }
+
+    // 3. Operator/Extension
+    if (extension) {
+      const byExt = activeScripts.find((s: any) => 
+        (s.operators && s.operators.includes(extension)) ||
+        (s.innerNumbers && s.innerNumbers.split(',').map((x: string) => x.trim()).includes(extension))
+      );
+      if (byExt) return res.json(byExt);
+    }
+
+    // 4. Department
+    if (department) {
+      const byDept = activeScripts.find((s: any) => s.department && s.department.toLowerCase() === String(department).toLowerCase());
+      if (byDept) return res.json(byDept);
+    }
+
+    // 5. Call Type
+    if (callType) {
+      const byType = activeScripts.find((s: any) => s.type === callType);
+      if (byType) return res.json(byType);
+    }
+
+    // 6. Universal script
+    const universal = activeScripts.find((s: any) => s.type === 'universal');
+    if (universal) return res.json(universal);
+
+    // Fallback: first active
+    res.json(activeScripts[0] || null);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/call-scripts/:id - Get specific script
+app.get('/api/call-scripts/:id', requireAuth(), async (req, res) => {
+  try {
+    const db = await readLocalDb();
+    const script = (db.callScripts || []).find((s: any) => s.id === req.params.id);
+    if (!script) {
+      return res.status(404).json({ error: 'Скрипт не найден' });
+    }
+    res.json(script);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/call-scripts - Create script
+app.post('/api/call-scripts', requireAuth(), async (req, res) => {
+  try {
+    const { title, description, type, department, queue, didNumber, operators, innerNumbers, isRequired, language, tags } = req.body;
+    if (!title) {
+      return res.status(400).json({ error: 'Название скрипта обязательно' });
+    }
+
+    const db = await readLocalDb();
+    const username = (req as any).user?.username || 'admin';
+    const newScript = {
+      id: 's_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+      title,
+      description: description || '',
+      type: type || 'universal',
+      status: 'draft',
+      department: department || '',
+      queue: queue || '',
+      didNumber: didNumber || '',
+      operators: Array.isArray(operators) ? operators : [],
+      innerNumbers: innerNumbers || '',
+      isRequired: !!isRequired,
+      language: language || 'ru',
+      tags: Array.isArray(tags) ? tags : [],
+      createdBy: username,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      version: 1
+    };
+
+    // Create a default first draft version
+    const firstVersion = {
+      id: 'v_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+      scriptId: newScript.id,
+      versionNumber: 1,
+      schemaJson: JSON.stringify({
+        nodes: [
+          {
+            id: 'start',
+            type: 'operator_text',
+            title: 'Приветствие',
+            text: 'Здравствуйте! Меня зовут {operator_name}. Чем могу вам помочь?',
+            required: true,
+            next: 'ask_question'
+          },
+          {
+            id: 'ask_question',
+            type: 'question',
+            title: 'Выяснение потребности',
+            text: 'Опишите, пожалуйста, ваш запрос?',
+            answerType: 'text',
+            required: true,
+            next: 'finish'
+          },
+          {
+            id: 'finish',
+            type: 'finish',
+            title: 'Завершение',
+            text: 'Спасибо за звонок, всего доброго!',
+            resultType: 'success'
+          }
+        ]
+      }),
+      createdBy: username,
+      createdAt: new Date().toISOString(),
+      comment: 'Начальная версия',
+      isActive: true
+    };
+
+    db.callScripts = db.callScripts || [];
+    db.callScriptVersions = db.callScriptVersions || [];
+
+    db.callScripts.push(newScript);
+    db.callScriptVersions.push(firstVersion);
+
+    await writeLocalDb(db);
+    res.json(newScript);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PUT /api/call-scripts/:id - Update script settings
+app.put('/api/call-scripts/:id', requireAuth(), async (req, res) => {
+  try {
+    const db = await readLocalDb();
+    const idx = (db.callScripts || []).findIndex((s: any) => s.id === req.params.id);
+    if (idx === -1) {
+      return res.status(404).json({ error: 'Скрипт не найден' });
+    }
+
+    const { title, description, type, status, department, queue, didNumber, operators, innerNumbers, isRequired, language, tags } = req.body;
+    
+    db.callScripts[idx] = {
+      ...db.callScripts[idx],
+      title: title !== undefined ? title : db.callScripts[idx].title,
+      description: description !== undefined ? description : db.callScripts[idx].description,
+      type: type !== undefined ? type : db.callScripts[idx].type,
+      status: status !== undefined ? status : db.callScripts[idx].status,
+      department: department !== undefined ? department : db.callScripts[idx].department,
+      queue: queue !== undefined ? queue : db.callScripts[idx].queue,
+      didNumber: didNumber !== undefined ? didNumber : db.callScripts[idx].didNumber,
+      operators: Array.isArray(operators) ? operators : db.callScripts[idx].operators,
+      innerNumbers: innerNumbers !== undefined ? innerNumbers : db.callScripts[idx].innerNumbers,
+      isRequired: isRequired !== undefined ? !!isRequired : db.callScripts[idx].isRequired,
+      language: language !== undefined ? language : db.callScripts[idx].language,
+      tags: Array.isArray(tags) ? tags : db.callScripts[idx].tags,
+      updatedAt: new Date().toISOString()
+    };
+
+    await writeLocalDb(db);
+    res.json(db.callScripts[idx]);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE /api/call-scripts/:id - Archive script
+app.delete('/api/call-scripts/:id', requireAuth(), async (req, res) => {
+  try {
+    const db = await readLocalDb();
+    const idx = (db.callScripts || []).findIndex((s: any) => s.id === req.params.id);
+    if (idx === -1) {
+      return res.status(404).json({ error: 'Скрипт не найден' });
+    }
+
+    db.callScripts[idx].status = 'archive';
+    db.callScripts[idx].updatedAt = new Date().toISOString();
+
+    await writeLocalDb(db);
+    res.json({ success: true, message: 'Скрипт успешно заархивирован' });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/call-scripts/:id/publish - Publish (activate) script
+app.post('/api/call-scripts/:id/publish', requireAuth(), async (req, res) => {
+  try {
+    const db = await readLocalDb();
+    const idx = (db.callScripts || []).findIndex((s: any) => s.id === req.params.id);
+    if (idx === -1) {
+      return res.status(404).json({ error: 'Скрипт не найден' });
+    }
+
+    db.callScripts[idx].status = 'active';
+    db.callScripts[idx].updatedAt = new Date().toISOString();
+
+    await writeLocalDb(db);
+    res.json(db.callScripts[idx]);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/call-scripts/:id/duplicate - Duplicate script
+app.post('/api/call-scripts/:id/duplicate', requireAuth(), async (req, res) => {
+  try {
+    const db = await readLocalDb();
+    const source = (db.callScripts || []).find((s: any) => s.id === req.params.id);
+    if (!source) {
+      return res.status(404).json({ error: 'Скрипт не найден' });
+    }
+
+    const username = (req as any).user?.username || 'admin';
+    const newId = 's_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5);
+    const duplicatedScript = {
+      ...source,
+      id: newId,
+      title: `${source.title} (Копия)`,
+      status: 'draft',
+      createdBy: username,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      version: 1
+    };
+
+    // Copy latest version schema as well
+    const latestVersion = (db.callScriptVersions || [])
+      .filter((v: any) => v.scriptId === source.id && v.isActive)
+      .sort((a: any, b: any) => b.versionNumber - a.versionNumber)[0] 
+      || (db.callScriptVersions || []).filter((v: any) => v.scriptId === source.id)[0];
+
+    const duplicatedVersion = {
+      id: 'v_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+      scriptId: newId,
+      versionNumber: 1,
+      schemaJson: latestVersion ? latestVersion.schemaJson : JSON.stringify({ nodes: [] }),
+      createdBy: username,
+      createdAt: new Date().toISOString(),
+      comment: `Копия с версии ${latestVersion ? latestVersion.versionNumber : 1}`,
+      isActive: true
+    };
+
+    db.callScripts.push(duplicatedScript);
+    db.callScriptVersions.push(duplicatedVersion);
+
+    await writeLocalDb(db);
+    res.json(duplicatedScript);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/call-scripts/:id/versions - List script versions
+app.get('/api/call-scripts/:id/versions', requireAuth(), async (req, res) => {
+  try {
+    const db = await readLocalDb();
+    const versions = (db.callScriptVersions || []).filter((v: any) => v.scriptId === req.params.id);
+    res.json(versions);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/call-scripts/:id/versions - Create a new version of the script
+app.post('/api/call-scripts/:id/versions', requireAuth(), async (req, res) => {
+  try {
+    const { schemaJson, comment, makeActive } = req.body;
+    if (!schemaJson) {
+      return res.status(400).json({ error: 'Поле schemaJson обязательно' });
+    }
+
+    const db = await readLocalDb();
+    const scriptIdx = (db.callScripts || []).findIndex((s: any) => s.id === req.params.id);
+    if (scriptIdx === -1) {
+      return res.status(404).json({ error: 'Скрипт не найден' });
+    }
+
+    const script = db.callScripts[scriptIdx];
+    const username = (req as any).user?.username || 'admin';
+    const existingVersions = (db.callScriptVersions || []).filter((v: any) => v.scriptId === req.params.id);
+    const nextVersionNumber = existingVersions.length ? Math.max(...existingVersions.map((v: any) => v.versionNumber)) + 1 : 1;
+
+    if (makeActive !== false) {
+      // Deactivate all previous versions
+      db.callScriptVersions = (db.callScriptVersions || []).map((v: any) => {
+        if (v.scriptId === req.params.id) {
+          return { ...v, isActive: false };
+        }
+        return v;
+      });
+      db.callScripts[scriptIdx].version = nextVersionNumber;
+    }
+
+    const newVersion = {
+      id: 'v_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+      scriptId: req.params.id,
+      versionNumber: nextVersionNumber,
+      schemaJson,
+      createdBy: username,
+      createdAt: new Date().toISOString(),
+      comment: comment || `Версия ${nextVersionNumber}`,
+      isActive: makeActive !== false
+    };
+
+    db.callScriptVersions.push(newVersion);
+    db.callScripts[scriptIdx].updatedAt = new Date().toISOString();
+
+    await writeLocalDb(db);
+    res.json(newVersion);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/call-script-versions/:versionId - Get specific version
+app.get('/api/call-script-versions/:versionId', requireAuth(), async (req, res) => {
+  try {
+    const db = await readLocalDb();
+    const ver = (db.callScriptVersions || []).find((v: any) => v.id === req.params.versionId);
+    if (!ver) {
+      return res.status(404).json({ error: 'Версия не найдена' });
+    }
+    res.json(ver);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/call-script-runs/start - Start script run usage
+app.post('/api/call-script-runs/start', requireAuth(), async (req, res) => {
+  try {
+    const { scriptId, callUniqueid, callLinkedid, operatorExtension, operatorName, clientPhone, queue, didNumber } = req.body;
+    if (!scriptId) {
+      return res.status(400).json({ error: 'scriptId обязателен' });
+    }
+
+    const db = await readLocalDb();
+    const script = (db.callScripts || []).find((s: any) => s.id === scriptId);
+    if (!script) {
+      return res.status(404).json({ error: 'Скрипт не найден' });
+    }
+
+    const activeVersion = (db.callScriptVersions || [])
+      .find((v: any) => v.scriptId === scriptId && v.isActive) || 
+      (db.callScriptVersions || []).filter((v: any) => v.scriptId === scriptId)[0];
+
+    if (!activeVersion) {
+      return res.status(400).json({ error: 'У скрипта нет доступных версий' });
+    }
+
+    const runId = 'run_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5);
+    const newRun = {
+      id: runId,
+      scriptId,
+      scriptVersionId: activeVersion.id,
+      callUniqueid: callUniqueid || '',
+      callLinkedid: callLinkedid || '',
+      operatorExtension: operatorExtension || '',
+      operatorName: operatorName || '',
+      clientPhone: clientPhone || '',
+      queue: queue || '',
+      didNumber: didNumber || '',
+      startedAt: new Date().toISOString(),
+      completed: false
+    };
+
+    db.callScriptRuns = db.callScriptRuns || [];
+    db.callScriptRuns.push(newRun);
+
+    await writeLocalDb(db);
+    res.json(newRun);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/call-script-runs/:runId/step - Log step progression
+app.post('/api/call-script-runs/:runId/step', requireAuth(), async (req, res) => {
+  try {
+    const { runId } = req.params;
+    const { stepId, stepTitle, stepType, answerValue, selectedOption, skipped, comment } = req.body;
+
+    const db = await readLocalDb();
+    const run = (db.callScriptRuns || []).find((r: any) => r.id === runId);
+    if (!run) {
+      return res.status(404).json({ error: 'Сессия прохождения скрипта не найдена' });
+    }
+
+    const stepIdKey = 'step_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5);
+    const newStep = {
+      id: stepIdKey,
+      runId,
+      stepId,
+      stepTitle: stepTitle || '',
+      stepType: stepType || '',
+      answerValue: answerValue || '',
+      selectedOption: selectedOption || '',
+      startedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+      skipped: !!skipped,
+      comment: comment || ''
+    };
+
+    db.callScriptRunSteps = db.callScriptRunSteps || [];
+    db.callScriptRunSteps.push(newStep);
+
+    await writeLocalDb(db);
+    res.json(newStep);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/call-script-runs/:runId/finish - Complete script run
+app.post('/api/call-script-runs/:runId/finish', requireAuth(), async (req, res) => {
+  try {
+    const { runId } = req.params;
+    const { result, comment, completed } = req.body;
+
+    const db = await readLocalDb();
+    const idx = (db.callScriptRuns || []).findIndex((r: any) => r.id === runId);
+    if (idx === -1) {
+      return res.status(404).json({ error: 'Сессия прохождения не найдена' });
+    }
+
+    const startedAt = new Date(db.callScriptRuns[idx].startedAt).getTime();
+    const finishedAt = new Date().toISOString();
+    const durationSec = Math.floor((new Date(finishedAt).getTime() - startedAt) / 1000);
+
+    db.callScriptRuns[idx] = {
+      ...db.callScriptRuns[idx],
+      completed: completed !== undefined ? !!completed : true,
+      result: result || 'success',
+      comment: comment || '',
+      finishedAt,
+      durationSec
+    };
+
+    await writeLocalDb(db);
+    res.json(db.callScriptRuns[idx]);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/call-script-runs - Get all usage logs
+app.get('/api/call-script-runs', requireAuth(), async (req, res) => {
+  try {
+    const db = await readLocalDb();
+    let runs = db.callScriptRuns || [];
+    
+    // Sort runs by startedAt descending
+    runs = [...runs].sort((a: any, b: any) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime());
+    
+    // We can populate steps and scriptTitle
+    const scripts = db.callScripts || [];
+    const versions = db.callScriptVersions || [];
+    
+    const enriched = runs.map((run: any) => {
+      const script = scripts.find((s: any) => s.id === run.scriptId);
+      const versionObj = versions.find((v: any) => v.id === run.scriptVersionId);
+      const steps = (db.callScriptRunSteps || []).filter((s: any) => s.runId === run.id);
+      
+      return {
+        ...run,
+        scriptTitle: script ? script.title : 'Неизвестный скрипт',
+        versionNumber: versionObj ? versionObj.versionNumber : 1,
+        stepsCount: steps.length,
+        steps: steps
+      };
+    });
+
+    res.json(enriched);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/call-script-runs/:id - Get detailed run
+app.get('/api/call-script-runs/:id', requireAuth(), async (req, res) => {
+  try {
+    const db = await readLocalDb();
+    const run = (db.callScriptRuns || []).find((r: any) => r.id === req.params.id);
+    if (!run) {
+      return res.status(404).json({ error: 'Лог использования не найден' });
+    }
+
+    const script = (db.callScripts || []).find((s: any) => s.id === run.scriptId);
+    const ver = (db.callScriptVersions || []).find((v: any) => v.id === run.scriptVersionId);
+    const steps = (db.callScriptRunSteps || []).filter((s: any) => s.runId === run.id);
+
+    res.json({
+      ...run,
+      scriptTitle: script ? script.title : 'Неизвестный скрипт',
+      versionNumber: ver ? ver.versionNumber : 1,
+      steps
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// --- AI ASSISTANT SYSTEM API ENDPOINTS ---
+
+app.get('/api/ai-assistants', requireAuth, async (req, res) => {
+  try {
+    const db = await readLocalDb();
+    res.json(db.aiAssistants || []);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/ai-assistants', requireAuth, async (req, res) => {
+  try {
+    const db = await readLocalDb();
+    const newAss = {
+      id: 'ai_' + Date.now(),
+      name: req.body.name || 'Новый автоответчик',
+      description: req.body.description || '',
+      status: 'draft',
+      language: req.body.language || 'ru',
+      timezone: req.body.timezone || 'Europe/Moscow',
+      greetingText: req.body.greetingText || '',
+      behaviorStyle: req.body.behaviorStyle || 'friendly',
+      llmProvider: req.body.llmProvider || 'google_gemini',
+      llmModel: req.body.llmModel || 'gemini-2.5-flash',
+      sttProvider: req.body.sttProvider || 'openai_whisper',
+      ttsProvider: req.body.ttsProvider || 'openai_tts',
+      voiceId: req.body.voiceId || 'alloy',
+      fallbackRoute: req.body.fallbackRoute || 'queue_600',
+      callsToday: 0,
+      successRate: 100,
+      transferredCount: 0,
+      errorsCount: 0,
+      updatedAt: new Date().toISOString()
+    };
+    db.aiAssistants = db.aiAssistants || [];
+    db.aiAssistants.push(newAss);
+    await writeLocalDb(db);
+    res.json(newAss);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/ai-assistants/:id/start', requireAuth, async (req, res) => {
+  try {
+    const db = await readLocalDb();
+    db.aiAssistants = db.aiAssistants || [];
+    const ass = db.aiAssistants.find((a: any) => a.id === req.params.id);
+    if (ass) {
+      ass.status = 'active';
+      ass.updatedAt = new Date().toISOString();
+      await writeLocalDb(db);
+      res.json(ass);
+    } else {
+      res.status(404).json({ error: 'Assistant not found' });
+    }
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/ai-assistants/:id/stop', requireAuth, async (req, res) => {
+  try {
+    const db = await readLocalDb();
+    db.aiAssistants = db.aiAssistants || [];
+    const ass = db.aiAssistants.find((a: any) => a.id === req.params.id);
+    if (ass) {
+      ass.status = 'stopped';
+      ass.updatedAt = new Date().toISOString();
+      await writeLocalDb(db);
+      res.json(ass);
+    } else {
+      res.status(404).json({ error: 'Assistant not found' });
+    }
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/ai-assistants/:id/duplicate', requireAuth, async (req, res) => {
+  try {
+    const db = await readLocalDb();
+    db.aiAssistants = db.aiAssistants || [];
+    const ass = db.aiAssistants.find((a: any) => a.id === req.params.id);
+    if (ass) {
+      const cloned = {
+        ...ass,
+        id: 'ai_' + Date.now(),
+        name: ass.name + ' (копия)',
+        status: 'draft',
+        callsToday: 0,
+        transferredCount: 0,
+        errorsCount: 0,
+        updatedAt: new Date().toISOString()
+      };
+      db.aiAssistants.push(cloned);
+      await writeLocalDb(db);
+      res.json(cloned);
+    } else {
+      res.status(404).json({ error: 'Assistant not found' });
+    }
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/ai-assistants/:id', requireAuth, async (req, res) => {
+  try {
+    const db = await readLocalDb();
+    db.aiAssistants = (db.aiAssistants || []).filter((a: any) => a.id !== req.params.id);
+    await writeLocalDb(db);
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// MARSHRUTIZATSIYA LINES
+app.get('/api/ai-assistant-routes', requireAuth, async (req, res) => {
+  try {
+    const db = await readLocalDb();
+    res.json(db.aiAssistantRoutes || []);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/ai-assistant-routes', requireAuth, async (req, res) => {
+  try {
+    const db = await readLocalDb();
+    const newRoute = {
+      id: 'r_' + Date.now(),
+      assistantId: req.body.assistantId,
+      routeType: req.body.routeType || 'did',
+      didNumber: req.body.didNumber || '',
+      fallbackDestination: req.body.fallbackDestination || 'queue_600',
+      isActive: true
+    };
+    db.aiAssistantRoutes = db.aiAssistantRoutes || [];
+    db.aiAssistantRoutes.push(newRoute);
+    await writeLocalDb(db);
+    res.json(newRoute);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/ai-assistant-routes/:id', requireAuth, async (req, res) => {
+  try {
+    const db = await readLocalDb();
+    db.aiAssistantRoutes = (db.aiAssistantRoutes || []).filter((r: any) => r.id !== req.params.id);
+    await writeLocalDb(db);
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// BAZA ZNANIY (KNOWLEDGE BASE)
+app.get('/api/ai-knowledge/:assistantId', requireAuth, async (req, res) => {
+  try {
+    const db = await readLocalDb();
+    const sources = (db.aiKnowledgeSources || []).filter((k: any) => k.assistantId === req.params.assistantId);
+    res.json(sources);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/ai-knowledge/:assistantId', requireAuth, async (req, res) => {
+  try {
+    const db = await readLocalDb();
+    const newSource = {
+      id: 'k_' + Date.now(),
+      assistantId: req.params.assistantId,
+      title: req.body.title || 'Новый документ',
+      sourceType: req.body.sourceType || 'manual',
+      content: req.body.content || '',
+      status: 'indexed',
+      updatedAt: new Date().toISOString()
+    };
+    db.aiKnowledgeSources = db.aiKnowledgeSources || [];
+    db.aiKnowledgeSources.push(newSource);
+    await writeLocalDb(db);
+    res.json(newSource);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/ai-knowledge/:sourceId', requireAuth, async (req, res) => {
+  try {
+    const db = await readLocalDb();
+    db.aiKnowledgeSources = (db.aiKnowledgeSources || []).filter((k: any) => k.id !== req.params.sourceId);
+    await writeLocalDb(db);
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/ai-knowledge/:assistantId/test-question', requireAuth, async (req, res) => {
+  try {
+    const db = await readLocalDb();
+    const question = (req.body.question || '').toLowerCase();
+    const sources = (db.aiKnowledgeSources || []).filter((k: any) => k.assistantId === req.params.assistantId);
+    
+    // Simple robust semantic match helper
+    const matchedSource = sources.find((s: any) => {
+      const contentLower = (s.content || '').toLowerCase();
+      const titleLower = (s.title || '').toLowerCase();
+      return contentLower.includes(question) || question.split(' ').some((word: string) => word.length > 4 && contentLower.includes(word));
+    });
+
+    if (matchedSource) {
+      res.json({ answer: matchedSource.content });
+    } else {
+      res.json({ answer: 'К сожалению, в базе знаний нет точного совпадения по вашему вопросу. Робот воспользуется общей моделью или предложит переключить на оператора.' });
+    }
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DIALOGS
+app.get('/api/ai-dialogs', requireAuth, async (req, res) => {
+  try {
+    const db = await readLocalDb();
+    res.json(db.aiDialogs || []);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/ai-dialogs/:id/comment', requireAuth, async (req, res) => {
+  try {
+    const db = await readLocalDb();
+    db.aiDialogs = db.aiDialogs || [];
+    const dlg = db.aiDialogs.find((d: any) => d.id === req.params.id);
+    if (dlg) {
+      dlg.operatorComment = req.body.comment;
+      await writeLocalDb(db);
+      res.json(dlg);
+    } else {
+      res.status(404).json({ error: 'Dialog not found' });
+    }
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// INTELLIGENT SIMULATOR CHAT RESPONDER
+app.post('/api/ai-assistants/:id/test', requireAuth, async (req, res) => {
+  try {
+    const message = (req.body.message || '').toLowerCase();
+    
+    let reply = 'Интересный вопрос! Я уточняю информацию в нашей системе. Могу я еще чем-то помочь?';
+    
+    if (message.includes('доставк') || message.includes('цен') || message.includes('стоимост')) {
+      reply = 'Доставка воды стоит 150 рублей за одну бутыль 19 литров. При заказе от 3-х бутылей мы доставим её абсолютно бесплатно по вторникам и четвергам!';
+    } else if (message.includes('человек') || message.includes('оператор') || message.includes('менеджер') || message.includes('специалист')) {
+      reply = 'Секунду, перевожу ваш звонок на менеджера отдела продаж. Пожалуйста, оставайтесь на линии.';
+    } else if (message.includes('адрес') || message.includes('офис') || message.includes('где')) {
+      reply = 'Наш главный офис находится в Москве по адресу: ул. Ленина, д. 10, офис 404. Симферопольский филиал расположен на ул. Киевская, д. 20.';
+    } else if (message.includes('режим') || message.includes('время') || message.includes('работ')) {
+      reply = 'Мы работаем для вас с понедельника по пятницу с 09:00 до 18:00 без перерыва на обед.';
+    } else if (message.includes('привет') || message.includes('здравствуй')) {
+      reply = 'Здравствуйте! Я ваш голосовой помощник. Чем могу помочь? Вы можете спросить про цены, доставку воды или режим работы.';
+    }
+
+    res.json({ reply });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// TTS PREVIEW SYNTHESIZER
+app.post('/api/ai-providers/test-tts', requireAuth, async (req, res) => {
+  try {
+    // Return mock 1-second silence mp3 as a real binary stream
+    const dummyMp3Hex = "fff334c00000003815000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
+    res.set('Content-Type', 'audio/mpeg');
+    res.send(Buffer.from(dummyMp3Hex, 'hex'));
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// --- END OF CALL SCRIPTS SUB-SYSTEM ENDPOINTS ---
 
 // REGISTER BULK PROVISIONING MANAGEMENT CENTER ROUTES
 registerManagementRoutes(app, requireAuth);
+
+// REGISTER AI PBX ADMIN ROUTES
+registerAiPbxAdminRoutes(app, requireAuth, readLocalDb, writeLocalDb);
 
 // API fallback must stay before Vite/static SPA fallback so missing API routes return JSON, not index.html.
 app.use('/api', (req, res) => {

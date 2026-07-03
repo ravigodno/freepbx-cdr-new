@@ -16,7 +16,13 @@ export const ROLE_PERMISSIONS: Partial<Record<UserRole, PermissionKey[]>> = {
     'view_sngrep',
     'view_cli',
     'view_sip_devices_map',
-    'view_balance_alerts'
+    'view_balance_alerts',
+    'view_scripts',
+    'manage_scripts',
+    'view_ai_assistant',
+    'manage_ai_assistant',
+    'view_ai_pbx_admin',
+    'manage_ai_pbx_admin'
   ],
   manager: [
     'view_calls',
@@ -27,13 +33,21 @@ export const ROLE_PERMISSIONS: Partial<Record<UserRole, PermissionKey[]>> = {
     'edit_directory',
     'view_monitoring',
     'view_active_calls',
-    'view_sip_devices_map'
+    'view_sip_devices_map',
+    'view_scripts',
+    'manage_scripts',
+    'view_ai_assistant',
+    'manage_ai_assistant',
+    'view_ai_pbx_admin',
+    'manage_ai_pbx_admin'
   ],
   operator: [
     'view_calls',
     'view_directory',
     'listen_recordings',
-    'make_calls'
+    'make_calls',
+    'view_scripts',
+    'view_ai_assistant'
   ],
   directory_only: [
     'view_directory'

@@ -41,7 +41,13 @@ export type PermissionKey =
   | 'view_balance_analytics'
   | 'manage_balance_sources'
   | 'view_balance_alerts'
-  | 'manage_balance_providers';
+  | 'manage_balance_providers'
+  | 'view_scripts'
+  | 'manage_scripts'
+  | 'view_ai_assistant'
+  | 'manage_ai_assistant'
+  | 'view_ai_pbx_admin'
+  | 'manage_ai_pbx_admin';
 
 export type UserPermissions = Partial<Record<PermissionKey, boolean>>;
 
@@ -50,7 +56,7 @@ export interface PermissionSession {
   permissions?: UserPermissions;
 }
 
-type OptionalModuleKey = 'marketing' | 'monitoring' | 'management' | 'balance';
+type OptionalModuleKey = 'marketing' | 'monitoring' | 'management' | 'balance' | 'scripts' | 'ai_assistant' | 'ai_pbx_admin';
 
 const PERMISSION_MODULE_MAP: Partial<Record<PermissionKey, OptionalModuleKey>> = {
   view_marketing: 'marketing',
@@ -77,7 +83,16 @@ const PERMISSION_MODULE_MAP: Partial<Record<PermissionKey, OptionalModuleKey>> =
   view_balance_analytics: 'balance',
   manage_balance_sources: 'balance',
   view_balance_alerts: 'balance',
-  manage_balance_providers: 'balance'
+  manage_balance_providers: 'balance',
+
+  view_scripts: 'scripts',
+  manage_scripts: 'scripts',
+
+  view_ai_assistant: 'ai_assistant',
+  manage_ai_assistant: 'ai_assistant',
+
+  view_ai_pbx_admin: 'ai_pbx_admin',
+  manage_ai_pbx_admin: 'ai_pbx_admin'
 };
 
 function isPermissionAllowedByModuleVisibility(

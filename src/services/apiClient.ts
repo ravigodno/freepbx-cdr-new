@@ -55,11 +55,26 @@ export function installAuthExpiredFetchInterceptor() {
   fetchInterceptorInstalled = true;
   originalFetch = window.fetch.bind(window);
 
-  window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+  const interceptorFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const response = await originalFetch!(input, init);
     if (response.status === 401 && !isAuthLoginRequest(input)) {
       handleAuthExpiredResponse(response);
     }
     return response;
   };
+
+  try {
+    window.fetch = interceptorFetch;
+  } catch (e) {
+    try {
+      Object.defineProperty(window, 'fetch', {
+        value: interceptorFetch,
+        configurable: true,
+        writable: true,
+        enumerable: true
+      });
+    } catch (err) {
+      console.warn("Could not intercept window.fetch: property is read-only in this environment.", err);
+    }
+  }
 }

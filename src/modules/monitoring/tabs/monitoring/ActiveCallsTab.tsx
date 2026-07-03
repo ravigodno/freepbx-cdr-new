@@ -832,6 +832,31 @@ export default function ActiveCallsTab({ liveSessionsData, liveSearch, setLiveSe
           </div>
         </div>
 
+        {/* Mode Selector Toggle */}
+        <div className="flex bg-slate-100 dark:bg-slate-950 p-1 rounded-xl border border-slate-200/50 dark:border-slate-800 self-stretch md:self-auto justify-center">
+          <button
+            onClick={() => setIsSimulatorMode(false)}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+              !isSimulatorMode
+                ? 'bg-rose-500 text-white shadow-sm'
+                : 'text-slate-500 hover:text-slate-700 dark:text-slate-400'
+            }`}
+          >
+            <Server className="h-3.5 w-3.5" />
+            Режим АТС (AMI)
+          </button>
+          <button
+            onClick={() => setIsSimulatorMode(true)}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+              isSimulatorMode
+                ? 'bg-rose-500 text-white shadow-sm'
+                : 'text-slate-500 hover:text-slate-700 dark:text-slate-400'
+            }`}
+          >
+            <Zap className="h-3.5 w-3.5" />
+            Демо-режим (Симулятор)
+          </button>
+        </div>
       </div>
 
       {/* 2. Stats Summaries Cards */}
@@ -946,9 +971,16 @@ export default function ActiveCallsTab({ liveSessionsData, liveSearch, setLiveSe
             <h3 className="mt-3 font-bold text-slate-700 dark:text-white text-sm">
               На АТС Asterisk нет активных каналов
             </h3>
-            <p className="mt-1 text-xs text-slate-400 max-w-sm mx-auto">
-              Почтовый ящик Asterisk AMI молчит. Проверьте подключение и настройки AMI-соединения в разделе «Настройки».
+            <p className="mt-1 text-xs text-slate-400 max-w-sm mx-auto mb-4">
+              Почтовый ящик Asterisk AMI молчит. Проверьте подключение и настройки AMI-соединения в разделе «Настройки» или запустите встроенный симулятор для проверки.
             </p>
+            <button
+              onClick={() => setIsSimulatorMode(true)}
+              className="px-4 py-2 rounded-xl text-xs font-black bg-rose-500 hover:bg-rose-600 text-white transition inline-flex items-center gap-1.5 shadow-sm"
+            >
+              <Zap className="h-3.5 w-3.5" />
+              Включить демо-режим (симулятор звонков)
+            </button>
           </div>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">

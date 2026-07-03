@@ -331,22 +331,6 @@ export default function MarketingTab() {
 
   return (
     <section className="w-full space-y-4" id="marketing-tab-container">
-      <div className="rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-          <div className="min-w-0">
-            <div className="inline-flex items-center gap-2 rounded-full bg-purple-50 px-3 py-1 text-[11px] font-black uppercase tracking-wide text-purple-700 dark:bg-purple-950/30 dark:text-purple-300">
-              <Target className="h-3.5 w-3.5" /> PBXPuls Calltracking
-            </div>
-            <h1 className="mt-3 text-2xl font-black tracking-tight text-slate-950 dark:text-white sm:text-3xl">Маркетинг и коллтрекинг</h1>
-            <p className="mt-1 max-w-3xl text-sm font-semibold text-slate-500 dark:text-slate-400">Связь рекламы, сайта и звонков в единую цепочку эффективности</p>
-          </div>
-          <div className="rounded-2xl border border-purple-100 bg-purple-50/70 px-4 py-3 text-xs font-bold text-purple-800 dark:border-purple-900/40 dark:bg-purple-950/20 dark:text-purple-200">
-            {loading ? <Loader2 className="mr-2 inline h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 inline h-4 w-4" />}
-            {sites.length ? 'Backend приема событий готов, сайтов: ' + sites.length : 'Создайте сайт и установите JS-скрипт на сайт'}
-          </div>
-        </div>
-      </div>
-
       {error && <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs font-bold text-amber-800 shadow-sm dark:border-amber-900/40 dark:bg-amber-950/20 dark:text-amber-300">{error}</div>}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">

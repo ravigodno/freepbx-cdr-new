@@ -16,13 +16,16 @@ interface PermissionsMatrixTabProps {
 
 type PermissionKind = 'tab' | 'feature' | 'su';
 
-type OptionalModuleKey = 'marketing' | 'monitoring' | 'management' | 'balance';
+type OptionalModuleKey = 'marketing' | 'monitoring' | 'management' | 'balance' | 'scripts' | 'ai_assistant' | 'ai_pbx_admin';
 
 const DEFAULT_MODULE_VISIBILITY: Record<OptionalModuleKey, boolean> = {
   marketing: true,
   monitoring: true,
   management: true,
-  balance: true
+  balance: true,
+  scripts: false,
+  ai_assistant: false,
+  ai_pbx_admin: false
 };
 
 interface PermissionRow {
@@ -135,6 +138,39 @@ const GROUPS: PermissionGroup[] = [
     ]
   },
   {
+    id: 'scripts',
+    title: 'Скрипты разговоров',
+    moduleKey: 'scripts',
+    description: 'Управление интерактивными сценариями и скриптами разговоров для операторов.',
+    color: 'blue',
+    rows: [
+      { key: 'view_scripts', label: 'Открыть Скрипты', kind: 'tab', hint: 'Разрешает доступ к разделу "Скрипты разговоров"' },
+      { key: 'manage_scripts', label: 'Управление скриптами', kind: 'feature', hint: 'Разрешает создавать, редактировать и удалять скрипты разговоров' }
+    ]
+  },
+  {
+    id: 'ai_assistant',
+    title: 'Умный автоответчик',
+    moduleKey: 'ai_assistant',
+    description: 'Настройка AI-автоответчика, сценариев обработки звонков роботом и интеграции с LLM.',
+    color: 'blue',
+    rows: [
+      { key: 'view_ai_assistant', label: 'Открыть AI-автоответчик', kind: 'tab', hint: 'Разрешает доступ к разделу "AI-автоответчик"' },
+      { key: 'manage_ai_assistant', label: 'Управление автоответчиком', kind: 'feature', hint: 'Разрешает редактировать промпты и правила AI-автоответчика' }
+    ]
+  },
+  {
+    id: 'ai_pbx_admin',
+    title: 'AI администратор',
+    moduleKey: 'ai_pbx_admin',
+    description: 'AI-ассистент администратора для диагностики, анализа логов и настройки АТС.',
+    color: 'blue',
+    rows: [
+      { key: 'view_ai_pbx_admin', label: 'Открыть AI-администратор', kind: 'tab', hint: 'Разрешает доступ к разделу "AI администратор АТС"' },
+      { key: 'manage_ai_pbx_admin', label: 'Управление AI-администратором', kind: 'feature', hint: 'Разрешает изменять системные настройки и промпты AI-администратора АТС' }
+    ]
+  },
+  {
     id: 'settings',
     title: 'Настройки',
     description: 'Доступ к системным настройкам.',
@@ -238,6 +274,9 @@ export default function PermissionsMatrixTab({
     monitoring: true,
     management: true,
     balance: true,
+    scripts: true,
+    ai_assistant: true,
+    ai_pbx_admin: true,
     settings: true,
     users_roles: true,
     system: isSu || showSuPermissionsToAdmin
@@ -337,7 +376,10 @@ export default function PermissionsMatrixTab({
       marketing: 'Маркетинг',
       monitoring: 'Мониторинг',
       management: 'Управление АТС',
-      balance: 'Баланс'
+      balance: 'Баланс',
+      scripts: 'Скрипты разговоров',
+      ai_assistant: 'Умный автоответчик',
+      ai_pbx_admin: 'AI администратор'
     };
 
     return (

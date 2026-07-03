@@ -1,0 +1,1656 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { 
+  Bot, Send, Sparkles, Terminal, BookOpen, Clock, Settings, FileText, 
+  CheckCircle2, AlertTriangle, Play, RefreshCw, Plus, Trash2, HelpCircle, 
+  Search, ShieldAlert, Cpu, Wrench, ArrowRight, Check, Copy, ChevronRight, 
+  Upload, X, Minimize2, Paperclip, MessageSquare, Info
+} from 'lucide-react';
+
+interface MsgAttachment {
+  id: string;
+  name: string;
+  type: string;
+  content: string;
+}
+
+interface Message {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+  attachments?: MsgAttachment[];
+  createdAt: string;
+}
+
+interface Session {
+  id: string;
+  title: string;
+  category: 'call_quality' | 'trunk' | 'extension' | 'routing' | 'security' | 'other';
+  status: 'open' | 'closed';
+  createdAt: string;
+  updatedAt: string;
+  messages: Message[];
+  attachments?: MsgAttachment[];
+}
+
+interface KbArticle {
+  id: string;
+  title: string;
+  category: string;
+  content: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface DiagnosticCommand {
+  command: string;
+  description: string;
+}
+
+interface AIPBXAdminTabProps {
+  session: any; // UserSession
+  hasPermission: (perm: string) => boolean;
+}
+
+// Custom simple zero-dependency markdown renderer for rendering technical AI consults
+function SimpleMarkdown({ text }: { text: string }) {
+  if (!text) return null;
+  const parts = text.split(/(```[\s\S]*?```)/g);
+  
+  return (
+    <div className="space-y-2 leading-relaxed text-xs">
+      {parts.map((part, idx) => {
+        if (part.startsWith('```')) {
+          const lines = part.split('\n');
+          const lang = lines[0].replace('```', '').trim() || 'text';
+          const code = lines.slice(1, lines.length - 1).join('\n');
+          return (
+            <div key={idx} className="relative group rounded-xl overflow-hidden my-3 border border-slate-200 dark:border-slate-800 shadow-sm">
+              <div className="flex items-center justify-between px-4 py-1.5 bg-slate-100 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 text-[10px] font-mono text-slate-500">
+                <span className="uppercase">{lang}</span>
+                <button 
+                  onClick={() => {
+                    navigator.clipboard.writeText(code);
+                  }}
+                  className="hover:text-blue-600 flex items-center gap-1 transition-colors cursor-pointer text-[9px] font-bold"
+                >
+                  <Copy className="h-3 w-3" /> Копировать
+                </button>
+              </div>
+              <pre className="p-4 bg-slate-950 font-mono text-[11px] text-slate-300 overflow-x-auto whitespace-pre leading-relaxed">
+                <code>{code}</code>
+              </pre>
+            </div>
+          );
+        }
+
+        const lines = part.split('\n');
+        return (
+          <div key={idx} className="space-y-1">
+            {lines.map((line, lIdx) => {
+              const trimmed = line.trim();
+              if (trimmed.startsWith('###')) {
+                return <h4 key={lIdx} className="text-xs font-bold text-slate-900 dark:text-white pt-2 pb-1 border-b border-slate-100 dark:border-slate-800">{trimmed.replace('###', '').trim()}</h4>;
+              }
+              if (trimmed.startsWith('##')) {
+                return <h3 key={lIdx} className="text-sm font-black text-slate-900 dark:text-white pt-3 pb-1 border-b border-slate-100 dark:border-slate-800">{trimmed.replace('##', '').trim()}</h3>;
+              }
+              if (trimmed.startsWith('#')) {
+                return <h2 key={lIdx} className="text-base font-extrabold text-slate-900 dark:text-white pt-4 pb-1">{trimmed.replace('#', '').trim()}</h2>;
+              }
+              if (trimmed.startsWith('-') || trimmed.startsWith('*')) {
+                return (
+                  <div key={lIdx} className="flex items-start gap-2 pl-3 text-slate-600 dark:text-slate-300">
+                    <span className="text-blue-500 mt-1 select-none">•</span>
+                    <span className="text-xs">{trimmed.substring(1).trim()}</span>
+                  </div>
+                );
+              }
+              if (/^\d+\./.test(trimmed)) {
+                const num = trimmed.match(/^\d+\./)?.[0] || '';
+                return (
+                  <div key={lIdx} className="flex items-start gap-2 pl-3 text-slate-600 dark:text-slate-300">
+                    <span className="text-blue-600 font-bold mt-0.5 text-[11px]">{num}</span>
+                    <span className="text-xs">{trimmed.replace(/^\d+\./, '').trim()}</span>
+                  </div>
+                );
+              }
+
+              if (trimmed === '') return <div key={lIdx} className="h-2" />;
+
+              // Process bold: **text**
+              const boldParts = line.split(/(\*\*.*?\*\*)/g).map((sub, sIdx) => {
+                if (sub.startsWith('**') && sub.endsWith('**')) {
+                  return <strong key={sIdx} className="font-semibold text-slate-900 dark:text-white">{sub.slice(2, -2)}</strong>;
+                }
+                return sub;
+              });
+
+              return <p key={lIdx} className="text-slate-600 dark:text-slate-300 text-xs leading-relaxed">{boldParts}</p>;
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+export default function AIPBXAdminTab({ session: userSession, hasPermission }: AIPBXAdminTabProps) {
+  const [activeTab, setActiveTab] = useState<'chat' | 'diagnostics' | 'wizards' | 'history' | 'kb' | 'settings'>('chat');
+  
+  // Chat view state
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [selectedSession, setSelectedSession] = useState<Session | null>(null);
+  const [chatInput, setChatInput] = useState('');
+  const [chatCategory, setChatCategory] = useState<'call_quality' | 'trunk' | 'extension' | 'routing' | 'security' | 'other'>('other');
+  const [chatAttachments, setChatAttachments] = useState<{ name: string; content: string; type: string }[]>([]);
+  const [isSending, setIsSending] = useState(false);
+  
+  // Diagnostics tab state
+  const [diagCategory, setDiagCategory] = useState<string>('trunk');
+  const [diagProblem, setDiagProblem] = useState<string>('');
+  const [suggestedCommands, setSuggestedCommands] = useState<DiagnosticCommand[]>([]);
+  const [isSuggesting, setIsSuggesting] = useState(false);
+  const [selectedCommand, setSelectedCommand] = useState<string>('');
+  const [terminalOutput, setTerminalOutput] = useState<string>('');
+  const [isExecutingCmd, setIsExecutingCmd] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [aiAnalysis, setAiAnalysis] = useState<string>('');
+
+  // Knowledge base state
+  const [articles, setArticles] = useState<KbArticle[]>([]);
+  const [kbSearch, setKbSearch] = useState('');
+  const [kbFilterCategory, setKbFilterCategory] = useState<string>('all');
+  const [selectedArticle, setSelectedArticle] = useState<KbArticle | null>(null);
+  const [isGeneratingArticle, setIsGeneratingArticle] = useState(false);
+
+  // Settings tab state
+  const [aiProvider, setAiProvider] = useState('gemini');
+  const [aiModel, setAiModel] = useState('gemini-3.5-flash');
+  const [aiTemp, setAiTemp] = useState(0.4);
+  const [aiSystemPrompt, setAiSystemPrompt] = useState('');
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [testResult, setTestResult] = useState<{ success: boolean; message: string; raw?: string } | null>(null);
+  const [isTesting, setIsTesting] = useState(false);
+
+  // Problem Wizards states
+  const [wizardId, setWizardId] = useState<string | null>(null);
+  const [wizardStep, setWizardStep] = useState(0);
+  const [wizardAnswers, setWizardAnswers] = useState<Record<string, any>>({});
+  const [wizardOutput, setWizardOutput] = useState<string>('');
+  const [isCompilingWizard, setIsCompilingWizard] = useState(false);
+
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Fetch initial data
+  useEffect(() => {
+    fetchSessions();
+    fetchKnowledgeBase();
+    fetchSettings();
+  }, []);
+
+  useEffect(() => {
+    // Scroll chat to bottom when messages change or session changes
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [selectedSession?.messages, selectedSession, activeTab]);
+
+  const fetchSessions = async () => {
+    try {
+      const res = await fetch('/api/ai-pbx-admin/sessions');
+      if (res.ok) {
+        const data = await res.json();
+        setSessions(data);
+        if (data.length > 0 && !selectedSession) {
+          // auto-select latest open session
+          const openSess = data.filter((s: any) => s.status === 'open');
+          setSelectedSession(openSess.length > 0 ? openSess[openSess.length - 1] : data[data.length - 1]);
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const fetchKnowledgeBase = async () => {
+    try {
+      const res = await fetch('/api/ai-pbx-admin/knowledge');
+      if (res.ok) {
+        const data = await res.json();
+        setArticles(data);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const fetchSettings = async () => {
+    try {
+      const res = await fetch('/api/ai-pbx-admin/settings');
+      if (res.ok) {
+        const data = await res.json();
+        setAiProvider(data.provider || 'gemini');
+        setAiModel(data.model || 'gemini-3.5-flash');
+        setAiTemp(data.temperature !== undefined ? data.temperature : 0.4);
+        setAiSystemPrompt(data.systemPrompt);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  // Create new chat session
+  const handleCreateSession = async () => {
+    try {
+      const res = await fetch('/api/ai-pbx-admin/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: `Техподдержка AI #${sessions.length + 1}`,
+          category: chatCategory
+        })
+      });
+      if (res.ok) {
+        const newSess = await res.json();
+        setSessions(prev => [...prev, newSess]);
+        setSelectedSession(newSess);
+        setActiveTab('chat');
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  // Close or re-open support session
+  const handleToggleSessionStatus = async (sess: Session) => {
+    const nextStatus = sess.status === 'open' ? 'closed' : 'open';
+    try {
+      const res = await fetch(`/api/ai-pbx-admin/sessions/${sess.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: nextStatus })
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setSessions(prev => prev.map(s => s.id === sess.id ? updated : s));
+        if (selectedSession?.id === sess.id) {
+          setSelectedSession(updated);
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  // Delete support session
+  const handleDeleteSession = async (id: string) => {
+    if (!window.confirm('Вы действительно хотите удалить это обращение из истории?')) return;
+    try {
+      const res = await fetch(`/api/ai-pbx-admin/sessions/${id}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        setSessions(prev => prev.filter(s => s.id !== id));
+        if (selectedSession?.id === id) {
+          setSelectedSession(null);
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  // Send message
+  const handleSendMessage = async () => {
+    if (!chatInput.trim() && chatAttachments.length === 0) return;
+    if (!selectedSession) return;
+
+    setIsSending(true);
+    const contentText = chatInput;
+    setChatInput('');
+    const attachmentsToSend = [...chatAttachments];
+    setChatAttachments([]);
+
+    try {
+      const res = await fetch(`/api/ai-pbx-admin/sessions/${selectedSession.id}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: contentText,
+          attachments: attachmentsToSend
+        })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        // Update both in list and active select
+        setSessions(prev => prev.map(s => {
+          if (s.id === selectedSession.id) {
+            return {
+              ...s,
+              messages: [...s.messages, data.userMessage, data.aiMessage]
+            };
+          }
+          return s;
+        }));
+        setSelectedSession(prev => {
+          if (!prev) return null;
+          return {
+            ...prev,
+            messages: [...prev.messages, data.userMessage, data.aiMessage]
+          };
+        });
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  // File Upload handling for Chat attachments
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const textContent = event.target?.result as string;
+      setChatAttachments(prev => [
+        ...prev,
+        {
+          name: file.name,
+          type: file.type || 'text/plain',
+          content: textContent
+        }
+      ]);
+    };
+    reader.readAsText(file);
+    // Reset file input
+    e.target.value = '';
+  };
+
+  // Suggest diagnostics commands
+  const handleSuggestCommands = async () => {
+    setIsSuggesting(true);
+    try {
+      const res = await fetch('/api/ai-pbx-admin/diagnostics/suggest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          category: diagCategory,
+          customProblem: diagProblem
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setSuggestedCommands(data.commands || []);
+        if (data.commands && data.commands.length > 0) {
+          setSelectedCommand(data.commands[0].command);
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsSuggesting(false);
+    }
+  };
+
+  // Execute terminal diagnostic command
+  const handleExecuteCommand = async (cmdToRun?: string) => {
+    const targetCmd = cmdToRun || selectedCommand;
+    if (!targetCmd) return;
+
+    setIsExecutingCmd(true);
+    setTerminalOutput('Запуск терминальной команды на сервере АТС...\n');
+    try {
+      const res = await fetch('/api/ai-pbx-admin/diagnostics/collect-safe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command: targetCmd })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setTerminalOutput(`$ ${targetCmd}\n\n${data.output}`);
+      } else {
+        setTerminalOutput(`$ ${targetCmd}\n\nОшибка: ${data.error || 'Неизвестный сбой выполнения.'}`);
+      }
+    } catch (e: any) {
+      setTerminalOutput(`$ ${targetCmd}\n\nОшибка сетевого соединения: ${e.message}`);
+    } finally {
+      setIsExecutingCmd(false);
+    }
+  };
+
+  // AI Analysis of terminal output / logs
+  const handleAnalyzeOutput = async () => {
+    if (!terminalOutput) return;
+    setIsAnalyzing(true);
+    setAiAnalysis('');
+    try {
+      const res = await fetch('/api/ai-pbx-admin/diagnostics/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sourceTitle: 'Вывод команды диагностики',
+          content: terminalOutput
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAiAnalysis(data.analysis);
+      } else {
+        const data = await res.json();
+        setAiAnalysis('Ошибка анализа: ' + (data.error || 'Не удалось выполнить запрос к AI.'));
+      }
+    } catch (e: any) {
+      setAiAnalysis('Сбой соединения: ' + e.message);
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  // Export terminal output to Chat support session
+  const handleSendOutputToChat = () => {
+    if (!terminalOutput || !selectedSession) return;
+    setChatAttachments(prev => [
+      ...prev,
+      {
+        name: 'diagnostic_terminal_dump.txt',
+        type: 'text/plain',
+        content: terminalOutput
+      }
+    ]);
+    setChatInput('Прилагаю вывод терминальной диагностики АТС. Проанализируй логи и статус подключения.');
+    setActiveTab('chat');
+  };
+
+  // Generate Knowledge Base article from a solved chat session
+  const handleGenerateKbArticle = async (sessId: string) => {
+    setIsGeneratingArticle(true);
+    try {
+      const res = await fetch(`/api/ai-pbx-admin/knowledge/from-session/${sessId}`, {
+        method: 'POST'
+      });
+      if (res.ok) {
+        const newArt = await res.json();
+        setArticles(prev => [newArt, ...prev]);
+        setSelectedArticle(newArt);
+        setActiveTab('kb');
+        alert('Статья успешно сгенерирована из диалога техподдержки!');
+      } else {
+        const data = await res.json();
+        alert('Ошибка генерации статьи: ' + (data.error || 'Неизвестный сбой.'));
+      }
+    } catch (e: any) {
+      alert('Сбой соединения: ' + e.message);
+    } finally {
+      setIsGeneratingArticle(false);
+    }
+  };
+
+  // Save Settings
+  const handleSaveSettings = async () => {
+    setIsSavingSettings(true);
+    setTestResult(null);
+    try {
+      const res = await fetch('/api/ai-pbx-admin/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          provider: aiProvider,
+          model: aiModel,
+          temperature: aiTemp,
+          systemPrompt: aiSystemPrompt
+        })
+      });
+      if (res.ok) {
+        alert('Настройки AI-администратора успешно сохранены!');
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsSavingSettings(false);
+    }
+  };
+
+  // Test Connection
+  const handleTestProvider = async () => {
+    setIsTesting(true);
+    setTestResult(null);
+    try {
+      const res = await fetch('/api/ai-pbx-admin/settings/test-provider', {
+        method: 'POST'
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setTestResult({ success: true, message: data.message, raw: data.raw });
+      } else {
+        setTestResult({ success: false, message: data.error || `Сбой соединения с провайдером AI (${aiProvider}).` });
+      }
+    } catch (e: any) {
+      setTestResult({ success: false, message: 'Сетевая ошибка: ' + e.message });
+    } finally {
+      setIsTesting(false);
+    }
+  };
+
+  // Interactive Problem Wizards Setup
+  const WIZARDS_LIST = [
+    {
+      id: 'trunk_fail',
+      title: 'Не регистрируется SIP-транк',
+      description: 'Пошаговая проверка статуса регистрации у SIP-провайдера, сетевой доступности и логов авторизации.',
+      icon: Terminal,
+      steps: [
+        {
+          question: 'Проверьте тип транка в настройках FreePBX. Какой протокол используется?',
+          options: [
+            { label: 'PJSIP (рекомендуемый)', value: 'pjsip' },
+            { label: 'chan_sip (устаревший)', value: 'sip' },
+            { label: 'IAX2', value: 'iax' }
+          ]
+        },
+        {
+          question: 'Какой статус транка выдает диагностика в текущий момент?',
+          options: [
+            { label: 'Rejected (Пароль или логин неверный)', value: 'rejected' },
+            { label: 'Unregistered / Timeout (Нет ответа от сервера провайдера)', value: 'timeout' },
+            { label: 'Registered (Зарегистрирован, но звонки не проходят)', value: 'registered' }
+          ]
+        },
+        {
+          question: 'Выполните пинг до SIP-сервера провайдера. Адрес пингуется без потерь?',
+          options: [
+            { label: 'Да, пинг стабильный, задержка < 40ms', value: 'ping_ok' },
+            { label: 'Сервер не пингуется вообще (Host unreachable / Timeout)', value: 'ping_fail' },
+            { label: 'Есть просадки пакетов / Джиттер', value: 'ping_jitter' }
+          ]
+        }
+      ]
+    },
+    {
+      id: 'one_way_audio',
+      title: 'Односторонняя слышимость (No Audio)',
+      description: 'Устранение проблем с отсутствием голоса в одну или обе стороны. Настройка NAT, RTP портов и кодеков.',
+      icon: HelpCircle,
+      steps: [
+        {
+          question: 'В какую сторону отсутствует слышимость при разговоре?',
+          options: [
+            { label: 'Мы слышим клиента, а клиент нас нет (Проблема с исходящим RTP)', value: 'no_outbound' },
+            { label: 'Клиент слышит нас, а мы его нет (Проблема с входящим RTP)', value: 'no_inbound' },
+            { label: 'Полная тишина в обе стороны', value: 'silence' }
+          ]
+        },
+        {
+          question: 'АТС находится за роутером с NAT или имеет публичный IP-адрес?',
+          options: [
+            { label: 'АТС за NAT (серый IP), проброс портов не настроен', value: 'nat_no_forward' },
+            { label: 'АТС за NAT, но порты проброшены и прописан externip/localnet', value: 'nat_configured' },
+            { label: 'АТС имеет белый статический публичный IP', value: 'public_ip' }
+          ]
+        },
+        {
+          question: 'Проверьте кодеки. Какие кодеки разрешены у транка и экстеншена?',
+          options: [
+            { label: 'alaw / ulaw (G.711a / G.711u) - оба разрешены', value: 'g711_ok' },
+            { label: 'Только g729', value: 'g729' },
+            { label: 'Несовпадение кодеков (Codec Mismatch error)', value: 'codec_mismatch' }
+          ]
+        }
+      ]
+    }
+  ];
+
+  const activeWizard = WIZARDS_LIST.find(w => w.id === wizardId);
+
+  const startWizard = (id: string) => {
+    setWizardId(id);
+    setWizardStep(0);
+    setWizardAnswers({});
+    setWizardOutput('');
+  };
+
+  const handleWizardAnswer = (value: any) => {
+    const nextAnswers = { ...wizardAnswers, [wizardStep]: value };
+    setWizardAnswers(nextAnswers);
+
+    if (activeWizard && wizardStep < activeWizard.steps.length - 1) {
+      setWizardStep(prev => prev + 1);
+    } else {
+      // Wizard complete! Generate diagnostic report using AI
+      compileWizardReport(nextAnswers);
+    }
+  };
+
+  const compileWizardReport = async (answers: Record<string, any>) => {
+    setIsCompilingWizard(true);
+    setWizardOutput('Сбор диагностических логов и составление технического отчета...');
+    
+    // Compile human text description of answers
+    let answersSummary = '';
+    if (wizardId === 'trunk_fail') {
+      answersSummary = `Симптомы регистрации транка:\n- Протокол: ${answers[0]}\n- Статус регистрации: ${answers[1]}\n- Сетевой пинг: ${answers[2]}\n`;
+    } else {
+      answersSummary = `Слышимость и NAT:\n- Проблема: ${answers[0]}\n- Топология сети: ${answers[1]}\n- Кодеки: ${answers[2]}\n`;
+    }
+
+    try {
+      const prompt = `Пользователь прошел пошаговый мастер выявления неисправностей АТС Asterisk/FreePBX.
+Вот его ответы на вопросы:
+${answersSummary}
+
+Пожалуйста, составь подробное техническое заключение на русском языке в красивом markdown. 
+Укажи:
+1. Наиболее вероятную причину сбоя.
+2. Конкретные команды, которые нужно выполнить в консоли Linux или Asterisk для точной проверки.
+3. План действий по исправлению настроек во FreePBX.
+4. Значения параметров NAT/RTP/Транков, которые нужно поменять.`;
+
+      const res = await fetch('/api/ai-pbx-admin/diagnostics/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sourceTitle: `Мастер диагностики - ${wizardId === 'trunk_fail' ? 'Транк' : 'NAT'}`,
+          content: prompt
+        })
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || 'Ошибка сервера AI');
+      }
+
+      const data = await res.json();
+      setWizardOutput(data.analysis || 'Не удалось сгенерировать рекомендации.');
+    } catch (e: any) {
+      setWizardOutput(`${answersSummary}\n\nОшибка генерации рекомендаций: ${e.message}`);
+    } finally {
+      setIsCompilingWizard(false);
+    }
+  };
+
+  const exportWizardReportToChat = () => {
+    if (!wizardOutput || !selectedSession) return;
+    setChatAttachments(prev => [
+      ...prev,
+      {
+        name: `wizard_diagnostic_report_${wizardId}.txt`,
+        type: 'text/plain',
+        content: wizardOutput
+      }
+    ]);
+    setChatInput('Прилагаю отчет о неисправности, составленный интерактивным мастером. Помоги применить инструкции.');
+    setWizardId(null);
+    setActiveTab('chat');
+  };
+
+  // Filter KB articles
+  const filteredKb = articles.filter(art => {
+    const matchesSearch = art.title.toLowerCase().includes(kbSearch.toLowerCase()) || 
+                          art.content.toLowerCase().includes(kbSearch.toLowerCase());
+    const matchesCategory = kbFilterCategory === 'all' || art.category === kbFilterCategory;
+    return matchesSearch && matchesCategory;
+  });
+
+  return (
+    <div className="w-full min-h-[calc(100vh-120px)] bg-slate-50 dark:bg-slate-900/60 p-4 sm:p-6 space-y-6 font-sans">
+      
+      {/* Top Header Card */}
+      <div className="bg-white dark:bg-slate-800 rounded-3xl border border-slate-100 dark:border-slate-800 shadow-sm p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+        <div className="flex items-center gap-4">
+          <div className="p-3.5 bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 rounded-2xl">
+            <Bot className="h-7 w-7 animate-pulse" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h1 className="text-lg font-black text-slate-900 dark:text-white">AI-администратор АТС</h1>
+              <span className="px-2 py-0.5 text-[9px] font-bold bg-blue-100 text-blue-700 dark:bg-blue-950/60 dark:text-blue-400 rounded-full uppercase tracking-wider">AIPBXAdmin</span>
+            </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+              Получайте экспертные AI-консультации по настройке Asterisk и FreePBX, запускайте безопасные тесты, анализируйте логи и управляйте базой знаний.
+            </p>
+          </div>
+        </div>
+        
+        {/* Quick launch session button */}
+        <button
+          onClick={handleCreateSession}
+          className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md shadow-blue-500/10 flex items-center gap-2 transition-all cursor-pointer self-stretch md:self-auto justify-center"
+        >
+          <Plus className="h-4 w-4" />
+          Новый запрос
+        </button>
+      </div>
+
+      {/* Navigation Sub-Tabs */}
+      <div className="flex flex-wrap gap-1.5 p-1 bg-slate-200/50 dark:bg-slate-800/40 rounded-2xl w-full max-w-3xl">
+        <button
+          onClick={() => { setActiveTab('chat'); setSelectedArticle(null); }}
+          className={`flex-1 min-w-[120px] flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+            activeTab === 'chat' 
+              ? 'bg-white dark:bg-slate-700 text-blue-600 dark:text-white shadow-sm' 
+              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+          }`}
+        >
+          <MessageSquare className="h-4 w-4" />
+          Чат поддержки
+        </button>
+        <button
+          onClick={() => { setActiveTab('diagnostics'); setSelectedArticle(null); }}
+          className={`flex-1 min-w-[120px] flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+            activeTab === 'diagnostics' 
+              ? 'bg-white dark:bg-slate-700 text-blue-600 dark:text-white shadow-sm' 
+              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+          }`}
+        >
+          <Terminal className="h-4 w-4" />
+          Диагностика
+        </button>
+        <button
+          onClick={() => { setActiveTab('wizards'); setSelectedArticle(null); }}
+          className={`flex-1 min-w-[120px] flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+            activeTab === 'wizards' 
+              ? 'bg-white dark:bg-slate-700 text-blue-600 dark:text-white shadow-sm' 
+              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+          }`}
+        >
+          <Wrench className="h-4 w-4" />
+          Мастера проблем
+        </button>
+        <button
+          onClick={() => { setActiveTab('kb'); setSelectedArticle(null); }}
+          className={`flex-1 min-w-[120px] flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+            activeTab === 'kb' 
+              ? 'bg-white dark:bg-slate-700 text-blue-600 dark:text-white shadow-sm' 
+              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+          }`}
+        >
+          <BookOpen className="h-4 w-4" />
+          База знаний
+        </button>
+        <button
+          onClick={() => { setActiveTab('history'); setSelectedArticle(null); }}
+          className={`flex-1 min-w-[120px] flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+            activeTab === 'history' 
+              ? 'bg-white dark:bg-slate-700 text-blue-600 dark:text-white shadow-sm' 
+              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+          }`}
+        >
+          <Clock className="h-4 w-4" />
+          История
+        </button>
+        <button
+          onClick={() => { setActiveTab('settings'); setSelectedArticle(null); }}
+          className={`flex-1 min-w-[120px] flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+            activeTab === 'settings' 
+              ? 'bg-white dark:bg-slate-700 text-blue-600 dark:text-white shadow-sm' 
+              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+          }`}
+        >
+          <Settings className="h-4 w-4" />
+          Настройки
+        </button>
+      </div>
+
+      {/* Main Workspaces based on activeTab */}
+      
+      {/* 1. CHAT WITH AI TAB */}
+      {activeTab === 'chat' && (
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+          
+          {/* Sidebar sessions list */}
+          <div className="lg:col-span-1 bg-white dark:bg-slate-800 rounded-3xl border border-slate-100 dark:border-slate-800 p-4 flex flex-col gap-3 max-h-[600px] overflow-y-auto">
+            <h3 className="text-xs font-black text-slate-800 dark:text-slate-300 tracking-wider uppercase px-2">Запросы поддержки</h3>
+            
+            {sessions.length === 0 ? (
+              <div className="p-6 text-center text-xs text-slate-400">Нет созданных запросов</div>
+            ) : (
+              sessions.map((sess) => (
+                <div
+                  key={sess.id}
+                  onClick={() => setSelectedSession(sess)}
+                  className={`p-3.5 rounded-2xl border transition-all cursor-pointer relative group flex flex-col gap-2 ${
+                    selectedSession?.id === sess.id
+                      ? 'bg-blue-50/50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-900/40 text-blue-700 dark:text-blue-300'
+                      : 'bg-slate-50 dark:bg-slate-900/30 border-slate-100 dark:border-slate-800/80 text-slate-700 dark:text-slate-300 hover:bg-slate-100/50 dark:hover:bg-slate-800/60'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className={`px-2 py-0.5 text-[8px] font-bold rounded-full ${
+                      sess.category === 'trunk' ? 'bg-orange-100 text-orange-700' :
+                      sess.category === 'call_quality' ? 'bg-red-100 text-red-700' :
+                      sess.category === 'security' ? 'bg-purple-100 text-purple-700' :
+                      'bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-400'
+                    }`}>
+                      {sess.category === 'trunk' ? 'Транк' :
+                       sess.category === 'call_quality' ? 'Слышимость' :
+                       sess.category === 'security' ? 'Безопасность' : 'Другое'}
+                    </span>
+                    <span className={`h-2 w-2 rounded-full ${sess.status === 'open' ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
+                  </div>
+                  
+                  <span className="text-xs font-bold truncate pr-6">{sess.title}</span>
+                  <span className="text-[10px] text-slate-400">{new Date(sess.createdAt).toLocaleDateString('ru-RU')}</span>
+                  
+                  {/* Quick toggle/delete actions */}
+                  <div className="absolute right-2 top-2 hidden group-hover:flex items-center gap-1">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleToggleSessionStatus(sess); }}
+                      title={sess.status === 'open' ? 'Закрыть обращение' : 'Открыть заново'}
+                      className="p-1 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg text-slate-500"
+                    >
+                      <CheckCircle2 className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleDeleteSession(sess.id); }}
+                      title="Удалить"
+                      className="p-1 hover:bg-rose-50 text-rose-600 rounded-lg"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          {/* Active Chat Surface */}
+          <div className="lg:col-span-3 bg-white dark:bg-slate-800 rounded-3xl border border-slate-100 dark:border-slate-800 flex flex-col overflow-hidden min-h-[500px] max-h-[600px]">
+            {selectedSession ? (
+              <>
+                {/* Chat Header */}
+                <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/20 flex items-center justify-between shrink-0">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2.5 bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 rounded-xl">
+                      <Bot className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <h2 className="text-xs font-black text-slate-900 dark:text-white leading-none">{selectedSession.title}</h2>
+                      <span className="text-[10px] text-slate-400 mt-1 block">Категория: {selectedSession.category} • Сформировано {new Date(selectedSession.createdAt).toLocaleDateString('ru-RU')}</span>
+                    </div>
+                  </div>
+                  
+                  <div className="flex items-center gap-2">
+                    {/* Status badge */}
+                    <span className={`px-2 py-1 text-[9px] font-bold rounded-lg ${
+                      selectedSession.status === 'open' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/20' : 'bg-slate-100 text-slate-600 dark:bg-slate-800'
+                    }`}>
+                      {selectedSession.status === 'open' ? 'Активно' : 'Закрыто'}
+                    </span>
+                    
+                    {/* Convert resolved session to KB Article! */}
+                    {selectedSession.messages.length >= 2 && (
+                      <button
+                        onClick={() => handleGenerateKbArticle(selectedSession.id)}
+                        disabled={isGeneratingArticle}
+                        className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 border border-amber-200 dark:border-amber-900/30 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400 text-[10px] font-bold rounded-lg flex items-center gap-1 transition-colors"
+                      >
+                        {isGeneratingArticle ? <RefreshCw className="h-3 w-3 animate-spin" /> : <BookOpen className="h-3 w-3" />}
+                        В базу знаний
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Messages Feed */}
+                <div className="flex-1 p-6 overflow-y-auto space-y-6">
+                  {selectedSession.messages.length === 0 ? (
+                    <div className="h-full flex flex-col items-center justify-center p-8 text-center space-y-4">
+                      <Bot className="h-12 w-12 text-slate-300 animate-bounce" />
+                      <div className="max-w-md">
+                        <p className="text-xs font-bold text-slate-700 dark:text-slate-300">Чем я могу помочь вам как AI-администратор?</p>
+                        <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
+                          Опишите проблему с транком, слышимостью, правилами маршрутизации во FreePBX или приложите диагностические логи/конфиги. AI сразу выдаст решение.
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    selectedSession.messages.map((msg) => (
+                      <div
+                        key={msg.id}
+                        className={`flex gap-4 max-w-4xl ${msg.role === 'user' ? 'ml-auto flex-row-reverse' : 'mr-auto'}`}
+                      >
+                        <div className={`p-2 rounded-xl shrink-0 h-9 w-9 flex items-center justify-center font-bold text-xs ${
+                          msg.role === 'user' ? 'bg-blue-600 text-white' : 'bg-slate-100 dark:bg-slate-900 text-blue-600'
+                        }`}>
+                          {msg.role === 'user' ? 'U' : <Bot className="h-4 w-4" />}
+                        </div>
+                        
+                        <div className={`space-y-2 p-4 rounded-3xl ${
+                          msg.role === 'user'
+                            ? 'bg-blue-600 text-white rounded-tr-none'
+                            : 'bg-slate-50 dark:bg-slate-900 border border-slate-100 dark:border-slate-850 rounded-tl-none'
+                        }`}>
+                          {msg.role === 'user' ? (
+                            <p className="text-xs whitespace-pre-wrap leading-relaxed">{msg.text}</p>
+                          ) : (
+                            <SimpleMarkdown text={msg.text} />
+                          )}
+
+                          {/* Show attached files inside chat bubbles */}
+                          {msg.attachments && msg.attachments.length > 0 && (
+                            <div className="pt-2 border-t border-slate-200/50 dark:border-slate-800/50 mt-2 space-y-1">
+                              <span className="text-[9px] font-bold opacity-60 flex items-center gap-1">
+                                <Paperclip className="h-3 w-3" /> Прикрепленные логи:
+                              </span>
+                              {msg.attachments.map((att) => (
+                                <div key={att.id} className="flex items-center justify-between p-1.5 bg-slate-950/10 dark:bg-black/20 rounded-lg text-[10px] font-mono">
+                                  <span className="truncate max-w-[200px]">{att.name}</span>
+                                  <span className="opacity-60 text-[8px] uppercase">({att.type})</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          <span className={`text-[9px] block text-right opacity-50`}>
+                            {new Date(msg.createdAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                  <div ref={messagesEndRef} />
+                </div>
+
+                {/* Chat Inputs Footer */}
+                <div className="p-4 border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/30 shrink-0 space-y-3">
+                  
+                  {/* Current staging attachments list */}
+                  {chatAttachments.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      {chatAttachments.map((att, index) => (
+                        <div key={index} className="flex items-center gap-1.5 px-2.5 py-1 bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-900/30 text-[10px] rounded-lg font-mono">
+                          <span className="truncate max-w-[150px]">{att.name}</span>
+                          <button
+                            onClick={() => setChatAttachments(prev => prev.filter((_, i) => i !== index))}
+                            className="p-0.5 hover:bg-blue-100 rounded-full"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="flex items-center gap-2">
+                    {/* Attachment trigger */}
+                    <label className="p-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-500 hover:text-slate-800 hover:bg-slate-50 dark:hover:bg-slate-750 cursor-pointer transition-all">
+                      <Paperclip className="h-4.5 w-4.5" />
+                      <input
+                        type="file"
+                        className="hidden"
+                        onChange={handleFileUpload}
+                        accept=".txt,.log,.conf,.cfg,.xml,.json,.pcap"
+                      />
+                    </label>
+
+                    {/* Main input */}
+                    <input
+                      type="text"
+                      value={chatInput}
+                      onChange={(e) => setChatInput(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') handleSendMessage(); }}
+                      disabled={selectedSession.status === 'closed'}
+                      placeholder={selectedSession.status === 'closed' ? 'Обращение закрыто. Вы можете открыть его заново в сайдбаре.' : 'Опишите проблему, например: Не регистрируется транк с МТТ...'}
+                      className="flex-1 px-4 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-800 dark:text-white placeholder-slate-400 focus:outline-none focus:border-blue-500"
+                    />
+
+                    {/* Send button */}
+                    <button
+                      onClick={handleSendMessage}
+                      disabled={isSending || selectedSession.status === 'closed'}
+                      className="p-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl shadow-md shadow-blue-500/10 cursor-pointer transition-colors disabled:bg-slate-300"
+                    >
+                      {isSending ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                    </button>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="h-full flex flex-col items-center justify-center p-12 text-center space-y-4">
+                <Bot className="h-16 w-16 text-slate-200 animate-bounce" />
+                <div>
+                  <h3 className="text-sm font-bold text-slate-800 dark:text-white">Выберите или создайте новый запрос поддержки</h3>
+                  <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto leading-relaxed">
+                    Для начала работы с AI-консультантом выберите нужную сессию в левом меню или кликните на кнопку "Новый запрос".
+                  </p>
+                </div>
+                <button
+                  onClick={handleCreateSession}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md shadow-blue-500/10 transition-colors cursor-pointer"
+                >
+                  Создать новый запрос
+                </button>
+              </div>
+            )}
+          </div>
+
+        </div>
+      )}
+
+      {/* 2. LIVE DIAGNOSTICS TAB */}
+      {activeTab === 'diagnostics' && (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          
+          {/* Diagnostic config panel */}
+          <div className="lg:col-span-5 bg-white dark:bg-slate-800 rounded-3xl border border-slate-100 dark:border-slate-800 p-6 space-y-6">
+            <div>
+              <h2 className="text-sm font-black text-slate-900 dark:text-white flex items-center gap-2">
+                <Terminal className="h-5 w-5 text-blue-600" />
+                Умный терминал диагностики
+              </h2>
+              <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
+                Выберите категорию, опишите проблему своими словами, и AI подберет точные терминальные команды для выявления ошибок в Asterisk / FreePBX.
+              </p>
+            </div>
+
+            <div className="space-y-4">
+              {/* Category selector */}
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-bold text-slate-500">Сфера проблемы</label>
+                <select
+                  value={diagCategory}
+                  onChange={(e) => setDiagCategory(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-700 dark:text-slate-300 focus:outline-none focus:border-blue-500"
+                >
+                  <option value="trunk">Регистрация SIP / PJSIP Транков</option>
+                  <option value="call_quality">Потери голоса / Односторонняя слышимость</option>
+                  <option value="extension">Регистрация абонентских телефонов (Extensions)</option>
+                  <option value="routing">Входящие / Исходящие маршруты (Routing)</option>
+                  <option value="security">Попытки взлома / SIP-сканеры (Security)</option>
+                </select>
+              </div>
+
+              {/* Problem text description */}
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-bold text-slate-500">Описание проблемы простыми словами</label>
+                <textarea
+                  value={diagProblem}
+                  onChange={(e) => setDiagProblem(e.target.value)}
+                  rows={3}
+                  placeholder="Например: Не работает исходящая связь через MTT, в трубке тишина, а затем короткие гудки."
+                  className="w-full p-3.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-700 dark:text-slate-300 placeholder-slate-400 focus:outline-none focus:border-blue-500 leading-relaxed resize-none"
+                />
+              </div>
+
+              {/* Get suggestions button */}
+              <button
+                onClick={handleSuggestCommands}
+                disabled={isSuggesting}
+                className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md shadow-blue-500/10 flex items-center justify-center gap-2 transition-colors cursor-pointer"
+              >
+                {isSuggesting ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                Подобрать команды диагностики
+              </button>
+            </div>
+
+            {/* Suggestions list */}
+            {suggestedCommands.length > 0 && (
+              <div className="pt-4 border-t border-slate-100 dark:border-slate-800 space-y-3">
+                <h3 className="text-xs font-bold text-slate-800 dark:text-slate-300">Рекомендуемые команды</h3>
+                <div className="space-y-2">
+                  {suggestedCommands.map((cmd, idx) => (
+                    <div
+                      key={idx}
+                      onClick={() => setSelectedCommand(cmd.command)}
+                      className={`p-3 rounded-xl border transition-all cursor-pointer flex flex-col gap-1 ${
+                        selectedCommand === cmd.command
+                          ? 'bg-blue-50/50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-900/40 text-blue-700 dark:text-blue-300'
+                          : 'bg-slate-50 dark:bg-slate-900/30 border-slate-100 dark:border-slate-800/80 text-slate-700 dark:text-slate-300 hover:bg-slate-100/50 dark:hover:bg-slate-800/60'
+                      }`}
+                    >
+                      <code className="text-[10px] font-mono font-bold select-all">{cmd.command}</code>
+                      <span className="text-[10px] opacity-75">{cmd.description}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Terminal Console output & AI Analysis */}
+          <div className="lg:col-span-7 bg-white dark:bg-slate-800 rounded-3xl border border-slate-100 dark:border-slate-800 p-6 flex flex-col gap-4">
+            
+            {/* Terminal Actions bar */}
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-50 dark:bg-slate-900 p-4 rounded-2xl border border-slate-100 dark:border-slate-800">
+              <div className="flex items-center gap-2 flex-1">
+                <Terminal className="h-4.5 w-4.5 text-slate-500" />
+                <input
+                  type="text"
+                  value={selectedCommand}
+                  onChange={(e) => setSelectedCommand(e.target.value)}
+                  placeholder="Выберите или введите команду"
+                  className="bg-transparent border-none text-[11px] font-mono text-slate-800 dark:text-white placeholder-slate-400 focus:outline-none flex-1"
+                />
+              </div>
+
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  onClick={() => handleExecuteCommand()}
+                  disabled={isExecutingCmd || !selectedCommand}
+                  className="px-3 py-1.5 bg-slate-950 hover:bg-black text-white rounded-lg text-[10px] font-bold flex items-center gap-1.5 cursor-pointer disabled:bg-slate-300 transition-colors"
+                >
+                  {isExecutingCmd ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />}
+                  Запустить тест
+                </button>
+              </div>
+            </div>
+
+            {/* Terminal output console screen */}
+            <div className="relative rounded-2xl overflow-hidden bg-slate-950 border border-slate-900 h-64 shadow-inner flex flex-col">
+              <div className="flex items-center justify-between px-4 py-1.5 bg-slate-900 text-[9px] font-bold text-slate-500 border-b border-slate-950">
+                <span>TERMINAL DIAGNOSTICS</span>
+                <button 
+                  onClick={() => {
+                    navigator.clipboard.writeText(terminalOutput);
+                  }}
+                  className="hover:text-white flex items-center gap-1"
+                >
+                  <Copy className="h-3 w-3" /> Копировать
+                </button>
+              </div>
+              <pre className="p-4 flex-1 font-mono text-[11px] text-emerald-400 overflow-y-auto whitespace-pre leading-relaxed select-text bg-slate-950">
+                <code>{terminalOutput || '# Терминал ожидает запуск безопасной команды...\n# Команды автоматически маскируют любые секретные пароли и токены.'}</code>
+              </pre>
+            </div>
+
+            {/* Analyze output actions */}
+            {terminalOutput && (
+              <div className="flex flex-wrap gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  onClick={handleAnalyzeOutput}
+                  disabled={isAnalyzing}
+                  className="px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl text-xs font-bold shadow-md shadow-indigo-500/10 flex items-center gap-1.5 transition-all cursor-pointer"
+                >
+                  {isAnalyzing ? <RefreshCw className="h-4.5 w-4.5 animate-spin" /> : <Sparkles className="h-4.5 w-4.5" />}
+                  Анализировать вывод с AI
+                </button>
+
+                {selectedSession && (
+                  <button
+                    onClick={handleSendOutputToChat}
+                    className="px-4 py-2 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <Send className="h-4 w-4" />
+                    Передать вывод в чат поддержки
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* AI Log analysis result display */}
+            {aiAnalysis && (
+              <div className="p-5 bg-blue-50/40 dark:bg-blue-950/10 border border-blue-100 dark:border-blue-900/30 rounded-2xl space-y-3">
+                <h3 className="text-xs font-black text-slate-900 dark:text-white flex items-center gap-1.5">
+                  <Bot className="h-4.5 w-4.5 text-blue-600" />
+                  AI-анализ неисправности и рекомендации:
+                </h3>
+                <div className="border-t border-blue-100 dark:border-blue-900/20 pt-3">
+                  <SimpleMarkdown text={aiAnalysis} />
+                </div>
+              </div>
+            )}
+
+          </div>
+
+        </div>
+      )}
+
+      {/* 3. PROBLEM WIZARDS TAB */}
+      {activeTab === 'wizards' && (
+        <div className="space-y-6 max-w-4xl mx-auto">
+          
+          {/* Welcome Screen / Wizards list */}
+          {!wizardId ? (
+            <div className="space-y-4">
+              <div className="text-center p-6 bg-slate-50 dark:bg-slate-900/20 rounded-3xl border border-slate-100 dark:border-slate-850">
+                <h2 className="text-base font-black text-slate-900 dark:text-white">Интерактивные мастера устранения проблем</h2>
+                <p className="text-xs text-slate-500 max-w-lg mx-auto mt-1 leading-relaxed">
+                  Пошаговые интерактивные гиды помогут вам провести подробную диагностику без знания сложных команд и за секунды составить готовый план решения.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {WIZARDS_LIST.map((wiz) => {
+                  const WizIcon = wiz.icon;
+                  return (
+                    <div
+                      key={wiz.id}
+                      onClick={() => startWizard(wiz.id)}
+                      className="bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-900/60 p-6 rounded-3xl transition-all cursor-pointer shadow-sm flex flex-col gap-4 group hover:-translate-y-0.5"
+                    >
+                      <div className="p-3 bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 rounded-2xl w-fit">
+                        <WizIcon className="h-6 w-6" />
+                      </div>
+                      
+                      <div>
+                        <h3 className="text-xs font-black text-slate-900 dark:text-white group-hover:text-blue-600 transition-colors">{wiz.title}</h3>
+                        <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">{wiz.description}</p>
+                      </div>
+
+                      <span className="text-[10px] text-blue-600 dark:text-blue-400 font-bold flex items-center gap-1 mt-auto">
+                        Начать проверку <ArrowRight className="h-3 w-3 group-hover:translate-x-1 transition-transform" />
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            // Active interactive wizard steps container
+            <div className="bg-white dark:bg-slate-800 rounded-3xl border border-slate-100 dark:border-slate-800 p-8 space-y-6">
+              
+              {/* Wizard header */}
+              <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 rounded-xl">
+                    <Wrench className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h2 className="text-sm font-black text-slate-900 dark:text-white">{activeWizard?.title}</h2>
+                    <span className="text-[10px] text-slate-400">Шаг {wizardStep + 1} из {activeWizard?.steps.length}</span>
+                  </div>
+                </div>
+                
+                <button
+                  onClick={() => setWizardId(null)}
+                  className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg text-slate-400"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              {/* Step indicator progress bar */}
+              <div className="w-full bg-slate-100 dark:bg-slate-900 h-1.5 rounded-full overflow-hidden">
+                <div 
+                  className="bg-blue-600 h-full transition-all duration-300" 
+                  style={{ width: `${((wizardStep + 1) / (activeWizard?.steps.length || 1)) * 100}%` }}
+                />
+              </div>
+
+              {/* Wizard Body (Question & Options) */}
+              {wizardOutput ? (
+                // Wizard Result Screen
+                <div className="space-y-6">
+                  <div className="p-5 bg-blue-50/40 dark:bg-blue-950/10 border border-blue-100 dark:border-blue-900/30 rounded-2xl space-y-4">
+                    <h3 className="text-xs font-black text-slate-900 dark:text-white flex items-center gap-2">
+                      <CheckCircle2 className="h-5 w-5 text-emerald-500 animate-bounce" />
+                      Сбор диагностики завершен! Технический отчет AI:
+                    </h3>
+                    
+                    <div className="border-t border-blue-100 dark:border-blue-900/20 pt-4">
+                      {isCompilingWizard ? (
+                        <div className="flex flex-col items-center justify-center p-8 space-y-3">
+                          <RefreshCw className="h-8 w-8 text-blue-600 animate-spin" />
+                          <span className="text-[11px] text-slate-500">AI компилирует отчет на основе ответов и логов...</span>
+                        </div>
+                      ) : (
+                        <SimpleMarkdown text={wizardOutput} />
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap gap-3">
+                    {selectedSession && (
+                      <button
+                        onClick={exportWizardReportToChat}
+                        className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md shadow-blue-500/10 flex items-center gap-2 transition-all cursor-pointer"
+                      >
+                        <Send className="h-4 w-4" />
+                        Экспортировать отчет в Чат поддержки
+                      </button>
+                    )}
+                    <button
+                      onClick={() => setWizardId(null)}
+                      className="px-5 py-2.5 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                    >
+                      К списку мастеров
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                // Step Question rendering
+                <div className="space-y-6">
+                  <p className="text-xs font-black text-slate-800 dark:text-slate-200">
+                    {activeWizard?.steps[wizardStep]?.question}
+                  </p>
+
+                  <div className="grid grid-cols-1 gap-3.5">
+                    {activeWizard?.steps[wizardStep]?.options.map((opt, idx) => (
+                      <div
+                        key={idx}
+                        onClick={() => handleWizardAnswer(opt.value)}
+                        className="p-4 bg-slate-50 dark:bg-slate-900/50 hover:bg-blue-50/30 dark:hover:bg-blue-950/10 border border-slate-150 dark:border-slate-800 rounded-2xl cursor-pointer transition-all flex items-center justify-between group"
+                      >
+                        <span className="text-xs text-slate-700 dark:text-slate-300 font-semibold">{opt.label}</span>
+                        <ChevronRight className="h-4 w-4 text-slate-400 group-hover:translate-x-1 transition-transform" />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+            </div>
+          )}
+
+        </div>
+      )}
+
+      {/* 4. KNOWLEDGE BASE TAB */}
+      {activeTab === 'kb' && (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          
+          {/* KB Filter & List column */}
+          <div className="lg:col-span-5 bg-white dark:bg-slate-800 rounded-3xl border border-slate-100 dark:border-slate-800 p-6 space-y-6 max-h-[600px] overflow-y-auto">
+            
+            {/* Search Input */}
+            <div className="relative">
+              <Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
+              <input
+                type="text"
+                value={kbSearch}
+                onChange={(e) => setKbSearch(e.target.value)}
+                placeholder="Поиск статей базы знаний..."
+                className="w-full pl-9 pr-4 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-700 dark:text-slate-300 placeholder-slate-400 focus:outline-none focus:border-blue-500"
+              />
+            </div>
+
+            {/* Category quick filters */}
+            <div className="flex flex-wrap gap-1.5">
+              {['all', 'trunk', 'quality', 'extension', 'security', 'other'].map((cat) => (
+                <button
+                  key={cat}
+                  onClick={() => setKbFilterCategory(cat)}
+                  className={`px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase transition-colors cursor-pointer ${
+                    kbFilterCategory === cat 
+                      ? 'bg-blue-600 text-white shadow-sm' 
+                      : 'bg-slate-100 dark:bg-slate-900 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  {cat === 'all' ? 'Все' :
+                   cat === 'trunk' ? 'Транки' :
+                   cat === 'quality' ? 'Слышимость' :
+                   cat === 'extension' ? 'Телефоны' :
+                   cat === 'security' ? 'Защита' : 'Другое'}
+                </button>
+              ))}
+            </div>
+
+            {/* Articles List */}
+            <div className="space-y-3">
+              {filteredKb.length === 0 ? (
+                <p className="text-center text-xs text-slate-400 py-6">Ничего не найдено</p>
+              ) : (
+                filteredKb.map((art) => (
+                  <div
+                    key={art.id}
+                    onClick={() => setSelectedArticle(art)}
+                    className={`p-3.5 rounded-2xl border transition-all cursor-pointer flex flex-col gap-1.5 ${
+                      selectedArticle?.id === art.id
+                        ? 'bg-blue-50/50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-900/40 text-blue-700 dark:text-blue-300'
+                        : 'bg-slate-50 dark:bg-slate-900/30 border-slate-100 dark:border-slate-800/80 text-slate-700 dark:text-slate-300 hover:bg-slate-100/50 dark:hover:bg-slate-800/60'
+                    }`}
+                  >
+                    <span className="text-xs font-bold leading-tight">{art.title}</span>
+                    <span className="text-[9px] uppercase font-bold text-slate-400">Категория: {art.category}</span>
+                  </div>
+                ))
+              )}
+            </div>
+
+          </div>
+
+          {/* Article Display panel */}
+          <div className="lg:col-span-7 bg-white dark:bg-slate-800 rounded-3xl border border-slate-100 dark:border-slate-800 p-6 flex flex-col gap-4">
+            {selectedArticle ? (
+              <div className="space-y-4">
+                <div className="border-b border-slate-100 dark:border-slate-800 pb-4">
+                  <h2 className="text-sm font-black text-slate-900 dark:text-white leading-tight">{selectedArticle.title}</h2>
+                  <span className="text-[10px] text-slate-400 mt-1 block">Категория: {selectedArticle.category} • Дата изменения: {new Date(selectedArticle.updatedAt).toLocaleDateString('ru-RU')}</span>
+                </div>
+
+                <div className="prose prose-slate dark:prose-invert max-w-none">
+                  <SimpleMarkdown text={selectedArticle.content} />
+                </div>
+              </div>
+            ) : (
+              <div className="h-full flex flex-col items-center justify-center p-12 text-center space-y-3">
+                <BookOpen className="h-14 w-14 text-slate-200 animate-pulse" />
+                <div>
+                  <h3 className="text-xs font-bold text-slate-800 dark:text-white">Выберите статью для изучения</h3>
+                  <p className="text-[11px] text-slate-400 mt-1 max-w-xs leading-relaxed">
+                    Нажмите на любую тему в левой колонке, чтобы открыть подробное пошаговое руководство с командами диагностики и решениями.
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+
+        </div>
+      )}
+
+      {/* 5. HISTORY OF REQUESTS TAB */}
+      {activeTab === 'history' && (
+        <div className="bg-white dark:bg-slate-800 rounded-3xl border border-slate-100 dark:border-slate-800 p-6 space-y-4">
+          <div>
+            <h2 className="text-sm font-black text-slate-900 dark:text-white flex items-center gap-2">
+              <Clock className="h-5 w-5 text-blue-600" />
+              Журнал AI-обращений
+            </h2>
+            <p className="text-[11px] text-slate-500 mt-1">
+              Список всех ваших сессий технической поддержки. Кликните на обращение, чтобы загрузить всю переписку.
+            </p>
+          </div>
+
+          <div className="overflow-x-auto rounded-2xl border border-slate-100 dark:border-slate-800">
+            <table className="w-full text-left text-xs border-collapse">
+              <thead>
+                <tr className="bg-slate-50 dark:bg-slate-900 text-slate-500 font-bold border-b border-slate-100 dark:border-slate-800">
+                  <th className="p-4">Название обращения</th>
+                  <th className="p-4">Сфера / Категория</th>
+                  <th className="p-4">Статус</th>
+                  <th className="p-4">Сообщений</th>
+                  <th className="p-4">Дата создания</th>
+                  <th className="p-4 text-right">Действия</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sessions.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="p-8 text-center text-slate-400">История обращений пуста</td>
+                  </tr>
+                ) : (
+                  sessions.map((sess) => (
+                    <tr
+                      key={sess.id}
+                      onClick={() => { setSelectedSession(sess); setActiveTab('chat'); }}
+                      className="hover:bg-slate-50/50 dark:hover:bg-slate-900/40 border-b border-slate-100 dark:border-slate-800/60 cursor-pointer transition-colors"
+                    >
+                      <td className="p-4 font-bold text-slate-800 dark:text-slate-200">{sess.title}</td>
+                      <td className="p-4 uppercase font-bold text-[10px] text-slate-400">{sess.category}</td>
+                      <td className="p-4">
+                        <span className={`px-2 py-0.5 text-[9px] font-bold rounded-md ${
+                          sess.status === 'open' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'
+                        }`}>
+                          {sess.status === 'open' ? 'Активно' : 'Закрыто'}
+                        </span>
+                      </td>
+                      <td className="p-4 font-bold text-slate-600 dark:text-slate-400">{sess.messages?.length || 0}</td>
+                      <td className="p-4 text-slate-400">{new Date(sess.createdAt).toLocaleString('ru-RU')}</td>
+                      <td className="p-4 text-right" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex justify-end gap-1.5">
+                          <button
+                            onClick={() => { setSelectedSession(sess); setActiveTab('chat'); }}
+                            className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-900 dark:text-slate-300 rounded-lg text-[10px] font-bold"
+                          >
+                            В чат
+                          </button>
+                          <button
+                            onClick={() => handleToggleSessionStatus(sess)}
+                            className="p-1 hover:bg-slate-100 dark:hover:bg-slate-900 text-slate-500 rounded-lg"
+                          >
+                            <CheckCircle2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* 6. SETTINGS TAB */}
+      {activeTab === 'settings' && (
+        <div className="max-w-3xl mx-auto bg-white dark:bg-slate-800 rounded-3xl border border-slate-100 dark:border-slate-800 p-8 space-y-6">
+          <div>
+            <h2 className="text-sm font-black text-slate-900 dark:text-white flex items-center gap-2">
+              <Settings className="h-5 w-5 text-blue-600" />
+              Настройки AI-провайдера (AIPBXAdmin)
+            </h2>
+            <p className="text-[11px] text-slate-500 mt-1">
+              Сконфигурируйте AI-провайдера, выберите языковую модель и настройте системные инструкции для стиля консультирования.
+            </p>
+          </div>
+
+          <div className="space-y-5">
+            {/* Provider and Model configuration */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-bold text-slate-500">AI-провайдер</label>
+                <select
+                  value={aiProvider}
+                  onChange={(e) => {
+                    const prov = e.target.value;
+                    setAiProvider(prov);
+                    if (prov === 'gemini') setAiModel('gemini-3.5-flash');
+                    else if (prov === 'openai') setAiModel('gpt-4o-mini');
+                    else if (prov === 'anthropic') setAiModel('claude-3-5-haiku');
+                    else if (prov === 'deepseek') setAiModel('deepseek-chat');
+                  }}
+                  className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-700 dark:text-slate-300 focus:outline-none focus:border-blue-500"
+                >
+                  <option value="gemini">Google Gemini</option>
+                  <option value="openai">OpenAI (ChatGPT)</option>
+                  <option value="anthropic">Anthropic (Claude)</option>
+                  <option value="deepseek">DeepSeek AI</option>
+                </select>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-bold text-slate-500">Языковая модель</label>
+                <select
+                  value={aiModel}
+                  onChange={(e) => setAiModel(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-700 dark:text-slate-300 focus:outline-none focus:border-blue-500"
+                >
+                  {aiProvider === 'gemini' && (
+                    <>
+                      <option value="gemini-3.5-flash">Gemini 3.5 Flash (рекомендуемая, быстрая)</option>
+                      <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro (глубокое рассуждение)</option>
+                    </>
+                  )}
+                  {aiProvider === 'openai' && (
+                    <>
+                      <option value="gpt-4o-mini">GPT-4o Mini (быстрая, экономичная)</option>
+                      <option value="gpt-4o">GPT-4o (высокая точность)</option>
+                    </>
+                  )}
+                  {aiProvider === 'anthropic' && (
+                    <>
+                      <option value="claude-3-5-haiku">Claude 3.5 Haiku (быстрая)</option>
+                      <option value="claude-3-5-sonnet">Claude 3.5 Sonnet (продвинутая)</option>
+                    </>
+                  )}
+                  {aiProvider === 'deepseek' && (
+                    <>
+                      <option value="deepseek-chat">DeepSeek Chat (быстрая, умная)</option>
+                      <option value="deepseek-coder">DeepSeek Coder (техническая)</option>
+                    </>
+                  )}
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1.5 md:col-span-2">
+                <label className="text-[11px] font-bold text-slate-500">Температура креативности ({aiTemp})</label>
+                <input
+                  type="range"
+                  min="0.1"
+                  max="1.0"
+                  step="0.1"
+                  value={aiTemp}
+                  onChange={(e) => setAiTemp(Number(e.target.value))}
+                  className="w-full h-1.5 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer mt-3"
+                />
+                <div className="flex justify-between text-[9px] text-slate-400 font-mono">
+                  <span>0.1 (Технически точно)</span>
+                  <span>1.0 (Креативно)</span>
+                </div>
+              </div>
+            </div>
+
+            {/* System prompt instruction */}
+            <div className="space-y-1.5">
+              <label className="text-[11px] font-bold text-slate-500">Системные инструкции (System Instructions)</label>
+              <textarea
+                value={aiSystemPrompt}
+                onChange={(e) => setAiSystemPrompt(e.target.value)}
+                rows={5}
+                className="w-full p-4 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl text-xs text-slate-700 dark:text-slate-300 placeholder-slate-400 focus:outline-none focus:border-blue-500 leading-relaxed font-mono"
+                placeholder="Задайте системную роль языковой модели..."
+              />
+            </div>
+
+            {/* Diagnostic connectivity test */}
+            <div className="p-4 bg-slate-50 dark:bg-slate-900 rounded-2xl border border-slate-100 dark:border-slate-800 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Cpu className="h-4.5 w-4.5 text-slate-500" />
+                  <span className="text-xs font-bold">
+                    Проверка подключения к {aiProvider === 'gemini' ? 'Gemini API' : aiProvider === 'openai' ? 'OpenAI API' : aiProvider === 'anthropic' ? 'Anthropic API' : 'DeepSeek API'}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleTestProvider}
+                  disabled={isTesting}
+                  className="px-3 py-1.5 bg-slate-900 hover:bg-black text-white rounded-lg text-[10px] font-bold flex items-center gap-1 cursor-pointer"
+                >
+                  {isTesting ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+                  Тест соединения
+                </button>
+              </div>
+
+              {testResult && (
+                <div className={`p-3 rounded-xl text-xs font-mono border ${
+                  testResult.success 
+                    ? 'bg-emerald-50/50 border-emerald-100 text-emerald-700 dark:bg-emerald-950/10 dark:border-emerald-900/30 dark:text-emerald-400' 
+                    : 'bg-rose-50/50 border-rose-100 text-rose-700 dark:bg-rose-950/10 dark:border-rose-900/30 dark:text-rose-400'
+                }`}>
+                  <p className="font-bold">{testResult.success ? 'Успешно' : 'Ошибка соединения'}:</p>
+                  <p className="mt-1 text-[11px] leading-relaxed">{testResult.message}</p>
+                  {testResult.raw && <pre className="mt-2 p-2 bg-black/5 dark:bg-black/30 rounded text-[10px] whitespace-pre-wrap">{testResult.raw}</pre>}
+                </div>
+              )}
+            </div>
+
+            {/* Save settings action button */}
+            <button
+              onClick={handleSaveSettings}
+              disabled={isSavingSettings}
+              className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl text-xs font-bold shadow-md shadow-blue-500/10 flex items-center justify-center gap-2 transition-colors cursor-pointer"
+            >
+              {isSavingSettings ? <RefreshCw className="h-4.5 w-4.5 animate-spin" /> : <Check className="h-4.5 w-4.5" />}
+              Сохранить настройки
+            </button>
+          </div>
+        </div>
+      )}
+
+    </div>
+  );
+}
