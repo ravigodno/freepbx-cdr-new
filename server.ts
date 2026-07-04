@@ -4627,6 +4627,35 @@ async function queryFreePBXCDR(
     if (connection) await connection.end();
   }
 }
+async function queryPBXPulsDb(sql: string, params: any[] = []): Promise<any[]> {
+  let connection;
+  try {
+    connection = await mysql.createConnection({
+      host: process.env.PBXPULS_DB_HOST || '127.0.0.1',
+      port: Number(process.env.PBXPULS_DB_PORT || 3306),
+      user: process.env.PBXPULS_DB_USER || 'pbxpuls',
+      password: process.env.PBXPULS_DB_PASS || '',
+      database: process.env.PBXPULS_DB_NAME || 'pbxpuls',
+      connectTimeout: 5000,
+      dateStrings: true
+    });
+
+    const [rows] = await connection.execute(sql, params);
+    return rows as any[];
+  } finally {
+    if (connection) await connection.end();
+  }
+}
+
+async function isPBXPulsDbAvailable(): Promise<boolean> {
+  try {
+    await queryPBXPulsDb('SELECT 1 AS ok', []);
+    return true;
+  } catch (e: any) {
+    console.warn('[PBXPULS_DB] unavailable:', e.message);
+    return false;
+  }
+}
 
 // Highly precise parser for our SQL queries to support SQL filtering in demo mode
 function filterMockCDR(sql: string, params: any[]): any[] {
@@ -13827,11 +13856,26 @@ async function getRealVoIPQualityDevices(settings: AppSettings): Promise<any[]> 
     }
 
     return {
+      ...dev,
       ext: dev.ext,
       name: dev.name,
       ip: dev.ip,
-      type: dev.tech || 'PJSIP',
+      port: dev.port || 0,
+      type: dev.tech || dev.type || 'PJSIP',
+      tech: dev.tech || dev.type || 'PJSIP',
+      deviceStatus: dev.status || '',
+      qualityStatus: status,
       userAgent: dev.userAgent,
+      manufacturer: dev.manufacturer || '',
+      model: dev.model || '',
+      deviceRole: dev.deviceRole || dev.device_role || 'extension',
+      typeLabel: dev.typeLabel || dev.type_label || '',
+      pjsipStatus: dev.pjsipStatus || dev.pjsip_status || '',
+      monitorMode: dev.monitorMode || dev.monitor_mode || '',
+      optionsDisabled: !!(dev.optionsDisabled || dev.options_disabled),
+      pingOk: !!(dev.pingOk || dev.ping_ok),
+      pingMs: dev.pingMs || dev.ping_ms || 0,
+      operationalStatus: dev.operationalStatus || dev.operational_status || '',
       network: dev.network,
       latency,
       jitter,
@@ -13900,6 +13944,7 @@ setInterval(async () => {
     const history: TelemetryPoint[] = JSON.parse(fs.readFileSync(QUALITY_HISTORY_FILE, 'utf8') || '[]');
     const alerts: TelemetryAlert[] = JSON.parse(fs.readFileSync(QUALITY_ALERTS_FILE, 'utf8') || '[]');
     const now = new Date().toISOString();
+    const currentQualityRows: any[] = [];
 
     for (const dev of devicesToProcess) {
       let metric = devicesMetrics[dev.ext];
@@ -13971,6 +14016,16 @@ setInterval(async () => {
         mos: metric.mos
       });
 
+      currentQualityRows.push({
+        ...dev,
+        deviceStatus: dev.status === 'Offline' ? 'Offline' : 'Online',
+        qualityStatus: metric.status,
+        latency: metric.latency,
+        jitter: metric.jitter,
+        rtpLoss: metric.rtpLoss,
+        mos: metric.mos
+      });
+
       if (metric.status !== 'Offline') {
         // Simple threshold alert trigger checks
         const checks = [
@@ -14007,9 +14062,15 @@ setInterval(async () => {
       }
     }
 
-    // Keep quality history by retention period instead of a small fixed buffer.
-    // Default: 30 days. Later this can be exposed in admin settings.
-    const qualityHistoryRetentionDays = Math.max(1, Number(settings.qualityHistoryRetentionDays || 30));
+    try {
+      await saveQualityCurrentToPBXPulsDb(currentQualityRows);
+    } catch (e: any) {
+      console.warn('[PBXPULS_DB] quality_current background save skipped:', e.message);
+    }
+
+    // Keep quality history compact while SQL storage is being introduced.
+    const qualityHistoryRetentionDays = Math.max(1, Number(settings.qualityHistoryRetentionDays || 7));
+    const qualityHistoryMaxPoints = Math.max(100, Number(settings.qualityHistoryMaxPoints || 1000));
     const qualityHistoryCutoff = Date.now() - qualityHistoryRetentionDays * 24 * 60 * 60 * 1000;
 
     for (let i = history.length - 1; i >= 0; i--) {
@@ -14018,6 +14079,11 @@ setInterval(async () => {
         history.splice(i, 1);
       }
     }
+
+    if (history.length > qualityHistoryMaxPoints) {
+      history.splice(0, history.length - qualityHistoryMaxPoints);
+    }
+
     // Cap alerts at 200 items
     if (alerts.length > 200) {
       alerts.splice(200);
@@ -14028,7 +14094,7 @@ setInterval(async () => {
   } catch (err: any) {
     console.error('[VOIP QUALITY] Simulation background error:', err.message);
   }
-}, 15000);
+}, 60000);
 
 // --- VoIP QUALITY ENDPOINTS ---
 app.get('/api/quality/devices', requireAuth(), async (req, res) => {
@@ -14048,6 +14114,13 @@ app.get('/api/quality/devices', requireAuth(), async (req, res) => {
     } else {
       list = await getRealVoIPQualityDevices(settings);
     }
+
+    try {
+      await saveQualityCurrentToPBXPulsDb(list);
+    } catch (e: any) {
+      console.warn('[PBXPULS_DB] quality_current API save skipped:', e.message);
+    }
+
     res.json({ success: true, count: list.length, devices: list });
   } catch (e: any) {
     res.status(500).json({ success: false, error: e.message || String(e) });
@@ -14910,6 +14983,82 @@ function initDevicesMapFiles() {
     }
   } catch (err: any) {
     console.error('Failed to initialize Devices Map json files:', err.message);
+  }
+}
+
+
+async function saveQualityCurrentToPBXPulsDb(devices: any[]): Promise<void> {
+  if (!Array.isArray(devices) || devices.length === 0) return;
+
+  const sql = `
+    INSERT INTO quality_current (
+      ext, name, device_role, type_label, tech, ip, port,
+      status, quality_status, latency_ms, jitter_ms, rtp_loss, mos,
+      pjsip_status, monitor_mode, options_disabled, ping_ok, ping_ms, operational_status,
+      user_agent, manufacturer, model, updated_at
+    ) VALUES (
+      ?, ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, NOW()
+    )
+    ON DUPLICATE KEY UPDATE
+      name = VALUES(name),
+      device_role = VALUES(device_role),
+      type_label = VALUES(type_label),
+      tech = VALUES(tech),
+      ip = VALUES(ip),
+      port = VALUES(port),
+      status = VALUES(status),
+      quality_status = VALUES(quality_status),
+      latency_ms = VALUES(latency_ms),
+      jitter_ms = VALUES(jitter_ms),
+      rtp_loss = VALUES(rtp_loss),
+      mos = VALUES(mos),
+      pjsip_status = VALUES(pjsip_status),
+      monitor_mode = VALUES(monitor_mode),
+      options_disabled = VALUES(options_disabled),
+      ping_ok = VALUES(ping_ok),
+      ping_ms = VALUES(ping_ms),
+      operational_status = VALUES(operational_status),
+      user_agent = VALUES(user_agent),
+      manufacturer = VALUES(manufacturer),
+      model = VALUES(model),
+      updated_at = NOW()
+  `;
+
+  for (const dev of devices) {
+    try {
+      await queryPBXPulsDb(sql, [
+        String(dev.ext || ''),
+        String(dev.name || ''),
+        String(dev.deviceRole || dev.device_role || 'extension'),
+        String(dev.typeLabel || dev.type_label || ''),
+        String(dev.tech || ''),
+        String(dev.ip || ''),
+        Number(dev.port || 0),
+
+        String(dev.deviceStatus || dev.device_status || dev.status || ''),
+        String(dev.qualityStatus || dev.quality_status || dev.status || ''),
+        Number(dev.latency || dev.latency_ms || dev.rtt || 0),
+        Number(dev.jitter || dev.jitter_ms || 0),
+        Number(dev.rtpLoss || dev.rtp_loss || 0),
+        Number(dev.mos || 0),
+
+        String(dev.pjsipStatus || dev.pjsip_status || ''),
+        String(dev.monitorMode || dev.monitor_mode || ''),
+        dev.optionsDisabled || dev.options_disabled ? 1 : 0,
+        dev.pingOk || dev.ping_ok ? 1 : 0,
+        Number(dev.pingMs || dev.ping_ms || 0),
+        String(dev.operationalStatus || dev.operational_status || ''),
+
+        String(dev.userAgent || dev.user_agent || ''),
+        String(dev.manufacturer || ''),
+        String(dev.model || '')
+      ]);
+    } catch (e: any) {
+      console.warn('[PBXPULS_DB] failed to save quality_current ext=' + String(dev.ext || '') + ':', e.message);
+    }
   }
 }
 
