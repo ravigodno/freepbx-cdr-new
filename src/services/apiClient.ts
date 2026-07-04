@@ -22,6 +22,30 @@ function isAuthLoginRequest(input: RequestInfo | URL): boolean {
   }
 }
 
+function getRequestAuthorization(input: RequestInfo | URL, init?: RequestInit): string {
+  const fromInit = init?.headers;
+
+  if (fromInit instanceof Headers) {
+    return fromInit.get('Authorization') || fromInit.get('authorization') || '';
+  }
+
+  if (Array.isArray(fromInit)) {
+    const found = fromInit.find(([key]) => String(key).toLowerCase() === 'authorization');
+    return found ? String(found[1] || '') : '';
+  }
+
+  if (fromInit && typeof fromInit === 'object') {
+    const obj = fromInit as Record<string, any>;
+    return String(obj.Authorization || obj.authorization || '');
+  }
+
+  if (typeof Request !== 'undefined' && input instanceof Request) {
+    return input.headers.get('Authorization') || input.headers.get('authorization') || '';
+  }
+
+  return '';
+}
+
 export function clearStoredAuthSession() {
   localStorage.removeItem(AUTH_SESSION_STORAGE_KEY);
   sessionStorage.removeItem(AUTH_SESSION_STORAGE_KEY);
@@ -56,10 +80,21 @@ export function installAuthExpiredFetchInterceptor() {
   originalFetch = window.fetch.bind(window);
 
   const interceptorFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const authHeader = getRequestAuthorization(input, init);
+    const hadBearerToken = /^Bearer\s+\S+/i.test(authHeader);
+
     const response = await originalFetch!(input, init);
-    if (response.status === 401 && !isAuthLoginRequest(input)) {
+
+    // Do not drop the user to login on random/public 401 responses.
+    // Only expire session when the failed request actually used a Bearer token.
+    if (
+      response.status === 401 &&
+      hadBearerToken &&
+      !isAuthLoginRequest(input)
+    ) {
       handleAuthExpiredResponse(response);
     }
+
     return response;
   };
 

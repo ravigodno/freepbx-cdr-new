@@ -904,6 +904,7 @@ export default function App() {
 
 
   const showAuthExpiredLogin = useCallback(() => {
+    const hadSession = !!localStorage.getItem('asterisk_cdr_session');
     clearStoredAuthSession();
     setSession(null);
     if (audioRef.current) {
@@ -912,7 +913,9 @@ export default function App() {
     setPlayingRecording(null);
     setPlayingCallId(null);
     setLoginPassword('');
-    setLoginError(AUTH_EXPIRED_LOGIN_MESSAGE);
+    // Show expired-session message only when we really had an active session.
+    // Do not keep showing it on the login screen after a fresh login attempt.
+    setLoginError(hadSession ? AUTH_EXPIRED_LOGIN_MESSAGE : '');
   }, []);
 
   useEffect(() => {
@@ -921,8 +924,12 @@ export default function App() {
   }, [showAuthExpiredLogin]);
 
   // Helper to handle unauthorized status (expired/missing token)
+  // Do not logout on generic network errors/timeouts.
+  // Logout only when backend really returned 401 Unauthorized.
   const handleAuthError = (resp?: Response) => {
-    handleAuthExpiredResponse(resp);
+    if (resp && resp.status === 401) {
+      handleAuthExpiredResponse(resp);
+    }
   };
 
   // Simple CSV / Text Parser
@@ -2285,7 +2292,9 @@ export default function App() {
           permissions: data.user.permissions || {}
         };
         localStorage.setItem('asterisk_cdr_session', JSON.stringify(nextSession));
-        window.location.href = '/';
+        setSession(nextSession);
+        setLoginPassword('');
+        setLoginError('');
         return;
       } else {
         setLoginError(data.error || 'Ошибка входа в систему.');
