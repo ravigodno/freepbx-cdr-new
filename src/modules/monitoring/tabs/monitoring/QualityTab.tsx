@@ -398,7 +398,29 @@ interface TelemetryAlert {
   severity: 'Предупреждение' | 'Критично';
 }
 
+function getStoredAuthToken(): string {
+  try {
+    const rawSession = localStorage.getItem('asterisk_cdr_session');
+    if (rawSession) {
+      const parsed = JSON.parse(rawSession);
+      if (parsed && typeof parsed.token === 'string' && parsed.token.trim()) {
+        return parsed.token.trim();
+      }
+    }
+
+    const rawToken = localStorage.getItem('asterisk_cdr_token');
+    if (rawToken && rawToken.trim()) {
+      return rawToken.trim();
+    }
+  } catch (e) {}
+
+  return '';
+}
+
 export default function QualityTab({ token }: Props) {
+  const effectiveToken = token && token.trim() ? token.trim() : getStoredAuthToken();
+  const authHeaders = effectiveToken ? { Authorization: `Bearer ${effectiveToken}` } : undefined;
+
   const [devices, setDevices] = useState<QualityDevice[]>([]);
   const [alerts, setAlerts] = useState<TelemetryAlert[]>([]);
   const [allHistory, setAllHistory] = useState<TelemetryPoint[]>([]);
@@ -417,7 +439,7 @@ export default function QualityTab({ token }: Props) {
     setIsLoading(true);
     setError('');
     try {
-      const headersStr = token ? { Authorization: `Bearer ${token}` } : undefined;
+      const headersStr = authHeaders;
       const [devsRes, alertsRes, histRes] = await Promise.all([
         fetch('/api/quality/devices', { headers: headersStr }).then(r => r.json()),
         fetch('/api/quality/alerts', { headers: headersStr }).then(r => r.json()),
@@ -554,7 +576,7 @@ export default function QualityTab({ token }: Props) {
     setActiveDiagName('Ping до устройства');
     setTerminalOutput(`Запуск команды: ping -c 4 на EXT ${ext}...\n`);
     try {
-      const headersStr = token ? { Authorization: `Bearer ${token}` } : undefined;
+      const headersStr = token ? { Authorization: `Bearer ${effectiveToken}` } : undefined;
       const res = await fetch(`/api/quality/ping/${ext}`, {
         method: 'POST',
         headers: headersStr
@@ -579,7 +601,7 @@ export default function QualityTab({ token }: Props) {
     setActiveDiagName('Traceroute до устройства');
     setTerminalOutput(`Запуск трассировки маршрута traceroute к EXT ${ext}...\n`);
     try {
-      const headersStr = token ? { Authorization: `Bearer ${token}` } : undefined;
+      const headersStr = token ? { Authorization: `Bearer ${effectiveToken}` } : undefined;
       const res = await fetch(`/api/quality/traceroute/${ext}`, {
         method: 'POST',
         headers: headersStr
