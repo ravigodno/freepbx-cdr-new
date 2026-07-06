@@ -473,9 +473,39 @@ interface UserSession {
   permissions?: UserPermissions;
 }
 
-const Logo3D = ({ className = "h-5 w-5", logoUrl }: { className?: string; logoUrl?: string }) => (
-  <img src={logoUrl || "/freepbx-cdr-logo.svg"} className={className} alt="PBXPULS" />
-);
+
+const Logo3D = ({
+  className = "h-5 w-5",
+  logoUrl,
+  withText = false,
+}: {
+  className?: string;
+  logoUrl?: string;
+  withText?: boolean;
+}) => {
+  if (logoUrl) {
+    return <img src={logoUrl} className={className} alt="PBXPULS" />;
+  }
+
+  if (withText) {
+    return (
+      <div className="flex items-center gap-3 whitespace-nowrap leading-none">
+        <img
+          src="/brand/pbx_icon.svg"
+          className="h-12 w-12 shrink-0"
+          alt="PBXPULS"
+        />
+        <img
+          src="/brand/pbx_text.svg"
+          className="h-[30px] w-auto shrink-0 block"
+          alt="PBXPULS"
+        />
+      </div>
+    );
+  }
+
+  return <img src="/brand/pbx_icon.svg" className={className} alt="PBXPULS" />;
+};
 
 
 
@@ -4473,8 +4503,7 @@ export default function App() {
         <div className="relative z-10 min-h-screen flex flex-col px-6 py-8">
           <header className="flex flex-col items-center text-center pt-14">
             <div className="flex items-center justify-center gap-4">
-              <Logo3D className="h-8 w-8" logoUrl={settings?.customLogoUrl || publicSettings?.customLogoUrl} />
-              <div className="text-3xl font-black tracking-tight text-blue-600 leading-none">PBXPULS</div>
+              <Logo3D className="h-12 w-12" logoUrl={settings?.customLogoUrl || publicSettings?.customLogoUrl} withText />
             </div>
             <div className="mt-2 text-sm font-semibold text-slate-600">
               Мониторинг, аналитика и управление телефонией
@@ -4566,11 +4595,10 @@ export default function App() {
         <div className={`flex min-h-0 flex-1 flex-col ${isSidebarExpanded ? 'items-start px-4' : 'items-center'} gap-6 w-full overflow-y-auto overflow-x-hidden pb-3`}>
           {/* Logo Element resembling high-end layers icon */}
           <div className={`flex items-center ${isSidebarExpanded ? 'gap-2 w-full' : 'justify-center w-full'}`}>
-            <div className="h-[45px] w-[45px] flex items-center justify-center active:scale-95 transition-transform cursor-pointer shrink-0">
-              <Logo3D className="h-[45px] w-[45px]" logoUrl={settings?.customLogoUrl || publicSettings?.customLogoUrl} /></div>
+            <div className={`${isSidebarExpanded ? "h-[52px] w-full justify-start" : "h-[45px] w-[45px] justify-center"} flex items-center active:scale-95 transition-transform cursor-pointer shrink-0 overflow-hidden`}>
+              <Logo3D className="h-[45px] w-[45px]" logoUrl={settings?.customLogoUrl || publicSettings?.customLogoUrl} withText={isSidebarExpanded} /></div>
             {isSidebarExpanded && (
-              <div className="min-w-0 animate-fade-in">
-                <span className="font-bold text-[#0f2557] dark:text-slate-100 text-[24px] tracking-tight uppercase block leading-none">PBXPULS</span></div>
+              <div className="min-w-0 animate-fade-in"></div>
             )}
           </div>
 
