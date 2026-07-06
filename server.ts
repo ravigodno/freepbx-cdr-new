@@ -15209,6 +15209,65 @@ function parseSipPeerDetails(output: string): { userAgent?: string; toHost?: str
     fromUser: fromUser || undefined
   };
 }
+
+function isLikelyVoipTrunkDevice(dev: any): boolean {
+  const ext = String(dev?.ext || '').trim().toLowerCase();
+  const name = String(dev?.name || '').trim().toLowerCase();
+  const tech = String(dev?.tech || dev?.type || '').trim().toLowerCase();
+  const userAgent = String(dev?.userAgent || dev?.user_agent || '').trim().toLowerCase();
+  const model = String(dev?.model || '').trim().toLowerCase();
+  const typeLabel = String(dev?.typeLabel || dev?.type_label || '').trim().toLowerCase();
+  const ip = String(dev?.ip || '').trim();
+
+  if (String(dev?.deviceRole || dev?.device_role || '').toLowerCase() === 'trunk') return true;
+
+  const text = [ext, name, userAgent, model, typeLabel].join(' ');
+
+  if (/sip\s*trunk|pjsip\s*trunk|trunk|транк|provider|sip provider/i.test(text)) return true;
+  if (/novofon|sip\.novofon\.ru|zadarma|mtt|megafon|ktk|uis|mango|gravitel|beeline|mts|rostelecom|sbc/i.test(text)) return true;
+
+  if (/(^|[-_])(in|out|trunk|gw|gateway|provider)([-_]|$)/i.test(ext)) return true;
+
+  const isNumericExtension = /^\d{2,6}$/.test(ext);
+  const isSipTech = tech === 'sip' || tech === 'pjsip';
+  const isPublicIp = ip && !/^10\.|^127\.|^172\.(1[6-9]|2\d|3[01])\.|^192\.168\./.test(ip);
+
+  if (!isNumericExtension && isSipTech && (isPublicIp || ip)) return true;
+
+  return false;
+}
+
+function normalizeVoipDeviceRole(dev: any): any {
+  if (!dev) return dev;
+
+  const isTrunk = isLikelyVoipTrunkDevice(dev);
+  const tech = String(dev.tech || dev.type || 'PJSIP').toUpperCase();
+
+  if (!isTrunk) {
+    dev.deviceRole = dev.deviceRole || 'extension';
+    dev.typeLabel = dev.typeLabel || (tech === 'SIP' ? 'SIP Extension' : 'PJSIP Extension');
+    return dev;
+  }
+
+  dev.deviceRole = 'trunk';
+  dev.typeLabel = tech === 'SIP' ? 'SIP Trunk' : 'PJSIP Trunk';
+
+  const ext = String(dev.ext || '');
+  if (!dev.name || String(dev.name).startsWith('Абонент ')) {
+    dev.name = ext;
+  }
+
+  if (!dev.userAgent || dev.userAgent === 'Sip Device') {
+    dev.userAgent = dev.typeLabel + (dev.ip ? ' / ' + dev.ip : '');
+  }
+
+  const detected = guessManufacturerAndModel(String(dev.userAgent || dev.model || dev.typeLabel || ''));
+  dev.manufacturer = detected.manufacturer === 'Generic' ? 'SIP Provider' : detected.manufacturer;
+  dev.model = detected.model === 'VoIP Terminal' ? dev.typeLabel : detected.model;
+
+  return dev;
+}
+
 function guessManufacturerAndModel(ua: string) {
   const uaLower = (ua || '').toLowerCase();
   if (uaLower.includes('yealink')) {
@@ -15487,7 +15546,7 @@ async function getRealVoIPDevices(settings: AppSettings): Promise<any[]> {
     }
   }
 
-  const list = Array.from(finalDevicesMap.values());
+  const list = Array.from(finalDevicesMap.values()).map(normalizeVoipDeviceRole);
 
   const ipToExtsMap = new Map<string, string[]>();
   for (const dev of list) {
@@ -15506,7 +15565,10 @@ async function getRealVoIPDevices(settings: AppSettings): Promise<any[]> {
         dev.status = 'Conflict';
       }
     }
-    const guessed = guessManufacturerAndModel(dev.userAgent);
+    normalizeVoipDeviceRole(dev);
+    const guessed = dev.deviceRole === 'trunk'
+      ? { manufacturer: dev.manufacturer || 'SIP Provider', model: dev.model || dev.typeLabel || 'SIP Trunk' }
+      : guessManufacturerAndModel(dev.userAgent);
     dev.manufacturer = guessed.manufacturer;
     dev.model = guessed.model;
     dev.network.vendor = guessed.manufacturer;
