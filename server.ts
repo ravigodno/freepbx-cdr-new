@@ -12319,6 +12319,9 @@ app.get('/api/health-report', requireAuth(['su', 'admin']), async (req, res) => 
 
 // --- PBXPULS HEALTH HISTORY ---
 const HEALTH_HISTORY_FILE = path.join(DATA_DIR, 'health-history.json');
+const HEALTH_HISTORY_MAX_POINTS = Math.max(120, Number(process.env.PBXPULS_HEALTH_HISTORY_MAX_POINTS || 2880));
+const HEALTH_HISTORY_INTERVAL_MS = Math.max(30000, Number(process.env.PBXPULS_HEALTH_HISTORY_INTERVAL_MS || 60000));
+const HEALTH_HISTORY_VERBOSE_LOG = String(process.env.PBXPULS_HEALTH_HISTORY_VERBOSE_LOG || '').trim() === '1';
 
 let lastHealthNetSample: any = null;
 
@@ -12334,7 +12337,8 @@ function readHealthHistory(): any[] {
 
 function writeHealthHistory(history: any[]) {
   try {
-    fs.writeFileSync(HEALTH_HISTORY_FILE, JSON.stringify(history, null, 2));
+    const safeHistory = Array.isArray(history) ? history.slice(-HEALTH_HISTORY_MAX_POINTS) : [];
+    fs.writeFileSync(HEALTH_HISTORY_FILE, JSON.stringify(safeHistory));
   } catch (e) {
     console.warn('[HEALTH_HISTORY] write failed', e);
   }
@@ -12519,7 +12523,9 @@ async function updateHealthHistory() {
     });
 
     writeHealthHistory(cleaned);
-    console.log('[HEALTH_HISTORY] saved point', point.timestamp, 'calls=' + point.asterisk.activeCalls, 'cpu=' + point.cpuPercent, 'ram=' + point.memoryPercent);
+    if (HEALTH_HISTORY_VERBOSE_LOG) {
+      console.log('[HEALTH_HISTORY] saved point', point.timestamp, 'calls=' + point.asterisk.activeCalls, 'cpu=' + point.cpuPercent, 'ram=' + point.memoryPercent);
+    }
   } catch (e) {
     console.warn('[HEALTH_HISTORY] update failed', e);
   }
@@ -12527,7 +12533,7 @@ async function updateHealthHistory() {
 
 setTimeout(() => {
   updateHealthHistory();
-  setInterval(updateHealthHistory, 15000);
+  setInterval(updateHealthHistory, HEALTH_HISTORY_INTERVAL_MS);
 }, 10000);
 
 app.get('/api/health-report/history', requireAuth(['su', 'admin']), async (req, res) => {

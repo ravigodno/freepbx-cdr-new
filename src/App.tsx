@@ -3208,6 +3208,7 @@ export default function App() {
       monitorMode === 'devices' ? 'Карта IP / SIP устройств' :
       monitorMode === 'quality' ? 'Качество связи' :
       monitorMode === 'health' ? 'Состояние АТС' :
+      monitorMode === 'ai-admin' ? 'AI-администратор АТС' :
       'Мониторинг';
 
     const monitoringSubtitle =
@@ -3218,6 +3219,7 @@ export default function App() {
       monitorMode === 'db' ? 'Просмотр CDR/CEL и таблиц FreePBX/Asterisk' :
       monitorMode === 'devices' ? 'Карта регистраций SIP/PJSIP, IP-адресов и конфликтующих устройств' :
       monitorMode === 'quality' ? 'Интегрированная IP/RTP-телеметрия качества связи Asterisk,\nдиагностика джиттера, RTT, потерь пакетов и MOS' :
+      monitorMode === 'ai-admin' ? 'AI-консультант администратора для диагностики Asterisk и FreePBX, анализа логов и подготовки команд' :
       monitorMode === 'health' ? 'Health Report сервера FreePBX/Asterisk: железо, диски, сеть, интернет, службы и общее состояние АТС' :
       '';
     const sessions = liveSessionsData?.sessions || [];
@@ -3552,6 +3554,17 @@ export default function App() {
                 Состояние АТС
               </button>
               )}
+
+              {hasPermission('view_ai_pbx_admin') && (
+              <button
+                onClick={() => setMonitorMode('ai-admin' as any)}
+                className={`px-3 py-2 rounded-lg text-xs font-bold border ${monitorMode === 'ai-admin'
+                  ? 'bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-950/40 dark:text-violet-300'
+                  : 'bg-white text-slate-600 border-slate-200'}`}
+              >
+                AI-администратор АТС
+              </button>
+              )}
               </div>
             </div>
 
@@ -3599,6 +3612,10 @@ export default function App() {
 
           {monitorMode === 'health' && hasPermission('view_cli') && (
             <HealthReportTab token={session?.token || ''} />
+          )}
+
+          {monitorMode === 'ai-admin' && hasPermission('view_ai_pbx_admin') && (
+            <AIPBXAdminTab session={session} hasPermission={hasPermission} />
           )}
 
           {monitorMode === 'devices' && hasPermission('view_sip_devices_map') && (
@@ -4774,29 +4791,6 @@ export default function App() {
                 </button>
               )}
 
-              {hasPermission('view_ai_pbx_admin') && (
-                <button
-                  onClick={() => setActiveView('ai-pbx-admin')}
-                  className={`flex items-center ${isSidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl transition-all relative group cursor-pointer ${
-                    activeView === 'ai-pbx-admin'
-                      ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-900/30 shadow-inner'
-                      : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent'
-                  }`}
-                  title={isSidebarExpanded ? "" : "AI-администратор АТС"}
-                >
-                  <Bot className="h-5 w-5 shrink-0" />
-                  {isSidebarExpanded && (
-                    <span className="text-xs font-semibold truncate animate-fade-in text-slate-705 dark:text-slate-200">
-                      AI-администратор АТС
-                    </span>
-                  )}
-                  {!isSidebarExpanded && (
-                    <span className="absolute left-full ml-3 px-2 py-1 rounded bg-slate-950 text-white text-[10px] font-bold opacity-0 group-hover:opacity-100 transition-opacity z-50 whitespace-nowrap shadow-md pointer-events-none">
-                      AI-администратор АТС
-                    </span>
-                  )}
-                </button>
-              )}
 
           </div></div>
 
@@ -6290,10 +6284,6 @@ export default function App() {
 
     {activeView === 'ai-assistant' && hasPermission('view_ai_assistant') && (
       <AiAssistantTab session={session} hasPermission={hasPermission} />
-    )}
-
-    {activeView === 'ai-pbx-admin' && hasPermission('view_ai_pbx_admin') && (
-      <AIPBXAdminTab session={session} hasPermission={hasPermission} />
     )}
 
 

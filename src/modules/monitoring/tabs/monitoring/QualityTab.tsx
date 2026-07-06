@@ -426,6 +426,7 @@ export default function QualityTab({ token }: Props) {
   const [allHistory, setAllHistory] = useState<TelemetryPoint[]>([]);
   const [selectedExt, setSelectedExt] = useState<string>('101');
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [deviceListTab, setDeviceListTab] = useState<'trunks' | 'devices'>('trunks');
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string>('');
   const [historyPeriod, setHistoryPeriod] = useState<'1h' | '24h' | '7d' | '30d'>('1h');
@@ -568,6 +569,16 @@ export default function QualityTab({ token }: Props) {
       d.userAgent.toLowerCase().includes(q)
     );
   }, [devices, searchQuery]);
+
+  const filteredTrunks = useMemo(() => {
+    return filteredDevices.filter(d => String((d as any).deviceRole || '').toLowerCase() === 'trunk');
+  }, [filteredDevices]);
+
+  const filteredExtensions = useMemo(() => {
+    return filteredDevices.filter(d => String((d as any).deviceRole || '').toLowerCase() !== 'trunk');
+  }, [filteredDevices]);
+
+  const visibleQualityDevices = deviceListTab === 'trunks' ? filteredTrunks : filteredExtensions;
 
   // RUN PING TOOL
   const runPing = async (ext: string) => {
@@ -878,9 +889,9 @@ export default function QualityTab({ token }: Props) {
               <div>
                 <h3 className="text-sm font-black text-slate-900 dark:text-white flex items-center gap-1.5">
                   <Sliders className="h-4 w-4 text-blue-500" />
-                  Мониторинг качества абонентских устройств
+                  Мониторинг качества связи
                 </h3>
-                <p className="text-xs text-slate-500 mt-0.5">Кликните по строке для просмотра детальной аналитики, истории и запуска тестов дебага.</p>
+                <p className="text-xs text-slate-500 mt-0.5">Разделите просмотр на транки и абонентские устройства. Кликните по строке для детальной аналитики и диагностики.</p>
               </div>
               
               <div className="relative">
@@ -895,13 +906,40 @@ export default function QualityTab({ token }: Props) {
               </div>
             </div>
 
+            <div className="px-4 pt-4">
+              <div className="inline-flex rounded-xl border border-slate-200 dark:border-[#334155] bg-slate-50 dark:bg-slate-900/40 p-1">
+                <button
+                  type="button"
+                  onClick={() => setDeviceListTab('trunks')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all ${
+                    deviceListTab === 'trunks'
+                      ? 'bg-white dark:bg-[#1e293b] text-blue-700 dark:text-blue-300 shadow-sm'
+                      : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                  }`}
+                >
+                  Транки ({filteredTrunks.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDeviceListTab('devices')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all ${
+                    deviceListTab === 'devices'
+                      ? 'bg-white dark:bg-[#1e293b] text-blue-700 dark:text-blue-300 shadow-sm'
+                      : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                  }`}
+                >
+                  Абоненты ({filteredExtensions.length})
+                </button>
+              </div>
+            </div>
+
             {/* TABLE */}
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs font-semibold whitespace-nowrap">
                 <thead className="bg-slate-50 dark:bg-slate-900/50 text-slate-500 uppercase tracking-wider text-[10px] border-b border-slate-200 dark:border-[#334155]">
                   <tr>
                     <th className="px-4 py-3">EXT</th>
-                    <th className="px-4 py-3">Абонент</th>
+                    <th className="px-4 py-3">Устройство</th>
                     <th className="px-4 py-3">IP Адрес</th>
                     <th className="px-4 py-3">Тип</th>
                     <th className="px-4 py-3">User-Agent</th>
@@ -913,14 +951,14 @@ export default function QualityTab({ token }: Props) {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {filteredDevices.length === 0 ? (
+                  {visibleQualityDevices.length === 0 ? (
                     <tr>
                       <td colSpan={10} className="px-4 py-8 text-center text-slate-400 font-medium">
-                        Устройства не найдены. Измените параметры поиска.
+                        {deviceListTab === 'trunks' ? 'Транки не найдены. Измените параметры поиска.' : 'Абоненты не найдены. Измените параметры поиска.'}
                       </td>
                     </tr>
                   ) : (
-                    filteredDevices.map((dev) => {
+                    visibleQualityDevices.map((dev) => {
                       const isSelected = selectedExt === dev.ext;
                       
                       // Status colors
@@ -974,7 +1012,7 @@ export default function QualityTab({ token }: Props) {
             </div>
             
             <div className="p-3 bg-slate-50/50 dark:bg-slate-900/30 text-slate-400 text-[10px] font-bold border-t border-slate-200 dark:border-[#334155] text-right">
-              Всего выведено устройств: {filteredDevices.length}
+              {deviceListTab === 'trunks' ? 'Выведено транков' : 'Выведено абонентов'}: {visibleQualityDevices.length} · Всего найдено: {filteredDevices.length}
             </div>
           </div>
 
