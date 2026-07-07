@@ -170,6 +170,21 @@ Run history can initially use `test_runs`/`test_results` or a later dedicated sc
 | `ai_voice_routes` | AI assistant voice/route rules. |
 | `ai_knowledge_base` | Knowledge sources and normalized text metadata. |
 
+## Stage 3.1: Backend Settings Service
+
+Stage 3.1 adds a backend-only settings service for the existing `settings` table:
+
+- service module: `server/pbxpulsSettings.ts`;
+- DB helper module: `server/pbxpulsDb.ts`;
+- supported value types: `string`, `number`, `boolean`, `json`, `secret`;
+- helper functions: `getPBXPulsSetting`, `getPBXPulsSettingsByCategory`, `setPBXPulsSetting`, `upsertPBXPulsSetting`, `parseSettingValue`, `serializeSettingValue`.
+
+This stage does not connect the service to runtime application settings, frontend code, endpoints, authentication or startup behavior. It does not seed data and does not migrate existing values from `data/db.json`, `.env`, localStorage or sessionStorage.
+
+If the PBXPuls database or `settings` table is unavailable, reads return the provided fallback value and writes return `false`. JSON parse failures produce a warning without logging the stored value. The `secret` value type is treated as a plain string placeholder for now; no encryption is implemented in this stage and no real secrets are migrated.
+
+The next phase can use this service behind a feature flag for dual-read/fallback of selected settings while preserving existing JSON/env behavior.
+
 ## Migration Order
 
 1. Inventory and documentation only.
