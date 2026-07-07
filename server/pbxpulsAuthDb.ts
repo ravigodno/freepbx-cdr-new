@@ -113,6 +113,23 @@ export async function getPBXPulsUser(username: string): Promise<PBXPulsSqlUser |
   }
 }
 
+export async function getPBXPulsUsers(): Promise<PBXPulsSqlUser[]> {
+  try {
+    if (!(await isPBXPulsDbAvailable())) return [];
+
+    const rows = await queryPBXPulsDb(
+      `SELECT id, username, display_name, email, password_hash, is_active, is_system
+       FROM users
+       ORDER BY username ASC`,
+      []
+    );
+    return (rows as PBXPulsSqlUserRow[]).map(mapUserRow);
+  } catch (error: any) {
+    warnAuthDbLayer('users read failed', error);
+    return [];
+  }
+}
+
 export async function getPBXPulsRoles(): Promise<PBXPulsSqlRole[]> {
   try {
     if (!(await isPBXPulsDbAvailable())) return [];

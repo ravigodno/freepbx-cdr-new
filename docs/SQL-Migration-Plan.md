@@ -317,6 +317,19 @@ When `auth.storage_mode=legacy`, the hook does nothing. When `auth.storage_mode=
 
 When `auth.storage_mode=sql`, runtime login still does not authorize from SQL. PBXPuls writes `auth_sql_mode_not_enabled` as a warning to make the requested mode visible while preserving legacy login behavior. SQL/settings/event errors are caught, legacy login continues, and comparison failures write `auth_compare_failed` when possible.
 
+## Stage 6.6: Auth Migration Readiness Report
+
+Stage 6.6 adds a backend-only read-only readiness endpoint for validating whether legacy JSON auth data is fully mirrored in SQL before any future auth runtime change.
+
+- endpoint: `GET /api/pbxpuls/auth-readiness`;
+- protection: existing `requireAuth(['su', 'admin'])` middleware;
+- source of legacy users: `data/db.json`;
+- SQL comparison source: `compareLegacyUserWithSql(username)` plus a read-only SQL users list.
+
+The report checks each legacy user for SQL presence, role match, permission count match and password-hash presence parity. It also reports SQL users missing from legacy. Issues contain only safe fields such as type and username; password hashes, plaintext passwords, tokens and secrets are never returned.
+
+The report recommends `hybrid` only as the next diagnostic mode. Runtime authentication remains legacy-only: login still reads `data/db.json`, `requireAuth()` is unchanged, token shape is unchanged, and SQL auth is not used to admit users.
+
 ## Migration Order
 
 1. Inventory and documentation only.

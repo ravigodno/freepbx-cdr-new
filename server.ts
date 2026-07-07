@@ -27,7 +27,7 @@ import { registerManagementRoutes } from './server-management.js';
 import { registerAiPbxAdminRoutes } from './server/aiPbxAdmin.js';
 import { runPBXPulsMigrations } from './server/pbxpulsMigrations.js';
 import { registerPBXPulsSqlStatusRoutes } from './server/pbxpulsSqlStatus.js';
-import { compareLegacyUserWithSql, getAuthStorageMode } from './server/pbxpulsAuthDb.js';
+import { compareLegacyUserWithSql, getAuthStorageMode, getPBXPulsUsers } from './server/pbxpulsAuthDb.js';
 import { isPBXPulsDbAvailable, sanitizePBXPulsDbError } from './server/pbxpulsDb.js';
 import { writePBXPulsSystemEvent } from './server/pbxpulsEvents.js';
 
@@ -6363,6 +6363,159 @@ async function markYandexMetrikaIntegration(localDb: any, integrationId: string,
   await writeLocalDb(localDb);
 }
 
+type AuthReadinessIssue = {
+  type: string;
+  username?: string;
+  error?: string;
+};
+
+type AuthReadinessReport = {
+  ready: boolean;
+  users: {
+    checked: number;
+    matched: number;
+    missingInSql: string[];
+    missingInLegacy: string[];
+  };
+  roles: {
+    matched: boolean;
+  };
+  permissions: {
+    matched: boolean;
+  };
+  issues: AuthReadinessIssue[];
+  recommendedMode: 'hybrid';
+};
+
+function readLegacyAuthUsersForReadiness(): { users: any[]; issues: AuthReadinessIssue[] } {
+  try {
+    if (!fs.existsSync(DB_FILE)) {
+      return { users: [], issues: [{ type: 'legacy_db_missing' }] };
+    }
+
+    const parsed = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    const users = Array.isArray(parsed?.users) ? parsed.users : [];
+    return {
+      users: users.filter((user: any) => String(user?.username || '').trim()),
+      issues: Array.isArray(parsed?.users) ? [] : [{ type: 'legacy_users_invalid' }]
+    };
+  } catch (error: any) {
+    return {
+      users: [],
+      issues: [{ type: 'legacy_db_read_failed', error: sanitizePBXPulsDbError(error).slice(0, 300) }]
+    };
+  }
+}
+
+async function buildAuthReadinessReport(): Promise<AuthReadinessReport> {
+  const legacyAuth = readLegacyAuthUsersForReadiness();
+  const issues: AuthReadinessIssue[] = [...legacyAuth.issues];
+  const legacyUsers = legacyAuth.users;
+  const legacyUsernames = uniqueAuthReadinessUsernames(legacyUsers.map((user: any) => user.username));
+  const legacyUsernameSet = new Set(legacyUsernames.map((username) => username.toLowerCase()));
+  const missingInSql: string[] = [];
+  const missingInLegacy: string[] = [];
+
+  const sqlUsers = await getPBXPulsUsers();
+  for (const sqlUser of sqlUsers) {
+    const username = normalizeAuthReadinessUsername(sqlUser.username);
+    if (username && !legacyUsernameSet.has(username.toLowerCase())) {
+      missingInLegacy.push(username);
+      issues.push({ type: 'user_missing_legacy', username });
+    }
+  }
+
+  let matched = 0;
+  const comparisons = [];
+
+  for (const username of legacyUsernames) {
+    try {
+      const comparison = await compareLegacyUserWithSql(username);
+      comparisons.push(comparison);
+
+      if (!comparison.legacyExists) {
+        issues.push({ type: 'user_missing_legacy', username });
+      }
+      if (!comparison.sqlExists) {
+        missingInSql.push(username);
+        issues.push({ type: 'user_missing_sql', username });
+      }
+      if (!comparison.rolesMatch) {
+        issues.push({ type: 'role_mismatch', username });
+      }
+      if (comparison.permissionsCountLegacy !== comparison.permissionsCountSql) {
+        issues.push({ type: 'permission_mismatch', username });
+      }
+      if (comparison.passwordHashPresentLegacy !== comparison.passwordHashPresentSql) {
+        issues.push({ type: 'password_hash_presence_mismatch', username });
+      }
+
+      if (isAuthReadinessUserMatched(comparison)) {
+        matched += 1;
+      }
+    } catch (error: any) {
+      issues.push({
+        type: 'auth_compare_failed',
+        username,
+        error: sanitizePBXPulsDbError(error).slice(0, 300)
+      });
+    }
+  }
+
+  if (legacyUsernames.length === 0) {
+    issues.push({ type: 'legacy_users_empty' });
+  }
+
+  const rolesMatched = comparisons.length === legacyUsernames.length && comparisons.every((comparison) => comparison.sqlExists && comparison.rolesMatch);
+  const permissionsMatched = comparisons.length === legacyUsernames.length && comparisons.every((comparison) =>
+    comparison.sqlExists && comparison.permissionsCountLegacy === comparison.permissionsCountSql
+  );
+  const ready = legacyUsernames.length > 0 && issues.length === 0 && matched === legacyUsernames.length && missingInSql.length === 0 && missingInLegacy.length === 0;
+
+  return {
+    ready,
+    users: {
+      checked: legacyUsernames.length,
+      matched,
+      missingInSql,
+      missingInLegacy
+    },
+    roles: {
+      matched: rolesMatched
+    },
+    permissions: {
+      matched: permissionsMatched
+    },
+    issues,
+    recommendedMode: 'hybrid'
+  };
+}
+
+function isAuthReadinessUserMatched(comparison: Awaited<ReturnType<typeof compareLegacyUserWithSql>>): boolean {
+  return comparison.legacyExists &&
+    comparison.sqlExists &&
+    comparison.rolesMatch &&
+    comparison.permissionsCountLegacy === comparison.permissionsCountSql &&
+    comparison.passwordHashPresentLegacy === comparison.passwordHashPresentSql;
+}
+
+function uniqueAuthReadinessUsernames(values: unknown[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const username = normalizeAuthReadinessUsername(value);
+    const key = username.toLowerCase();
+    if (!username || seen.has(key)) continue;
+    seen.add(key);
+    result.push(username);
+  }
+  return result;
+}
+
+function normalizeAuthReadinessUsername(value: unknown): string {
+  return String(value ?? '').trim().slice(0, 100);
+}
+
 // API ROUTER START
 const app = express();
 
@@ -6421,6 +6574,32 @@ app.get('/api/pbxpuls/auth-mode', requireAuth(['su', 'admin']), async (_req, res
       sqlAvailable: false,
       loginRuntimeSource: 'data/db.json',
       sqlAuthRuntimeEnabled: false
+    });
+  }
+});
+
+app.get('/api/pbxpuls/auth-readiness', requireAuth(['su', 'admin']), async (_req, res) => {
+  try {
+    const report = await buildAuthReadinessReport();
+    res.json(report);
+  } catch (error: any) {
+    console.warn('[PBXPULS_AUTH_READINESS] failed:', sanitizePBXPulsDbError(error).slice(0, 300));
+    res.json({
+      ready: false,
+      users: {
+        checked: 0,
+        matched: 0,
+        missingInSql: [],
+        missingInLegacy: []
+      },
+      roles: {
+        matched: false
+      },
+      permissions: {
+        matched: false
+      },
+      issues: [{ type: 'auth_readiness_failed', error: sanitizePBXPulsDbError(error).slice(0, 300) }],
+      recommendedMode: 'hybrid'
     });
   }
 });
