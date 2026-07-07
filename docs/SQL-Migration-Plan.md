@@ -309,6 +309,14 @@ The SQL auth helper now exposes `getAuthStorageMode()` and `getPBXPulsAuthCandid
 
 A read-only diagnostic endpoint `GET /api/pbxpuls/auth-mode` reports the current mode, SQL availability and the fixed runtime source `data/db.json`. Login is not switched to SQL, `requireAuth()` is unchanged, token shape is unchanged, and SQL auth remains diagnostic-only. A later stage may add hybrid comparison during login, still without authorizing from SQL.
 
+## Stage 6.5: Hybrid Auth Comparison on Login
+
+Stage 6.5 adds a non-blocking post-login comparison hook after successful legacy authentication. The login source remains `data/db.json`; SQL users, roles and permissions are not used to authorize the user, and token structure remains unchanged.
+
+When `auth.storage_mode=legacy`, the hook does nothing. When `auth.storage_mode=hybrid`, it compares the successful legacy user with SQL through `compareLegacyUserWithSql(username)`. Mismatches are written to `system_events` as `auth_compare_mismatch` with only safe fields: username, existence flags, role match, permission counts and password-hash presence booleans. Password hashes, plaintext passwords, tokens and secrets are never included.
+
+When `auth.storage_mode=sql`, runtime login still does not authorize from SQL. PBXPuls writes `auth_sql_mode_not_enabled` as a warning to make the requested mode visible while preserving legacy login behavior. SQL/settings/event errors are caught, legacy login continues, and comparison failures write `auth_compare_failed` when possible.
+
 ## Migration Order
 
 1. Inventory and documentation only.

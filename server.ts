@@ -28,7 +28,8 @@ import { registerAiPbxAdminRoutes } from './server/aiPbxAdmin.js';
 import { runPBXPulsMigrations } from './server/pbxpulsMigrations.js';
 import { registerPBXPulsSqlStatusRoutes } from './server/pbxpulsSqlStatus.js';
 import { compareLegacyUserWithSql, getAuthStorageMode } from './server/pbxpulsAuthDb.js';
-import { isPBXPulsDbAvailable } from './server/pbxpulsDb.js';
+import { isPBXPulsDbAvailable, sanitizePBXPulsDbError } from './server/pbxpulsDb.js';
+import { writePBXPulsSystemEvent } from './server/pbxpulsEvents.js';
 
 // Load environment variables
 dotenv.config();
@@ -7587,6 +7588,70 @@ app.get('/api/marketing/metrika/pages', requireAuth(), async (req, res) => {
   }
 });
 
+function scheduleLegacySqlAuthComparison(username: string): void {
+  runLegacySqlAuthComparison(username).catch((error: any) => {
+    console.warn('[AUTH] legacy/sql comparison skipped:', sanitizeAuthComparisonError(error));
+  });
+}
+
+async function runLegacySqlAuthComparison(username: string): Promise<void> {
+  const safeUsername = String(username || '').trim().slice(0, 100);
+
+  try {
+    const mode = await getAuthStorageMode();
+    if (mode === 'legacy') return;
+
+    if (mode === 'sql') {
+      await writePBXPulsSystemEvent({
+        event_type: 'auth_sql_mode_not_enabled',
+        severity: 'warning',
+        source: 'pbxpuls_auth',
+        message: 'SQL auth mode requested but runtime login still uses legacy source',
+        details: {
+          username: safeUsername,
+          loginRuntimeSource: 'data/db.json',
+          sqlAuthRuntimeEnabled: false
+        }
+      });
+      return;
+    }
+
+    const comparison = await compareLegacyUserWithSql(safeUsername);
+    if (hasAuthComparisonMismatch(comparison)) {
+      await writePBXPulsSystemEvent({
+        event_type: 'auth_compare_mismatch',
+        severity: 'warning',
+        source: 'pbxpuls_auth',
+        message: 'Auth legacy/sql comparison mismatch',
+        details: comparison
+      });
+    }
+  } catch (error: any) {
+    await writePBXPulsSystemEvent({
+      event_type: 'auth_compare_failed',
+      severity: 'warning',
+      source: 'pbxpuls_auth',
+      message: 'Auth comparison failed but legacy login continued',
+      details: {
+        username: safeUsername,
+        error: sanitizeAuthComparisonError(error)
+      }
+    });
+  }
+}
+
+function hasAuthComparisonMismatch(comparison: Awaited<ReturnType<typeof compareLegacyUserWithSql>>): boolean {
+  if (!comparison.legacyExists || !comparison.sqlExists) return true;
+  if (!comparison.rolesMatch) return true;
+  if (comparison.permissionsCountLegacy !== comparison.permissionsCountSql) return true;
+  if (comparison.passwordHashPresentLegacy !== comparison.passwordHashPresentSql) return true;
+  return false;
+}
+
+function sanitizeAuthComparisonError(error: any): string {
+  return sanitizePBXPulsDbError(error).slice(0, 300);
+}
+
 // Auth endpoint
 app.post('/api/auth/login', async (req, res) => {
   const { username, password } = req.body;
@@ -7637,6 +7702,8 @@ app.post('/api/auth/login', async (req, res) => {
   }
 
   console.log(`[AUTH] Login success username=${user.username} role=${user.role} extension=${user.extension || ''}`);
+
+  scheduleLegacySqlAuthComparison(user.username);
 
   const roleConfig = (localDb.roles || getDefaultAccessRoles()).find((item: any) => item.id === user.role);
   const effectivePermissions = {
