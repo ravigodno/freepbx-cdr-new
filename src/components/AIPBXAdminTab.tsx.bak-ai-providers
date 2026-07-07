@@ -134,39 +134,6 @@ function SimpleMarkdown({ text }: { text: string }) {
   );
 }
 
-
-// SAFE_AIPBX_FRONTEND_MESSAGES_V1
-const safeAipbxMessages = (messages: any): any[] => {
-  if (!Array.isArray(messages)) return [];
-
-  return messages
-    .filter((m: any) => m && typeof m === 'object')
-    .map((m: any) => {
-      const role = typeof m.role === 'string' ? m.role : '';
-
-      if (role !== 'user' && role !== 'assistant' && role !== 'system') {
-        return null;
-      }
-
-      const text = String(m.text || m.content || '');
-      if (!text.trim()) return null;
-
-      const rawDate = m.createdAt || m.timestamp || m.created_at;
-      const parsed = rawDate ? Date.parse(rawDate) : NaN;
-      const createdAt = Number.isNaN(parsed) ? new Date().toISOString() : new Date(parsed).toISOString();
-
-      return {
-        ...m,
-        role,
-        text,
-        content: text,
-        createdAt,
-        timestamp: createdAt
-      };
-    })
-    .filter(Boolean);
-};
-
 export default function AIPBXAdminTab({ session: userSession, hasPermission }: AIPBXAdminTabProps) {
   const [activeTab, setActiveTab] = useState<'chat' | 'diagnostics' | 'wizards' | 'history' | 'kb' | 'settings'>('chat');
   
@@ -199,9 +166,6 @@ export default function AIPBXAdminTab({ session: userSession, hasPermission }: A
   // Settings tab state
   const [aiProvider, setAiProvider] = useState('gemini');
   const [aiModel, setAiModel] = useState('gemini-3.5-flash');
-  const [aiApiKey, setAiApiKey] = useState('');
-  const [aiApiKeyMasked, setAiApiKeyMasked] = useState('');
-  const [aiBaseUrl, setAiBaseUrl] = useState('');
   const [aiTemp, setAiTemp] = useState(0.4);
   const [aiSystemPrompt, setAiSystemPrompt] = useState('');
   const [isSavingSettings, setIsSavingSettings] = useState(false);
@@ -217,20 +181,6 @@ export default function AIPBXAdminTab({ session: userSession, hasPermission }: A
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const authHeaders = (extra: Record<string, string> = {}) => {
-    const token =
-      userSession?.token ||
-      localStorage.getItem('asterisk_cdr_token') ||
-      localStorage.getItem('token') ||
-      localStorage.getItem('authToken') ||
-      '';
-
-    return {
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...extra
-    };
-  };
-
   // Fetch initial data
   useEffect(() => {
     fetchSessions();
@@ -245,7 +195,7 @@ export default function AIPBXAdminTab({ session: userSession, hasPermission }: A
 
   const fetchSessions = async () => {
     try {
-      const res = await fetch('/api/ai-pbx-admin/sessions', { headers: authHeaders() });
+      const res = await fetch('/api/ai-pbx-admin/sessions');
       if (res.ok) {
         const data = await res.json();
         setSessions(data);
@@ -262,7 +212,7 @@ export default function AIPBXAdminTab({ session: userSession, hasPermission }: A
 
   const fetchKnowledgeBase = async () => {
     try {
-      const res = await fetch('/api/ai-pbx-admin/knowledge', { headers: authHeaders() });
+      const res = await fetch('/api/ai-pbx-admin/knowledge');
       if (res.ok) {
         const data = await res.json();
         setArticles(data);
@@ -274,22 +224,7 @@ export default function AIPBXAdminTab({ session: userSession, hasPermission }: A
 
   const fetchSettings = async () => {
     try {
-      const res = await fetch('/api/ai-pbx-admin/settings', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      provider,
-      model,
-      temperature,
-      apiKey,
-      baseUrl,
-      systemPrompt
-    })
-      .finally(() => {
-        clearTimeout(timeout);
-        setSaving(false);
-      })
-  }, { headers: authHeaders() });
+      const res = await fetch('/api/ai-pbx-admin/settings');
       if (res.ok) {
         const data = await res.json();
         setAiProvider(data.provider || 'gemini');
@@ -307,7 +242,7 @@ export default function AIPBXAdminTab({ session: userSession, hasPermission }: A
     try {
       const res = await fetch('/api/ai-pbx-admin/sessions', {
         method: 'POST',
-        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           title: `Техподдержка AI #${sessions.length + 1}`,
           category: chatCategory
@@ -330,7 +265,7 @@ export default function AIPBXAdminTab({ session: userSession, hasPermission }: A
     try {
       const res = await fetch(`/api/ai-pbx-admin/sessions/${sess.id}`, {
         method: 'PUT',
-        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: nextStatus })
       });
       if (res.ok) {
@@ -350,8 +285,7 @@ export default function AIPBXAdminTab({ session: userSession, hasPermission }: A
     if (!window.confirm('Вы действительно хотите удалить это обращение из истории?')) return;
     try {
       const res = await fetch(`/api/ai-pbx-admin/sessions/${id}`, {
-        method: 'DELETE',
-        headers: authHeaders()
+        method: 'DELETE'
       });
       if (res.ok) {
         setSessions(prev => prev.filter(s => s.id !== id));
@@ -378,7 +312,7 @@ export default function AIPBXAdminTab({ session: userSession, hasPermission }: A
     try {
       const res = await fetch(`/api/ai-pbx-admin/sessions/${selectedSession.id}/messages`, {
         method: 'POST',
-        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           text: contentText,
           attachments: attachmentsToSend
@@ -387,45 +321,23 @@ export default function AIPBXAdminTab({ session: userSession, hasPermission }: A
 
       if (res.ok) {
         const data = await res.json();
-
-        const updatedSession = data.session
-          ? {
-              ...data.session,
-              messages: safeAipbxMessages(data.session.messages)
-            }
-          : null;
-
-        if (updatedSession) {
-          setSessions(prev => {
-            const exists = prev.some(s => s.id === updatedSession.id);
-            if (!exists) return [...prev, updatedSession];
-            return prev.map(s => s.id === updatedSession.id ? updatedSession : s);
-          });
-
-          setSelectedSession(updatedSession);
-        } else if (data.message) {
-          const safeMessage = safeAipbxMessages([data.message])[0];
-
-          if (safeMessage) {
-            setSessions(prev => prev.map(s => {
-              if (s.id === selectedSession.id) {
-                return {
-                  ...s,
-                  messages: safeAipbxMessages([...(s.messages || []), safeMessage])
-                };
-              }
-              return s;
-            }));
-
-            setSelectedSession(prev => {
-              if (!prev) return null;
-              return {
-                ...prev,
-                messages: safeAipbxMessages([...(prev.messages || []), safeMessage])
-              };
-            });
+        // Update both in list and active select
+        setSessions(prev => prev.map(s => {
+          if (s.id === selectedSession.id) {
+            return {
+              ...s,
+              messages: [...s.messages, data.userMessage, data.aiMessage]
+            };
           }
-        }
+          return s;
+        }));
+        setSelectedSession(prev => {
+          if (!prev) return null;
+          return {
+            ...prev,
+            messages: [...prev.messages, data.userMessage, data.aiMessage]
+          };
+        });
       }
     } catch (e) {
       console.error(e);
@@ -462,7 +374,7 @@ export default function AIPBXAdminTab({ session: userSession, hasPermission }: A
     try {
       const res = await fetch('/api/ai-pbx-admin/diagnostics/suggest', {
         method: 'POST',
-        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           category: diagCategory,
           customProblem: diagProblem
@@ -492,7 +404,7 @@ export default function AIPBXAdminTab({ session: userSession, hasPermission }: A
     try {
       const res = await fetch('/api/ai-pbx-admin/diagnostics/collect-safe', {
         method: 'POST',
-        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ command: targetCmd })
       });
       const data = await res.json();
@@ -516,7 +428,7 @@ export default function AIPBXAdminTab({ session: userSession, hasPermission }: A
     try {
       const res = await fetch('/api/ai-pbx-admin/diagnostics/analyze', {
         method: 'POST',
-        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           sourceTitle: 'Вывод команды диагностики',
           content: terminalOutput
@@ -579,66 +491,22 @@ export default function AIPBXAdminTab({ session: userSession, hasPermission }: A
   const handleSaveSettings = async () => {
     setIsSavingSettings(true);
     setTestResult(null);
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
-
     try {
       const res = await fetch('/api/ai-pbx-admin/settings', {
         method: 'PUT',
-        headers: typeof authHeaders === 'function'
-          ? authHeaders({ 'Content-Type': 'application/json' })
-          : { 'Content-Type': 'application/json' },
-        signal: controller.signal,
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           provider: aiProvider,
           model: aiModel,
-          apiKey: aiApiKey,
-          baseUrl: aiBaseUrl,
           temperature: aiTemp,
           systemPrompt: aiSystemPrompt
         })
       });
-
-      clearTimeout(timeout);
-
-      const text = await res.text();
-      let data: any = {};
-      try {
-        data = text ? JSON.parse(text) : {};
-      } catch (jsonError) {
-        throw new Error('Сервер вернул не JSON: ' + text.slice(0, 300));
+      if (res.ok) {
+        alert('Настройки AI-администратора успешно сохранены!');
       }
-
-      if (!res.ok) {
-        throw new Error(data.error || 'HTTP ' + res.status);
-      }
-
-      setAiApiKey('');
-      setAiApiKeyMasked(data.apiKeyMasked || '');
-      setAiBaseUrl(data.baseUrl || aiBaseUrl || '');
-
-      setTestResult({
-        success: true,
-        message: 'Настройки AI-администратора успешно сохранены.'
-      });
-
-      alert('Настройки AI-администратора успешно сохранены.');
-    } catch (e: any) {
-      clearTimeout(timeout);
-
-      const message = e?.name === 'AbortError'
-        ? 'Сервер не ответил за 15 секунд.'
-        : 'Ошибка сохранения настроек: ' + (e?.message || 'неизвестная ошибка');
-
-      console.error('[AIPBXAdmin] save settings failed:', e);
-
-      setTestResult({
-        success: false,
-        message
-      });
-
-      alert(message);
+    } catch (e) {
+      console.error(e);
     } finally {
       setIsSavingSettings(false);
     }
@@ -780,7 +648,7 @@ ${answersSummary}
 
       const res = await fetch('/api/ai-pbx-admin/diagnostics/analyze', {
         method: 'POST',
-        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           sourceTitle: `Мастер диагностики - ${wizardId === 'trunk_fail' ? 'Транк' : 'NAT'}`,
           content: prompt
@@ -1037,7 +905,7 @@ ${answersSummary}
                       </div>
                     </div>
                   ) : (
-                    safeAipbxMessages(selectedSession.messages).map((msg) => (
+                    selectedSession.messages.map((msg) => (
                       <div
                         key={msg.id}
                         className={`flex gap-4 max-w-4xl ${msg.role === 'user' ? 'ml-auto flex-row-reverse' : 'mr-auto'}`}
@@ -1768,40 +1636,6 @@ ${answersSummary}
                   {testResult.raw && <pre className="mt-2 p-2 bg-black/5 dark:bg-black/30 rounded text-[10px] whitespace-pre-wrap">{testResult.raw}</pre>}
                 </div>
               )}
-            </div>
-
-            
-            <div className="space-y-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40 p-4">
-              <div>
-                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">
-                  API key
-                </label>
-                <input
-                  id="aipbxadmin-api-key-input"
-                  type="password"
-                  value={aiApiKey}
-                  onChange={(e) => setAiApiKey(e.target.value)}
-                  placeholder="Вставьте новый ключ. Если оставить пустым — старый ключ сохранится."
-                  className="mt-1 w-full px-3.5 py-2.5 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-700 dark:text-slate-300 focus:outline-none focus:border-blue-500"
-                  autoComplete="off"
-                />
-                <p className="mt-1 text-[11px] text-slate-400">
-                  Сейчас сохранено: <span className="font-mono">{aiApiKeyMasked || 'ключ не сохранен'}</span>
-                </p>
-              </div>
-
-              <div>
-                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">
-                  Base URL
-                </label>
-                <input
-                  type="text"
-                  value={aiBaseUrl}
-                  onChange={(e) => setAiBaseUrl(e.target.value)}
-                  placeholder="Для OpenAI оставить пустым. Для OpenRouter: https://openrouter.ai/api/v1"
-                  className="mt-1 w-full px-3.5 py-2.5 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-700 dark:text-slate-300 focus:outline-none focus:border-blue-500"
-                />
-              </div>
             </div>
 
             {/* Save settings action button */}

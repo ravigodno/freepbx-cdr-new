@@ -134,39 +134,6 @@ function SimpleMarkdown({ text }: { text: string }) {
   );
 }
 
-
-// SAFE_AIPBX_FRONTEND_MESSAGES_V1
-const safeAipbxMessages = (messages: any): any[] => {
-  if (!Array.isArray(messages)) return [];
-
-  return messages
-    .filter((m: any) => m && typeof m === 'object')
-    .map((m: any) => {
-      const role = typeof m.role === 'string' ? m.role : '';
-
-      if (role !== 'user' && role !== 'assistant' && role !== 'system') {
-        return null;
-      }
-
-      const text = String(m.text || m.content || '');
-      if (!text.trim()) return null;
-
-      const rawDate = m.createdAt || m.timestamp || m.created_at;
-      const parsed = rawDate ? Date.parse(rawDate) : NaN;
-      const createdAt = Number.isNaN(parsed) ? new Date().toISOString() : new Date(parsed).toISOString();
-
-      return {
-        ...m,
-        role,
-        text,
-        content: text,
-        createdAt,
-        timestamp: createdAt
-      };
-    })
-    .filter(Boolean);
-};
-
 export default function AIPBXAdminTab({ session: userSession, hasPermission }: AIPBXAdminTabProps) {
   const [activeTab, setActiveTab] = useState<'chat' | 'diagnostics' | 'wizards' | 'history' | 'kb' | 'settings'>('chat');
   
@@ -387,45 +354,23 @@ export default function AIPBXAdminTab({ session: userSession, hasPermission }: A
 
       if (res.ok) {
         const data = await res.json();
-
-        const updatedSession = data.session
-          ? {
-              ...data.session,
-              messages: safeAipbxMessages(data.session.messages)
-            }
-          : null;
-
-        if (updatedSession) {
-          setSessions(prev => {
-            const exists = prev.some(s => s.id === updatedSession.id);
-            if (!exists) return [...prev, updatedSession];
-            return prev.map(s => s.id === updatedSession.id ? updatedSession : s);
-          });
-
-          setSelectedSession(updatedSession);
-        } else if (data.message) {
-          const safeMessage = safeAipbxMessages([data.message])[0];
-
-          if (safeMessage) {
-            setSessions(prev => prev.map(s => {
-              if (s.id === selectedSession.id) {
-                return {
-                  ...s,
-                  messages: safeAipbxMessages([...(s.messages || []), safeMessage])
-                };
-              }
-              return s;
-            }));
-
-            setSelectedSession(prev => {
-              if (!prev) return null;
-              return {
-                ...prev,
-                messages: safeAipbxMessages([...(prev.messages || []), safeMessage])
-              };
-            });
+        // Update both in list and active select
+        setSessions(prev => prev.map(s => {
+          if (s.id === selectedSession.id) {
+            return {
+              ...s,
+              messages: [...s.messages, data.userMessage, data.aiMessage]
+            };
           }
-        }
+          return s;
+        }));
+        setSelectedSession(prev => {
+          if (!prev) return null;
+          return {
+            ...prev,
+            messages: [...prev.messages, data.userMessage, data.aiMessage]
+          };
+        });
       }
     } catch (e) {
       console.error(e);
@@ -1037,7 +982,7 @@ ${answersSummary}
                       </div>
                     </div>
                   ) : (
-                    safeAipbxMessages(selectedSession.messages).map((msg) => (
+                    selectedSession.messages.map((msg) => (
                       <div
                         key={msg.id}
                         className={`flex gap-4 max-w-4xl ${msg.role === 'user' ? 'ml-auto flex-row-reverse' : 'mr-auto'}`}

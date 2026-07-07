@@ -495,28 +495,20 @@ function formatToolResultsForAI(results: any[]): string {
 async function callOpenAIChatViaCurlSafe(endpoint: string, key: string, payload: any): Promise<any> {
   const { execFile } = require('child_process');
 
-  const body = JSON.stringify(payload);
-
-  const runOnce = (attempt: number) => new Promise<any>((resolve, reject) => {
+  return await new Promise((resolve, reject) => {
     execFile('curl', [
-      '-4',
       '-sS',
-      '--connect-timeout', '20',
       '--max-time', '75',
-      '--retry', '2',
-      '--retry-delay', '1',
-      '--retry-all-errors',
       endpoint,
       '-H', 'Authorization: Bearer ' + key,
       '-H', 'Content-Type: application/json',
-      '-H', 'OpenAI-Beta: assistants=v2',
-      '-d', body
+      '-d', JSON.stringify(payload)
     ], {
-      timeout: 90000,
+      timeout: 80000,
       maxBuffer: 1024 * 1024 * 4
     }, (error: any, stdout: string, stderr: string) => {
       if (error) {
-        reject(new Error('curl OpenAI error attempt ' + attempt + ': ' + (stderr || error.message || String(error))));
+        reject(new Error('curl OpenAI error: ' + (stderr || error.message || String(error))));
         return;
       }
 
@@ -524,15 +516,7 @@ async function callOpenAIChatViaCurlSafe(endpoint: string, key: string, payload:
         const data = JSON.parse(String(stdout || '{}'));
 
         if (data.error) {
-          const code = String(data.error.code || '');
-          const msg = JSON.stringify(data.error);
-
-          if (code === 'unsupported_country_region_territory') {
-            reject(new Error('RETRYABLE_OPENAI_REGION_ERROR: ' + msg));
-            return;
-          }
-
-          reject(new Error('OpenAI API error via curl: ' + msg));
+          reject(new Error('OpenAI API error via curl: ' + JSON.stringify(data.error)));
           return;
         }
 
@@ -542,25 +526,6 @@ async function callOpenAIChatViaCurlSafe(endpoint: string, key: string, payload:
       }
     });
   });
-
-  let lastError: any = null;
-
-  for (let attempt = 1; attempt <= 4; attempt++) {
-    try {
-      return await runOnce(attempt);
-    } catch (e: any) {
-      lastError = e;
-      const msg = String(e?.message || e);
-
-      if (!msg.includes('RETRYABLE_OPENAI_REGION_ERROR')) {
-        throw e;
-      }
-
-      await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
-    }
-  }
-
-  throw new Error(String(lastError?.message || lastError || 'OpenAI curl failed after retries').replace('RETRYABLE_OPENAI_REGION_ERROR: ', 'OpenAI API error via curl after retries: '));
 }
 
 async function generateAIResponse(params: {

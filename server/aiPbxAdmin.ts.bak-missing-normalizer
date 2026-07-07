@@ -219,39 +219,6 @@ function cleanJsonResponseText(raw: string): string {
 // Unified multi-provider AI text completion engine
 
 
-
-// AIPBX_MESSAGE_NORMALIZER_RESTORED_V1
-function normalizeAipbxMessageFinal(m: any): any | null {
-  if (!m || typeof m !== 'object') return null;
-
-  const role = typeof m.role === 'string' ? m.role : '';
-  if (role !== 'user' && role !== 'assistant' && role !== 'system') return null;
-
-  const text = String(m.text || m.content || '');
-  if (!text.trim()) return null;
-
-  const rawDate = m.createdAt || m.timestamp || m.created_at;
-  const createdAt = rawDate && !Number.isNaN(Date.parse(rawDate))
-    ? new Date(rawDate).toISOString()
-    : new Date().toISOString();
-
-  return {
-    id: String(m.id || ('msg_' + Date.now() + '_' + Math.random().toString(16).slice(2))),
-    role,
-    text,
-    content: text,
-    createdAt,
-    timestamp: createdAt,
-    attachments: Array.isArray(m.attachments) ? m.attachments : []
-  };
-}
-
-function normalizeAipbxMessagesFinal(messages: any): any[] {
-  return Array.isArray(messages)
-    ? messages.map(normalizeAipbxMessageFinal).filter(Boolean)
-    : [];
-}
-
 // AIPBX_AI_TOOL_ROUTER_V1
 function extractJsonObjectFromText(raw: string): any | null {
   const text = String(raw || '').trim();
@@ -490,79 +457,6 @@ function formatToolResultsForAI(results: any[]): string {
   }).join('\n\n---\n\n');
 }
 
-
-// OPENAI_CURL_HELPER_SAFE_V1
-async function callOpenAIChatViaCurlSafe(endpoint: string, key: string, payload: any): Promise<any> {
-  const { execFile } = require('child_process');
-
-  const body = JSON.stringify(payload);
-
-  const runOnce = (attempt: number) => new Promise<any>((resolve, reject) => {
-    execFile('curl', [
-      '-4',
-      '-sS',
-      '--connect-timeout', '20',
-      '--max-time', '75',
-      '--retry', '2',
-      '--retry-delay', '1',
-      '--retry-all-errors',
-      endpoint,
-      '-H', 'Authorization: Bearer ' + key,
-      '-H', 'Content-Type: application/json',
-      '-H', 'OpenAI-Beta: assistants=v2',
-      '-d', body
-    ], {
-      timeout: 90000,
-      maxBuffer: 1024 * 1024 * 4
-    }, (error: any, stdout: string, stderr: string) => {
-      if (error) {
-        reject(new Error('curl OpenAI error attempt ' + attempt + ': ' + (stderr || error.message || String(error))));
-        return;
-      }
-
-      try {
-        const data = JSON.parse(String(stdout || '{}'));
-
-        if (data.error) {
-          const code = String(data.error.code || '');
-          const msg = JSON.stringify(data.error);
-
-          if (code === 'unsupported_country_region_territory') {
-            reject(new Error('RETRYABLE_OPENAI_REGION_ERROR: ' + msg));
-            return;
-          }
-
-          reject(new Error('OpenAI API error via curl: ' + msg));
-          return;
-        }
-
-        resolve(data);
-      } catch (e: any) {
-        reject(new Error('OpenAI curl returned non-JSON: ' + String(stdout || '').slice(0, 1000)));
-      }
-    });
-  });
-
-  let lastError: any = null;
-
-  for (let attempt = 1; attempt <= 4; attempt++) {
-    try {
-      return await runOnce(attempt);
-    } catch (e: any) {
-      lastError = e;
-      const msg = String(e?.message || e);
-
-      if (!msg.includes('RETRYABLE_OPENAI_REGION_ERROR')) {
-        throw e;
-      }
-
-      await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
-    }
-  }
-
-  throw new Error(String(lastError?.message || lastError || 'OpenAI curl failed after retries').replace('RETRYABLE_OPENAI_REGION_ERROR: ', 'OpenAI API error via curl after retries: '));
-}
-
 async function generateAIResponse(params: {
   provider: string;
   model: string;
@@ -612,28 +506,48 @@ async function generateAIResponse(params: {
     if (!key) {
       throw new Error('Укажите API-ключ OpenAI в настройках AI-администратора или переменную OPENAI_API_KEY в .env.');
     }
-
     const endpoint = normalizeAiBaseUrl(baseUrl, 'https://api.openai.com/v1');
 
     const payload = {
       model: model || 'gpt-4o-mini',
       temperature: Number(temperature),
       messages: [
-        { role: 'system', content: systemPrompt || '' },
+        { role: 'system', content: systemPrompt },
         ...messages.map(m => ({
           role: m.role === 'user' ? 'user' : 'assistant',
-          content: String(m.text || '')
-        })).filter(m => m.content.trim())
-      ]
+          content: m.text
+        }))
+      ],
+      ...(responseType === 'json' ? { response_format: { type: 'json_object' } } : {})
     };
 
-    if (responseType === 'json') {
-      (payload as any).response_format = { type: 'json_object' };
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${key}`
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      
+      if (
+        res.status === 403 &&
+        (
+          String(errText).includes('unsupported_country_region_territory') ||
+          String(errText).includes('Country, region, or territory not supported')
+        )
+      ) {
+        return 'OpenAI сейчас недоступен с IP-адреса этой АТС из-за регионального ограничения. Для диагностики АТС используйте локальные запросы: «Проверь, все ли транки на связи», «Проверь PJSIP», «Проверь очереди», «Проверь RTP», «Проверь активные каналы». Эти проверки выполняются локально без обращения к OpenAI.';
+      }
+
+      throw new Error(`OpenAI API error (${res.status}): ${errText}`);
     }
 
-    const data: any = await callOpenAIChatViaCurlSafe(endpoint, key, payload);
-
-    return String(data?.choices?.[0]?.message?.content || '').trim();
+    const data: any = await res.json();
+    return data?.choices?.[0]?.message?.content || '';
   }
 
   // 3. Anthropic Claude
@@ -934,7 +848,9 @@ export function registerAiPbxAdminRoutes(
         timestamp: nowIso
       };
 
-      session.messages = normalizeAipbxMessagesFinal(session.messages);
+      session.messages = normalizeAipbxMessagesFinal
+        ? normalizeAipbxMessagesFinal(session.messages)
+        : (Array.isArray(session.messages) ? session.messages : []);
 
       session.messages.push(userMsg);
 

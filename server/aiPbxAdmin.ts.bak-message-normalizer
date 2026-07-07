@@ -218,349 +218,358 @@ function cleanJsonResponseText(raw: string): string {
 
 // Unified multi-provider AI text completion engine
 
-
-
-// AIPBX_MESSAGE_NORMALIZER_RESTORED_V1
-function normalizeAipbxMessageFinal(m: any): any | null {
-  if (!m || typeof m !== 'object') return null;
-
-  const role = typeof m.role === 'string' ? m.role : '';
-  if (role !== 'user' && role !== 'assistant' && role !== 'system') return null;
-
-  const text = String(m.text || m.content || '');
-  if (!text.trim()) return null;
-
-  const rawDate = m.createdAt || m.timestamp || m.created_at;
-  const createdAt = rawDate && !Number.isNaN(Date.parse(rawDate))
-    ? new Date(rawDate).toISOString()
-    : new Date().toISOString();
-
-  return {
-    id: String(m.id || ('msg_' + Date.now() + '_' + Math.random().toString(16).slice(2))),
-    role,
-    text,
-    content: text,
-    createdAt,
-    timestamp: createdAt,
-    attachments: Array.isArray(m.attachments) ? m.attachments : []
-  };
-}
-
-function normalizeAipbxMessagesFinal(messages: any): any[] {
-  return Array.isArray(messages)
-    ? messages.map(normalizeAipbxMessageFinal).filter(Boolean)
-    : [];
-}
-
-// AIPBX_AI_TOOL_ROUTER_V1
-function extractJsonObjectFromText(raw: string): any | null {
-  const text = String(raw || '').trim();
-
-  try {
-    return JSON.parse(text);
-  } catch {}
-
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
-  if (fenced) {
-    try {
-      return JSON.parse(fenced[1]);
-    } catch {}
-  }
-
-  const start = text.indexOf('{');
-  const end = text.lastIndexOf('}');
-  if (start !== -1 && end !== -1 && end > start) {
-    try {
-      return JSON.parse(text.slice(start, end + 1));
-    } catch {}
-  }
-
-  return null;
-}
-
-function normalizeToolCommandId(id: string): string {
-  return String(id || '').trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
-}
-
-function getAipbxAllowedToolCommands() {
-  return {
-    sip_show_registry: {
-      title: 'Chan SIP registry',
-      cmd: 'asterisk',
-      args: ['-rx', 'sip show registry'],
-      description: 'Проверка SIP-регистраций провайдеров chan_sip'
-    },
-    sip_show_peers: {
-      title: 'Chan SIP peers',
-      cmd: 'asterisk',
-      args: ['-rx', 'sip show peers'],
-      description: 'Проверка состояния chan_sip peers и задержек'
-    },
-    sip_show_settings: {
-      title: 'Chan SIP settings',
-      cmd: 'asterisk',
-      args: ['-rx', 'sip show settings'],
-      description: 'Проверка общих настроек chan_sip, NAT, bind, externip/localnet'
-    },
-    pjsip_show_registrations: {
-      title: 'PJSIP registrations',
-      cmd: 'asterisk',
-      args: ['-rx', 'pjsip show registrations'],
-      description: 'Проверка PJSIP регистраций'
-    },
-    pjsip_show_endpoints: {
-      title: 'PJSIP endpoints',
-      cmd: 'asterisk',
-      args: ['-rx', 'pjsip show endpoints'],
-      description: 'Проверка PJSIP endpoints'
-    },
-    pjsip_show_contacts: {
-      title: 'PJSIP contacts',
-      cmd: 'asterisk',
-      args: ['-rx', 'pjsip show contacts'],
-      description: 'Проверка PJSIP contacts'
-    },
-    rtp_show_settings: {
-      title: 'RTP settings',
-      cmd: 'asterisk',
-      args: ['-rx', 'rtp show settings'],
-      description: 'Проверка RTP диапазона и настроек RTP'
-    },
-    queue_show: {
-      title: 'Queues',
-      cmd: 'asterisk',
-      args: ['-rx', 'queue show'],
-      description: 'Проверка очередей и агентов'
-    },
-    core_show_channels: {
-      title: 'Active channels',
-      cmd: 'asterisk',
-      args: ['-rx', 'core show channels concise'],
-      description: 'Проверка активных каналов/звонков'
-    },
-    manager_show_settings: {
-      title: 'AMI settings',
-      cmd: 'asterisk',
-      args: ['-rx', 'manager show settings'],
-      description: 'Проверка AMI'
-    }
-  } as Record<string, { title: string; cmd: string; args: string[]; description: string }>;
-}
-
-async function executeAipbxToolCommands(requestedCommands: any[]): Promise<any[]> {
+// LOCAL_DIAGNOSTIC_CHAT_PATCH_V1
+async function runLocalAsteriskDiagnosticFromChat(userText: string): Promise<string | null> {
   const { execFile } = require('child_process');
-  const allowed = getAipbxAllowedToolCommands();
 
-  const commands = Array.isArray(requestedCommands) ? requestedCommands.slice(0, 8) : [];
-  const results: any[] = [];
+  const text = String(userText || '').trim().toLowerCase();
 
-  const run = (title: string, cmd: string, args: string[]) => {
+  let preset = '';
+
+  // Умный локальный выбор диагностики по смыслу вопроса.
+  // Без OpenAI: только безопасный whitelist команд.
+  if (
+    text === 'trunks' ||
+    text.includes('транк') ||
+    text.includes('trunk') ||
+    text.includes('регистрац') ||
+    text.includes('registered') ||
+    text.includes('исходящ') ||
+    text.includes('входящ') ||
+    text.includes('нет звонк') ||
+    text.includes('не звонит') ||
+    text.includes('не проходят звонки') ||
+    text.includes('оператор связи') ||
+    text.includes('провайдер связи')
+  ) {
+    preset = 'trunks';
+  } else if (
+    text === 'pjsip' ||
+    text.includes('пжсип') ||
+    text.includes('pj sip') ||
+    text.includes('endpoint') ||
+    text.includes('contact')
+  ) {
+    preset = 'pjsip';
+  } else if (
+    text === 'sip' ||
+    text.includes('chan sip') ||
+    text.includes('sip peer') ||
+    text.includes('sip registry')
+  ) {
+    preset = 'sip';
+  } else if (
+    text === 'queues' ||
+    text.includes('очеред') ||
+    text.includes('queue') ||
+    text.includes('оператор') ||
+    text.includes('агент')
+  ) {
+    preset = 'queues';
+  } else if (
+    text === 'channels' ||
+    text.includes('канал') ||
+    text.includes('активные звонки') ||
+    text.includes('сейчас звон') ||
+    text.includes('зависшие звонки')
+  ) {
+    preset = 'channels';
+  } else if (
+    text === 'rtp' ||
+    text.includes('ртп') ||
+    text.includes('звук') ||
+    text.includes('односторон') ||
+    text.includes('не слышно') ||
+    text.includes('нет голоса')
+  ) {
+    preset = 'rtp';
+  } else if (
+    text === 'ami' ||
+    text.includes('manager') ||
+    text.includes('ами') ||
+    text.includes('5038')
+  ) {
+    preset = 'ami';
+  }
+
+  if (!preset) return null;
+
+  const presets: Record<string, Array<{ title: string; cmd: string; args: string[] }>> = {
+    trunks: [
+      { title: 'PJSIP registrations', cmd: 'asterisk', args: ['-rx', 'pjsip show registrations'] },
+      { title: 'PJSIP endpoints', cmd: 'asterisk', args: ['-rx', 'pjsip show endpoints'] },
+      { title: 'Chan SIP registry', cmd: 'asterisk', args: ['-rx', 'sip show registry'] },
+      { title: 'Chan SIP peers', cmd: 'asterisk', args: ['-rx', 'sip show peers'] }
+    ],
+    sip: [
+      { title: 'Chan SIP registry', cmd: 'asterisk', args: ['-rx', 'sip show registry'] },
+      { title: 'Chan SIP peers', cmd: 'asterisk', args: ['-rx', 'sip show peers'] }
+    ],
+    pjsip: [
+      { title: 'PJSIP registrations', cmd: 'asterisk', args: ['-rx', 'pjsip show registrations'] },
+      { title: 'PJSIP endpoints', cmd: 'asterisk', args: ['-rx', 'pjsip show endpoints'] },
+      { title: 'PJSIP contacts', cmd: 'asterisk', args: ['-rx', 'pjsip show contacts'] }
+    ],
+    queues: [
+      { title: 'Queues', cmd: 'asterisk', args: ['-rx', 'queue show'] }
+    ],
+    channels: [
+      { title: 'Active channels', cmd: 'asterisk', args: ['-rx', 'core show channels concise'] }
+    ],
+    rtp: [
+      { title: 'RTP settings', cmd: 'asterisk', args: ['-rx', 'rtp show settings'] }
+    ],
+    ami: [
+      { title: 'AMI settings', cmd: 'asterisk', args: ['-rx', 'manager show settings'] }
+    ]
+  };
+
+  const run = (item: { title: string; cmd: string; args: string[] }) => {
     return new Promise<any>((resolve) => {
-      execFile(cmd, args, { timeout: 12000, maxBuffer: 1024 * 1024 }, (error: any, stdout: string, stderr: string) => {
+      execFile(item.cmd, item.args, { timeout: 10000, maxBuffer: 1024 * 1024 }, (error: any, stdout: string, stderr: string) => {
         resolve({
-          title,
-          command: [cmd, ...args].join(' '),
+          title: item.title,
+          command: [item.cmd, ...item.args].join(' '),
           ok: !error,
-          stdout: String(stdout || '').slice(0, 20000),
-          stderr: String(stderr || '').slice(0, 4000),
-          error: error ? String(error.message || error).slice(0, 1200) : null
+          stdout: String(stdout || '').slice(0, 12000),
+          stderr: String(stderr || '').slice(0, 2000),
+          error: error ? String(error.message || error).slice(0, 800) : ''
         });
       });
     });
   };
 
-  for (const item of commands) {
-    const id = normalizeToolCommandId(typeof item === 'string' ? item : item?.id);
-    const spec = allowed[id];
-
-    if (spec) {
-      results.push(await run(spec.title, spec.cmd, spec.args));
-      continue;
-    }
-
-    // Разрешенный параметризованный tool: sip show peer <peer>
-    if (id === 'sip_show_peer') {
-      const peer = String(item?.peer || item?.name || '').trim();
-
-      if (!/^[A-Za-z0-9_.-]{1,80}$/.test(peer)) {
-        results.push({
-          title: 'sip show peer',
-          command: 'asterisk -rx "sip show peer <invalid>"',
-          ok: false,
-          stdout: '',
-          stderr: '',
-          error: 'Недопустимое имя peer. Разрешены только буквы, цифры, точка, дефис и подчеркивание.'
-        });
-        continue;
-      }
-
-      results.push(await run('Chan SIP peer ' + peer, 'asterisk', ['-rx', 'sip show peer ' + peer]));
-      continue;
-    }
-
-    // Разрешенный параметризованный tool: pjsip show endpoint <endpoint>
-    if (id === 'pjsip_show_endpoint') {
-      const endpoint = String(item?.endpoint || item?.name || '').trim();
-
-      if (!/^[A-Za-z0-9_.-]{1,80}$/.test(endpoint)) {
-        results.push({
-          title: 'pjsip show endpoint',
-          command: 'asterisk -rx "pjsip show endpoint <invalid>"',
-          ok: false,
-          stdout: '',
-          stderr: '',
-          error: 'Недопустимое имя endpoint.'
-        });
-        continue;
-      }
-
-      results.push(await run('PJSIP endpoint ' + endpoint, 'asterisk', ['-rx', 'pjsip show endpoint ' + endpoint]));
-      continue;
-    }
-
-    results.push({
-      title: 'Rejected tool',
-      command: id || '<empty>',
-      ok: false,
-      stdout: '',
-      stderr: '',
-      error: 'Команда не входит в whitelist безопасных read-only инструментов.'
-    });
+  const results = [];
+  for (const item of presets[preset]) {
+    results.push(await run(item));
   }
 
-  return results;
+  const trunkProblems: string[] = [];
+  const trunkOk: string[] = [];
+  const extensionOffline: string[] = [];
+  const pjsipUnavailable: string[] = [];
+
+  for (const r of results) {
+    const out = String((r.stdout || '') + '\\n' + (r.stderr || '') + '\\n' + (r.error || ''));
+    const lines = out.split(/\\r?\\n/).map(x => x.trim()).filter(Boolean);
+
+    for (const line of lines) {
+      const low = line.toLowerCase();
+
+      // Реальная регистрация провайдера из "sip show registry"
+      if (low.includes('registered') && !low.includes('endpoint:')) {
+        trunkOk.push(line);
+      }
+
+      // Реальные проблемы регистрации/транка
+      if (
+        low.includes('rejected') ||
+        low.includes('timeout') ||
+        low.includes('request sent') ||
+        low.includes('no authentication') ||
+        low.includes('failed')
+      ) {
+        trunkProblems.push(line);
+      }
+
+      // Внутренние SIP-номера offline/UNKNOWN — не считаем проблемой транка
+      if (
+        /^\\d+\\s+\\(unspecified\\)/i.test(line) ||
+        (/^\\d+\\//i.test(line) && low.includes('unknown'))
+      ) {
+        extensionOffline.push(line);
+      }
+
+      // PJSIP endpoint unavailable — отдельно, чаще это внутренний номер
+      if (low.startsWith('endpoint:') && low.includes('unavailable')) {
+        pjsipUnavailable.push(line);
+      }
+    }
+  }
+
+  let answer = '';
+
+  if (preset === 'trunks') {
+    if (trunkProblems.length) {
+      answer += 'По локальной диагностике есть проблемы с SIP/PJSIP регистрациями или транками.\\n\\n';
+    } else if (trunkOk.length) {
+      answer += 'Внешний SIP-транк выглядит рабочим: регистрация есть, критичных ошибок по транкам не найдено.\\n\\n';
+    } else {
+      answer += 'Явных зарегистрированных SIP/PJSIP транков не найдено. Нужно проверить, используются ли транки на этой АТС и по какой технологии: chan_sip или pjsip.\\n\\n';
+    }
+
+    if (trunkOk.length) {
+      answer += 'Рабочие регистрации / транки:\\n';
+      answer += trunkOk.slice(0, 20).map(x => '- ' + x).join('\\n') + '\\n\\n';
+    }
+
+    if (trunkProblems.length) {
+      answer += 'Проблемные строки по транкам/регистрациям:\\n';
+      answer += trunkProblems.slice(0, 30).map(x => '- ' + x).join('\\n') + '\\n\\n';
+    }
+
+    if (extensionOffline.length) {
+      answer += 'Отдельно: есть незарегистрированные внутренние SIP-номера. Это не обязательно проблема транков:\\n';
+      answer += extensionOffline.slice(0, 30).map(x => '- ' + x).join('\\n') + '\\n\\n';
+    }
+
+    if (pjsipUnavailable.length) {
+      answer += 'Отдельно: есть недоступные PJSIP endpoint, вероятно внутренние номера:\\n';
+      answer += pjsipUnavailable.slice(0, 20).map(x => '- ' + x).join('\\n') + '\\n\\n';
+    }
+
+    answer += 'Я сам выбрал диагностику транков по вашему вопросу. Проверены команды: pjsip show registrations, pjsip show endpoints, sip show registry, sip show peers.\\n\\n';
+  } else {
+    answer += 'Выполнена локальная диагностика: ' + preset + '.\\n\\n';
+  }
+
+  answer += 'Вывод команд:\n\n';
+
+  for (const r of results) {
+    answer += '### ' + r.title + '\n';
+    answer += '$ ' + r.command + '\n';
+    if (r.error) answer += 'ERROR: ' + r.error + '\n';
+    if (r.stderr) answer += 'STDERR:\n' + r.stderr + '\n';
+    answer += 'STDOUT:\n' + (r.stdout || 'пусто') + '\n\n';
+  }
+
+  return answer.slice(0, 24000);
 }
 
-function buildAipbxToolRouterPrompt(userText: string, allowed: any): string {
-  const tools = Object.entries(allowed).map(([id, spec]: any) => {
-    return '- ' + id + ': ' + spec.description;
-  }).join('\n');
 
-  return `
-Ты — AI tool-router для PBXPuls / FreePBX / Asterisk.
-
-Твоя задача: по запросу пользователя выбрать, какие безопасные read-only диагностические команды надо выполнить.
-
-ВАЖНО:
-- Не отвечай пользователю обычным текстом.
-- Верни только JSON.
-- Не выдумывай команды.
-- Используй только whitelist.
-- Если нужно проверить конкретный chan_sip peer, можно использовать:
-  {"id":"sip_show_peer","peer":"ИМЯ_PEER"}
-- Если нужно проверить конкретный PJSIP endpoint, можно использовать:
-  {"id":"pjsip_show_endpoint","endpoint":"ИМЯ_ENDPOINT"}
-- Опасные действия, изменения конфигурации, restart/reload/delete запрещены.
-
-Whitelist:
-${tools}
-
-Запрос пользователя:
-${userText}
-
-Верни JSON строго такого вида:
-{
-  "mode": "diagnose",
-  "reason": "почему выбраны эти команды",
-  "commands": [
-    {"id":"sip_show_registry"},
-    {"id":"sip_show_peers"}
-  ]
-}
-
-Если диагностические команды не нужны:
-{
-  "mode": "answer",
-  "reason": "почему команды не нужны",
-  "commands": []
-}
-`;
-}
-
-function formatToolResultsForAI(results: any[]): string {
-  return results.map((r) => {
-    return [
-      '### ' + r.title,
-      '$ ' + r.command,
-      'OK: ' + r.ok,
-      r.error ? 'ERROR: ' + r.error : '',
-      r.stderr ? 'STDERR:\n' + r.stderr : '',
-      'STDOUT:\n' + (r.stdout || 'пусто')
-    ].filter(Boolean).join('\n');
-  }).join('\n\n---\n\n');
-}
-
-
-// OPENAI_CURL_HELPER_SAFE_V1
-async function callOpenAIChatViaCurlSafe(endpoint: string, key: string, payload: any): Promise<any> {
+// STABLE_LOCAL_TRUNKS_DIAG_V1
+async function runStableLocalTrunksDiagnostic(userText: string): Promise<string | null> {
   const { execFile } = require('child_process');
 
-  const body = JSON.stringify(payload);
+  const text = String(userText || '').toLowerCase();
 
-  const runOnce = (attempt: number) => new Promise<any>((resolve, reject) => {
-    execFile('curl', [
-      '-4',
-      '-sS',
-      '--connect-timeout', '20',
-      '--max-time', '75',
-      '--retry', '2',
-      '--retry-delay', '1',
-      '--retry-all-errors',
-      endpoint,
-      '-H', 'Authorization: Bearer ' + key,
-      '-H', 'Content-Type: application/json',
-      '-H', 'OpenAI-Beta: assistants=v2',
-      '-d', body
-    ], {
-      timeout: 90000,
-      maxBuffer: 1024 * 1024 * 4
-    }, (error: any, stdout: string, stderr: string) => {
-      if (error) {
-        reject(new Error('curl OpenAI error attempt ' + attempt + ': ' + (stderr || error.message || String(error))));
-        return;
-      }
+  const isTrunkQuestion =
+    text.includes('транк') ||
+    text.includes('trunk') ||
+    text.includes('регистрац') ||
+    text.includes('оператор связи') ||
+    text.includes('провайдер') ||
+    text.includes('исходящ') ||
+    text.includes('входящ') ||
+    text.includes('не звонит') ||
+    text.includes('нет звонк') ||
+    text.includes('проверь все ли') ||
+    text.includes('на связи');
 
-      try {
-        const data = JSON.parse(String(stdout || '{}'));
+  if (!isTrunkQuestion) return null;
 
-        if (data.error) {
-          const code = String(data.error.code || '');
-          const msg = JSON.stringify(data.error);
+  const commands = [
+    { title: 'PJSIP registrations', cmd: 'asterisk', args: ['-rx', 'pjsip show registrations'] },
+    { title: 'PJSIP endpoints', cmd: 'asterisk', args: ['-rx', 'pjsip show endpoints'] },
+    { title: 'Chan SIP registry', cmd: 'asterisk', args: ['-rx', 'sip show registry'] },
+    { title: 'Chan SIP peers', cmd: 'asterisk', args: ['-rx', 'sip show peers'] }
+  ];
 
-          if (code === 'unsupported_country_region_territory') {
-            reject(new Error('RETRYABLE_OPENAI_REGION_ERROR: ' + msg));
-            return;
-          }
-
-          reject(new Error('OpenAI API error via curl: ' + msg));
-          return;
-        }
-
-        resolve(data);
-      } catch (e: any) {
-        reject(new Error('OpenAI curl returned non-JSON: ' + String(stdout || '').slice(0, 1000)));
-      }
+  const run = (item: any) => {
+    return new Promise<any>((resolve) => {
+      execFile(item.cmd, item.args, { timeout: 10000, maxBuffer: 1024 * 1024 }, (error: any, stdout: string, stderr: string) => {
+        resolve({
+          title: item.title,
+          command: [item.cmd, ...item.args].join(' '),
+          ok: !error,
+          stdout: String(stdout || ''),
+          stderr: String(stderr || ''),
+          error: error ? String(error.message || error) : ''
+        });
+      });
     });
-  });
+  };
 
-  let lastError: any = null;
+  const results = [];
+  for (const item of commands) {
+    results.push(await run(item));
+  }
 
-  for (let attempt = 1; attempt <= 4; attempt++) {
-    try {
-      return await runOnce(attempt);
-    } catch (e: any) {
-      lastError = e;
-      const msg = String(e?.message || e);
+  const trunkOk: string[] = [];
+  const trunkProblems: string[] = [];
+  const internalOffline: string[] = [];
+  const pjsipInternalUnavailable: string[] = [];
 
-      if (!msg.includes('RETRYABLE_OPENAI_REGION_ERROR')) {
-        throw e;
+  for (const r of results) {
+    const lines = String((r.stdout || '') + '\n' + (r.stderr || '') + '\n' + (r.error || ''))
+      .split(/\r?\n/)
+      .map((x: string) => x.trim())
+      .filter(Boolean);
+
+    for (const line of lines) {
+      const low = line.toLowerCase();
+
+      if (low.includes('registered') && !low.includes('endpoint:')) {
+        trunkOk.push(line);
       }
 
-      await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+      if (
+        low.includes('rejected') ||
+        low.includes('timeout') ||
+        low.includes('request sent') ||
+        low.includes('no authentication') ||
+        low.includes('failed')
+      ) {
+        trunkProblems.push(line);
+      }
+
+      if (/^\d+\s+\(unspecified\)/i.test(line) || (/^\d+\//i.test(line) && low.includes('unknown'))) {
+        internalOffline.push(line);
+      }
+
+      if (low.startsWith('endpoint:') && low.includes('unavailable')) {
+        pjsipInternalUnavailable.push(line);
+      }
     }
   }
 
-  throw new Error(String(lastError?.message || lastError || 'OpenAI curl failed after retries').replace('RETRYABLE_OPENAI_REGION_ERROR: ', 'OpenAI API error via curl after retries: '));
+  let answer = '';
+
+  if (trunkProblems.length) {
+    answer += 'По локальной диагностике есть признаки проблем с SIP/PJSIP транками или регистрациями.\n\n';
+  } else if (trunkOk.length) {
+    answer += 'Транки выглядят рабочими: есть успешная SIP-регистрация, критичных ошибок по транкам не найдено.\n\n';
+  } else {
+    answer += 'Явной успешной регистрации SIP/PJSIP транка не найдено. Нужно проверить, используются ли транки на этой АТС и по какой технологии: chan_sip или pjsip.\n\n';
+  }
+
+  if (trunkOk.length) {
+    answer += 'Рабочие регистрации / транки:\n';
+    answer += trunkOk.slice(0, 20).map(x => '- ' + x).join('\n') + '\n\n';
+  }
+
+  if (trunkProblems.length) {
+    answer += 'Проблемные строки по транкам:\n';
+    answer += trunkProblems.slice(0, 30).map(x => '- ' + x).join('\n') + '\n\n';
+  }
+
+  if (internalOffline.length) {
+    answer += 'Отдельно вижу незарегистрированные внутренние SIP-номера. Это не обязательно проблема транков:\n';
+    answer += internalOffline.slice(0, 30).map(x => '- ' + x).join('\n') + '\n\n';
+  }
+
+  if (pjsipInternalUnavailable.length) {
+    answer += 'Отдельно вижу недоступные PJSIP endpoint, вероятно внутренние номера:\n';
+    answer += pjsipInternalUnavailable.slice(0, 20).map(x => '- ' + x).join('\n') + '\n\n';
+  }
+
+  answer += 'Я самостоятельно выбрал и выполнил локальные команды диагностики:\n';
+  answer += '- asterisk -rx "pjsip show registrations"\n';
+  answer += '- asterisk -rx "pjsip show endpoints"\n';
+  answer += '- asterisk -rx "sip show registry"\n';
+  answer += '- asterisk -rx "sip show peers"\n\n';
+
+  answer += 'Вывод команд:\n\n';
+
+  for (const r of results) {
+    answer += '### ' + r.title + '\n';
+    answer += '$ ' + r.command + '\n';
+    if (r.error) answer += 'ERROR: ' + r.error + '\n';
+    if (r.stderr) answer += 'STDERR:\n' + r.stderr.slice(0, 2000) + '\n';
+    answer += 'STDOUT:\n' + (r.stdout || 'пусто').slice(0, 12000) + '\n\n';
+  }
+
+  return answer.slice(0, 24000);
 }
 
 async function generateAIResponse(params: {
@@ -612,28 +621,48 @@ async function generateAIResponse(params: {
     if (!key) {
       throw new Error('Укажите API-ключ OpenAI в настройках AI-администратора или переменную OPENAI_API_KEY в .env.');
     }
-
     const endpoint = normalizeAiBaseUrl(baseUrl, 'https://api.openai.com/v1');
 
     const payload = {
       model: model || 'gpt-4o-mini',
       temperature: Number(temperature),
       messages: [
-        { role: 'system', content: systemPrompt || '' },
+        { role: 'system', content: systemPrompt },
         ...messages.map(m => ({
           role: m.role === 'user' ? 'user' : 'assistant',
-          content: String(m.text || '')
-        })).filter(m => m.content.trim())
-      ]
+          content: m.text
+        }))
+      ],
+      ...(responseType === 'json' ? { response_format: { type: 'json_object' } } : {})
     };
 
-    if (responseType === 'json') {
-      (payload as any).response_format = { type: 'json_object' };
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${key}`
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      
+      if (
+        res.status === 403 &&
+        (
+          String(errText).includes('unsupported_country_region_territory') ||
+          String(errText).includes('Country, region, or territory not supported')
+        )
+      ) {
+        return 'OpenAI сейчас недоступен с IP-адреса этой АТС из-за регионального ограничения. Для диагностики АТС используйте локальные запросы: «Проверь, все ли транки на связи», «Проверь PJSIP», «Проверь очереди», «Проверь RTP», «Проверь активные каналы». Эти проверки выполняются локально без обращения к OpenAI.';
+      }
+
+      throw new Error(`OpenAI API error (${res.status}): ${errText}`);
     }
 
-    const data: any = await callOpenAIChatViaCurlSafe(endpoint, key, payload);
-
-    return String(data?.choices?.[0]?.message?.content || '').trim();
+    const data: any = await res.json();
+    return data?.choices?.[0]?.message?.content || '';
   }
 
   // 3. Anthropic Claude
@@ -906,180 +935,122 @@ export function registerAiPbxAdminRoutes(
   // 6. Post message and get AI reply (multi-provider support)
   app.post('/api/ai-pbx-admin/sessions/:id/messages', aiPbxAuth, async (req: Request, res: Response) => {
     try {
-      const text = String(req.body?.text || '').trim();
-      const attachments = Array.isArray(req.body?.attachments) ? req.body.attachments : [];
-
+      const { text, attachments } = req.body;
       if (!text) {
-        return res.status(400).json({ success: false, error: 'Message text is required' });
+        return res.status(400).json({ error: 'Message text is required' });
       }
 
       const db = await readLocalDb();
-      db.ai_pbx_sessions = Array.isArray(db.ai_pbx_sessions) ? db.ai_pbx_sessions : [];
-
-      const session = db.ai_pbx_sessions.find((s: any) => s && s.id === req.params.id);
+      const session = (db.ai_pbx_sessions || []).find((s: any) => s.id === req.params.id);
       if (!session) {
-        return res.status(404).json({ success: false, error: 'Session not found' });
+        return res.status(404).json({ error: 'Session not found' });
       }
 
-      const settings = db.ai_pbx_settings || {};
-      const nowIso = new Date().toISOString();
-
+      // Add user message
       const userMsg = {
         id: 'msg_' + crypto.randomBytes(6).toString('hex'),
         role: 'user',
         text,
-        content: text,
-        attachments,
-        createdAt: nowIso,
-        timestamp: nowIso
+        attachments: attachments || [],
+        createdAt: new Date().toISOString()
       };
+      // STABLE_LOCAL_TRUNKS_INTERCEPT_V1
+      const stableLocalAnswer = await runStableLocalTrunksDiagnostic(text);
+      if (stableLocalAnswer) {
+        const assistantMsg = {
+          id: 'msg_' + crypto.randomBytes(6).toString('hex'),
+          role: 'assistant',
+          text: stableLocalAnswer,
+          timestamp: new Date().toISOString()
+        };
 
-      session.messages = normalizeAipbxMessagesFinal(session.messages);
+        session.messages = Array.isArray(session.messages)
+          ? session.messages.filter((m: any) => m && typeof m === 'object' && typeof m.role === 'string')
+          : [];
 
-      session.messages.push(userMsg);
+        session.messages.push(userMsg);
+        session.messages.push(assistantMsg);
+        session.updatedAt = new Date().toISOString();
 
-      const allowed = getAipbxAllowedToolCommands();
+        await writeLocalDb(db);
 
-      let plannerRaw = '';
-      let plan: any = null;
-      let toolResults: any[] = [];
-      let finalText = '';
-
-      try {
-        plannerRaw = await generateAIResponse({
-          provider: settings.provider || 'openai',
-          model: settings.model || 'gpt-4o-mini',
-          temperature: 0,
-          systemPrompt: 'Ты возвращаешь только валидный JSON. Никакого markdown.',
-          messages: [
-            {
-              role: 'user',
-              text: buildAipbxToolRouterPrompt(text, allowed)
-            }
-          ],
-          apiKey: settings.apiKey || '',
-          baseUrl: settings.baseUrl || ''
+        return res.json({
+          success: true,
+          message: assistantMsg,
+          session
         });
-
-        plan = extractJsonObjectFromText(plannerRaw);
-
-        if (!plan || !Array.isArray(plan.commands)) {
-          plan = {
-            mode: 'answer',
-            reason: 'AI не вернул корректный JSON-план команд.',
-            commands: []
-          };
-        }
-
-        if (plan.mode === 'diagnose' && plan.commands.length > 0) {
-          toolResults = await executeAipbxToolCommands(plan.commands);
-
-          const toolOutput = formatToolResultsForAI(toolResults);
-
-          const articles = Array.isArray(db.ai_pbx_knowledge) ? db.ai_pbx_knowledge : [];
-          const kbContext = articles.length > 0
-            ? '\n\nБаза знаний PBXPuls:\n' + articles.map((art: any) => {
-                return '[Тема: ' + String(art.title || '') + '\nКатегория: ' + String(art.category || '') + '\nСодержание: ' + String(art.content || '') + ']';
-              }).join('\n\n')
-            : '';
-
-          const finalPrompt = `
-Пользователь спросил:
-${text}
-
-AI выбрал диагностические команды:
-${JSON.stringify(plan, null, 2)}
-
-Backend выполнил только разрешенные read-only команды из whitelist.
-Ниже вывод команд:
-
-${toolOutput}
-
-${kbContext}
-
-Сформируй инженерный ответ на русском:
-1. Краткий вывод.
-2. Что проверено.
-3. Что найдено.
-4. Что это значит.
-5. Какие следующие безопасные шаги.
-6. Если нужны опасные действия или изменения конфигурации — только предложи и попроси подтверждение.
-Не выдумывай данные, которых нет в выводе команд.
-`;
-
-          finalText = await generateAIResponse({
-            provider: settings.provider || 'openai',
-            model: settings.model || 'gpt-4o-mini',
-            temperature: settings.temperature !== undefined ? Number(settings.temperature) : 0.2,
-            systemPrompt: settings.systemPrompt || 'Ты — AIPBXAdmin, инженер FreePBX/Asterisk. Отвечай кратко и по делу.',
-            messages: [
-              { role: 'user', text: finalPrompt }
-            ],
-            apiKey: settings.apiKey || '',
-            baseUrl: settings.baseUrl || ''
-          });
-        } else {
-          const formattedMessages = session.messages.map((m: any) => ({
-            role: m.role,
-            text: m.text || m.content || ''
-          }));
-
-          finalText = await generateAIResponse({
-            provider: settings.provider || 'openai',
-            model: settings.model || 'gpt-4o-mini',
-            temperature: settings.temperature !== undefined ? Number(settings.temperature) : 0.2,
-            systemPrompt: settings.systemPrompt || 'Ты — AIPBXAdmin, инженер FreePBX/Asterisk. Отвечай кратко и по делу.',
-            messages: formattedMessages,
-            apiKey: settings.apiKey || '',
-            baseUrl: settings.baseUrl || ''
-          });
-        }
-      } catch (aiErr: any) {
-        finalText = 'AI tool-router не смог выполнить задачу: ' + (aiErr?.message || String(aiErr)) + '\n\nПричина чаще всего: AI API недоступен с этой АТС или не настроен Base URL/proxy. Архитектурно команда должна выбираться AI, затем backend выполняет только whitelist-команды.';
       }
 
-      const assistantIso = new Date().toISOString();
+      session.updatedAt = new Date().toISOString();
 
+      // Read AIPBXAdmin settings (provider, model, temperature, etc.)
+      const settings = db.ai_pbx_settings || {
+        provider: 'gemini',
+        model: 'gemini-3.5-flash',
+        temperature: 0.4,
+        systemPrompt: 'You are AIPBXAdmin, a world-class senior Asterisk, FreePBX, PJSIP, dialplan, and Linux networking support specialist. Help users troubleshoot FreePBX issues step-by-step. Provide clean markdown format with bullet points, code blocks for terminal commands or configurations, and exact explanations. Always write your response in Russian.'
+      };
+
+      // Compile message list for history context
+      const formattedMessages = session.messages.map((m: any) => {
+        const attachmentCtx = (m.attachments || []).map((a: any) => `[Вложение "${a.name}" (${a.type}): ${a.content}]`).join('\n');
+        return {
+          role: m.role === 'user' ? 'user' : 'assistant',
+          text: `${m.text}${attachmentCtx ? '\n' + attachmentCtx : ''}`
+        };
+      });
+
+      // Add grounding with existing knowledge base articles if any are relevant
+      const articles = db.ai_pbx_knowledge || [];
+      const kbContext = articles.length > 0 
+        ? `\nДоступные статьи Базы Знаний, которые могут помочь:\n` + articles.map((art: any) => `[Тема: ${art.title}\nКатегория: ${art.category}\nСодержание: ${art.content}]`).join('\n\n')
+        : '';
+
+      const finalSystemInstruction = `${settings.systemPrompt}\n${kbContext}`;
+
+      let aiText = '';
+      try {
+
+      // old local diagnostic intercept disabled by stable patch
+
+        aiText = await generateAIResponse({
+          provider: settings.provider || 'gemini',
+          model: settings.model || 'gemini-3.5-flash',
+          temperature: settings.temperature !== undefined ? Number(settings.temperature) : 0.4,
+          systemPrompt: finalSystemInstruction,
+          messages: formattedMessages,
+          apiKey: settings.apiKey,
+          baseUrl: settings.baseUrl
+        });
+      } catch (aiErr: any) {
+        // Return a helper assistant message when the requested key or connection fails
+        const fallbackMsg = {
+          id: 'msg_' + crypto.randomBytes(6).toString('hex'),
+          role: 'assistant',
+          text: `Ошибка подключения к AI-провайдеру (${settings.provider}): ${aiErr.message}\n\nПожалуйста, проверьте правильность настройки API-ключей в Secrets (в правом верхнем углу интерфейса AI Studio) и выберите корректную модель в Настройках AI-Администратора.`,
+          createdAt: new Date().toISOString()
+        };
+        session.messages.push(fallbackMsg);
+        await writeLocalDb(db);
+        return res.json({ userMessage: userMsg, aiMessage: fallbackMsg });
+      }
+
+      // Add assistant message
       const assistantMsg = {
         id: 'msg_' + crypto.randomBytes(6).toString('hex'),
         role: 'assistant',
-        text: finalText,
-        content: finalText,
-        attachments: [],
-        createdAt: assistantIso,
-        timestamp: assistantIso,
-        toolPlan: plan,
-        toolResults: toolResults.map((r: any) => ({
-          title: r.title,
-          command: r.command,
-          ok: r.ok,
-          error: r.error || null
-        }))
+        text: aiText || 'К сожалению, не удалось получить ответ от AI. Попробуйте другой запрос.',
+        createdAt: new Date().toISOString()
       };
-
       session.messages.push(assistantMsg);
-      session.updatedAt = assistantIso;
-
-      if (typeof normalizeAipbxMessagesFinal === 'function') {
-        session.messages = normalizeAipbxMessagesFinal(session.messages);
-      }
-
       await writeLocalDb(db);
 
-      return res.json({
-        success: true,
-        message: assistantMsg,
-        session
-      });
+      res.json({ userMessage: userMsg, aiMessage: assistantMsg });
     } catch (error: any) {
-      console.error('[AIPBXAdmin] AI tool-router message route failed:', error);
-      return res.status(500).json({
-        success: false,
-        error: error?.message || String(error)
-      });
+      console.error('AI call error:', error);
+      res.status(500).json({ error: 'Не удалось получить ответ от AI: ' + error.message });
     }
   });
-
 
   // 7. Add raw file/log attachment to session
   app.post('/api/ai-pbx-admin/sessions/:id/attachments', requireAuth, async (req: Request, res: Response) => {

@@ -114,9 +114,6 @@ interface DevicesMapTabProps {
   token: string;
 }
 
-type DeviceSortKey = 'ext' | 'name' | 'tech' | 'ip' | 'equipment' | 'status' | 'ipChanges' | 'regCount';
-type DeviceSortDirection = 'asc' | 'desc';
-
 export default function DevicesMapTab({ token }: DevicesMapTabProps) {
   // State
   const [devices, setDevices] = useState<Device[]>([]);
@@ -130,10 +127,6 @@ export default function DevicesMapTab({ token }: DevicesMapTabProps) {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedTech, setSelectedTech] = useState<string>('All');
   const [selectedStatus, setSelectedStatus] = useState<string>('All');
-  const [deviceSort, setDeviceSort] = useState<{ key: DeviceSortKey; direction: DeviceSortDirection }>({
-    key: 'ext',
-    direction: 'asc'
-  });
   const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
   
   // History point filter (Inside selected device detail drawer)
@@ -413,75 +406,6 @@ export default function DevicesMapTab({ token }: DevicesMapTabProps) {
     });
   }, [devices, selectedTech, selectedStatus, searchQuery]);
 
-  const deviceSortCollator = useMemo(() => new Intl.Collator('ru-RU', {
-    numeric: true,
-    sensitivity: 'base'
-  }), []);
-
-  const getDeviceStatusRank = (status: Device['status']) => {
-    if (status === 'Online') return 1;
-    if (status === 'Warning') return 2;
-    if (status === 'Conflict') return 3;
-    if (status === 'Offline') return 4;
-    return 99;
-  };
-
-  const getDeviceSortValue = (device: Device, key: DeviceSortKey): string | number => {
-    if (key === 'equipment') return `${device.manufacturer || ''} ${device.model || ''} ${device.userAgent || ''}`.trim();
-    if (key === 'status') return getDeviceStatusRank(device.status);
-    if (key === 'ip') return device.ip || '';
-    const value = device[key as keyof Device];
-    if (typeof value === 'number') return value;
-    return String(value ?? '').trim();
-  };
-
-  const handleDeviceSort = (key: DeviceSortKey) => {
-    setDeviceSort(prev => ({
-      key,
-      direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc'
-    }));
-  };
-
-  const renderDeviceSortableHeader = (key: DeviceSortKey, label: string, align: 'left' | 'right' = 'left') => {
-    const isActive = deviceSort.key === key;
-    const arrow = isActive ? (deviceSort.direction === 'asc' ? '▲' : '▼') : '↕';
-
-    return (
-      <th className={`p-3 ${align === 'right' ? 'text-right' : ''}`}>
-        <button
-          type="button"
-          onClick={() => handleDeviceSort(key)}
-          className={`group inline-flex items-center gap-1.5 rounded-md text-[10px] font-black uppercase tracking-wider transition-all hover:text-rose-700 focus:outline-none focus:ring-2 focus:ring-rose-200 ${isActive ? 'text-rose-700 dark:text-rose-300' : 'text-slate-400'}`}
-          title={`Сортировать: ${label}`}
-        >
-          <span>{label}</span>
-          <span className={`text-[9px] leading-none ${isActive ? 'opacity-100' : 'opacity-35 group-hover:opacity-80'}`}>
-            {arrow}
-          </span>
-        </button>
-      </th>
-    );
-  };
-
-  const sortedDevices = useMemo(() => {
-    const sorted = [...filteredDevices].sort((a, b) => {
-      const aValue = getDeviceSortValue(a, deviceSort.key);
-      const bValue = getDeviceSortValue(b, deviceSort.key);
-
-      let result = 0;
-
-      if (typeof aValue === 'number' && typeof bValue === 'number') {
-        result = aValue - bValue;
-      } else {
-        result = deviceSortCollator.compare(String(aValue), String(bValue));
-      }
-
-      return deviceSort.direction === 'asc' ? result : -result;
-    });
-
-    return sorted;
-  }, [filteredDevices, deviceSort, deviceSortCollator]);
-
   // Selected device registration history filtered
   const filteredDeviceHistory = useMemo(() => {
     if (!selectedDevice) return [];
@@ -545,7 +469,7 @@ export default function DevicesMapTab({ token }: DevicesMapTabProps) {
   // Export actions
   const exportToCSV = () => {
     const headers = ["EXT", "Имя", "Технология", "IP Адрес", "Порт", "Статус", "User-Agent", "Производитель", "Модель", "MAC адрес", "VLAN", "Регистраций"];
-    const rows = sortedDevices.map(d => [
+    const rows = filteredDevices.map(d => [
       d.ext,
       d.name,
       d.tech,
@@ -583,7 +507,7 @@ export default function DevicesMapTab({ token }: DevicesMapTabProps) {
   };
 
   const exportToJSON = () => {
-    const jsonString = JSON.stringify(sortedDevices, null, 2);
+    const jsonString = JSON.stringify(filteredDevices, null, 2);
     const blob = new Blob([jsonString], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -891,25 +815,25 @@ export default function DevicesMapTab({ token }: DevicesMapTabProps) {
                       <table className="w-full text-left border-collapse text-xs">
                         <thead>
                           <tr className="bg-slate-50 dark:bg-slate-950 text-[10px] uppercase font-black text-slate-400 border-b border-slate-100 dark:border-slate-800">
-                            {renderDeviceSortableHeader('ext', 'EXT')}
-                            {renderDeviceSortableHeader('name', 'Имя')}
-                            {renderDeviceSortableHeader('tech', 'Технология')}
-                            {renderDeviceSortableHeader('ip', 'IP Адрес')}
-                            {renderDeviceSortableHeader('equipment', 'Оборудование')}
-                            {renderDeviceSortableHeader('status', 'Статус')}
-                            {renderDeviceSortableHeader('ipChanges', 'Смены IP', 'right')}
-                            {renderDeviceSortableHeader('regCount', 'Рег-ций', 'right')}
+                            <th className="p-3">EXT</th>
+                            <th className="p-3">Имя</th>
+                            <th className="p-3">Технология</th>
+                            <th className="p-3">IP Адрес</th>
+                            <th className="p-3">Оборудование</th>
+                            <th className="p-3">Статус</th>
+                            <th className="p-3 text-right">Смены IP</th>
+                            <th className="p-3 text-right">Рег-ций</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 dark:divide-slate-800 select-none">
-                          {sortedDevices.length === 0 ? (
+                          {filteredDevices.length === 0 ? (
                             <tr>
                               <td colSpan={8} className="p-10 text-center text-slate-400">
                                 Устройства с выбранными фильтрами не найдены.
                               </td>
                             </tr>
                           ) : (
-                            sortedDevices.map(dev => (
+                            filteredDevices.map(dev => (
                               <tr
                                 key={dev.ext}
                                 onClick={() => setSelectedDevice(dev)}

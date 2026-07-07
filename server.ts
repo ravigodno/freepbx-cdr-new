@@ -6360,6 +6360,18 @@ async function markYandexMetrikaIntegration(localDb: any, integrationId: string,
 
 // API ROUTER START
 const app = express();
+
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api/')) {
+    const started = Date.now();
+    console.log('[API START]', req.method, req.path, req.url);
+    res.on('finish', () => {
+      console.log('[API END]', req.method, req.path, res.statusCode, Date.now() - started + 'ms');
+    });
+  }
+  next();
+});
+
 app.use(express.json({ limit: '25mb' }));
 
 app.options('/api/calltracking/resolve-number', (_req, res) => {

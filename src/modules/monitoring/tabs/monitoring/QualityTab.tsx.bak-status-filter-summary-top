@@ -400,7 +400,6 @@ interface TelemetryAlert {
 
 type QualitySortKey = 'ext' | 'name' | 'ip' | 'type' | 'userAgent' | 'latency' | 'jitter' | 'rtpLoss' | 'mos' | 'status';
 type QualitySortDirection = 'asc' | 'desc';
-type QualityStatusFilter = 'ALL' | QualityDevice['status'];
 
 function getStoredAuthToken(): string {
   try {
@@ -430,7 +429,6 @@ export default function QualityTab({ token }: Props) {
   const [allHistory, setAllHistory] = useState<TelemetryPoint[]>([]);
   const [selectedExt, setSelectedExt] = useState<string>('101');
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [qualityStatusFilter, setQualityStatusFilter] = useState<QualityStatusFilter>('ALL');
   const [deviceListTab, setDeviceListTab] = useState<'trunks' | 'devices'>('trunks');
   const [qualitySort, setQualitySort] = useState<{ key: QualitySortKey; direction: QualitySortDirection }>({
     key: 'ext',
@@ -567,25 +565,17 @@ export default function QualityTab({ token }: Props) {
     };
   }, [devices]);
 
-  // Filtered devices list based on search query and status
+  // Filtered devices list based on search query
   const filteredDevices = useMemo(() => {
     const q = searchQuery.toLowerCase().trim();
-
-    return devices.filter(d => {
-      const matchesSearch =
-        !q ||
-        d.ext.includes(q) ||
-        d.name.toLowerCase().includes(q) ||
-        d.ip.includes(q) ||
-        d.userAgent.toLowerCase().includes(q);
-
-      const matchesStatus =
-        qualityStatusFilter === 'ALL' ||
-        d.status === qualityStatusFilter;
-
-      return matchesSearch && matchesStatus;
-    });
-  }, [devices, searchQuery, qualityStatusFilter]);
+    if (!q) return devices;
+    return devices.filter(d => 
+      d.ext.includes(q) || 
+      d.name.toLowerCase().includes(q) || 
+      d.ip.includes(q) ||
+      d.userAgent.toLowerCase().includes(q)
+    );
+  }, [devices, searchQuery]);
 
   const filteredTrunks = useMemo(() => {
     return filteredDevices.filter(d => String((d as any).deviceRole || '').toLowerCase() === 'trunk');
@@ -663,17 +653,6 @@ export default function QualityTab({ token }: Props) {
 
     return sorted;
   }, [deviceListTab, filteredTrunks, filteredExtensions, qualitySort, qualitySortCollator]);
-
-  const qualityVisibleSummary = useMemo(() => {
-    const online = visibleQualityDevices.filter(d => d.status !== 'Offline').length;
-    const offline = visibleQualityDevices.filter(d => d.status === 'Offline').length;
-    return {
-      visible: visibleQualityDevices.length,
-      online,
-      offline,
-      totalFound: filteredDevices.length
-    };
-  }, [visibleQualityDevices, filteredDevices]);
 
   // RUN PING TOOL
   const runPing = async (ext: string) => {
@@ -989,35 +968,19 @@ export default function QualityTab({ token }: Props) {
                 <p className="text-xs text-slate-500 mt-0.5">Разделите просмотр на транки и абонентские устройства. Кликните по строке для детальной аналитики и диагностики.</p>
               </div>
               
-              <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-                <select
-                  value={qualityStatusFilter}
-                  onChange={(e) => setQualityStatusFilter(e.target.value as QualityStatusFilter)}
-                  className="w-full sm:w-48 px-3 py-1.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-[#334155] text-xs font-bold rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 dark:text-white"
-                  title="Фильтр по статусу устройства"
-                >
-                  <option value="ALL">Все статусы</option>
-                  <option value="Отлично">Отлично</option>
-                  <option value="Хорошо">Хорошо</option>
-                  <option value="Предупреждение">Предупреждение</option>
-                  <option value="Критично">Критично</option>
-                  <option value="Offline">Offline</option>
-                </select>
-
-                <div className="relative">
-                  <input
-                    type="text"
-                    placeholder="Поиск по EXT, IP, Имени..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full md:w-64 pl-8 pr-3 py-1.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-[#334155] text-xs font-semibold rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 dark:text-white"
-                  />
-                  <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-slate-400" />
-                </div>
+              <div className="relative">
+                <input
+                  type="text"
+                  placeholder="Поиск по EXT, IP, Имени..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full md:w-64 pl-8 pr-3 py-1.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-[#334155] text-xs font-semibold rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 dark:text-white"
+                />
+                <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-slate-400" />
               </div>
             </div>
 
-            <div className="px-4 pt-4 pb-2 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+            <div className="px-4 pt-4">
               <div className="inline-flex rounded-xl border border-slate-200 dark:border-[#334155] bg-slate-50 dark:bg-slate-900/40 p-1">
                 <button
                   type="button"
@@ -1041,16 +1004,6 @@ export default function QualityTab({ token }: Props) {
                 >
                   Абоненты ({filteredExtensions.length})
                 </button>
-              </div>
-
-              <div className="text-[10px] sm:text-xs font-black text-slate-500 dark:text-slate-400 text-left lg:text-right">
-                {deviceListTab === 'trunks' ? 'Выведено транков' : 'Выведено абонентов'}: <span className="text-blue-700 dark:text-blue-300">{qualityVisibleSummary.visible}</span>
-                <span className="mx-1 text-slate-300">·</span>
-                Онлайн <span className="text-emerald-600">{qualityVisibleSummary.online}</span>
-                <span className="mx-1 text-slate-300">·</span>
-                Офлайн <span className="text-slate-700 dark:text-slate-200">{qualityVisibleSummary.offline}</span>
-                <span className="mx-1 text-slate-300">·</span>
-                Всего найдено: <span className="text-slate-800 dark:text-white">{qualityVisibleSummary.totalFound}</span>
               </div>
             </div>
 
@@ -1131,7 +1084,10 @@ export default function QualityTab({ token }: Props) {
                 </tbody>
               </table>
             </div>
-
+            
+            <div className="p-3 bg-slate-50/50 dark:bg-slate-900/30 text-slate-400 text-[10px] font-bold border-t border-slate-200 dark:border-[#334155] text-right">
+              {deviceListTab === 'trunks' ? 'Выведено транков' : 'Выведено абонентов'}: {visibleQualityDevices.length} · Всего найдено: {filteredDevices.length}
+            </div>
           </div>
 
           {/* DYNAMIC METRIC CHARTS */}
