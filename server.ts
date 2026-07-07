@@ -27,6 +27,7 @@ import { registerManagementRoutes } from './server-management.js';
 import { registerAiPbxAdminRoutes } from './server/aiPbxAdmin.js';
 import { runPBXPulsMigrations } from './server/pbxpulsMigrations.js';
 import { registerPBXPulsSqlStatusRoutes } from './server/pbxpulsSqlStatus.js';
+import { compareLegacyUserWithSql } from './server/pbxpulsAuthDb.js';
 
 // Load environment variables
 dotenv.config();
@@ -6377,6 +6378,25 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: '25mb' }));
 
 registerPBXPulsSqlStatusRoutes(app, requireAuth);
+
+app.get('/api/pbxpuls/auth-compare/:username', requireAuth(['su', 'admin']), async (req, res) => {
+  try {
+    const comparison = await compareLegacyUserWithSql(String(req.params.username || ''));
+    res.json(comparison);
+  } catch (error: any) {
+    console.warn('[PBXPULS_AUTH_COMPARE] failed:', String(error?.message || error || 'unknown error').slice(0, 300));
+    res.json({
+      username: String(req.params.username || '').trim().slice(0, 100),
+      legacyExists: false,
+      sqlExists: false,
+      rolesMatch: false,
+      permissionsCountLegacy: 0,
+      permissionsCountSql: 0,
+      passwordHashPresentLegacy: false,
+      passwordHashPresentSql: false
+    });
+  }
+});
 
 app.options('/api/calltracking/resolve-number', (_req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');

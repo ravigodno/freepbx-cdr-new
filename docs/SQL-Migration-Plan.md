@@ -289,6 +289,18 @@ The helper uses only `isPBXPulsDbAvailable()` and `queryPBXPulsDb()` with read-o
 
 Runtime authentication still uses legacy `data/db.json`. This layer is intentionally not connected to `/api/auth/login`, `requireAuth()`, permissions runtime, frontend code or public APIs. Its purpose is to verify SQL migration readiness before any future dual-read comparison stage.
 
+## Stage 6.3: Auth Compare Diagnostic Endpoint
+
+Stage 6.3 adds a backend-only read-only diagnostic endpoint for comparing legacy JSON auth data with the SQL auth preparation layer:
+
+- endpoint: `GET /api/pbxpuls/auth-compare/:username`;
+- protection: existing `requireAuth(['su', 'admin'])` middleware;
+- implementation source: `compareLegacyUserWithSql(username)`.
+
+The endpoint returns only safe comparison fields: existence flags, role match status, permission counts and password-hash presence booleans. It never returns `password_hash`, plaintext passwords, tokens, secrets or raw user records, and it does not write data.
+
+Runtime authentication remains unchanged. Login still reads `data/db.json`, `requireAuth()` is unchanged, permissions runtime is unchanged, and no frontend/UI code is connected to this diagnostic endpoint.
+
 ## Migration Order
 
 1. Inventory and documentation only.
