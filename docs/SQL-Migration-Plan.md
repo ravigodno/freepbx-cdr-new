@@ -185,6 +185,24 @@ If the PBXPuls database or `settings` table is unavailable, reads return the pro
 
 The next phase can use this service behind a feature flag for dual-read/fallback of selected settings while preserving existing JSON/env behavior.
 
+## Stage 3.2: Core Settings Seed
+
+Stage 3.2 adds migration `20260707_002_seed_core_settings` with description `Seed core PBXPuls settings`. It seeds only non-secret baseline rows into the existing `settings` table.
+
+Seeded settings:
+
+| setting_key | value | value_type | category |
+| --- | --- | --- | --- |
+| `app.name` | `PBXPuls` | `string` | `app` |
+| `app.storage_mode` | `hybrid` | `string` | `app` |
+| `settings.sql_enabled` | `true` | `boolean` | `system` |
+| `settings.fallback_enabled` | `true` | `boolean` | `system` |
+| `tools.registry_source` | `sql_seeded` | `string` | `tools` |
+| `audit.enabled` | `true` | `boolean` | `audit` |
+| `system.events_enabled` | `true` | `boolean` | `system` |
+
+The seed uses `INSERT IGNORE`, so existing settings are not overwritten. It does not migrate values from `data/db.json`, `.env`, localStorage or sessionStorage, and it does not store secrets. Runtime UI/API behavior remains unchanged; these rows prepare later dual-read/fallback work.
+
 ## Migration Order
 
 1. Inventory and documentation only.

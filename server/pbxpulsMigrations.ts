@@ -32,6 +32,16 @@ const CORE_TOOLS = [
   ['logs', 'Logs', 'Logs and audit surfaces', 'system', 160]
 ] as const;
 
+const CORE_SETTINGS = [
+  ['app.name', 'PBXPuls', 'string', 'app', 'Application name'],
+  ['app.storage_mode', 'hybrid', 'string', 'app', 'Current storage mode: legacy/json/sql/hybrid'],
+  ['settings.sql_enabled', '1', 'boolean', 'system', 'SQL settings layer enabled'],
+  ['settings.fallback_enabled', '1', 'boolean', 'system', 'Legacy fallback enabled when SQL setting is missing'],
+  ['tools.registry_source', 'sql_seeded', 'string', 'tools', 'Tools registry seed source'],
+  ['audit.enabled', '1', 'boolean', 'audit', 'Audit logging enabled'],
+  ['system.events_enabled', '1', 'boolean', 'system', 'System events logging enabled']
+] as const;
+
 const MIGRATIONS: Migration[] = [
   {
     key: '20260707_001_core_internal_tables',
@@ -136,6 +146,12 @@ const MIGRATIONS: Migration[] = [
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
     ],
     seed: seedCoreTools
+  },
+  {
+    key: '20260707_002_seed_core_settings',
+    description: 'Seed core PBXPuls settings',
+    statements: [],
+    seed: seedCoreSettings
   }
 ];
 
@@ -249,6 +265,16 @@ async function seedCoreTools(connection: Connection): Promise<void> {
 
   for (const tool of CORE_TOOLS) {
     await connection.execute(sql, tool);
+  }
+}
+
+async function seedCoreSettings(connection: Connection): Promise<void> {
+  const sql = `INSERT IGNORE INTO settings
+    (setting_key, setting_value, value_type, category, is_secret, description)
+    VALUES (?, ?, ?, ?, 0, ?)`;
+
+  for (const setting of CORE_SETTINGS) {
+    await connection.execute(sql, setting);
   }
 }
 
