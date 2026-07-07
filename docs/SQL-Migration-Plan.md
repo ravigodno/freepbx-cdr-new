@@ -203,6 +203,33 @@ Seeded settings:
 
 The seed uses `INSERT IGNORE`, so existing settings are not overwritten. It does not migrate values from `data/db.json`, `.env`, localStorage or sessionStorage, and it does not store secrets. Runtime UI/API behavior remains unchanged; these rows prepare later dual-read/fallback work.
 
+## Stage 4.1: Audit and System Events Service
+
+Stage 4.1 adds a backend-only helper service for future writes to `audit_log` and `system_events`:
+
+- service module: `server/pbxpulsEvents.ts`;
+- audit helper: `writePBXPulsAuditLog(options)`;
+- system event helper: `writePBXPulsSystemEvent(options)`.
+
+The service serializes `details` as JSON for objects, stores strings as strings, and stores `NULL` for missing details. It masks sensitive fields named `password`, `pass`, `token`, `secret`, `apiKey`, `api_key` and `authorization` before writing or warning. Supported system event severities are `debug`, `info`, `warning`, `error` and `critical`; invalid severities fall back to `warning`.
+
+This stage does not connect the helpers to existing API handlers, startup flows, authentication, UI or frontend code. It intentionally avoids mass logging and does not migrate existing audit/change-log data. Write failures are non-fatal and only produce sanitized warnings.
+
+## Stage 4.2: Migration System Events
+
+Stage 4.2 connects the migration core to `writePBXPulsSystemEvent()` for a small set of important migration lifecycle events only. It does not add audit logging for user actions and does not enable mass logging.
+
+Migration events written to `system_events` when the PBXPuls database and table are available:
+
+| event_type | severity | source |
+| --- | --- | --- |
+| `migration_started` | `info` | `pbxpuls_migrations` |
+| `migration_applied` | `info` | `pbxpuls_migrations` |
+| `migration_skipped_db_unavailable` | `warning` | `pbxpuls_migrations` |
+| `migration_failed` | `error` | `pbxpuls_migrations` |
+
+Event details include `migration_key`, `description` and a sanitized `error` string when relevant. The event writer is non-fatal: if writing to `system_events` fails, migration execution continues or fails according to the original migration result, not because of event logging.
+
 ## Migration Order
 
 1. Inventory and documentation only.

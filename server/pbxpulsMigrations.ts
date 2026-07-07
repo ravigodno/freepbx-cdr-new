@@ -1,4 +1,5 @@
 import mysql, { Connection } from 'mysql2/promise';
+import { writePBXPulsSystemEvent } from './pbxpulsEvents.js';
 
 interface Migration {
   key: string;
@@ -169,6 +170,7 @@ async function createPBXPulsConnection(): Promise<Connection> {
 
 export async function runPBXPulsMigrations(): Promise<void> {
   let connection: Connection | null = null;
+  let activeMigration: Migration | null = null;
 
   try {
     connection = await createPBXPulsConnection();
@@ -181,7 +183,9 @@ export async function runPBXPulsMigrations(): Promise<void> {
         continue;
       }
 
+      activeMigration = migration;
       console.log('[PBXPULS_DB] applying migration:', migration.key);
+      await writeMigrationSystemEvent('migration_started', 'info', 'PBXPuls migration started', migration);
       for (const statement of migration.statements) {
         await connection.query(statement);
       }
@@ -189,15 +193,44 @@ export async function runPBXPulsMigrations(): Promise<void> {
         await migration.seed(connection);
       }
       await markMigrationApplied(connection, columns, migration.key, migration.description);
+      await writeMigrationSystemEvent('migration_applied', 'info', 'PBXPuls migration applied', migration);
       console.log('[PBXPULS_DB] migration applied:', migration.key);
+      activeMigration = null;
     }
   } catch (error: any) {
-    console.warn('[PBXPULS_DB] migrations skipped:', sanitizeMigrationError(error));
+    const safeError = sanitizeMigrationError(error);
+    if (!connection) {
+      await writeMigrationSystemEvent('migration_skipped_db_unavailable', 'warning', 'PBXPuls migrations skipped: database unavailable', activeMigration, safeError);
+      console.warn('[PBXPULS_DB] migrations skipped:', safeError);
+    } else {
+      await writeMigrationSystemEvent('migration_failed', 'error', 'PBXPuls migration failed', activeMigration, safeError);
+      console.warn('[PBXPULS_DB] migration failed:', safeError);
+    }
   } finally {
     if (connection) {
       await connection.end();
     }
   }
+}
+
+async function writeMigrationSystemEvent(
+  eventType: 'migration_started' | 'migration_applied' | 'migration_skipped_db_unavailable' | 'migration_failed',
+  severity: 'info' | 'warning' | 'error',
+  message: string,
+  migration?: Migration | null,
+  error?: string
+): Promise<void> {
+  await writePBXPulsSystemEvent({
+    event_type: eventType,
+    severity,
+    source: 'pbxpuls_migrations',
+    message,
+    details: {
+      migration_key: migration?.key || null,
+      description: migration?.description || null,
+      error: error || null
+    }
+  });
 }
 
 async function ensureSchemaMigrationsTable(connection: Connection): Promise<SchemaMigrationColumns> {
