@@ -27,7 +27,8 @@ import { registerManagementRoutes } from './server-management.js';
 import { registerAiPbxAdminRoutes } from './server/aiPbxAdmin.js';
 import { runPBXPulsMigrations } from './server/pbxpulsMigrations.js';
 import { registerPBXPulsSqlStatusRoutes } from './server/pbxpulsSqlStatus.js';
-import { compareLegacyUserWithSql } from './server/pbxpulsAuthDb.js';
+import { compareLegacyUserWithSql, getAuthStorageMode } from './server/pbxpulsAuthDb.js';
+import { isPBXPulsDbAvailable } from './server/pbxpulsDb.js';
 
 // Load environment variables
 dotenv.config();
@@ -6394,6 +6395,31 @@ app.get('/api/pbxpuls/auth-compare/:username', requireAuth(['su', 'admin']), asy
       permissionsCountSql: 0,
       passwordHashPresentLegacy: false,
       passwordHashPresentSql: false
+    });
+  }
+});
+
+app.get('/api/pbxpuls/auth-mode', requireAuth(['su', 'admin']), async (_req, res) => {
+  try {
+    const [mode, sqlAvailable] = await Promise.all([
+      getAuthStorageMode(),
+      isPBXPulsDbAvailable()
+    ]);
+    res.json({
+      mode,
+      effectiveMode: mode,
+      sqlAvailable,
+      loginRuntimeSource: 'data/db.json',
+      sqlAuthRuntimeEnabled: false
+    });
+  } catch (error: any) {
+    console.warn('[PBXPULS_AUTH_MODE] failed:', String(error?.message || error || 'unknown error').slice(0, 300));
+    res.json({
+      mode: 'legacy',
+      effectiveMode: 'legacy',
+      sqlAvailable: false,
+      loginRuntimeSource: 'data/db.json',
+      sqlAuthRuntimeEnabled: false
     });
   }
 });

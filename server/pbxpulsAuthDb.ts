@@ -1,6 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import { isPBXPulsDbAvailable, queryPBXPulsDb, sanitizePBXPulsDbError } from './pbxpulsDb.js';
+import { getPBXPulsSetting } from './pbxpulsSettings.js';
+import { writePBXPulsSystemEvent } from './pbxpulsEvents.js';
 
 export interface PBXPulsSqlUser {
   id: number;
@@ -43,6 +45,16 @@ export interface PBXPulsLegacySqlUserComparison {
   passwordHashPresentSql: boolean;
 }
 
+export type PBXPulsAuthStorageMode = 'legacy' | 'sql' | 'hybrid';
+
+export interface PBXPulsAuthCandidate {
+  mode: PBXPulsAuthStorageMode;
+  username: string;
+  sqlSnapshot: PBXPulsAuthSnapshot | null;
+  legacyComparison: PBXPulsLegacySqlUserComparison | null;
+  sqlAuthRuntimeEnabled: false;
+}
+
 interface PBXPulsSqlUserRow {
   id: number;
   username: string;
@@ -68,6 +80,16 @@ interface PBXPulsSqlPermissionRow {
 }
 
 const LEGACY_DB_PATH = path.join(process.cwd(), 'data', 'db.json');
+
+export async function getAuthStorageMode(): Promise<PBXPulsAuthStorageMode> {
+  try {
+    const mode = await getPBXPulsSetting<string>('auth.storage_mode', 'legacy');
+    return normalizeAuthStorageMode(mode);
+  } catch (error: any) {
+    warnAuthDbLayer('auth storage mode read failed', error);
+    return 'legacy';
+  }
+}
 
 export async function getPBXPulsUser(username: string): Promise<PBXPulsSqlUser | null> {
   const normalizedUsername = normalizeText(username, 100);
@@ -176,6 +198,52 @@ export async function getPBXPulsAuthSnapshot(username: string): Promise<PBXPulsA
   };
 }
 
+export async function getPBXPulsAuthCandidate(username: string): Promise<PBXPulsAuthCandidate> {
+  const normalizedUsername = normalizeText(username, 100);
+  const mode = await getAuthStorageMode();
+
+  if (mode === 'legacy') {
+    return {
+      mode,
+      username: normalizedUsername,
+      sqlSnapshot: null,
+      legacyComparison: null,
+      sqlAuthRuntimeEnabled: false
+    };
+  }
+
+  const sqlSnapshot = await getPBXPulsAuthSnapshot(normalizedUsername);
+
+  if (mode === 'sql') {
+    return {
+      mode,
+      username: normalizedUsername,
+      sqlSnapshot,
+      legacyComparison: null,
+      sqlAuthRuntimeEnabled: false
+    };
+  }
+
+  const legacyComparison = await compareLegacyUserWithSql(normalizedUsername);
+  if (hasAuthComparisonMismatch(legacyComparison)) {
+    await writePBXPulsSystemEvent({
+      event_type: 'auth_compare_mismatch',
+      severity: 'warning',
+      source: 'pbxpuls_auth',
+      message: 'Legacy and SQL auth records differ',
+      details: legacyComparison
+    });
+  }
+
+  return {
+    mode,
+    username: normalizedUsername,
+    sqlSnapshot,
+    legacyComparison,
+    sqlAuthRuntimeEnabled: false
+  };
+}
+
 export async function compareLegacyUserWithSql(username: string): Promise<PBXPulsLegacySqlUserComparison> {
   const normalizedUsername = normalizeText(username, 100);
   const legacyDb = readLegacyDb();
@@ -262,6 +330,19 @@ function mapPermissionRow(row: PBXPulsSqlPermissionRow): PBXPulsSqlPermission {
     name: String(row.name || ''),
     category: nullableText(row.category)
   };
+}
+
+function normalizeAuthStorageMode(value: unknown): PBXPulsAuthStorageMode {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  return normalized === 'sql' || normalized === 'hybrid' ? normalized : 'legacy';
+}
+
+function hasAuthComparisonMismatch(comparison: PBXPulsLegacySqlUserComparison): boolean {
+  if (!comparison.legacyExists || !comparison.sqlExists) return true;
+  if (!comparison.rolesMatch) return true;
+  if (comparison.permissionsCountLegacy !== comparison.permissionsCountSql) return true;
+  if (comparison.passwordHashPresentLegacy !== comparison.passwordHashPresentSql) return true;
+  return false;
 }
 
 function normalizeId(value: unknown): number | null {

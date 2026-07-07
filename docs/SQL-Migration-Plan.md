@@ -301,6 +301,14 @@ The endpoint returns only safe comparison fields: existence flags, role match st
 
 Runtime authentication remains unchanged. Login still reads `data/db.json`, `requireAuth()` is unchanged, permissions runtime is unchanged, and no frontend/UI code is connected to this diagnostic endpoint.
 
+## Stage 6.4: Dual Auth Read Mode Preparation
+
+Stage 6.4 adds migration `20260707_004_seed_auth_storage_mode` with description `Seed auth storage mode setting`. The migration seeds `auth.storage_mode` as `legacy` through `INSERT IGNORE`, so existing deployments are not overwritten and legacy JSON remains the default authentication source.
+
+The SQL auth helper now exposes `getAuthStorageMode()` and `getPBXPulsAuthCandidate(username)` for future dual-read preparation. Allowed modes are `legacy`, `sql` and `hybrid`; missing SQL, missing settings or unknown values fall back to `legacy`. In `hybrid` mode the helper can compare legacy and SQL auth records and write a sanitized `auth_compare_mismatch` system event without password hashes or secrets.
+
+A read-only diagnostic endpoint `GET /api/pbxpuls/auth-mode` reports the current mode, SQL availability and the fixed runtime source `data/db.json`. Login is not switched to SQL, `requireAuth()` is unchanged, token shape is unchanged, and SQL auth remains diagnostic-only. A later stage may add hybrid comparison during login, still without authorizing from SQL.
+
 ## Migration Order
 
 1. Inventory and documentation only.

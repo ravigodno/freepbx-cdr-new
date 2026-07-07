@@ -45,6 +45,14 @@ const CORE_SETTINGS = [
   ['system.events_enabled', '1', 'boolean', 'system', 'System events logging enabled']
 ] as const;
 
+const AUTH_STORAGE_MODE_SETTING = [
+  'auth.storage_mode',
+  'legacy',
+  'string',
+  'auth',
+  'Authentication source mode: legacy/sql/hybrid'
+] as const;
+
 const MIGRATIONS: Migration[] = [
   {
     key: '20260707_001_core_internal_tables',
@@ -161,6 +169,12 @@ const MIGRATIONS: Migration[] = [
     description: 'Seed users and roles from legacy data/db.json',
     statements: [],
     seed: seedLegacyUsersAndRoles
+  },
+  {
+    key: '20260707_004_seed_auth_storage_mode',
+    description: 'Seed auth storage mode setting',
+    statements: [],
+    seed: seedAuthStorageMode
   }
 ];
 
@@ -317,6 +331,15 @@ async function seedCoreSettings(connection: Connection): Promise<void> {
   for (const setting of CORE_SETTINGS) {
     await connection.execute(sql, setting);
   }
+}
+
+async function seedAuthStorageMode(connection: Connection): Promise<void> {
+  await connection.execute(
+    `INSERT IGNORE INTO settings
+      (setting_key, setting_value, value_type, category, is_secret, description)
+     VALUES (?, ?, ?, ?, 0, ?)`,
+    AUTH_STORAGE_MODE_SETTING
+  );
 }
 
 interface LegacySeedStats {
