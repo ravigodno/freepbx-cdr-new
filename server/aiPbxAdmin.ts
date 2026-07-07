@@ -3,6 +3,8 @@ import { spawnSync } from 'child_process';
 import { GoogleGenAI } from '@google/genai';
 import * as crypto from 'crypto';
 import fetch from 'node-fetch';
+import { runAiAgentCore, sanitizeAiProviderError } from './aiAgentCore.js';
+import { executeReadOnlyCommand, findAllowedDiagnosticCommand, getAllowedDiagnosticCommandSuggestions } from './aiAgentCapabilities.js';
 
 function maskAiApiKey(key?: string): string {
   const value = String(key || '').trim();
@@ -242,7 +244,10 @@ function normalizeAipbxMessageFinal(m: any): any | null {
     content: text,
     createdAt,
     timestamp: createdAt,
-    attachments: Array.isArray(m.attachments) ? m.attachments : []
+    attachments: Array.isArray(m.attachments) ? m.attachments : [],
+    capabilityPlan: m.capabilityPlan || m.toolPlan,
+    capabilityResults: Array.isArray(m.capabilityResults) ? m.capabilityResults : [],
+    toolResults: Array.isArray(m.toolResults) ? m.toolResults : (Array.isArray(m.capabilityResults) ? m.capabilityResults : [])
   };
 }
 
@@ -251,245 +256,6 @@ function normalizeAipbxMessagesFinal(messages: any): any[] {
     ? messages.map(normalizeAipbxMessageFinal).filter(Boolean)
     : [];
 }
-
-// AIPBX_AI_TOOL_ROUTER_V1
-function extractJsonObjectFromText(raw: string): any | null {
-  const text = String(raw || '').trim();
-
-  try {
-    return JSON.parse(text);
-  } catch {}
-
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
-  if (fenced) {
-    try {
-      return JSON.parse(fenced[1]);
-    } catch {}
-  }
-
-  const start = text.indexOf('{');
-  const end = text.lastIndexOf('}');
-  if (start !== -1 && end !== -1 && end > start) {
-    try {
-      return JSON.parse(text.slice(start, end + 1));
-    } catch {}
-  }
-
-  return null;
-}
-
-function normalizeToolCommandId(id: string): string {
-  return String(id || '').trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
-}
-
-function getAipbxAllowedToolCommands() {
-  return {
-    sip_show_registry: {
-      title: 'Chan SIP registry',
-      cmd: 'asterisk',
-      args: ['-rx', 'sip show registry'],
-      description: 'Проверка SIP-регистраций провайдеров chan_sip'
-    },
-    sip_show_peers: {
-      title: 'Chan SIP peers',
-      cmd: 'asterisk',
-      args: ['-rx', 'sip show peers'],
-      description: 'Проверка состояния chan_sip peers и задержек'
-    },
-    sip_show_settings: {
-      title: 'Chan SIP settings',
-      cmd: 'asterisk',
-      args: ['-rx', 'sip show settings'],
-      description: 'Проверка общих настроек chan_sip, NAT, bind, externip/localnet'
-    },
-    pjsip_show_registrations: {
-      title: 'PJSIP registrations',
-      cmd: 'asterisk',
-      args: ['-rx', 'pjsip show registrations'],
-      description: 'Проверка PJSIP регистраций'
-    },
-    pjsip_show_endpoints: {
-      title: 'PJSIP endpoints',
-      cmd: 'asterisk',
-      args: ['-rx', 'pjsip show endpoints'],
-      description: 'Проверка PJSIP endpoints'
-    },
-    pjsip_show_contacts: {
-      title: 'PJSIP contacts',
-      cmd: 'asterisk',
-      args: ['-rx', 'pjsip show contacts'],
-      description: 'Проверка PJSIP contacts'
-    },
-    rtp_show_settings: {
-      title: 'RTP settings',
-      cmd: 'asterisk',
-      args: ['-rx', 'rtp show settings'],
-      description: 'Проверка RTP диапазона и настроек RTP'
-    },
-    queue_show: {
-      title: 'Queues',
-      cmd: 'asterisk',
-      args: ['-rx', 'queue show'],
-      description: 'Проверка очередей и агентов'
-    },
-    core_show_channels: {
-      title: 'Active channels',
-      cmd: 'asterisk',
-      args: ['-rx', 'core show channels concise'],
-      description: 'Проверка активных каналов/звонков'
-    },
-    manager_show_settings: {
-      title: 'AMI settings',
-      cmd: 'asterisk',
-      args: ['-rx', 'manager show settings'],
-      description: 'Проверка AMI'
-    }
-  } as Record<string, { title: string; cmd: string; args: string[]; description: string }>;
-}
-
-async function executeAipbxToolCommands(requestedCommands: any[]): Promise<any[]> {
-  const { execFile } = require('child_process');
-  const allowed = getAipbxAllowedToolCommands();
-
-  const commands = Array.isArray(requestedCommands) ? requestedCommands.slice(0, 8) : [];
-  const results: any[] = [];
-
-  const run = (title: string, cmd: string, args: string[]) => {
-    return new Promise<any>((resolve) => {
-      execFile(cmd, args, { timeout: 12000, maxBuffer: 1024 * 1024 }, (error: any, stdout: string, stderr: string) => {
-        resolve({
-          title,
-          command: [cmd, ...args].join(' '),
-          ok: !error,
-          stdout: String(stdout || '').slice(0, 20000),
-          stderr: String(stderr || '').slice(0, 4000),
-          error: error ? String(error.message || error).slice(0, 1200) : null
-        });
-      });
-    });
-  };
-
-  for (const item of commands) {
-    const id = normalizeToolCommandId(typeof item === 'string' ? item : item?.id);
-    const spec = allowed[id];
-
-    if (spec) {
-      results.push(await run(spec.title, spec.cmd, spec.args));
-      continue;
-    }
-
-    // Разрешенный параметризованный tool: sip show peer <peer>
-    if (id === 'sip_show_peer') {
-      const peer = String(item?.peer || item?.name || '').trim();
-
-      if (!/^[A-Za-z0-9_.-]{1,80}$/.test(peer)) {
-        results.push({
-          title: 'sip show peer',
-          command: 'asterisk -rx "sip show peer <invalid>"',
-          ok: false,
-          stdout: '',
-          stderr: '',
-          error: 'Недопустимое имя peer. Разрешены только буквы, цифры, точка, дефис и подчеркивание.'
-        });
-        continue;
-      }
-
-      results.push(await run('Chan SIP peer ' + peer, 'asterisk', ['-rx', 'sip show peer ' + peer]));
-      continue;
-    }
-
-    // Разрешенный параметризованный tool: pjsip show endpoint <endpoint>
-    if (id === 'pjsip_show_endpoint') {
-      const endpoint = String(item?.endpoint || item?.name || '').trim();
-
-      if (!/^[A-Za-z0-9_.-]{1,80}$/.test(endpoint)) {
-        results.push({
-          title: 'pjsip show endpoint',
-          command: 'asterisk -rx "pjsip show endpoint <invalid>"',
-          ok: false,
-          stdout: '',
-          stderr: '',
-          error: 'Недопустимое имя endpoint.'
-        });
-        continue;
-      }
-
-      results.push(await run('PJSIP endpoint ' + endpoint, 'asterisk', ['-rx', 'pjsip show endpoint ' + endpoint]));
-      continue;
-    }
-
-    results.push({
-      title: 'Rejected tool',
-      command: id || '<empty>',
-      ok: false,
-      stdout: '',
-      stderr: '',
-      error: 'Команда не входит в whitelist безопасных read-only инструментов.'
-    });
-  }
-
-  return results;
-}
-
-function buildAipbxToolRouterPrompt(userText: string, allowed: any): string {
-  const tools = Object.entries(allowed).map(([id, spec]: any) => {
-    return '- ' + id + ': ' + spec.description;
-  }).join('\n');
-
-  return `
-Ты — AI tool-router для PBXPuls / FreePBX / Asterisk.
-
-Твоя задача: по запросу пользователя выбрать, какие безопасные read-only диагностические команды надо выполнить.
-
-ВАЖНО:
-- Не отвечай пользователю обычным текстом.
-- Верни только JSON.
-- Не выдумывай команды.
-- Используй только whitelist.
-- Если нужно проверить конкретный chan_sip peer, можно использовать:
-  {"id":"sip_show_peer","peer":"ИМЯ_PEER"}
-- Если нужно проверить конкретный PJSIP endpoint, можно использовать:
-  {"id":"pjsip_show_endpoint","endpoint":"ИМЯ_ENDPOINT"}
-- Опасные действия, изменения конфигурации, restart/reload/delete запрещены.
-
-Whitelist:
-${tools}
-
-Запрос пользователя:
-${userText}
-
-Верни JSON строго такого вида:
-{
-  "mode": "diagnose",
-  "reason": "почему выбраны эти команды",
-  "commands": [
-    {"id":"sip_show_registry"},
-    {"id":"sip_show_peers"}
-  ]
-}
-
-Если диагностические команды не нужны:
-{
-  "mode": "answer",
-  "reason": "почему команды не нужны",
-  "commands": []
-}
-`;
-}
-
-function formatToolResultsForAI(results: any[]): string {
-  return results.map((r) => {
-    return [
-      '### ' + r.title,
-      '$ ' + r.command,
-      'OK: ' + r.ok,
-      r.error ? 'ERROR: ' + r.error : '',
-      r.stderr ? 'STDERR:\n' + r.stderr : '',
-      'STDOUT:\n' + (r.stdout || 'пусто')
-    ].filter(Boolean).join('\n');
-  }).join('\n\n---\n\n');
-}
-
 
 // OPENAI_CURL_HELPER_SAFE_V1
 async function callOpenAIChatViaCurlSafe(endpoint: string, key: string, payload: any): Promise<any> {
@@ -505,7 +271,6 @@ async function callOpenAIChatViaCurlSafe(endpoint: string, key: string, payload:
       '--max-time', '75',
       '--retry', '2',
       '--retry-delay', '1',
-      '--retry-all-errors',
       endpoint,
       '-H', 'Authorization: Bearer ' + key,
       '-H', 'Content-Type: application/json',
@@ -516,7 +281,7 @@ async function callOpenAIChatViaCurlSafe(endpoint: string, key: string, payload:
       maxBuffer: 1024 * 1024 * 4
     }, (error: any, stdout: string, stderr: string) => {
       if (error) {
-        reject(new Error('curl OpenAI error attempt ' + attempt + ': ' + (stderr || error.message || String(error))));
+        reject(new Error('OpenAI curl request failed on attempt ' + attempt + ': ' + sanitizeAiProviderError(stderr || 'network error')));
         return;
       }
 
@@ -525,7 +290,7 @@ async function callOpenAIChatViaCurlSafe(endpoint: string, key: string, payload:
 
         if (data.error) {
           const code = String(data.error.code || '');
-          const msg = JSON.stringify(data.error);
+          const msg = sanitizeAiProviderError(JSON.stringify(data.error));
 
           if (code === 'unsupported_country_region_territory') {
             reject(new Error('RETRYABLE_OPENAI_REGION_ERROR: ' + msg));
@@ -538,7 +303,7 @@ async function callOpenAIChatViaCurlSafe(endpoint: string, key: string, payload:
 
         resolve(data);
       } catch (e: any) {
-        reject(new Error('OpenAI curl returned non-JSON: ' + String(stdout || '').slice(0, 1000)));
+        reject(new Error('OpenAI curl returned non-JSON response'));
       }
     });
   });
@@ -560,7 +325,7 @@ async function callOpenAIChatViaCurlSafe(endpoint: string, key: string, payload:
     }
   }
 
-  throw new Error(String(lastError?.message || lastError || 'OpenAI curl failed after retries').replace('RETRYABLE_OPENAI_REGION_ERROR: ', 'OpenAI API error via curl after retries: '));
+  throw new Error('OpenAI API error via curl after retries: ' + sanitizeAiProviderError(lastError?.message || lastError || 'OpenAI curl failed'));
 }
 
 async function generateAIResponse(params: {
@@ -579,7 +344,7 @@ async function generateAIResponse(params: {
   if (provider === 'gemini') {
     const key = String(apiKey || process.env.GEMINI_API_KEY || '').trim();
     if (!key) {
-      throw new Error('Укажите API-ключ Gemini в настройках AI-администратора или переменную GEMINI_API_KEY в .env.');
+      throw new Error('Укажите API-ключ Gemini в настройках AI-администратора.');
     }
     const ai = new GoogleGenAI({ apiKey: key });
     
@@ -610,7 +375,7 @@ async function generateAIResponse(params: {
   if (provider === 'openai') {
     const key = String(apiKey || process.env.OPENAI_API_KEY || '').trim();
     if (!key) {
-      throw new Error('Укажите API-ключ OpenAI в настройках AI-администратора или переменную OPENAI_API_KEY в .env.');
+      throw new Error('Укажите API-ключ OpenAI в настройках AI-администратора.');
     }
 
     const endpoint = normalizeAiBaseUrl(baseUrl, 'https://api.openai.com/v1');
@@ -640,7 +405,7 @@ async function generateAIResponse(params: {
   if (provider === 'anthropic' || provider === 'claude') {
     const key = String(apiKey || process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY || '').trim();
     if (!key) {
-      throw new Error('Укажите API-ключ Anthropic/Claude в настройках AI-администратора или переменную ANTHROPIC_API_KEY в .env.');
+      throw new Error('Укажите API-ключ Anthropic в настройках AI-администратора.');
     }
     const endpoint = String(baseUrl || 'https://api.anthropic.com/v1/messages').trim();
 
@@ -678,7 +443,7 @@ async function generateAIResponse(params: {
   if (provider === 'deepseek') {
     const key = String(apiKey || process.env.DEEPSEEK_API_KEY || '').trim();
     if (!key) {
-      throw new Error('Укажите API-ключ DeepSeek в настройках AI-администратора или переменную DEEPSEEK_API_KEY в .env.');
+      throw new Error('Укажите API-ключ DeepSeek в настройках AI-администратора.');
     }
     const endpoint = normalizeAiBaseUrl(baseUrl, 'https://api.deepseek.com');
 
@@ -757,26 +522,6 @@ async function generateAIResponse(params: {
 
   throw new Error(`Неизвестный провайдер: ${provider}`);
 }
-
-// Predefined list of safe diagnostic commands allowed to run on the server
-const ALLOWED_SAFE_COMMANDS = [
-  'asterisk -rx "pjsip show registration"',
-  'asterisk -rx "pjsip show endpoints"',
-  'asterisk -rx "pjsip show registry"',
-  'asterisk -rx "core show channels"',
-  'asterisk -rx "sip show registry"',
-  'asterisk -rx "sip show peers"',
-  'asterisk -rx "iax2 show registry"',
-  'asterisk -rx "iax2 show peers"',
-  'asterisk -rx "core show translation"',
-  'asterisk -rx "core show codecs"',
-  'fwconsole systeminfo',
-  'fwconsole certificates',
-  'ip route show',
-  'ip address show',
-  'df -h',
-  'free -m'
-];
 
 // Helper to sanitize secrets in terminal output and logs
 function maskSecretsInText(text: string): string {
@@ -938,105 +683,18 @@ export function registerAiPbxAdminRoutes(
 
       session.messages.push(userMsg);
 
-      const allowed = getAipbxAllowedToolCommands();
-
-      let plannerRaw = '';
-      let plan: any = null;
-      let toolResults: any[] = [];
-      let finalText = '';
-
-      try {
-        plannerRaw = await generateAIResponse({
-          provider: settings.provider || 'openai',
-          model: settings.model || 'gpt-4o-mini',
-          temperature: 0,
-          systemPrompt: 'Ты возвращаешь только валидный JSON. Никакого markdown.',
-          messages: [
-            {
-              role: 'user',
-              text: buildAipbxToolRouterPrompt(text, allowed)
-            }
-          ],
-          apiKey: settings.apiKey || '',
-          baseUrl: settings.baseUrl || ''
-        });
-
-        plan = extractJsonObjectFromText(plannerRaw);
-
-        if (!plan || !Array.isArray(plan.commands)) {
-          plan = {
-            mode: 'answer',
-            reason: 'AI не вернул корректный JSON-план команд.',
-            commands: []
-          };
+      const agentResult = await runAiAgentCore({
+        userText: text,
+        settings,
+        sessionMessages: session.messages,
+        knowledge: Array.isArray(db.ai_pbx_knowledge) ? db.ai_pbx_knowledge : [],
+        complete: generateAIResponse,
+        log: (message, meta = {}) => {
+          console.log("[AIPBXAdmin][AgentCore]", message, meta);
         }
+      });
 
-        if (plan.mode === 'diagnose' && plan.commands.length > 0) {
-          toolResults = await executeAipbxToolCommands(plan.commands);
-
-          const toolOutput = formatToolResultsForAI(toolResults);
-
-          const articles = Array.isArray(db.ai_pbx_knowledge) ? db.ai_pbx_knowledge : [];
-          const kbContext = articles.length > 0
-            ? '\n\nБаза знаний PBXPuls:\n' + articles.map((art: any) => {
-                return '[Тема: ' + String(art.title || '') + '\nКатегория: ' + String(art.category || '') + '\nСодержание: ' + String(art.content || '') + ']';
-              }).join('\n\n')
-            : '';
-
-          const finalPrompt = `
-Пользователь спросил:
-${text}
-
-AI выбрал диагностические команды:
-${JSON.stringify(plan, null, 2)}
-
-Backend выполнил только разрешенные read-only команды из whitelist.
-Ниже вывод команд:
-
-${toolOutput}
-
-${kbContext}
-
-Сформируй инженерный ответ на русском:
-1. Краткий вывод.
-2. Что проверено.
-3. Что найдено.
-4. Что это значит.
-5. Какие следующие безопасные шаги.
-6. Если нужны опасные действия или изменения конфигурации — только предложи и попроси подтверждение.
-Не выдумывай данные, которых нет в выводе команд.
-`;
-
-          finalText = await generateAIResponse({
-            provider: settings.provider || 'openai',
-            model: settings.model || 'gpt-4o-mini',
-            temperature: settings.temperature !== undefined ? Number(settings.temperature) : 0.2,
-            systemPrompt: settings.systemPrompt || 'Ты — AIPBXAdmin, инженер FreePBX/Asterisk. Отвечай кратко и по делу.',
-            messages: [
-              { role: 'user', text: finalPrompt }
-            ],
-            apiKey: settings.apiKey || '',
-            baseUrl: settings.baseUrl || ''
-          });
-        } else {
-          const formattedMessages = session.messages.map((m: any) => ({
-            role: m.role,
-            text: m.text || m.content || ''
-          }));
-
-          finalText = await generateAIResponse({
-            provider: settings.provider || 'openai',
-            model: settings.model || 'gpt-4o-mini',
-            temperature: settings.temperature !== undefined ? Number(settings.temperature) : 0.2,
-            systemPrompt: settings.systemPrompt || 'Ты — AIPBXAdmin, инженер FreePBX/Asterisk. Отвечай кратко и по делу.',
-            messages: formattedMessages,
-            apiKey: settings.apiKey || '',
-            baseUrl: settings.baseUrl || ''
-          });
-        }
-      } catch (aiErr: any) {
-        finalText = 'AI tool-router не смог выполнить задачу: ' + (aiErr?.message || String(aiErr)) + '\n\nПричина чаще всего: AI API недоступен с этой АТС или не настроен Base URL/proxy. Архитектурно команда должна выбираться AI, затем backend выполняет только whitelist-команды.';
-      }
+      const finalText = agentResult.text;
 
       const assistantIso = new Date().toISOString();
 
@@ -1048,8 +706,14 @@ ${kbContext}
         attachments: [],
         createdAt: assistantIso,
         timestamp: assistantIso,
-        toolPlan: plan,
-        toolResults: toolResults.map((r: any) => ({
+        capabilityPlan: agentResult.plan,
+        capabilityResults: agentResult.capabilityResults.map((r: any) => ({
+          title: r.title,
+          command: r.command,
+          ok: r.ok,
+          error: r.error || null
+        })),
+        toolResults: agentResult.capabilityResults.map((r: any) => ({
           title: r.title,
           command: r.command,
           ok: r.ok,
@@ -1065,6 +729,7 @@ ${kbContext}
       }
 
       await writeLocalDb(db);
+      console.log('[AIPBXAdmin][AgentCore]', 'final response saved', { sessionId: session.id, messageId: assistantMsg.id });
 
       return res.json({
         success: true,
@@ -1072,10 +737,11 @@ ${kbContext}
         session
       });
     } catch (error: any) {
-      console.error('[AIPBXAdmin] AI tool-router message route failed:', error);
+      const safeError = sanitizeAiProviderError(error?.message || String(error));
+      console.error('[AIPBXAdmin] Agent Core message route failed:', safeError);
       return res.status(500).json({
         success: false,
-        error: error?.message || String(error)
+        error: 'AI provider недоступен или вернул ошибку. Проверьте Base URL, ключ и сетевой доступ.'
       });
     }
   });
@@ -1118,106 +784,57 @@ ${kbContext}
   });
 
   // 8. Suggest terminal diagnostic commands
-  app.post('/api/ai-pbx-admin/diagnostics/suggest', aiPbxAuth, async (req: Request, res: Response) => {
+  app.post("/api/ai-pbx-admin/diagnostics/suggest", aiPbxAuth, async (req: Request, res: Response) => {
     try {
-      const { category, customProblem } = req.body;
-      const db = await readLocalDb();
-      const settings = db.ai_pbx_settings || {
-        provider: 'gemini',
-        model: 'gemini-3.5-flash',
-        temperature: 0.4
+      const category = String(req.body?.category || "").toLowerCase();
+      const problem = String(req.body?.customProblem || "").toLowerCase();
+      const allCommands = getAllowedDiagnosticCommandSuggestions();
+
+      const matches = (command: string, description: string) => {
+        const text = (command + " " + description).toLowerCase();
+        if (category.includes("trunk") || problem.includes("транк") || problem.includes("trunk")) return /sip|pjsip|rtp/.test(text);
+        if (category.includes("extension") || problem.includes("номер") || problem.includes("extension")) return /endpoint|contact|peer|channel/.test(text);
+        if (category.includes("quality") || problem.includes("слыш") || problem.includes("rtp") || problem.includes("audio")) return /rtp|codec|translation|endpoint/.test(text);
+        if (category.includes("call") || category.includes("queue") || problem.includes("очеред") || problem.includes("queue")) return /channel|queue/.test(text);
+        if (category.includes("routing") || problem.includes("звон") || problem.includes("call")) return /channel|queue|route|address/.test(text);
+        if (category.includes("security") || problem.includes("ami")) return /ami|manager|address/.test(text);
+        return false;
       };
-      
-      const prompt = `Пользователь описывает проблему: "${customProblem || 'Общая диагностика АТС'}" в категории "${category || 'other'}". 
-Выдай JSON-массив из 4-6 наиболее подходящих терминальных команд диагностики для Asterisk/Linux, которые помогут исследовать эту проблему.
-Каждая команда в списке ДОЛЖНА БЫТЬ из списка разрешенных команд PBXPuls или относиться к базовым командам проверки (ping, traceroute, asterisk, ip, df, free).
-Разрешенные команды АТС:
-- asterisk -rx "pjsip show registration"
-- asterisk -rx "pjsip show endpoints"
-- asterisk -rx "pjsip show registry"
-- asterisk -rx "core show channels"
-- asterisk -rx "sip show registry"
-- asterisk -rx "sip show peers"
-- asterisk -rx "iax2 show registry"
-- asterisk -rx "iax2 show peers"
-- asterisk -rx "core show translation"
-- asterisk -rx "core show codecs"
-- fwconsole systeminfo
-- fwconsole certificates
-- ping -c 4 [ip/host]
-- ip route show
-- ip address show
-- df -h
-- free -m
 
-Верни СТРОГО валидный JSON в следующем формате (без каких-либо markdown-тегов \`\`\`json, только чистый JSON-массив):
-[
-  { "command": "команда", "description": "краткое пояснение на русском языке" }
-]`;
+      const selected = allCommands.filter(item => matches(item.command, item.description));
+      const commands = (selected.length ? selected : allCommands).slice(0, 6);
 
-      let text = '[]';
-      try {
-        text = await generateAIResponse({
-          provider: settings.provider || 'gemini',
-          model: settings.model || 'gemini-3.5-flash',
-          temperature: 0.1,
-          systemPrompt: 'You are an Asterisk diagnostic assistant. Return raw JSON arrays only.',
-          messages: [{ role: 'user', text: prompt }],
-          responseType: 'json',
-          apiKey: settings.apiKey,
-          baseUrl: settings.baseUrl
-        });
-      } catch (err: any) {
-        const fallbackCommands = [
-          { command: 'asterisk -rx "pjsip show registration"', description: 'Показать статус регистрации PJSIP-транков' },
-          { command: 'asterisk -rx "pjsip show endpoints"', description: 'Список всех активных PJSIP-экстеншенов АТС' },
-          { command: 'ip route show', description: 'Показать таблицу маршрутизации Linux-сервера' },
-          { command: 'df -h', description: 'Проверка свободного места на дисках' }
-        ];
-        return res.json({ commands: fallbackCommands, note: `Внимание: Показаны стандартные команды (Ошибка AI: ${err.message})` });
-      }
-
-      const cleanedText = cleanJsonResponseText(text);
-      try {
-        const parsed = JSON.parse(cleanedText);
-        res.json({ commands: parsed });
-      } catch (err) {
-        res.json({
-          commands: [
-            { command: 'asterisk -rx "pjsip show registration"', description: 'Показать статус регистрации PJSIP-транков' },
-            { command: 'asterisk -rx "pjsip show endpoints"', description: 'Список всех активных PJSIP-экстеншенов АТС' },
-            { command: 'ip route show', description: 'Показать таблицу маршрутизации Linux-сервера' }
-          ]
-        });
-      }
+      res.json({ commands });
     } catch (error: any) {
-      res.status(500).json({ error: error.message });
+      res.status(500).json({ error: "Не удалось подобрать безопасные диагностические команды" });
     }
   });
 
   // 9. Execute secure diagnostic commands on the server!
   app.post('/api/ai-pbx-admin/diagnostics/collect-safe', aiPbxAuth, async (req: Request, res: Response) => {
     try {
-      const { command, args } = req.body;
+      const { command } = req.body;
       if (!command) {
         return res.status(400).json({ error: 'Command is required' });
       }
 
-      // Check if command is safe & allowed
-      const isAllowed = ALLOWED_SAFE_COMMANDS.some(allowed => command.startsWith(allowed.split(' ')[0])) || 
-                        ALLOWED_SAFE_COMMANDS.includes(command);
-
-      if (!isAllowed) {
-        return res.status(403).json({ 
-          error: 'Доступ заблокирован'
+      const allowedCommand = findAllowedDiagnosticCommand(String(command));
+      if (!allowedCommand) {
+        return res.status(403).json({
+          error: 'Доступ заблокирован: команда не входит в точный whitelist read-only диагностики'
         });
       }
-      const { exec } = require('child_process');
-      exec(command, (err, stdout, stderr) => {
-        const resultText = (stdout || '') + (stderr || '');
-        res.json({ output: maskSecretsInText(resultText) || 'Команда выполнена успешно, вывод пуст.' });
+
+      const result = await executeReadOnlyCommand(allowedCommand);
+      const output = [result.stdout, result.stderr, result.error ? 'ERROR: ' + result.error : '']
+        .filter(Boolean)
+        .join('\n');
+
+      res.json({
+        output: output || 'Команда выполнена успешно, вывод пуст.',
+        ok: result.ok
       });
-    } catch (error) { 
+    } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
   });
@@ -1272,7 +889,7 @@ ${maskSecretsInText(content)}
             id: 'kb_1',
             title: 'Устранение неполадок с регистрацией PJSIP транка',
             category: 'trunk',
-            content: '### Симптомы:\nТранк переходит в статус Unregistered или Rejected.\n\n### Решение:\n1. Проверьте адрес SIP-сервера в настройках транка.\n2. Убедитесь, что порт 5060/5061 не блокируется файрволом.\n3. Запустите `asterisk -rx "pjsip show registration"` для диагностики.\n4. Проверьте правильность auth_username и пароля.',
+            content: '### Симптомы:\nТранк переходит в статус Unregistered или Rejected.\n\n### Решение:\n1. Проверьте адрес SIP-сервера в настройках транка.\n2. Убедитесь, что порт 5060/5061 не блокируется файрволом.\n3. Запустите `asterisk -rx "pjsip show registrations"` для диагностики.\n4. Проверьте правильность auth_username и пароля.',
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString()
           },
@@ -1426,188 +1043,6 @@ ${history}
     }
   });
 
-
-  // 15.1 AI trunk diagnostics
-  app.post('/api/ai-pbx-admin/diagnostics/trunks-ai', aiPbxAuth, async (req: Request, res: Response) => {
-    const { execFile } = require('child_process');
-
-    const runCommand = (cmd: string, args: string[], timeoutMs = 8000) => {
-      return new Promise<{ command: string; ok: boolean; stdout: string; stderr: string; error?: string }>((resolve) => {
-        const child = execFile(cmd, args, { timeout: timeoutMs, maxBuffer: 1024 * 1024 }, (error: any, stdout: string, stderr: string) => {
-          resolve({
-            command: [cmd, ...args].join(' '),
-            ok: !error,
-            stdout: String(stdout || '').slice(0, 12000),
-            stderr: String(stderr || '').slice(0, 4000),
-            error: error ? String(error.message || error).slice(0, 1000) : undefined
-          });
-        });
-
-        child.on('error', (error: any) => {
-          resolve({
-            command: [cmd, ...args].join(' '),
-            ok: false,
-            stdout: '',
-            stderr: '',
-            error: String(error.message || error).slice(0, 1000)
-          });
-        });
-      });
-    };
-
-    try {
-      const question = String(req.body?.question || 'Проверь, все ли SIP/PJSIP транки на связи').slice(0, 1000);
-
-      const commands = [
-        ['asterisk', ['-rx', 'pjsip show registrations']],
-        ['asterisk', ['-rx', 'pjsip show endpoints']],
-        ['asterisk', ['-rx', 'sip show registry']],
-        ['asterisk', ['-rx', 'sip show peers']]
-      ];
-
-      const results = [];
-      for (const [cmd, args] of commands) {
-        results.push(await runCommand(cmd as string, args as string[]));
-      }
-
-      const db = await readLocalDb();
-      const settings = db.ai_pbx_settings || {};
-
-      const safeOutput = results.map((r: any) => {
-        return [
-          '### COMMAND: ' + r.command,
-          'OK: ' + r.ok,
-          r.error ? 'ERROR: ' + r.error : '',
-          'STDOUT:',
-          r.stdout || '',
-          'STDERR:',
-          r.stderr || ''
-        ].join('\n');
-      }).join('\n\n---\n\n');
-
-      const prompt = `
-Пользователь задал вопрос:
-${question}
-
-Ниже вывод безопасных диагностических команд Asterisk/FreePBX.
-Проанализируй транки и регистрации.
-
-Требования к ответу:
-1. Сначала короткий вывод: все ли транки на связи.
-2. Затем список проблемных транков, если есть.
-3. Объясни, что означают статусы Registered, Rejected, Timeout, Unreachable, NonQual, Offline.
-4. Дай следующие команды для проверки только если они действительно нужны.
-5. Не выдумывай. Если данных недостаточно — прямо скажи.
-
-Вывод команд:
-${safeOutput}
-`;
-
-      const aiText = "AI временно отключен из-за региональных ограничений. Показан только вывод диагностики.";
-res.json({
-        success: true,
-        question,
-        commands: results.map((r: any) => ({
-          command: r.command,
-          ok: r.ok,
-          error: r.error || null
-        })),
-        answer: aiText
-      });
-    } catch (error: any) {
-      console.error('[AIPBXAdmin] trunks-ai failed:', error);
-      res.status(500).json({
-        success: false,
-        error: error.message || String(error)
-      });
-    }
-  });
-
-
-  // 15.2 Safe diagnostic console
-  app.post('/api/ai-pbx-admin/diagnostics/console', aiPbxAuth, async (req: Request, res: Response) => {
-    const { execFile } = require('child_process');
-
-    const rawCommand = String(req.body?.command || '').trim().toLowerCase();
-
-    const presets: Record<string, Array<{ title: string; cmd: string; args: string[] }>> = {
-      'trunks': [
-        { title: 'PJSIP registrations', cmd: 'asterisk', args: ['-rx', 'pjsip show registrations'] },
-        { title: 'PJSIP endpoints', cmd: 'asterisk', args: ['-rx', 'pjsip show endpoints'] },
-        { title: 'Chan SIP registry', cmd: 'asterisk', args: ['-rx', 'sip show registry'] },
-        { title: 'Chan SIP peers', cmd: 'asterisk', args: ['-rx', 'sip show peers'] }
-      ],
-      'sip': [
-        { title: 'Chan SIP registry', cmd: 'asterisk', args: ['-rx', 'sip show registry'] },
-        { title: 'Chan SIP peers', cmd: 'asterisk', args: ['-rx', 'sip show peers'] }
-      ],
-      'pjsip': [
-        { title: 'PJSIP registrations', cmd: 'asterisk', args: ['-rx', 'pjsip show registrations'] },
-        { title: 'PJSIP endpoints', cmd: 'asterisk', args: ['-rx', 'pjsip show endpoints'] },
-        { title: 'PJSIP contacts', cmd: 'asterisk', args: ['-rx', 'pjsip show contacts'] }
-      ],
-      'channels': [
-        { title: 'Active channels', cmd: 'asterisk', args: ['-rx', 'core show channels concise'] }
-      ],
-      'queues': [
-        { title: 'Queues', cmd: 'asterisk', args: ['-rx', 'queue show'] }
-      ],
-      'ami': [
-        { title: 'AMI settings', cmd: 'asterisk', args: ['-rx', 'manager show settings'] }
-      ],
-      'rtp': [
-        { title: 'RTP settings', cmd: 'asterisk', args: ['-rx', 'rtp show settings'] }
-      ]
-    };
-
-    let presetKey = rawCommand;
-
-    if (rawCommand.includes('транк') || rawCommand.includes('trunk')) presetKey = 'trunks';
-    if (rawCommand.includes('очеред')) presetKey = 'queues';
-    if (rawCommand.includes('канал')) presetKey = 'channels';
-    if (rawCommand.includes('pjsip')) presetKey = 'pjsip';
-    if (rawCommand.includes('sip')) presetKey = 'sip';
-    if (rawCommand.includes('ami')) presetKey = 'ami';
-    if (rawCommand.includes('rtp')) presetKey = 'rtp';
-
-    const selected = presets[presetKey];
-
-    if (!selected) {
-      return res.status(400).json({
-        success: false,
-        error: 'Команда не разрешена',
-        allowed: Object.keys(presets),
-        hint: 'Например: trunks, sip, pjsip, channels, queues, ami, rtp'
-      });
-    }
-
-    const run = (item: { title: string; cmd: string; args: string[] }) => {
-      return new Promise((resolve) => {
-        execFile(item.cmd, item.args, { timeout: 10000, maxBuffer: 1024 * 1024 }, (error: any, stdout: string, stderr: string) => {
-          resolve({
-            title: item.title,
-            command: [item.cmd, ...item.args].join(' '),
-            ok: !error,
-            stdout: String(stdout || '').slice(0, 20000),
-            stderr: String(stderr || '').slice(0, 4000),
-            error: error ? String(error.message || error).slice(0, 1000) : null
-          });
-        });
-      });
-    };
-
-    const results = [];
-    for (const item of selected) {
-      results.push(await run(item));
-    }
-
-    res.json({
-      success: true,
-      requested: rawCommand,
-      preset: presetKey,
-      results
-    });
-  });
 
   // 16. Get AIPBXAdmin Settings
   app.get('/api/ai-pbx-admin/settings', aiPbxAuth, async (req: Request, res: Response) => {

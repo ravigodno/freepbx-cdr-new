@@ -299,3 +299,7 @@ Do not load Extensions directly from /userman/extensions or /core/users in new c
 Provider order in Auto mode: BMO local, GraphQL API, Database readonly, Legacy REST. Legacy REST is a compatibility fallback only. FreePBX 17 should use GraphQL fetchAllExtensions when OAuth is configured.
 
 FreePBX OAuth tokens must be cached in memory and refreshed before expiry. Never log access_token, client_secret, SIP secret or password values.
+
+## AI PBX Admin Agent Core Rules
+
+AI PBX Admin must use PBXPuls Agent Core for chat diagnostics. The AI model selects a high-level capability, never a shell command. Backend code validates the capability and executes only predefined read-only diagnostics through execFile. Do not use prefix-based command checks or exec(command) with user/AI-provided strings. The chat endpoint must return success/message/session so the UI updates without refresh.

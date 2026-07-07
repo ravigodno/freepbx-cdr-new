@@ -274,28 +274,15 @@ export default function AIPBXAdminTab({ session: userSession, hasPermission }: A
 
   const fetchSettings = async () => {
     try {
-      const res = await fetch('/api/ai-pbx-admin/settings', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      provider,
-      model,
-      temperature,
-      apiKey,
-      baseUrl,
-      systemPrompt
-    })
-      .finally(() => {
-        clearTimeout(timeout);
-        setSaving(false);
-      })
-  }, { headers: authHeaders() });
+      const res = await fetch('/api/ai-pbx-admin/settings', { headers: authHeaders() });
       if (res.ok) {
         const data = await res.json();
         setAiProvider(data.provider || 'gemini');
-        setAiModel(data.model || 'gemini-3.5-flash');
+        setAiModel(data.model || 'gemini-2.5-flash');
         setAiTemp(data.temperature !== undefined ? data.temperature : 0.4);
-        setAiSystemPrompt(data.systemPrompt);
+        setAiSystemPrompt(data.systemPrompt || '');
+        setAiApiKeyMasked(data.apiKeyMasked || '');
+        setAiBaseUrl(data.baseUrl || '');
       }
     } catch (e) {
       console.error(e);
