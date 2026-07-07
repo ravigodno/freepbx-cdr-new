@@ -274,6 +274,21 @@ The seed is additive and uses `INSERT IGNORE` so existing SQL users, roles, perm
 
 This stage does not change runtime authentication, login, `requireAuth()`, users/roles APIs, frontend code or UI behavior. Runtime auth continues to read `data/db.json`; SQL users and roles are a prepared compatibility layer for later phases.
 
+## Stage 6.2: SQL User/Roles Read Layer
+
+Stage 6.2 adds a backend-only read layer for SQL users, roles and permissions:
+
+- helper module: `server/pbxpulsAuthDb.ts`;
+- user lookup: `getPBXPulsUser(username)`;
+- role reads: `getPBXPulsRoles()`, `getPBXPulsUserRoles(userId)`;
+- permission reads: `getPBXPulsUserPermissions(userId)`;
+- full SQL snapshot: `getPBXPulsAuthSnapshot(username)`;
+- legacy comparison helper: `compareLegacyUserWithSql(username)`.
+
+The helper uses only `isPBXPulsDbAvailable()` and `queryPBXPulsDb()` with read-only SQL. SQL errors, missing tables or unavailable DB return `null`/empty values and sanitized warnings without password hashes, tokens or secrets.
+
+Runtime authentication still uses legacy `data/db.json`. This layer is intentionally not connected to `/api/auth/login`, `requireAuth()`, permissions runtime, frontend code or public APIs. Its purpose is to verify SQL migration readiness before any future dual-read comparison stage.
+
 ## Migration Order
 
 1. Inventory and documentation only.
