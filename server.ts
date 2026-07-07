@@ -27,7 +27,7 @@ import { registerManagementRoutes } from './server-management.js';
 import { registerAiPbxAdminRoutes } from './server/aiPbxAdmin.js';
 import { runPBXPulsMigrations } from './server/pbxpulsMigrations.js';
 import { registerPBXPulsSqlStatusRoutes } from './server/pbxpulsSqlStatus.js';
-import { compareLegacyUserWithSql, getAuthStorageMode, getPBXPulsUsers } from './server/pbxpulsAuthDb.js';
+import { authenticatePBXPulsSqlUser, compareLegacyUserWithSql, getAuthStorageMode, getPBXPulsUsers } from './server/pbxpulsAuthDb.js';
 import { isPBXPulsDbAvailable, sanitizePBXPulsDbError } from './server/pbxpulsDb.js';
 import { writePBXPulsSystemEvent } from './server/pbxpulsEvents.js';
 
@@ -6559,6 +6559,18 @@ app.get('/api/pbxpuls/auth-mode', requireAuth(['su', 'admin']), async (_req, res
       getAuthStorageMode(),
       isPBXPulsDbAvailable()
     ]);
+    if (mode === 'sql') {
+      res.json({
+        mode,
+        effectiveMode: 'sql_with_legacy_fallback',
+        sqlAvailable,
+        loginRuntimeSource: 'sql',
+        sqlAuthRuntimeEnabled: true,
+        legacyFallbackEnabled: true
+      });
+      return;
+    }
+
     res.json({
       mode,
       effectiveMode: mode,
@@ -7767,6 +7779,114 @@ app.get('/api/marketing/metrika/pages', requireAuth(), async (req, res) => {
   }
 });
 
+type LoginAuthenticatedUser = {
+  id: string;
+  username: string;
+  role: UserRole;
+  extension: string;
+  disabled: boolean;
+  permissions: Record<string, boolean>;
+};
+
+type LegacyAuthResult = {
+  ok: true;
+  user: LoginAuthenticatedUser;
+} | {
+  ok: false;
+  reason: 'not_found' | 'disabled' | 'bad_password';
+};
+
+function authenticateLegacyUser(localDb: LocalDb, username: string, password: string): LegacyAuthResult {
+  const normalizedUsername = String(username || '').toLowerCase();
+  const user = localDb.users.find(u => u.username.toLowerCase() === normalizedUsername);
+
+  if (!user) return { ok: false, reason: 'not_found' };
+  if (user.disabled) return { ok: false, reason: 'disabled' };
+
+  let isMatch = bcrypt.compareSync(password, user.passwordHash);
+
+  // Keep the existing fallback checks for developers and operators using default or configured passwords.
+  if (!isMatch) {
+    if (user.role === 'su') {
+      isMatch = password === 'su123456' ||
+                password === 'su_secure_password' ||
+                !!(process.env.SU_PASSWORD && password === process.env.SU_PASSWORD);
+    } else if (user.role === 'admin') {
+      isMatch = password === 'admin' ||
+                password === 'admin_secure_password' ||
+                !!(process.env.ADMIN_PASSWORD && password === process.env.ADMIN_PASSWORD);
+    } else if (user.role === 'operator') {
+      isMatch = password === 'operator' ||
+                password === 'operator_secure_password' ||
+                !!(process.env.OPERATOR_PASSWORD && password === process.env.OPERATOR_PASSWORD);
+    } else if (user.role === 'manager') {
+      isMatch = password === 'manager' ||
+                !!(process.env.MANAGER_PASSWORD && password === process.env.MANAGER_PASSWORD);
+    }
+  }
+
+  if (!isMatch) return { ok: false, reason: 'bad_password' };
+
+  const roleConfig = (localDb.roles || getDefaultAccessRoles()).find((item: any) => item.id === user.role);
+  const effectivePermissions = {
+    ...(roleConfig?.permissions || {}),
+    ...(user.permissions || {})
+  };
+
+  return {
+    ok: true,
+    user: {
+      id: user.id,
+      username: user.username,
+      role: user.role,
+      extension: user.extension || '',
+      disabled: !!user.disabled,
+      permissions: effectivePermissions
+    }
+  };
+}
+
+function buildAuthLoginResponse(user: LoginAuthenticatedUser): { token: string; user: LoginAuthenticatedUser } {
+  const token = createAuthToken({
+    username: user.username,
+    role: user.role,
+    extension: user.extension || '',
+    permissions: user.permissions || {},
+    expiresAt: Date.now() + 24 * 60 * 60 * 1000
+  });
+
+  return {
+    token,
+    user: {
+      id: user.id,
+      username: user.username,
+      role: user.role,
+      extension: user.extension || '',
+      disabled: !!user.disabled,
+      permissions: user.permissions || {}
+    }
+  };
+}
+
+function logLegacyAuthFailure(username: string, reason: string): void {
+  console.warn(`[AUTH] Login failed username=${String(username || '').trim()} reason=${reason}`);
+}
+
+async function writeAuthRuntimeEvent(event: {
+  event_type: string;
+  severity: 'info' | 'warning';
+  message: string;
+  details: Record<string, unknown>;
+}): Promise<void> {
+  await writePBXPulsSystemEvent({
+    event_type: event.event_type,
+    severity: event.severity,
+    source: 'pbxpuls_auth',
+    message: event.message,
+    details: event.details
+  });
+}
+
 function scheduleLegacySqlAuthComparison(username: string): void {
   runLegacySqlAuthComparison(username).catch((error: any) => {
     console.warn('[AUTH] legacy/sql comparison skipped:', sanitizeAuthComparisonError(error));
@@ -7834,8 +7954,9 @@ function sanitizeAuthComparisonError(error: any): string {
 // Auth endpoint
 app.post('/api/auth/login', async (req, res) => {
   const { username, password } = req.body;
-  
-  console.log(`[AUTH] Login attempt username=${String(username || '').trim()} ip=${req.ip || req.socket.remoteAddress || ''}`);
+  const safeUsername = String(username || '').trim().slice(0, 100);
+
+  console.log(`[AUTH] Login attempt username=${safeUsername} ip=${req.ip || req.socket.remoteAddress || ''}`);
 
   if (!username || !password) {
     console.warn('[AUTH] Login failed: missing username or password');
@@ -7843,73 +7964,78 @@ app.post('/api/auth/login', async (req, res) => {
     return;
   }
 
+  const mode = await getAuthStorageMode();
+
+  if (mode === 'sql') {
+    let sqlFailureReason = 'sql_auth_failed';
+
+    try {
+      const sqlUser = await authenticatePBXPulsSqlUser(String(username), String(password));
+      if (sqlUser) {
+        const user: LoginAuthenticatedUser = {
+          id: sqlUser.id,
+          username: sqlUser.username,
+          role: sqlUser.role as UserRole,
+          extension: sqlUser.extension || '',
+          disabled: !!sqlUser.disabled,
+          permissions: sqlUser.permissions || {}
+        };
+
+        console.log(`[AUTH] SQL login success username=${user.username} role=${user.role} extension=${user.extension || ''}`);
+        await writeAuthRuntimeEvent({
+          event_type: 'auth_sql_login_success',
+          severity: 'info',
+          message: 'SQL auth login succeeded',
+          details: { username: user.username, role: user.role }
+        });
+        res.json(buildAuthLoginResponse(user));
+        return;
+      }
+    } catch (error: any) {
+      sqlFailureReason = 'sql_auth_error';
+      console.warn('[AUTH] SQL login attempt failed:', sanitizeAuthComparisonError(error));
+    }
+
+    const localDb = await readLocalDb();
+    const legacyAuth = authenticateLegacyUser(localDb, String(username), String(password));
+    if (legacyAuth.ok) {
+      console.warn(`[AUTH] SQL login fallback to legacy username=${legacyAuth.user.username} reason=${sqlFailureReason}`);
+      await writeAuthRuntimeEvent({
+        event_type: 'auth_sql_fallback_to_legacy',
+        severity: 'warning',
+        message: 'SQL auth failed, legacy fallback succeeded',
+        details: { username: legacyAuth.user.username, reason: sqlFailureReason }
+      });
+      res.json(buildAuthLoginResponse(legacyAuth.user));
+      return;
+    }
+
+    await writeAuthRuntimeEvent({
+      event_type: 'auth_sql_login_failed',
+      severity: 'warning',
+      message: 'SQL auth failed and legacy fallback failed',
+      details: { username: safeUsername, reason: legacyAuth.reason }
+    });
+    logLegacyAuthFailure(safeUsername, legacyAuth.reason);
+    res.status(401).json({ error: 'Неверные имя пользователя или пароль' });
+    return;
+  }
+
   const localDb = await readLocalDb();
-  const user = localDb.users.find(u => u.username.toLowerCase() === username.toLowerCase());
-
-  if (!user || user.disabled) {
-    console.warn(`[AUTH] Login failed username=${String(username || '').trim()} reason=${!user ? 'not_found' : 'disabled'}`);
+  const legacyAuth = authenticateLegacyUser(localDb, String(username), String(password));
+  if (!legacyAuth.ok) {
+    logLegacyAuthFailure(safeUsername, legacyAuth.reason);
     res.status(401).json({ error: 'Неверные имя пользователя или пароль' });
     return;
   }
 
-  let isMatch = bcrypt.compareSync(password, user.passwordHash);
-  
-  // Robust fallback checks for developers and operators using default or configured passwords
-  if (!isMatch) {
-    if (user.role === 'su') {
-      isMatch = password === 'su123456' || 
-                password === 'su_secure_password' || 
-                !!(process.env.SU_PASSWORD && password === process.env.SU_PASSWORD);
-    } else if (user.role === 'admin') {
-      isMatch = password === 'admin' || 
-                password === 'admin_secure_password' || 
-                !!(process.env.ADMIN_PASSWORD && password === process.env.ADMIN_PASSWORD);
-    } else if (user.role === 'operator') {
-      isMatch = password === 'operator' || 
-                password === 'operator_secure_password' || 
-                !!(process.env.OPERATOR_PASSWORD && password === process.env.OPERATOR_PASSWORD);
-    } else if (user.role === 'manager') {
-      isMatch = password === 'manager' || 
-                !!(process.env.MANAGER_PASSWORD && password === process.env.MANAGER_PASSWORD);
-    }
+  console.log(`[AUTH] Login success username=${legacyAuth.user.username} role=${legacyAuth.user.role} extension=${legacyAuth.user.extension || ''}`);
+
+  if (mode === 'hybrid') {
+    scheduleLegacySqlAuthComparison(legacyAuth.user.username);
   }
 
-  if (!isMatch) {
-    console.warn(`[AUTH] Login failed username=${user.username} reason=bad_password`);
-    res.status(401).json({ error: 'Неверные имя пользователя или пароль' });
-    return;
-  }
-
-  console.log(`[AUTH] Login success username=${user.username} role=${user.role} extension=${user.extension || ''}`);
-
-  scheduleLegacySqlAuthComparison(user.username);
-
-  const roleConfig = (localDb.roles || getDefaultAccessRoles()).find((item: any) => item.id === user.role);
-  const effectivePermissions = {
-    ...(roleConfig?.permissions || {}),
-    ...(user.permissions || {})
-  };
-
-  // Create a signed token valid for 24 hours
-  const token = createAuthToken({
-    username: user.username,
-    role: user.role,
-    extension: user.extension || '',
-    permissions: effectivePermissions,
-    expiresAt: Date.now() + 24 * 60 * 60 * 1000
-  });
-
-  res.json({
-    token,
-    user: {
-      id: user.id,
-      username: user.username,
-      role: user.role,
-      extension: user.extension || '',
-      disabled: !!user.disabled,
-      permissions: effectivePermissions
-    }
-  });
+  res.json(buildAuthLoginResponse(legacyAuth.user));
 });
 
 

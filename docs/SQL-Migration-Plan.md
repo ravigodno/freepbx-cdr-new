@@ -330,6 +330,20 @@ The report checks each legacy user for SQL presence, role match, permission coun
 
 The report recommends `hybrid` only as the next diagnostic mode. Runtime authentication remains legacy-only: login still reads `data/db.json`, `requireAuth()` is unchanged, token shape is unchanged, and SQL auth is not used to admit users.
 
+## Stage 6.8: SQL Auth Runtime Behind Setting
+
+Stage 6.8 adds SQL authentication runtime support behind the existing `auth.storage_mode` setting. The default remains `legacy`, so existing deployments continue to authenticate from `data/db.json` unless the setting is explicitly changed later.
+
+Runtime behavior by mode:
+
+- `legacy`: login reads `data/db.json` and SQL auth is not used.
+- `hybrid`: login still reads `data/db.json`; after successful legacy login PBXPuls runs the existing legacy/SQL comparison diagnostics.
+- `sql`: login first attempts SQL users/roles/permissions authentication. If SQL auth cannot authenticate the user for any reason, PBXPuls falls back to legacy `data/db.json` authentication so SQL errors cannot lock out all users.
+
+SQL auth success creates the same token shape and response shape as legacy login. The frontend/UI, `requireAuth()`, token structure and existing API contracts are unchanged. Password hashes, plaintext passwords, tokens and secrets are not written to logs, system events or API responses. SQL-mode runtime events record only safe metadata for SQL success, fallback-to-legacy and complete login failure.
+
+`data/db.json` remains in place as the legacy fallback source and is not removed by this stage.
+
 ## Migration Order
 
 1. Inventory and documentation only.

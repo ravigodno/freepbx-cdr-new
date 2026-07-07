@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import bcrypt from 'bcryptjs';
 import { isPBXPulsDbAvailable, queryPBXPulsDb, sanitizePBXPulsDbError } from './pbxpulsDb.js';
 import { getPBXPulsSetting } from './pbxpulsSettings.js';
 import { writePBXPulsSystemEvent } from './pbxpulsEvents.js';
@@ -53,6 +54,15 @@ export interface PBXPulsAuthCandidate {
   sqlSnapshot: PBXPulsAuthSnapshot | null;
   legacyComparison: PBXPulsLegacySqlUserComparison | null;
   sqlAuthRuntimeEnabled: false;
+}
+
+export interface PBXPulsSqlAuthenticatedUser {
+  id: string;
+  username: string;
+  role: string;
+  extension: string;
+  disabled: boolean;
+  permissions: Record<string, boolean>;
 }
 
 interface PBXPulsSqlUserRow {
@@ -193,6 +203,42 @@ export async function getPBXPulsUserPermissions(userId: number): Promise<PBXPuls
   }
 }
 
+export async function authenticatePBXPulsSqlUser(username: string, password: string): Promise<PBXPulsSqlAuthenticatedUser | null> {
+  const normalizedUsername = normalizeText(username, 100);
+  if (!normalizedUsername || typeof password !== 'string') return null;
+
+  try {
+    const user = await getPBXPulsUser(normalizedUsername);
+    if (!user || !user.is_active || !user.password_hash) return null;
+
+    const passwordMatches = bcrypt.compareSync(password, user.password_hash);
+    if (!passwordMatches) return null;
+
+    const roles = await getPBXPulsUserRoles(user.id);
+    const primaryRole = choosePrimarySqlRole(roles);
+    if (!primaryRole) return null;
+
+    const permissions = await getPBXPulsUserPermissions(user.id);
+    const permissionMap: Record<string, boolean> = {};
+    for (const permission of permissions) {
+      const permissionKey = normalizeText(permission.permission_key, 191);
+      if (permissionKey) permissionMap[permissionKey] = true;
+    }
+
+    return {
+      id: String(user.id),
+      username: user.username,
+      role: primaryRole.role_key,
+      extension: '',
+      disabled: false,
+      permissions: permissionMap
+    };
+  } catch (error: any) {
+    warnAuthDbLayer('sql authentication failed', error);
+    return null;
+  }
+}
+
 export async function getPBXPulsAuthSnapshot(username: string): Promise<PBXPulsAuthSnapshot> {
   const user = await getPBXPulsUser(username);
   if (!user) {
@@ -317,6 +363,14 @@ function collectEnabledPermissionKeys(source: any, target: Set<string>): void {
       if (normalizedKey) target.add(normalizedKey);
     }
   }
+}
+
+function choosePrimarySqlRole(roles: PBXPulsSqlRole[]): PBXPulsSqlRole | null {
+  if (!roles.length) return null;
+  return [...roles].sort((left, right) => {
+    if (left.is_system !== right.is_system) return left.is_system ? -1 : 1;
+    return left.id - right.id;
+  })[0] || null;
 }
 
 function mapUserRow(row: PBXPulsSqlUserRow): PBXPulsSqlUser {
