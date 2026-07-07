@@ -246,6 +246,18 @@ The service reads through the shared `queryPBXPulsDb()` and `isPBXPulsDbAvailabl
 
 The next stage will introduce dual-read behavior for the module registry: keep current hardcoded/legacy module sources as the active runtime source, then read SQL `tools` as an additional source behind a compatibility switch before any frontend or navigation behavior changes.
 
+## Stage 5.2: SQL Core Diagnostic Endpoint
+
+Stage 5.2 adds a backend-only read-only diagnostic endpoint for the PBXPuls SQL core:
+
+- endpoint: `GET /api/pbxpuls/sql-status`;
+- route module: `server/pbxpulsSqlStatus.ts`;
+- shared helpers: `isPBXPulsDbAvailable()`, `queryPBXPulsDb()` and `getPBXPulsSetting()`.
+
+The endpoint reports PBXPuls SQL availability, storage mode, migration registry status, core table row counts and tools registry counts. It performs only `SELECT` and `SHOW COLUMNS` reads. It does not run migrations, seed data, change settings, write audit/events rows, touch FreePBX databases, or modify frontend/navigation behavior.
+
+If the PBXPuls database is unavailable, the endpoint returns `ok: false`, `dbAvailable: false` and a sanitized error string. If an individual table is absent, only that table count is returned as `null`; the rest of the diagnostic response continues. Error logging is limited to sanitized backend warnings and never includes passwords, tokens, connection strings or secret values.
+
 ## Migration Order
 
 1. Inventory and documentation only.

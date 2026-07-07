@@ -26,6 +26,7 @@ import os from 'os';
 import { registerManagementRoutes } from './server-management.js';
 import { registerAiPbxAdminRoutes } from './server/aiPbxAdmin.js';
 import { runPBXPulsMigrations } from './server/pbxpulsMigrations.js';
+import { registerPBXPulsSqlStatusRoutes } from './server/pbxpulsSqlStatus.js';
 
 // Load environment variables
 dotenv.config();
@@ -6374,6 +6375,8 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json({ limit: '25mb' }));
+
+registerPBXPulsSqlStatusRoutes(app, requireAuth);
 
 app.options('/api/calltracking/resolve-number', (_req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
