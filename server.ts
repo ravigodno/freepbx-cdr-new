@@ -25,6 +25,7 @@ import { CallEntry, MissedCallStatus, AppSettings, DashboardStats, UserRole, Web
 import os from 'os';
 import { registerManagementRoutes } from './server-management.js';
 import { registerAiPbxAdminRoutes } from './server/aiPbxAdmin.js';
+import { runPBXPulsMigrations } from './server/pbxpulsMigrations.js';
 
 // Load environment variables
 dotenv.config();
@@ -16725,6 +16726,7 @@ async function startServer() {
   }
 
   const startupDb = await readLocalDb();
+  await runPBXPulsMigrations();
   startDtmfAmiListener(startupDb.settings).catch((e: any) => console.error('[DTMF] listener start failed:', e.message));
 
   app.listen(parseInt(PORT, 10), '0.0.0.0', () => {
