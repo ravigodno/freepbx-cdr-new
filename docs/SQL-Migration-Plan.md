@@ -258,6 +258,22 @@ The endpoint reports PBXPuls SQL availability, storage mode, migration registry 
 
 If the PBXPuls database is unavailable, the endpoint returns `ok: false`, `dbAvailable: false` and a sanitized error string. If an individual table is absent, only that table count is returned as `null`; the rest of the diagnostic response continues. Error logging is limited to sanitized backend warnings and never includes passwords, tokens, connection strings or secret values.
 
+## Stage 6.1: Legacy Users/Roles SQL Seed
+
+Stage 6.1 adds migration `20260707_003_seed_users_roles_from_legacy` with description `Seed users and roles from legacy data/db.json`.
+
+The migration reads the current legacy `data/db.json` users and roles and seeds SQL preparation tables only:
+
+- `roles` from legacy role ids/names;
+- `users` from legacy usernames, optional display/email fields and existing `passwordHash` values;
+- `user_roles` from each legacy user role assignment;
+- `permissions` from role and user permission keys;
+- `role_permissions` from enabled role permissions.
+
+The seed is additive and uses `INSERT IGNORE` so existing SQL users, roles, permissions and links are not overwritten. Password hashes are copied as hashes only and are never logged. Missing or invalid `data/db.json` produces a sanitized warning and does not stop server startup.
+
+This stage does not change runtime authentication, login, `requireAuth()`, users/roles APIs, frontend code or UI behavior. Runtime auth continues to read `data/db.json`; SQL users and roles are a prepared compatibility layer for later phases.
+
 ## Migration Order
 
 1. Inventory and documentation only.

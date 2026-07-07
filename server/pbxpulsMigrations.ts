@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import mysql, { Connection } from 'mysql2/promise';
 import { writePBXPulsSystemEvent } from './pbxpulsEvents.js';
 
@@ -153,6 +155,12 @@ const MIGRATIONS: Migration[] = [
     description: 'Seed core PBXPuls settings',
     statements: [],
     seed: seedCoreSettings
+  },
+  {
+    key: '20260707_003_seed_users_roles_from_legacy',
+    description: 'Seed users and roles from legacy data/db.json',
+    statements: [],
+    seed: seedLegacyUsersAndRoles
   }
 ];
 
@@ -309,6 +317,178 @@ async function seedCoreSettings(connection: Connection): Promise<void> {
   for (const setting of CORE_SETTINGS) {
     await connection.execute(sql, setting);
   }
+}
+
+interface LegacySeedStats {
+  users: number;
+  roles: number;
+  permissions: number;
+  userRoles: number;
+  rolePermissions: number;
+}
+
+async function seedLegacyUsersAndRoles(connection: Connection): Promise<void> {
+  const legacyPath = path.join(process.cwd(), 'data', 'db.json');
+  const stats: LegacySeedStats = {
+    users: 0,
+    roles: 0,
+    permissions: 0,
+    userRoles: 0,
+    rolePermissions: 0
+  };
+
+  let legacyDb: any;
+  try {
+    if (!fs.existsSync(legacyPath)) {
+      console.warn('[PBXPULS_DB] legacy users/roles seed skipped: data/db.json not found');
+      return;
+    }
+    legacyDb = JSON.parse(fs.readFileSync(legacyPath, 'utf8'));
+  } catch (error: any) {
+    console.warn('[PBXPULS_DB] legacy users/roles seed skipped:', sanitizeMigrationError(error));
+    return;
+  }
+
+  const legacyUsers = Array.isArray(legacyDb?.users) ? legacyDb.users : [];
+  const legacyRoles = Array.isArray(legacyDb?.roles) ? legacyDb.roles : [];
+
+  if (!legacyUsers.length && !legacyRoles.length) {
+    console.warn('[PBXPULS_DB] legacy users/roles seed skipped: no legacy users or roles found');
+    return;
+  }
+
+  const roleIdsByKey = new Map<string, number>();
+  const permissionIdsByKey = new Map<string, number>();
+
+  for (const role of legacyRoles) {
+    const roleKey = normalizeLegacyKey(role?.id || role?.role || role?.key || role?.name, 100);
+    if (!roleKey) continue;
+
+    stats.roles += await executeInsertIgnore(connection,
+      `INSERT IGNORE INTO roles (role_key, name, description, is_system)
+       VALUES (?, ?, ?, 1)`,
+      [
+        roleKey,
+        normalizeLegacyText(role?.name, roleKey, 191),
+        normalizeLegacyNullableText(role?.description, 255)
+      ]
+    );
+  }
+
+  for (const row of await selectRows(connection, 'SELECT id, role_key FROM roles')) {
+    roleIdsByKey.set(String(row.role_key), Number(row.id));
+  }
+
+  const permissionKeys = collectLegacyPermissionKeys(legacyRoles, legacyUsers);
+  for (const permissionKey of permissionKeys) {
+    stats.permissions += await executeInsertIgnore(connection,
+      `INSERT IGNORE INTO permissions (permission_key, name, category)
+       VALUES (?, ?, ?)`,
+      [permissionKey, permissionKey, getPermissionCategory(permissionKey)]
+    );
+  }
+
+  for (const row of await selectRows(connection, 'SELECT id, permission_key FROM permissions')) {
+    permissionIdsByKey.set(String(row.permission_key), Number(row.id));
+  }
+
+  for (const user of legacyUsers) {
+    const username = normalizeLegacyKey(user?.username, 100);
+    if (!username) continue;
+
+    stats.users += await executeInsertIgnore(connection,
+      `INSERT IGNORE INTO users (username, display_name, email, password_hash, is_active, is_system)
+       VALUES (?, ?, ?, ?, ?, 0)`,
+      [
+        username,
+        normalizeLegacyNullableText(user?.displayName || user?.display_name || user?.name || username, 191),
+        normalizeLegacyNullableText(user?.email, 191),
+        typeof user?.passwordHash === 'string' ? user.passwordHash.slice(0, 255) : null,
+        user?.disabled ? 0 : 1
+      ]
+    );
+  }
+
+  const userIdsByUsername = new Map<string, number>();
+  for (const row of await selectRows(connection, 'SELECT id, username FROM users')) {
+    userIdsByUsername.set(String(row.username).toLowerCase(), Number(row.id));
+  }
+
+  for (const user of legacyUsers) {
+    const username = normalizeLegacyKey(user?.username, 100);
+    const roleKey = normalizeLegacyKey(user?.role, 100);
+    const userId = userIdsByUsername.get(username.toLowerCase());
+    const roleId = roleIdsByKey.get(roleKey);
+    if (!userId || !roleId) continue;
+
+    stats.userRoles += await executeInsertIgnore(connection,
+      'INSERT IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)',
+      [userId, roleId]
+    );
+  }
+
+  for (const role of legacyRoles) {
+    const roleKey = normalizeLegacyKey(role?.id || role?.role || role?.key || role?.name, 100);
+    const roleId = roleIdsByKey.get(roleKey);
+    if (!roleId) continue;
+
+    const permissions = role?.permissions && typeof role.permissions === 'object' ? role.permissions : {};
+    for (const [permissionKey, enabled] of Object.entries(permissions)) {
+      if (enabled !== true) continue;
+      const normalizedPermissionKey = normalizeLegacyKey(permissionKey, 191);
+      const permissionId = permissionIdsByKey.get(normalizedPermissionKey);
+      if (!permissionId) continue;
+
+      stats.rolePermissions += await executeInsertIgnore(connection,
+        'INSERT IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)',
+        [roleId, permissionId]
+      );
+    }
+  }
+
+  console.log('[PBXPULS_DB] legacy users/roles seed applied:', stats);
+}
+
+async function executeInsertIgnore(connection: Connection, sql: string, params: any[]): Promise<number> {
+  const [result] = await connection.execute(sql, params);
+  return Number((result as any)?.affectedRows || 0);
+}
+
+async function selectRows(connection: Connection, sql: string): Promise<any[]> {
+  const [rows] = await connection.query(sql);
+  return Array.isArray(rows) ? rows as any[] : [];
+}
+
+function collectLegacyPermissionKeys(roles: any[], users: any[]): string[] {
+  const keys = new Set<string>();
+  for (const source of [...roles, ...users]) {
+    const permissions = source?.permissions && typeof source.permissions === 'object' ? source.permissions : {};
+    for (const key of Object.keys(permissions)) {
+      const normalizedKey = normalizeLegacyKey(key, 191);
+      if (normalizedKey) keys.add(normalizedKey);
+    }
+  }
+  return Array.from(keys).sort();
+}
+
+function getPermissionCategory(permissionKey: string): string | null {
+  const dotIndex = permissionKey.indexOf('.');
+  if (dotIndex <= 0) return null;
+  return permissionKey.slice(0, dotIndex).slice(0, 100);
+}
+
+function normalizeLegacyKey(value: unknown, maxLength: number): string {
+  return String(value ?? '').trim().slice(0, maxLength);
+}
+
+function normalizeLegacyText(value: unknown, fallback: string, maxLength: number): string {
+  const text = String(value ?? '').trim() || fallback;
+  return text.slice(0, maxLength);
+}
+
+function normalizeLegacyNullableText(value: unknown, maxLength: number): string | null {
+  const text = String(value ?? '').trim();
+  return text ? text.slice(0, maxLength) : null;
 }
 
 function sanitizeMigrationError(error: any): string {
