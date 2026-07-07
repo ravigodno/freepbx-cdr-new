@@ -230,6 +230,22 @@ Migration events written to `system_events` when the PBXPuls database and table 
 
 Event details include `migration_key`, `description` and a sanitized `error` string when relevant. The event writer is non-fatal: if writing to `system_events` fails, migration execution continues or fails according to the original migration result, not because of event logging.
 
+
+## Stage 5.1: Tools Registry Service
+
+Stage 5.1 adds a backend-only helper service for the existing `tools` table:
+
+- service module: `server/pbxpulsTools.ts`;
+- registry helpers: `getPBXPulsTools`, `getPBXPulsTool`, `isPBXPulsToolEnabled`, `setPBXPulsToolEnabled`, `upsertPBXPulsTool`.
+
+The `tools` table becomes the source for a future PBXPuls module/tool registry. It stores tool metadata and enable flags for later dual-read module registry work, but the frontend does not use it in this stage. Existing UI navigation, API contracts, authorization and legacy module sources remain unchanged.
+
+The service reads through the shared `queryPBXPulsDb()` and `isPBXPulsDbAvailable()` helpers. If the PBXPuls database or `tools` table is unavailable, list reads return an empty array, single reads return `null`, enabled checks return their fallback value and writes return `false`. Tool keys are validated as non-empty strings with the `tools.tool_key` length limit; boolean flags are normalized to `0`/`1`, and sort order is normalized to an integer.
+
+`setPBXPulsToolEnabled()` updates existing rows only and does not create missing tools. `upsertPBXPulsTool()` can safely add a new tool and only updates existing values when the corresponding option is explicitly provided. This prevents seed/default metadata from being overwritten accidentally.
+
+The next stage will introduce dual-read behavior for the module registry: keep current hardcoded/legacy module sources as the active runtime source, then read SQL `tools` as an additional source behind a compatibility switch before any frontend or navigation behavior changes.
+
 ## Migration Order
 
 1. Inventory and documentation only.
