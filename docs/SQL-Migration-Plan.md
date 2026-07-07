@@ -344,6 +344,19 @@ SQL auth success creates the same token shape and response shape as legacy login
 
 `data/db.json` remains in place as the legacy fallback source and is not removed by this stage.
 
+## Stage 7.1: Secure Auth Mode Management API
+
+Stage 7.1 adds a backend-only secure management endpoint for changing `auth.storage_mode` through the API.
+
+- endpoint: `POST /api/pbxpuls/auth-mode`;
+- protection: `requireAuth(['su'])`;
+- allowed values: `legacy`, `hybrid`, `sql`;
+- storage helper: PBXPuls settings service with `auth.storage_mode` as a string auth setting.
+
+Changing to `sql` is guarded by the same readiness report used by `GET /api/pbxpuls/auth-readiness`. If readiness is not true, PBXPuls does not change the setting, returns `409 Conflict` with safe issues, and writes `auth_mode_change_blocked` to `system_events`.
+
+Successful changes write `auth_mode_changed` to `system_events` with safe details only: previous mode, new mode and actor username. UI/frontend are unchanged in this stage, token shape is unchanged, `requireAuth()` is unchanged, and runtime login behavior remains controlled only by the setting.
+
 ## Migration Order
 
 1. Inventory and documentation only.

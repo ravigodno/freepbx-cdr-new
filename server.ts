@@ -30,6 +30,7 @@ import { registerPBXPulsSqlStatusRoutes } from './server/pbxpulsSqlStatus.js';
 import { authenticatePBXPulsSqlUser, compareLegacyUserWithSql, getAuthStorageMode, getPBXPulsUsers } from './server/pbxpulsAuthDb.js';
 import { isPBXPulsDbAvailable, sanitizePBXPulsDbError } from './server/pbxpulsDb.js';
 import { writePBXPulsSystemEvent } from './server/pbxpulsEvents.js';
+import { upsertPBXPulsSetting } from './server/pbxpulsSettings.js';
 
 // Load environment variables
 dotenv.config();
@@ -6516,6 +6517,59 @@ function normalizeAuthReadinessUsername(value: unknown): string {
   return String(value ?? '').trim().slice(0, 100);
 }
 
+type AuthModeResponse = {
+  mode: 'legacy' | 'hybrid' | 'sql';
+  effectiveMode: 'legacy' | 'hybrid' | 'sql_with_legacy_fallback';
+  sqlAvailable: boolean;
+  loginRuntimeSource: 'data/db.json' | 'sql';
+  sqlAuthRuntimeEnabled: boolean;
+  legacyFallbackEnabled: boolean;
+};
+
+function normalizeRequestedAuthStorageMode(value: unknown): 'legacy' | 'hybrid' | 'sql' | null {
+  const mode = String(value ?? '').trim().toLowerCase();
+  return mode === 'legacy' || mode === 'hybrid' || mode === 'sql' ? mode : null;
+}
+
+function buildAuthModeResponse(mode: 'legacy' | 'hybrid' | 'sql', sqlAvailable: boolean): AuthModeResponse {
+  if (mode === 'sql') {
+    return {
+      mode,
+      effectiveMode: 'sql_with_legacy_fallback',
+      sqlAvailable,
+      loginRuntimeSource: 'sql',
+      sqlAuthRuntimeEnabled: true,
+      legacyFallbackEnabled: true
+    };
+  }
+
+  return {
+    mode,
+    effectiveMode: mode,
+    sqlAvailable,
+    loginRuntimeSource: 'data/db.json',
+    sqlAuthRuntimeEnabled: false,
+    legacyFallbackEnabled: false
+  };
+}
+
+function getAuthModeActor(req: Request): string {
+  const authUser = (req as any).user || {};
+  return String(authUser.username || 'unknown').trim().slice(0, 100) || 'unknown';
+}
+
+function buildAuthReadinessBlockedDetails(readiness: AuthReadinessReport, actor: string, requestedMode: string): Record<string, unknown> {
+  return {
+    actor,
+    requestedMode,
+    ready: readiness.ready,
+    users: readiness.users,
+    roles: readiness.roles,
+    permissions: readiness.permissions,
+    issues: readiness.issues
+  };
+}
+
 // API ROUTER START
 const app = express();
 
@@ -6559,34 +6613,78 @@ app.get('/api/pbxpuls/auth-mode', requireAuth(['su', 'admin']), async (_req, res
       getAuthStorageMode(),
       isPBXPulsDbAvailable()
     ]);
-    if (mode === 'sql') {
-      res.json({
-        mode,
-        effectiveMode: 'sql_with_legacy_fallback',
-        sqlAvailable,
-        loginRuntimeSource: 'sql',
-        sqlAuthRuntimeEnabled: true,
-        legacyFallbackEnabled: true
-      });
+    res.json(buildAuthModeResponse(mode, sqlAvailable));
+  } catch (error: any) {
+    console.warn('[PBXPULS_AUTH_MODE] failed:', String(error?.message || error || 'unknown error').slice(0, 300));
+    res.json(buildAuthModeResponse('legacy', false));
+  }
+});
+
+app.post('/api/pbxpuls/auth-mode', requireAuth(['su']), async (req, res) => {
+  const requestedMode = normalizeRequestedAuthStorageMode(req.body?.mode);
+  if (!requestedMode) {
+    res.status(400).json({ error: 'Invalid auth storage mode' });
+    return;
+  }
+
+  const actor = getAuthModeActor(req);
+
+  try {
+    const previousMode = await getAuthStorageMode();
+
+    if (requestedMode === 'sql') {
+      const readiness = await buildAuthReadinessReport();
+      if (readiness.ready !== true) {
+        const details = buildAuthReadinessBlockedDetails(readiness, actor, requestedMode);
+        await writePBXPulsSystemEvent({
+          event_type: 'auth_mode_change_blocked',
+          severity: 'warning',
+          source: 'pbxpuls_auth',
+          message: 'SQL auth mode change blocked by readiness check',
+          details
+        });
+        res.status(409).json({
+          ok: false,
+          error: 'SQL auth mode change blocked by readiness check',
+          issues: readiness.issues
+        });
+        return;
+      }
+    }
+
+    const updated = await upsertPBXPulsSetting('auth.storage_mode', requestedMode, {
+      valueType: 'string',
+      category: 'auth',
+      isSecret: false,
+      description: 'Authentication source mode: legacy/sql/hybrid'
+    });
+
+    if (!updated) {
+      res.status(503).json({ error: 'Failed to update auth storage mode' });
       return;
     }
 
+    await writePBXPulsSystemEvent({
+      event_type: 'auth_mode_changed',
+      severity: requestedMode === 'sql' ? 'warning' : 'info',
+      source: 'pbxpuls_auth',
+      message: 'Auth storage mode changed',
+      details: {
+        previousMode,
+        newMode: requestedMode,
+        actor
+      }
+    });
+
+    const sqlAvailable = await isPBXPulsDbAvailable();
     res.json({
-      mode,
-      effectiveMode: mode,
-      sqlAvailable,
-      loginRuntimeSource: 'data/db.json',
-      sqlAuthRuntimeEnabled: false
+      ok: true,
+      previousMode,
+      ...buildAuthModeResponse(requestedMode, sqlAvailable)
     });
   } catch (error: any) {
-    console.warn('[PBXPULS_AUTH_MODE] failed:', String(error?.message || error || 'unknown error').slice(0, 300));
-    res.json({
-      mode: 'legacy',
-      effectiveMode: 'legacy',
-      sqlAvailable: false,
-      loginRuntimeSource: 'data/db.json',
-      sqlAuthRuntimeEnabled: false
-    });
+    console.warn('[PBXPULS_AUTH_MODE_SET] failed:', sanitizePBXPulsDbError(error));
+    res.status(500).json({ error: 'Failed to update auth storage mode' });
   }
 });
 
