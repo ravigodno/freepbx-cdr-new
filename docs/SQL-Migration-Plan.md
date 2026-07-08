@@ -396,6 +396,19 @@ After a successful seed pass, PBXPuls writes a safe `legacy_settings_seeded` sys
 
 Runtime settings remain legacy-only in this stage: `/api/settings` still reads `data/db.json`, SQL settings are not used as runtime source, `auth.storage_mode` remains `legacy`, authentication and `requireAuth()` are unchanged, and no frontend/UI behavior is changed. The next stage should add settings compare/readiness diagnostics before any read-through or runtime switch is considered.
 
+## Stage 8.3: Settings SQL Readiness / Compare
+
+Stage 8.3 adds a backend-only read-only readiness endpoint for checking whether non-secret legacy settings match their SQL seed rows before any runtime read-through is enabled.
+
+- endpoint: `GET /api/pbxpuls/settings-readiness`;
+- protection: `requireAuth(['su', 'admin'])`;
+- source: legacy `data/db.json` plus read-only SQL `settings` rows;
+- no writes, migrations, frontend changes or runtime source changes are performed.
+
+The endpoint rebuilds legacy seed rows with `buildLegacySettingsSeedRows(localDb)`, compares only `willSeed=true` and non-secret rows, and verifies SQL key presence, `value_type` parity and serialized value parity. Secret rows are counted as skipped and their values are never read from SQL, returned in responses, logged or written to system events. Issues contain only safe metadata such as issue type, setting key and value types.
+
+Runtime settings remain legacy-only: `/api/settings` still reads `data/db.json`, `settingsMigration.runtimeSource` remains `data/db.json`, `sqlRuntimeEnabled` remains `false`, authentication remains controlled by `auth.storage_mode=legacy`, and `requireAuth()` is unchanged. The next stage can add a settings hybrid read layer after readiness is clean.
+
 ## Migration Order
 
 1. Inventory and documentation only.

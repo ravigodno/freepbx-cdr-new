@@ -6596,6 +6596,8 @@ type MigrationStatusReport = {
     safeToSeed: number;
     sqlSeeded: number;
     secretsSkipped: number;
+    readinessAvailable: true;
+    ready: boolean;
   };
   nextRecommendedStep: string;
 };
@@ -6630,7 +6632,9 @@ async function buildPBXPulsMigrationStatusReport(): Promise<MigrationStatusRepor
       legacyTotal: 0,
       safeToSeed: 0,
       sqlSeeded: 0,
-      secretsSkipped: 0
+      secretsSkipped: 0,
+      readinessAvailable: true,
+      ready: false
     },
     nextRecommendedStep: 'Verify PBXPuls SQL connectivity'
   };
@@ -6656,15 +6660,47 @@ async function buildPBXPulsMigrationStatusReport(): Promise<MigrationStatusRepor
   report.settingsMigration.safeToSeed = legacySettingsSummary.safeToSeed;
   report.settingsMigration.sqlSeeded = legacySettingsSummary.sqlSeeded;
   report.settingsMigration.secretsSkipped = legacySettingsSummary.secretsSkipped;
+  report.settingsMigration.ready = legacySettingsSummary.ready;
   report.nextRecommendedStep = choosePBXPulsMigrationNextStep(report, Number(settingsCount || 0));
   return report;
 }
+
+type SettingsReadinessIssueType = 'missing_in_sql' | 'type_mismatch' | 'value_mismatch';
+
+type SettingsReadinessIssue = {
+  type: SettingsReadinessIssueType;
+  setting_key: string;
+  value_type_legacy?: string;
+  value_type_sql?: string;
+};
+
+type SqlSettingCompareRow = {
+  setting_key: string;
+  setting_value: string | null;
+  value_type: string;
+};
+
+type SettingsReadinessReport = {
+  ready: boolean;
+  total: number;
+  safeToCompare: number;
+  matched: number;
+  missingInSql: SettingsReadinessIssue[];
+  typeMismatches: SettingsReadinessIssue[];
+  valueMismatches: SettingsReadinessIssue[];
+  secretsSkipped: number;
+  issues: SettingsReadinessIssue[];
+  runtimeSource: 'data/db.json';
+  sqlRuntimeEnabled: false;
+  recommendedMode: 'hybrid';
+};
 
 type LegacySettingsMigrationSummary = {
   legacyTotal: number;
   safeToSeed: number;
   sqlSeeded: number;
   secretsSkipped: number;
+  ready: boolean;
 };
 
 async function buildLegacySettingsMigrationSummary(): Promise<LegacySettingsMigrationSummary> {
@@ -6672,7 +6708,8 @@ async function buildLegacySettingsMigrationSummary(): Promise<LegacySettingsMigr
     legacyTotal: 0,
     safeToSeed: 0,
     sqlSeeded: 0,
-    secretsSkipped: 0
+    secretsSkipped: 0,
+    ready: false
   };
 
   try {
@@ -6683,6 +6720,8 @@ async function buildLegacySettingsMigrationSummary(): Promise<LegacySettingsMigr
     summary.safeToSeed = safeRows.length;
     summary.secretsSkipped = rows.length - safeRows.length;
     summary.sqlSeeded = await countExistingPBXPulsSettings(safeRows.map((row) => row.setting_key));
+    const readiness = await compareLegacySettingsWithSqlRows(rows);
+    summary.ready = readiness.ready;
   } catch (error: any) {
     console.warn('[PBXPULS_SETTINGS_MIGRATION] summary failed:', String(error?.message || error || 'unknown error').slice(0, 300));
   }
@@ -6749,6 +6788,104 @@ async function readPBXPulsDiagnosticTableCount(tableName: PBXPulsDiagnosticCount
     }
     return null;
   }
+}
+
+function buildDefaultSettingsReadinessReport(): SettingsReadinessReport {
+  return {
+    ready: false,
+    total: 0,
+    safeToCompare: 0,
+    matched: 0,
+    missingInSql: [],
+    typeMismatches: [],
+    valueMismatches: [],
+    secretsSkipped: 0,
+    issues: [],
+    runtimeSource: 'data/db.json',
+    sqlRuntimeEnabled: false,
+    recommendedMode: 'hybrid'
+  };
+}
+
+async function compareLegacySettingsWithSql(localDb: Record<string, unknown> | null | undefined): Promise<SettingsReadinessReport> {
+  return compareLegacySettingsWithSqlRows(buildLegacySettingsSeedRows(localDb));
+}
+
+async function compareLegacySettingsWithSqlRows(rows: ReturnType<typeof buildLegacySettingsSeedRows>): Promise<SettingsReadinessReport> {
+  const report = buildDefaultSettingsReadinessReport();
+  const safeRows = rows.filter((row) => row.willSeed === true && row.is_secret !== true && row.value_type !== 'secret');
+
+  report.total = rows.length;
+  report.safeToCompare = safeRows.length;
+  report.secretsSkipped = rows.length - safeRows.length;
+
+  const sqlSettings = await getSQLSettingsMap(safeRows.map((row) => row.setting_key));
+
+  for (const row of safeRows) {
+    const sqlRow = sqlSettings.get(row.setting_key);
+    if (!sqlRow) {
+      report.missingInSql.push({ type: 'missing_in_sql', setting_key: row.setting_key });
+      continue;
+    }
+
+    if (String(sqlRow.value_type) !== String(row.value_type)) {
+      report.typeMismatches.push({
+        type: 'type_mismatch',
+        setting_key: row.setting_key,
+        value_type_legacy: row.value_type,
+        value_type_sql: sqlRow.value_type
+      });
+      continue;
+    }
+
+    if (String(sqlRow.setting_value ?? '') !== String(row.setting_value ?? '')) {
+      report.valueMismatches.push({
+        type: 'value_mismatch',
+        setting_key: row.setting_key,
+        value_type_legacy: row.value_type,
+        value_type_sql: sqlRow.value_type
+      });
+      continue;
+    }
+
+    report.matched += 1;
+  }
+
+  report.issues = [
+    ...report.missingInSql,
+    ...report.typeMismatches,
+    ...report.valueMismatches
+  ];
+  report.ready = report.safeToCompare > 0 && report.issues.length === 0;
+  return report;
+}
+
+async function getSQLSettingsMap(settingKeys: string[]): Promise<Map<string, SqlSettingCompareRow>> {
+  const result = new Map<string, SqlSettingCompareRow>();
+  if (!settingKeys.length) return result;
+
+  try {
+    const placeholders = settingKeys.map(() => '?').join(', ');
+    const rows = await queryPBXPulsDb(
+      `SELECT setting_key, setting_value, value_type FROM settings WHERE setting_key IN (${placeholders})`,
+      settingKeys
+    );
+    for (const row of rows as any[]) {
+      const settingKey = String(row.setting_key || '');
+      if (!settingKey) continue;
+      result.set(settingKey, {
+        setting_key: settingKey,
+        setting_value: row.setting_value === null || row.setting_value === undefined ? null : String(row.setting_value),
+        value_type: String(row.value_type || '')
+      });
+    }
+  } catch (error: any) {
+    if (!isPBXPulsMissingTableError(error)) {
+      console.warn('[PBXPULS_SETTINGS_READINESS] SQL settings read failed:', sanitizePBXPulsDbError(error));
+    }
+  }
+
+  return result;
 }
 
 async function countExistingPBXPulsSettings(settingKeys: string[]): Promise<number> {
@@ -6855,6 +6992,17 @@ app.get('/api/pbxpuls/settings-migration-preview', requireAuth(['su', 'admin']),
   }
 });
 
+app.get('/api/pbxpuls/settings-readiness', requireAuth(['su', 'admin']), async (_req, res) => {
+  try {
+    const localDb = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    const readiness = await compareLegacySettingsWithSql(localDb);
+    res.json(readiness);
+  } catch (error: any) {
+    console.warn('[PBXPULS_SETTINGS_READINESS] endpoint failed:', String(error?.message || error || 'unknown error').slice(0, 300));
+    res.status(500).json(buildDefaultSettingsReadinessReport());
+  }
+});
+
 app.get('/api/pbxpuls/migration-status', requireAuth(['su', 'admin']), async (_req, res) => {
   try {
     const report = await buildPBXPulsMigrationStatusReport();
@@ -6885,7 +7033,9 @@ app.get('/api/pbxpuls/migration-status', requireAuth(['su', 'admin']), async (_r
         legacyTotal: 0,
         safeToSeed: 0,
         sqlSeeded: 0,
-        secretsSkipped: 0
+        secretsSkipped: 0,
+        readinessAvailable: true,
+        ready: false
       },
       nextRecommendedStep: 'Verify PBXPuls SQL connectivity'
     });
