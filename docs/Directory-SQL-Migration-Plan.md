@@ -1113,3 +1113,52 @@ Runtime impact:
 - Existing Directory UI and APIs continue to use `data/db.json`.
 - Imports, Click2Call, CDR, Bitrix24 and SQL write-through are unchanged.
 - `runtimeSource` remains `data/db.json` until a later explicit runtime integration stage.
+
+## Stage 9.8.1 Directory SQL Read Runtime
+
+This stage adds a backend-only SQL read runtime layer for Directory.
+
+Runtime switch behavior:
+
+- The default `directory.storage_mode` remains `legacy`.
+- SQL runtime is not enabled automatically.
+- Existing write operations remain legacy-only.
+- Imports and sync flows continue to write `data/db.json`.
+- Frontend code and Directory UI are unchanged.
+
+Helper:
+
+- `server/pbxpulsDirectoryRuntime.ts`
+- `getDirectoryStorageMode()`
+- `getDirectoryContactByPhone()`
+- `searchDirectoryContacts()`
+
+Read behavior:
+
+- When `directory.storage_mode = legacy`, Directory reads use the existing `data/db.json` path.
+- When `directory.storage_mode = sql`, Directory reads use `directory_contacts` and `directory_contact_metadata`.
+- SQL rows are mapped back to the existing `DirectoryEntry` shape so existing filters, caller display logic and CDR lookup logic can remain compatible.
+- If SQL read fails, the runtime falls back to `data/db.json` and reports the effective source accordingly.
+
+Read paths covered:
+
+- Directory list/detail reads.
+- Contact lookup by phone.
+- Live call banner caller card resolution.
+- CDR lookup name/type enrichment.
+- Read-only call statistics and reports that depend on Directory owner/contact mapping.
+
+Diagnostic endpoint:
+
+- `GET /api/pbxpuls/directory-runtime-effective`
+- Auth: `requireAuth(['su', 'admin'])`
+- Returns: `configuredMode`, `effectiveSource`, `sqlAvailable`, `readiness`, `writeMode`
+- `writeMode` is always `legacy` in this stage.
+
+Audit:
+
+- When the SQL read layer is actually used, PBXPuls writes `directory_sql_read_used` to `system_events`.
+- Details are safe and limited to `{ "source": "pbxpuls_sql" }`.
+- Audit details must not include contacts, phone numbers, names, comments, custom field values, customer data or raw Directory payloads.
+
+Stage 9.8.1 does not add SQL write-through and does not change import, create, update, delete, spam or blacklist write behavior.

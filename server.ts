@@ -30,11 +30,12 @@ import { registerPBXPulsSqlStatusRoutes } from './server/pbxpulsSqlStatus.js';
 import { authenticatePBXPulsSqlUser, compareLegacyUserWithSql, getAuthStorageMode, getPBXPulsUsers } from './server/pbxpulsAuthDb.js';
 import { isPBXPulsDbAvailable, queryPBXPulsDb, sanitizePBXPulsDbError } from './server/pbxpulsDb.js';
 import { writePBXPulsSystemEvent } from './server/pbxpulsEvents.js';
-import { getPBXPulsSetting, upsertPBXPulsSetting } from './server/pbxpulsSettings.js';
+import { upsertPBXPulsSetting } from './server/pbxpulsSettings.js';
 import { buildLegacySettingsSeedRows } from './server/pbxpulsLegacySettings.js';
 import { buildHybridSettingsSnapshot, getPBXPulsRuntimeSettingsSnapshot, getSettingsStorageMode, isSettingsApiRuntimeSwitchEnabled } from './server/pbxpulsSettingsRuntime.js';
 import { buildDirectoryMigrationPreview } from './server/pbxpulsDirectoryMigrationPreview.js';
 import { buildDirectoryReadiness, buildDirectorySeedPreview } from './server/pbxpulsDirectorySeed.js';
+import { getDirectoryRuntimeSnapshot, getDirectoryStorageMode, type DirectoryStorageMode } from './server/pbxpulsDirectoryRuntime.js';
 
 // Load environment variables
 dotenv.config();
@@ -6576,8 +6577,6 @@ function buildAuthReadinessBlockedDetails(readiness: AuthReadinessReport, actor:
 
 type SettingsStorageModeApiMode = 'legacy' | 'hybrid' | 'sql';
 type SettingsApiRuntimeSource = 'data/db.json' | 'pbxpuls_hybrid';
-type DirectoryStorageMode = 'legacy' | 'sql';
-type DirectoryRuntimeSource = 'data/db.json';
 
 const SETTINGS_API_RUNTIME_SOURCE_LEGACY: SettingsApiRuntimeSource = 'data/db.json';
 const SETTINGS_API_RUNTIME_SOURCE_HYBRID: SettingsApiRuntimeSource = 'pbxpuls_hybrid';
@@ -6664,11 +6663,6 @@ function normalizeRequestedDirectoryStorageMode(value: unknown): DirectoryStorag
   return mode === 'legacy' || mode === 'sql' ? mode : null;
 }
 
-async function getDirectoryStorageMode(): Promise<DirectoryStorageMode> {
-  const mode = await getPBXPulsSetting<DirectoryStorageMode>('directory.storage_mode', 'legacy');
-  return mode === 'sql' ? 'sql' : 'legacy';
-}
-
 function getDirectoryStorageModeActor(req: Request): string {
   const authUser = (req as any).user || {};
   return String(authUser.username || 'unknown').trim().slice(0, 100) || 'unknown';
@@ -6678,13 +6672,21 @@ function buildDirectoryStorageModeResponse(
   mode: DirectoryStorageMode,
   readiness: Awaited<ReturnType<typeof buildDirectoryReadiness>>
 ): Record<string, unknown> {
-  const runtimeSource: DirectoryRuntimeSource = 'data/db.json';
   return {
     mode,
     readiness,
     sqlAvailable: readiness.sqlAvailable === true,
-    runtimeSource
+    runtimeSource: 'data/db.json'
   };
+}
+
+async function getDirectoryRuntimeSnapshotForRequest(localDb: any, req: Request) {
+  return getDirectoryRuntimeSnapshot({
+    legacyDirectory: localDb?.directory || [],
+    settings: localDb?.settings,
+    authUser: (req as any).user,
+    dbUser: getAuthenticatedDbUser(localDb, req)
+  });
 }
 
 function buildSettingsApiSwitchReason(switchEnabled: boolean, safeToEnable: boolean): string {
@@ -7913,6 +7915,40 @@ app.post('/api/pbxpuls/directory-storage-mode', requireAuth(['su']), async (req,
   } catch (error: any) {
     console.warn('[PBXPULS_DIRECTORY_STORAGE_MODE_SET] failed:', sanitizePBXPulsDbError(error));
     res.status(500).json({ ok: false, error: 'Failed to update directory storage mode' });
+  }
+});
+
+app.get('/api/pbxpuls/directory-runtime-effective', requireAuth(['su', 'admin']), async (req, res) => {
+  try {
+    const localDb = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    const [runtime, readiness] = await Promise.all([
+      getDirectoryRuntimeSnapshotForRequest(localDb, req),
+      buildDirectoryReadiness(localDb)
+    ]);
+
+    res.json({
+      configuredMode: runtime.configuredMode,
+      effectiveSource: runtime.effectiveSource,
+      sqlAvailable: runtime.sqlAvailable || readiness.sqlAvailable === true,
+      readiness,
+      writeMode: 'legacy'
+    });
+  } catch (error: any) {
+    console.warn('[PBXPULS_DIRECTORY_RUNTIME_EFFECTIVE] failed:', String(error?.message || error || 'unknown error').slice(0, 300));
+    res.status(500).json({
+      configuredMode: 'legacy',
+      effectiveSource: 'data/db.json',
+      sqlAvailable: false,
+      readiness: {
+        ok: false,
+        ready: false,
+        source: 'data/db.json',
+        sqlAvailable: false,
+        valuesReturned: false,
+        issues: [{ code: 'directory_runtime_effective_failed', count: 1 }]
+      },
+      writeMode: 'legacy'
+    });
   }
 });
 
@@ -10405,11 +10441,12 @@ app.get('/api/directory', requireAuth(), async (req, res) => {
 
   try {
     const localDb = await readLocalDb();
+    const directoryRuntime = await getDirectoryRuntimeSnapshotForRequest(localDb, req);
     const all = ['1', 'true', 'yes'].includes(String(req.query.all || '').trim().toLowerCase());
     if (all) {
-      return res.json(applyDirectoryAccessAndFilters(localDb.directory || [], req, localDb).sort(compareDirectoryEntries));
+      return res.json(applyDirectoryAccessAndFilters(directoryRuntime.contacts, req, localDb).sort(compareDirectoryEntries));
     }
-    res.json(buildDirectoryPaginatedResponse(localDb.directory || [], req, localDb));
+    res.json(buildDirectoryPaginatedResponse(directoryRuntime.contacts, req, localDb));
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -11189,7 +11226,8 @@ app.get('/api/directory/:id', requireAuth(), async (req, res) => {
     return res.status(403).json({ error: 'Access denied: view_directory permission required' });
   }
   const localDb = await readLocalDb();
-  const entry = (localDb.directory || []).find((item: any) => item.id === req.params.id);
+  const directoryRuntime = await getDirectoryRuntimeSnapshotForRequest(localDb, req);
+  const entry = (directoryRuntime.contacts || []).find((item: any) => item.id === req.params.id);
   if (!entry) return res.status(404).json({ error: 'Контакт не найден' });
   const dbUser = getAuthenticatedDbUser(localDb, req);
   if (!canReadDirectoryEntry(entry, (req as any).user, dbUser, localDb.settings)) {
@@ -11754,8 +11792,9 @@ app.get('/api/live/call-banner', requireAuth(), async (req, res) => {
       res.json({ active: false });
       return;
     }
+    const directoryRuntime = await getDirectoryRuntimeSnapshotForRequest(localDb, req);
     const channels = await runAmiCoreShowChannels(localDb.settings);
-    const banner = buildLiveCallBannerFromAmiChannels(channels, effectiveOperatorExt, localDb.directory || [], localDb.settings);
+    const banner = buildLiveCallBannerFromAmiChannels(channels, effectiveOperatorExt, directoryRuntime.contacts, localDb.settings);
     res.json(banner);
   } catch (error: any) {
     res.json({ active: false, error: error.message });
@@ -12639,7 +12678,8 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
       };
     });
 
-    const directory = localDb.directory || [];
+    const directoryRuntime = await getDirectoryRuntimeSnapshotForRequest(localDb, req);
+    const directory = directoryRuntime.contacts;
 
     const callMap = new Map<string, CallEntry>();
     calls.forEach(call => {
@@ -12796,12 +12836,12 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
 
     const callsStartMs = startDate ? getDateTimeFilterMs(startDate, startTime) : -Infinity;
     const callsEndMs = endDate ? getDateTimeFilterMs(endDate, endTime, true) : Infinity;
-    const callsOwnerMap = buildExtensionOwnerMap(localDb.directory || [], localDb.users || []);
+    const callsOwnerMap = buildExtensionOwnerMap(directory, localDb.users || []);
     const callsLostAnalytics = buildLostCallAnalytics(calls, {
       startMs: callsStartMs,
       endMs: callsEndMs,
       callbackWindowHours,
-      directory: localDb.directory || [],
+      directory,
       ownerMap: callsOwnerMap
     });
     const callsLostByUniqueId = new Map(callsLostAnalytics.items.map(item => [item.uniqueid, item]));
@@ -12986,7 +13026,8 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
       };
     });
 
-    const directory = localDb.directory || [];
+    const directoryRuntime = await getDirectoryRuntimeSnapshotForRequest(localDb, req);
+    const directory = directoryRuntime.contacts;
     const callMap = new Map<string, CallEntry>();
     calls.forEach(c => {
       const local = localDb.missedCallStatuses.find(status => status.uniqueid === c.uniqueid);
@@ -13110,12 +13151,12 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
 
     const statsStartMs = startDate ? getDateTimeFilterMs(startDate, startTime) : -Infinity;
     const statsEndMs = endDate ? getDateTimeFilterMs(endDate, endTime, true) : Infinity;
-    const ownerMap = buildExtensionOwnerMap(localDb.directory || [], localDb.users || []);
+    const ownerMap = buildExtensionOwnerMap(directory, localDb.users || []);
     const lostCallAnalytics = buildLostCallAnalytics(calls, {
       startMs: statsStartMs,
       endMs: statsEndMs,
       callbackWindowHours,
-      directory: localDb.directory || [],
+      directory,
       ownerMap
     });
     const counters = calculateCallBusinessCounters(filteredCalls, {
@@ -13492,7 +13533,9 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
       }
     }
 
-    const ownerMap = buildExtensionOwnerMap(localDb.directory || [], localDb.users || []);
+    const directoryRuntime = await getDirectoryRuntimeSnapshotForRequest(localDb, req);
+    const directory = directoryRuntime.contacts;
+    const ownerMap = buildExtensionOwnerMap(directory, localDb.users || []);
 
     const checkCallDepartmentMatch = (c: any, dept: string, directory: any[]): boolean => {
       const normalizedDept = String(dept || '').trim().toLowerCase();
@@ -13557,7 +13600,7 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
       const responsibleExt = getResponsibleExtensionForCall(c);
       if (extensionFilter && ![responsibleExt, getCallerInternalExt(c), getCalleeInternalExt(c)].some(ext => onlyDigits(ext) === extensionFilter)) return false;
       if (employee && employee !== 'all' && employeeFilter && ![responsibleExt, getCallerInternalExt(c), getCalleeInternalExt(c)].some(ext => onlyDigits(ext) === employeeFilter)) return false;
-      if (department && department !== 'all' && !checkCallDepartmentMatch(c, department, localDb.directory || [])) return false;
+      if (department && department !== 'all' && !checkCallDepartmentMatch(c, department, directory)) return false;
       if (trunkFilter && trunkFilter !== 'all' && (extractTrunkName(c) || UNKNOWN_TRUNK_NAME) !== trunkFilter) return false;
       return true;
     });
@@ -13567,7 +13610,7 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
       startMs: reportStartMs,
       endMs: reportEndMs,
       callbackWindowHours,
-      directory: localDb.directory || [],
+      directory,
       ownerMap
     });
     const reportRowIds = new Set(reportFilteredCalls.map(call => call.uniqueid).filter(Boolean));
@@ -13882,7 +13925,7 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
 
     const heatmap = buildCallHeatmap24(reportFilteredCalls, lostByUniqueId);
     const clientAnalytics = buildClientAnalytics(calls, reportFilteredCalls, {
-      directory: localDb.directory || [],
+      directory,
       settings: localDb.settings,
       ownerMap,
       startMs: reportStartMs,
