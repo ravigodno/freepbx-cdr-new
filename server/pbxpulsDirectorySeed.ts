@@ -364,6 +364,203 @@ function buildDirectorySeedRows(legacyDb: any): DirectorySeedRows {
   };
 }
 
+const countSqlRows = async (tableName: string): Promise<number> => {
+  const rows = await queryPBXPulsDb(`SELECT COUNT(*) AS count FROM ${tableName}`);
+  return Number(rows[0]?.count || 0);
+};
+
+const selectDirectoryContactRows = async (ids: string[]): Promise<Map<string, any>> => {
+  if (!ids.length) return new Map();
+  const placeholders = ids.map(() => '?').join(', ');
+  const rows = await queryPBXPulsDb(
+    `SELECT id, contact_type, owner_user_id, phone_normalized
+     FROM directory_contacts
+     WHERE id IN (${placeholders})`,
+    ids
+  );
+  return new Map(rows.map(row => [String(row.id || ''), row]));
+};
+
+const selectExistingCustomFieldKeys = async (fieldKeys: string[]): Promise<Set<string>> => (
+  selectExistingIds('directory_custom_fields', 'field_key', fieldKeys)
+);
+
+const selectExistingMetadataKeys = async (contactIds: string[]): Promise<Set<string>> => {
+  if (!contactIds.length) return new Set();
+  const placeholders = contactIds.map(() => '?').join(', ');
+  const rows = await queryPBXPulsDb(
+    `SELECT contact_id, metadata_key
+     FROM directory_contact_metadata
+     WHERE contact_id IN (${placeholders})`,
+    contactIds
+  );
+  return new Set(rows.map(row => `${row.contact_id}:${row.metadata_key}`));
+};
+
+export async function buildDirectoryReadiness(legacyDb: any) {
+  const rows = buildDirectorySeedRows(legacyDb);
+  const issues: Array<{ code: string; count: number }> = [];
+  const addIssue = (code: string, count: number) => {
+    if (count > 0) issues.push({ code, count });
+  };
+
+  try {
+    const [sqlContactsTotal, sqlCustomFieldsTotal, sqlMetadataTotal] = await Promise.all([
+      countSqlRows('directory_contacts'),
+      countSqlRows('directory_custom_fields'),
+      countSqlRows('directory_contact_metadata')
+    ]);
+
+    const contactRows = await selectDirectoryContactRows(rows.contacts.map(row => row.id));
+    const expectedContactIds = new Set(rows.contacts.map(row => row.id));
+    const matchedContacts = rows.contacts.filter(row => contactRows.has(row.id)).length;
+    const missingContacts = rows.contacts.length - matchedContacts;
+    const commonExpected = rows.contacts.filter(row => row.contact_type === 'common');
+    const personalExpected = rows.contacts.filter(row => row.contact_type === 'personal');
+    const commonMatched = commonExpected.filter(row => contactRows.get(row.id)?.contact_type === 'common').length;
+    const personalMatched = personalExpected.filter(row => contactRows.get(row.id)?.contact_type === 'personal').length;
+    const ownersMatched = personalExpected.filter((row) => {
+      const sqlRow = contactRows.get(row.id);
+      return sqlRow && String(sqlRow.owner_user_id || '') === String(row.owner_user_id || '');
+    }).length;
+    const phonesExpected = rows.contacts.filter(row => row.phone_normalized);
+    const phonesMatched = phonesExpected.filter((row) => {
+      const sqlRow = contactRows.get(row.id);
+      return sqlRow && String(sqlRow.phone_normalized || '') === row.phone_normalized;
+    }).length;
+
+    const customFieldKeys = rows.customFields.map(row => row.field_key);
+    const existingCustomFields = await selectExistingCustomFieldKeys(customFieldKeys);
+    const matchedCustomFields = customFieldKeys.filter(key => existingCustomFields.has(key)).length;
+
+    const expectedMetadataKeys = rows.metadata
+      .filter(row => expectedContactIds.has(row.contact_id))
+      .map(row => `${row.contact_id}:${row.metadata_key}`);
+    const existingMetadata = await selectExistingMetadataKeys(Array.from(expectedContactIds));
+    const matchedMetadata = expectedMetadataKeys.filter(key => existingMetadata.has(key)).length;
+
+    addIssue('missing_contacts', missingContacts);
+    addIssue('invalid_legacy_contacts_skipped', rows.skippedCount);
+    addIssue('common_contacts_mismatch', commonExpected.length - commonMatched);
+    addIssue('personal_contacts_mismatch', personalExpected.length - personalMatched);
+    addIssue('owners_mismatch', personalExpected.length - ownersMatched);
+    addIssue('phones_mismatch', phonesExpected.length - phonesMatched);
+    addIssue('custom_fields_mismatch', customFieldKeys.length - matchedCustomFields);
+    addIssue('metadata_mismatch', expectedMetadataKeys.length - matchedMetadata);
+
+    if (rows.contacts.length !== sqlContactsTotal) addIssue('contacts_count_mismatch', Math.abs(rows.contacts.length - sqlContactsTotal));
+    if (rows.customFields.length !== sqlCustomFieldsTotal) addIssue('custom_fields_count_mismatch', Math.abs(rows.customFields.length - sqlCustomFieldsTotal));
+    if (expectedMetadataKeys.length !== sqlMetadataTotal) addIssue('metadata_count_mismatch', Math.abs(expectedMetadataKeys.length - sqlMetadataTotal));
+
+    return {
+      ok: true,
+      ready: issues.length === 0
+        && rows.contacts.length === sqlContactsTotal
+        && rows.customFields.length === sqlCustomFieldsTotal
+        && expectedMetadataKeys.length === sqlMetadataTotal,
+      source: 'data/db.json',
+      sqlAvailable: true,
+      contacts: {
+        legacy: rows.contacts.length,
+        sql: sqlContactsTotal,
+        matched: matchedContacts
+      },
+      common: {
+        legacy: commonExpected.length,
+        sqlMatched: commonMatched,
+        matched: commonExpected.length === commonMatched
+      },
+      personal: {
+        legacy: personalExpected.length,
+        sqlMatched: personalMatched,
+        matched: personalExpected.length === personalMatched
+      },
+      owners: {
+        legacy: personalExpected.length,
+        matchedCount: ownersMatched,
+        matched: personalExpected.length === ownersMatched
+      },
+      phones: {
+        legacy: phonesExpected.length,
+        matchedCount: phonesMatched,
+        matched: phonesExpected.length === phonesMatched
+      },
+      customFields: {
+        legacy: customFieldKeys.length,
+        sql: sqlCustomFieldsTotal,
+        matchedCount: matchedCustomFields,
+        matched: customFieldKeys.length === matchedCustomFields
+      },
+      metadata: {
+        legacy: expectedMetadataKeys.length,
+        sql: sqlMetadataTotal,
+        matchedCount: matchedMetadata,
+        matched: expectedMetadataKeys.length === matchedMetadata
+      },
+      skipped: {
+        invalidLegacyContacts: rows.skippedCount
+      },
+      valuesReturned: false,
+      issues
+    };
+  } catch (error: any) {
+    return {
+      ok: false,
+      ready: false,
+      source: 'data/db.json',
+      sqlAvailable: false,
+      contacts: {
+        legacy: rows.contacts.length,
+        sql: 0,
+        matched: 0
+      },
+      common: {
+        legacy: rows.contacts.filter(row => row.contact_type === 'common').length,
+        sqlMatched: 0,
+        matched: false
+      },
+      personal: {
+        legacy: rows.contacts.filter(row => row.contact_type === 'personal').length,
+        sqlMatched: 0,
+        matched: false
+      },
+      owners: {
+        legacy: rows.contacts.filter(row => row.contact_type === 'personal').length,
+        matchedCount: 0,
+        matched: false
+      },
+      phones: {
+        legacy: rows.contacts.filter(row => row.phone_normalized).length,
+        matchedCount: 0,
+        matched: false
+      },
+      customFields: {
+        legacy: rows.customFields.length,
+        sql: 0,
+        matchedCount: 0,
+        matched: false
+      },
+      metadata: {
+        legacy: rows.metadata.length,
+        sql: 0,
+        matchedCount: 0,
+        matched: false
+      },
+      skipped: {
+        invalidLegacyContacts: rows.skippedCount
+      },
+      valuesReturned: false,
+      issues: [
+        {
+          code: 'sql_unavailable',
+          count: 1
+        }
+      ],
+      error: sanitizePBXPulsDbError(error)
+    };
+  }
+}
+
 async function selectExistingIds(tableName: string, columnName: string, values: string[]): Promise<Set<string>> {
   if (!values.length) return new Set();
   const placeholders = values.map(() => '?').join(', ');

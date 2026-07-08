@@ -981,3 +981,100 @@ Audit details must not include:
 Stage 9.5 does not change read or write behavior for the Directory module.
 
 The application continues to use legacy `data/db.json` for existing Directory APIs until a later controlled runtime switch stage is designed, previewed, and explicitly enabled.
+
+## Stage 9.6 Directory SQL Readiness
+
+This stage adds a read-only readiness check for comparing legacy Directory data with the SQL Directory seed result.
+
+Endpoint:
+
+- `GET /api/pbxpuls/directory-readiness`
+- Auth: `requireAuth(['su', 'admin'])`
+- Source: `data/db.json`
+- SQL tables checked: `directory_contacts`, `directory_custom_fields`, `directory_contact_metadata`
+- Runtime impact: none
+- SQL writes: none
+
+The endpoint returns only safe aggregate data. It must not return contact names, phone values, email addresses, comments, custom field values, or raw metadata values.
+
+### Checks
+
+The readiness report compares:
+
+- legacy contact count against `directory_contacts`;
+- matched contact IDs without returning the IDs;
+- common contact count and SQL `contact_type = common`;
+- personal contact count and SQL `contact_type = personal`;
+- personal owner mapping through `owner_user_id`;
+- normalized phone coverage without returning phone values;
+- custom field key coverage in `directory_custom_fields`;
+- metadata row coverage in `directory_contact_metadata`;
+- invalid legacy rows skipped by the seed mapping.
+
+Example safe response:
+
+```json
+{
+  "ok": true,
+  "ready": true,
+  "contacts": {
+    "legacy": 1,
+    "sql": 1,
+    "matched": 1
+  },
+  "common": {
+    "legacy": 1,
+    "sqlMatched": 1,
+    "matched": true
+  },
+  "personal": {
+    "legacy": 0,
+    "sqlMatched": 0,
+    "matched": true
+  },
+  "owners": {
+    "legacy": 0,
+    "matchedCount": 0,
+    "matched": true
+  },
+  "phones": {
+    "legacy": 1,
+    "matchedCount": 1,
+    "matched": true
+  },
+  "customFields": {
+    "legacy": 0,
+    "sql": 0,
+    "matchedCount": 0,
+    "matched": true
+  },
+  "issues": []
+}
+```
+
+### Readiness Criteria
+
+Directory SQL readiness is `ready: true` only when:
+
+- SQL is available;
+- all expected legacy contacts are present in `directory_contacts`;
+- SQL contact count matches the seedable legacy contact count;
+- common and personal counts match;
+- every personal contact has the expected `owner_user_id`;
+- every expected normalized phone is present for the matching contact;
+- custom field definitions match;
+- metadata rows match;
+- no invalid legacy contacts were skipped.
+
+### Conditions For Future SQL Runtime Switch
+
+A later controlled Directory SQL runtime switch may be considered only when:
+
+- `/api/pbxpuls/directory-readiness` returns `ready: true`;
+- `/api/pbxpuls/directory-seed-preview` reports no unexpected additions or duplicates;
+- owner-aware lookup rules are implemented for caller cards, CDR lookup, and live call banners;
+- personal contact names are protected for non-owners;
+- rollback to `data/db.json` remains available;
+- no SQL write-through is enabled without a separate preview/audit/rollback stage.
+
+Stage 9.6 does not enable SQL runtime and does not change existing Directory APIs.

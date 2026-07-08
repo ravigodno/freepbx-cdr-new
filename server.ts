@@ -34,7 +34,7 @@ import { upsertPBXPulsSetting } from './server/pbxpulsSettings.js';
 import { buildLegacySettingsSeedRows } from './server/pbxpulsLegacySettings.js';
 import { buildHybridSettingsSnapshot, getPBXPulsRuntimeSettingsSnapshot, getSettingsStorageMode, isSettingsApiRuntimeSwitchEnabled } from './server/pbxpulsSettingsRuntime.js';
 import { buildDirectoryMigrationPreview } from './server/pbxpulsDirectoryMigrationPreview.js';
-import { buildDirectorySeedPreview } from './server/pbxpulsDirectorySeed.js';
+import { buildDirectoryReadiness, buildDirectorySeedPreview } from './server/pbxpulsDirectorySeed.js';
 
 // Load environment variables
 dotenv.config();
@@ -7730,6 +7730,69 @@ app.get('/api/pbxpuls/directory-seed-preview', requireAuth(['su', 'admin']), asy
       safe: true,
       valuesReturned: false,
       error: 'Unable to build directory seed preview'
+    });
+  }
+});
+
+app.get('/api/pbxpuls/directory-readiness', requireAuth(['su', 'admin']), async (_req, res) => {
+  try {
+    const localDb = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    res.json(await buildDirectoryReadiness(localDb));
+  } catch (error: any) {
+    console.warn('[PBXPULS_DIRECTORY_READINESS] endpoint failed:', String(error?.message || error || 'unknown error').slice(0, 300));
+    res.status(500).json({
+      ok: false,
+      ready: false,
+      source: 'data/db.json',
+      sqlAvailable: false,
+      contacts: {
+        legacy: 0,
+        sql: 0,
+        matched: 0
+      },
+      common: {
+        legacy: 0,
+        sqlMatched: 0,
+        matched: false
+      },
+      personal: {
+        legacy: 0,
+        sqlMatched: 0,
+        matched: false
+      },
+      owners: {
+        legacy: 0,
+        matchedCount: 0,
+        matched: false
+      },
+      phones: {
+        legacy: 0,
+        matchedCount: 0,
+        matched: false
+      },
+      customFields: {
+        legacy: 0,
+        sql: 0,
+        matchedCount: 0,
+        matched: false
+      },
+      metadata: {
+        legacy: 0,
+        sql: 0,
+        matchedCount: 0,
+        matched: false
+      },
+      skipped: {
+        invalidLegacyContacts: 0
+      },
+      valuesReturned: false,
+      issues: [
+        {
+          code: 'readiness_failed',
+          count: 1
+        }
+      ],
+      error: 'Unable to build directory readiness report'
     });
   }
 });
