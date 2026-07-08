@@ -434,6 +434,19 @@ This stage does not switch `/api/settings`. The production settings endpoint sti
 
 The next stage should run a controlled hybrid smoke-test. Only after that should a separate stage consider switching `/api/settings` to the hybrid runtime source.
 
+## Stage 8.7.1: Settings Runtime Effective Diagnostics
+
+Stage 8.7.1 adds a backend-only diagnostic endpoint that shows the difference between the configured settings storage mode, the effective read-layer source and the actual runtime source used by `/api/settings`.
+
+- endpoint: `GET /api/pbxpuls/settings-runtime-effective`;
+- protection: `requireAuth(['su', 'admin'])`;
+- reports `configuredMode` from `settings.storage_mode` and `effectiveReadLayerSource` from the hybrid read-layer helper;
+- reports `settingsApiRuntimeSource=data/db.json` and `settingsApiSwitched=false` because the production `/api/settings` endpoint is still legacy.
+
+This endpoint is a diagnostic guard before any future controlled settings API switch. It returns only safe metadata: readiness counts, protected secret count, SQL overlay/readiness counts and block reason for SQL runtime. It does not return actual settings values, does not return secret values, does not write to SQL, does not write to `data/db.json` and does not change `settings.storage_mode`.
+
+The existing migration status and runtime preview endpoints now also expose that effective diagnostics are available and that `/api/settings` still uses `data/db.json`. The next stage should add the controlled settings API switch guard.
+
 ## Migration Order
 
 1. Inventory and documentation only.
