@@ -645,3 +645,217 @@ The preview must not return:
 - tokens or secrets from Directory import/sync settings.
 
 This keeps the endpoint safe for migration planning without leaking Directory personal data.
+
+## Stage 9.4 Directory Data Mapping
+
+This stage defines the Legacy Directory to PBXPuls SQL mapping rules. It is documentation-only: no SQL is executed, no data is written, and no runtime/API/frontend behavior changes.
+
+### Contact Mapping
+
+Legacy source: `data/db.json.directory[]`.
+
+Target primary table: `directory_contacts`.
+
+| Legacy `DirectoryEntry` field | Target SQL field | Rule |
+| --- | --- | --- |
+| `id` | `directory_contacts.id` | Preserve existing ID when present. Generate only in a later controlled migration if missing. |
+| `name`, `fio`, `fullname`, `contact` | `name` | Use the first non-empty display-name candidate. Do not expose names in preview output. |
+| `company`, `organization`, `org` | `company` | Use the first non-empty organization candidate. |
+| `number`, first normalized `phones[]`, `phone`, `phone1` | `phone` | Store primary phone as the canonical display phone. |
+| normalized primary phone | `phone_normalized` | Store the normalized lookup value. |
+| `phone2`, remaining `phones[]` | `phone2` and metadata | Keep compatibility `phone2`; preserve full phone array in `directory_contact_metadata`. |
+| `email` | `email` | Preserve value. Do not include in preview output. |
+| `comment`, `notes` | `comment` | Preserve value. Do not include in preview output. |
+| `visibility` | `contact_type` plus compatibility `visibility` | Convert to `common` or `personal`; retain legacy visibility during transition. |
+| `ownerUserId`, `ownerId`, `userId` | `owner_user_id` | Required for personal contacts. |
+| `type` | `type` | Preserve business category: `internal`, `client`, `supplier`, or `government`. |
+| `isSpam`, `is_spam` | `is_spam` | Convert truthy values to `1`. |
+| `isBlacklisted`, `is_blacklisted` | `is_blacklisted` | Convert truthy values to `1`. |
+| `createdAt` | `created_at` | Preserve if parseable. |
+| `updatedAt` | `updated_at` | Preserve if parseable. |
+
+Fields not represented as first-class columns must be preserved through `directory_contact_metadata` unless a later stage promotes them to `directory_contacts` columns.
+
+### Visibility Mapping
+
+Legacy shared/common/public contacts:
+
+```text
+visibility = shared/common/public/empty
+  -> contact_type = common
+  -> owner_user_id = NULL
+```
+
+Legacy personal/private contacts:
+
+```text
+visibility = private/personal/личный
+  -> contact_type = personal
+  -> owner_user_id = ownerUserId
+```
+
+Rules:
+
+- `common` contacts are visible to all users.
+- `personal` contacts are visible to their owner.
+- Personal contacts without `ownerUserId` are not safe to migrate as personal rows until an owner resolution rule exists.
+- No separate `created_by` field is introduced at this stage; for personal contacts, creator and owner are treated as the same user.
+
+### Phone Normalization Rules
+
+Phone normalization must be deterministic and must match the future lookup layer.
+
+Planned normalization steps:
+
+1. Trim leading and trailing spaces.
+2. Remove spaces and formatting separators.
+3. Remove parentheses.
+4. Remove dashes and visual separators.
+5. Keep only phone digits for `phone_normalized`.
+6. Apply configured PBXPuls normalization behavior, including Russian `8` to `7` replacement when enabled.
+7. Prefer international-format lookup values where enough digits are available.
+
+Examples are intentionally omitted because this plan must not expose real customer phone numbers.
+
+Migration storage:
+
+- `directory_contacts.phone`: primary display/source phone.
+- `directory_contacts.phone_normalized`: normalized lookup key.
+- `directory_contacts.phone2`: compatibility secondary phone text where available.
+- `directory_contact_metadata`: full legacy `phones[]` array and any additional phone fields.
+
+### Custom Fields Mapping
+
+Legacy additional fields are any `DirectoryEntry` keys not covered by the known core model.
+
+Mapping:
+
+```text
+unknown legacy field key
+  -> directory_custom_fields.field_key
+  -> directory_custom_fields.field_name
+  -> directory_contact_metadata.field_id
+  -> directory_contact_metadata.value
+```
+
+Rules:
+
+- Create one `directory_custom_fields` definition per distinct legacy field key in a later controlled migration.
+- Store per-contact values in `directory_contact_metadata`.
+- Do not include custom field values in preview responses.
+- Preserve array/object values through `metadata_json` when they cannot be represented safely as text.
+- Default custom field visibility should be conservative until reviewed. Prefer `private` for fields that may contain personal data.
+
+Legacy fields currently expected to use metadata unless promoted:
+
+- `phones`
+- `position`
+- `department`
+- `group`
+- `website`
+- `inn`
+- `kpp`
+- `ogrn`
+- `address`
+- `internalExtension`
+- `linkedExternalNumber`
+- `responsibleUserId`
+- `tags`
+
+### Duplicate Handling
+
+Duplicate detection should use `phone_normalized`, not raw formatted phone text.
+
+Rules for identical normalized phones:
+
+- Do not silently drop rows.
+- Preserve every legacy contact record unless a later preview explicitly confirms a merge.
+- Mark duplicate groups in migration diagnostics.
+- Prefer deterministic primary row selection only for lookup conflict resolution.
+- Preserve non-primary rows and their metadata.
+- Store merge or conflict decisions in a future audit/migration report before any write migration.
+
+Suggested conflict resolution order for future preview only:
+
+1. Same `id`: treat as the same contact.
+2. Same normalized phone and same owner/contact type: candidate for merge preview.
+3. Same normalized phone but different owners: do not merge automatically.
+4. Same normalized phone where one row is `common` and another is `personal`: do not merge automatically; owner-aware lookup rules must decide display behavior.
+
+History preservation:
+
+- Keep original legacy IDs in `directory_contacts.id` when possible.
+- Store alternate source fields and multi-phone arrays in metadata.
+- A later migration should record duplicate groups without exposing phone values.
+
+### Invalid Data Handling
+
+Contacts without phone:
+
+- Keep as migration candidates if they have a name or useful metadata.
+- Report in preview as `contact_without_phone`.
+- Do not include them in phone lookup indexes until a phone exists.
+
+Contacts without name:
+
+- Preserve the row if it has a phone, owner, or metadata.
+- Use an empty `name` or a generated placeholder only in a later controlled migration.
+- Do not show generated placeholders in migration preview as personal data.
+
+Personal contacts without owner:
+
+- Report as `personal_contact_without_owner`.
+- Do not migrate as visible personal contacts until an owner resolution rule exists.
+- Safe fallback options for a later stage are quarantine, admin-only review, or converting to common only after explicit approval.
+
+Invalid visibility:
+
+- Report as `invalid_visibility`.
+- Do not guess personal visibility from names, comments, or other personal fields.
+- Defaulting to `common` is allowed only for missing/empty visibility that matches current legacy behavior.
+
+Invalid type:
+
+- Report as `invalid_contact_type`.
+- Preserve raw type in metadata if it is not one of `internal`, `client`, `supplier`, or `government`.
+- Use a controlled default such as `client` only after preview review.
+
+### Safe Migration Preview Example
+
+Example output without personal data:
+
+```json
+{
+  "ok": true,
+  "source": "data/db.json",
+  "safe": true,
+  "contacts": {
+    "total": 1,
+    "common": 1,
+    "personal": 0
+  },
+  "owners": {
+    "ownersCount": 0,
+    "contactsWithoutOwner": 0
+  },
+  "phones": {
+    "totalPhones": 1,
+    "emptyPhones": 0,
+    "duplicatePhones": 0
+  },
+  "customFields": {
+    "count": 0,
+    "valueCells": 0,
+    "fields": []
+  },
+  "plannedMapping": {
+    "sharedVisibilityToContactType": "common",
+    "privateVisibilityToContactType": "personal",
+    "ownerField": "owner_user_id",
+    "customFieldsTarget": "directory_contact_metadata",
+    "valuesReturned": false
+  }
+}
+```
+
+This example intentionally excludes names, phone values, comments, emails, and custom field values.
