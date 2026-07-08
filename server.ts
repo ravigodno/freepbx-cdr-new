@@ -6579,10 +6579,19 @@ const SETTINGS_API_RUNTIME_SOURCE_LEGACY: SettingsApiRuntimeSource = 'data/db.js
 const SETTINGS_API_RUNTIME_SOURCE_HYBRID: SettingsApiRuntimeSource = 'pbxpuls_hybrid';
 const SETTINGS_EFFECTIVE_DIAGNOSTICS_AVAILABLE = true;
 const SETTINGS_API_SWITCH_GUARD_AVAILABLE = true;
+const SETTINGS_RUNTIME_AUDIT_AVAILABLE = true;
+const SETTINGS_RUNTIME_AUDIT_ENABLED = true;
+const SETTINGS_RUNTIME_AUDIT_SOURCE = 'pbxpuls_settings_runtime';
+const SETTINGS_RUNTIME_AUDIT_COOLDOWN_MS = 5 * 60 * 1000;
+const SETTINGS_RUNTIME_AUDIT_EVENT_TYPES = [
+  'settings_runtime_hybrid_used',
+  'settings_runtime_fallback'
+] as const;
 const SETTINGS_ALLOWED_RUNTIME_MODES = ['legacy', 'hybrid'] as const;
 const SETTINGS_BLOCKED_RUNTIME_MODES = {
   sql: 'sql_settings_runtime_requires_secret_migration'
 } as const;
+const settingsRuntimeAuditCooldown = new Map<string, number>();
 
 type SettingsStorageModeResponse = {
   mode: SettingsStorageModeApiMode;
@@ -6610,6 +6619,13 @@ type SettingsApiRuntimeDecision = {
   secretsSource: 'legacy';
   secretKeysProtected: number;
   sqlOverlayCount: number;
+};
+
+type SettingsRuntimeFallbackReason = 'readiness_failed' | 'sql_unavailable' | 'runtime_error';
+
+type SettingsRuntimeAuditEvent = {
+  event_type: typeof SETTINGS_RUNTIME_AUDIT_EVENT_TYPES[number];
+  created_at: string;
 };
 
 function normalizeRequestedSettingsStorageMode(value: unknown): SettingsStorageModeApiMode | null {
@@ -6676,6 +6692,73 @@ async function getSettingsForApiResponse(localDb: LocalDb): Promise<{ settings: 
   };
 }
 
+function buildSettingsRuntimeAuditCooldownKey(eventType: string, details: Record<string, unknown>): string {
+  return `${eventType}:${JSON.stringify(details)}`;
+}
+
+async function writeSettingsRuntimeAuditEvent(
+  eventType: typeof SETTINGS_RUNTIME_AUDIT_EVENT_TYPES[number],
+  severity: 'info' | 'warning',
+  details: Record<string, unknown>
+): Promise<void> {
+  const cooldownKey = buildSettingsRuntimeAuditCooldownKey(eventType, details);
+  const now = Date.now();
+  const previous = settingsRuntimeAuditCooldown.get(cooldownKey) || 0;
+  if (now - previous < SETTINGS_RUNTIME_AUDIT_COOLDOWN_MS) return;
+
+  settingsRuntimeAuditCooldown.set(cooldownKey, now);
+  const written = await writePBXPulsSystemEvent({
+    event_type: eventType,
+    severity,
+    source: SETTINGS_RUNTIME_AUDIT_SOURCE,
+    message: eventType === 'settings_runtime_hybrid_used'
+      ? 'Settings runtime hybrid source used'
+      : 'Settings runtime fell back to legacy source',
+    details
+  });
+
+  if (!written) {
+    settingsRuntimeAuditCooldown.delete(cooldownKey);
+  }
+}
+
+function resolveSettingsRuntimeFallbackReason(decision: SettingsApiRuntimeDecision): SettingsRuntimeFallbackReason | null {
+  if (decision.switchEnabled !== true || decision.switched === true) return null;
+  if (decision.safeToEnable !== true) return 'readiness_failed';
+  return 'runtime_error';
+}
+
+async function resolveSettingsRuntimeErrorFallbackReason(): Promise<SettingsRuntimeFallbackReason> {
+  try {
+    return (await isPBXPulsDbAvailable()) ? 'runtime_error' : 'sql_unavailable';
+  } catch (_error) {
+    return 'runtime_error';
+  }
+}
+
+async function readSettingsRuntimeAuditEvents(limit = 50): Promise<SettingsRuntimeAuditEvent[]> {
+  try {
+    const safeLimit = Math.max(1, Math.min(100, Math.floor(Number(limit) || 50)));
+    const placeholders = SETTINGS_RUNTIME_AUDIT_EVENT_TYPES.map(() => '?').join(', ');
+    const rows = await queryPBXPulsDb(
+      `SELECT event_type, created_at
+       FROM system_events
+       WHERE event_type IN (${placeholders})
+       ORDER BY created_at DESC, id DESC
+       LIMIT ${safeLimit}`,
+      [...SETTINGS_RUNTIME_AUDIT_EVENT_TYPES]
+    );
+
+    return (rows as any[]).map((row) => ({
+      event_type: String(row.event_type || ''),
+      created_at: String(row.created_at || '')
+    }));
+  } catch (error: any) {
+    console.warn('[PBXPULS_SETTINGS_RUNTIME_AUDIT] events read failed:', sanitizePBXPulsDbError(error));
+    return [];
+  }
+}
+
 type MigrationStatusReport = {
   database: 'pbxpuls';
   migrationsApplied: number | null;
@@ -6715,6 +6798,7 @@ type MigrationStatusReport = {
     settingsApiRuntimeSource: SettingsApiRuntimeSource;
     settingsApiSwitchAvailable: true;
     settingsApiSwitchEnabled: boolean;
+    runtimeAuditAvailable: true;
   };
   nextRecommendedStep: string;
 };
@@ -6765,7 +6849,8 @@ async function buildPBXPulsMigrationStatusReport(): Promise<MigrationStatusRepor
       settingsApiSwitched: false,
       settingsApiRuntimeSource: SETTINGS_API_RUNTIME_SOURCE_LEGACY,
       settingsApiSwitchAvailable: SETTINGS_API_SWITCH_GUARD_AVAILABLE,
-      settingsApiSwitchEnabled
+      settingsApiSwitchEnabled,
+      runtimeAuditAvailable: SETTINGS_RUNTIME_AUDIT_AVAILABLE
     },
     nextRecommendedStep: 'Verify PBXPuls SQL connectivity'
   };
@@ -7209,6 +7294,8 @@ app.get('/api/pbxpuls/settings-runtime-effective', requireAuth(['su', 'admin']),
       safeSqlSettings: readiness.safeToCompare,
       settingsApiSwitchEnabled: settingsApiDecision.switchEnabled,
       switchGuardAvailable: SETTINGS_API_SWITCH_GUARD_AVAILABLE,
+      auditAvailable: SETTINGS_RUNTIME_AUDIT_AVAILABLE,
+      hybridAuditEnabled: SETTINGS_RUNTIME_AUDIT_ENABLED,
       readiness: {
         ready: readiness.ready,
         matched: readiness.matched,
@@ -7234,6 +7321,8 @@ app.get('/api/pbxpuls/settings-runtime-effective', requireAuth(['su', 'admin']),
       safeSqlSettings: 0,
       settingsApiSwitchEnabled: false,
       switchGuardAvailable: SETTINGS_API_SWITCH_GUARD_AVAILABLE,
+      auditAvailable: SETTINGS_RUNTIME_AUDIT_AVAILABLE,
+      hybridAuditEnabled: SETTINGS_RUNTIME_AUDIT_ENABLED,
       readiness: {
         ready: false,
         matched: 0,
@@ -7243,6 +7332,14 @@ app.get('/api/pbxpuls/settings-runtime-effective', requireAuth(['su', 'admin']),
       error: 'Unable to build settings runtime effective diagnostics'
     });
   }
+});
+
+app.get('/api/pbxpuls/settings-runtime-events', requireAuth(['su', 'admin']), async (_req, res) => {
+  const events = await readSettingsRuntimeAuditEvents(50);
+  res.json({
+    ok: true,
+    events
+  });
 });
 
 app.get('/api/pbxpuls/settings-api-switch-status', requireAuth(['su', 'admin']), async (_req, res) => {
@@ -7428,7 +7525,8 @@ app.get('/api/pbxpuls/migration-status', requireAuth(['su', 'admin']), async (_r
         settingsApiSwitched: false,
         settingsApiRuntimeSource: SETTINGS_API_RUNTIME_SOURCE_LEGACY,
         settingsApiSwitchAvailable: SETTINGS_API_SWITCH_GUARD_AVAILABLE,
-        settingsApiSwitchEnabled: false
+        settingsApiSwitchEnabled: false,
+        runtimeAuditAvailable: SETTINGS_RUNTIME_AUDIT_AVAILABLE
       },
       nextRecommendedStep: 'Verify PBXPuls SQL connectivity'
     });
@@ -9331,8 +9429,25 @@ app.get('/api/settings', requireAuth(), async (req, res) => {
   try {
     const runtime = await getSettingsForApiResponse(localDb);
     runtimeSettings = runtime.settings;
+    if (runtime.decision.switched === true) {
+      await writeSettingsRuntimeAuditEvent('settings_runtime_hybrid_used', 'info', {
+        source: SETTINGS_API_RUNTIME_SOURCE_HYBRID,
+        settingsApiRuntimeSwitch: true
+      });
+    } else {
+      const fallbackReason = resolveSettingsRuntimeFallbackReason(runtime.decision);
+      if (fallbackReason) {
+        await writeSettingsRuntimeAuditEvent('settings_runtime_fallback', 'warning', {
+          reason: fallbackReason
+        });
+      }
+    }
   } catch (error: any) {
     console.warn('[SETTINGS_API_RUNTIME] falling back to data/db.json:', String(error?.message || error || 'unknown error').slice(0, 300));
+    const fallbackReason = await resolveSettingsRuntimeErrorFallbackReason();
+    await writeSettingsRuntimeAuditEvent('settings_runtime_fallback', 'warning', {
+      reason: fallbackReason
+    });
   }
 
   if (await checkUserPermission(req, 'view_settings')) {
@@ -18113,4 +18228,3 @@ async function startServer() {
 startServer().catch((err) => {
   console.error('Fatal initialization error:', err);
 });
-

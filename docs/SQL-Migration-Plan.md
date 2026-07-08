@@ -467,6 +467,16 @@ Diagnostics now report the effective `settingsApiRuntimeSource` as either `data/
 
 This stage does not modify `POST /api/settings`, does not add SQL write-through, does not migrate secrets, does not change auth and does not change FreePBX/PBX state.
 
+## Stage 8.7.4: Settings Runtime Hybrid Audit Events
+
+Stage 8.7.4 adds safe audit events for the actual runtime source used by `GET /api/settings`.
+
+When the guarded switch is enabled and `/api/settings` really uses the PBXPuls hybrid runtime source, PBXPuls writes `settings_runtime_hybrid_used` to `system_events` with safe metadata only: `source=pbxpuls_hybrid` and `settingsApiRuntimeSwitch=true`. When the switch is enabled but the hybrid source is not used, PBXPuls writes `settings_runtime_fallback` with only a safe reason such as `readiness_failed`, `sql_unavailable` or `runtime_error`.
+
+Runtime audit events are throttled by an in-process cooldown so identical events are not written on every request. The diagnostic endpoint `GET /api/pbxpuls/settings-runtime-events` is protected with `requireAuth(['su', 'admin'])` and returns only recent event metadata; it does not return event `details`.
+
+This stage does not change `/api/settings` response behavior, does not enable `settings.api_runtime_switch`, does not add SQL write-through, does not migrate secrets and does not write setting values, API keys, passwords or tokens to logs, SQL event details or diagnostic responses. The audit prepares operators for a later controlled switch by making the effective runtime source observable without changing the runtime itself.
+
 ## Migration Order
 
 1. Inventory and documentation only.
