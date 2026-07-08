@@ -6572,6 +6572,46 @@ function buildAuthReadinessBlockedDetails(readiness: AuthReadinessReport, actor:
   };
 }
 
+type SettingsStorageModeApiMode = 'legacy' | 'hybrid' | 'sql';
+
+const SETTINGS_RUNTIME_ENDPOINT_SWITCHED = false;
+const SETTINGS_ALLOWED_RUNTIME_MODES = ['legacy', 'hybrid'] as const;
+const SETTINGS_BLOCKED_RUNTIME_MODES = {
+  sql: 'sql_settings_runtime_requires_secret_migration'
+} as const;
+
+type SettingsStorageModeResponse = {
+  mode: SettingsStorageModeApiMode;
+  effectiveSource: 'legacy' | 'hybrid';
+  hybridReadLayerAvailable: true;
+  settingsRuntimeEndpointSwitched: false;
+  secretsSource: 'legacy';
+  allowedModes: Array<typeof SETTINGS_ALLOWED_RUNTIME_MODES[number]>;
+  blockedModes: typeof SETTINGS_BLOCKED_RUNTIME_MODES;
+};
+
+function normalizeRequestedSettingsStorageMode(value: unknown): SettingsStorageModeApiMode | null {
+  const mode = String(value ?? '').trim().toLowerCase();
+  return mode === 'legacy' || mode === 'hybrid' || mode === 'sql' ? mode : null;
+}
+
+function buildSettingsStorageModeResponse(mode: SettingsStorageModeApiMode): SettingsStorageModeResponse {
+  return {
+    mode,
+    effectiveSource: mode === 'legacy' ? 'legacy' : 'hybrid',
+    hybridReadLayerAvailable: true,
+    settingsRuntimeEndpointSwitched: SETTINGS_RUNTIME_ENDPOINT_SWITCHED,
+    secretsSource: 'legacy',
+    allowedModes: [...SETTINGS_ALLOWED_RUNTIME_MODES],
+    blockedModes: SETTINGS_BLOCKED_RUNTIME_MODES
+  };
+}
+
+function getSettingsStorageModeActor(req: Request): string {
+  const authUser = (req as any).user || {};
+  return String(authUser.username || 'unknown').trim().slice(0, 100) || 'unknown';
+}
+
 type MigrationStatusReport = {
   database: 'pbxpuls';
   migrationsApplied: number | null;
@@ -6602,6 +6642,10 @@ type MigrationStatusReport = {
     storageMode: 'legacy' | 'hybrid' | 'sql';
     effectiveRuntimeSource: 'legacy' | 'hybrid';
     hybridReadLayerAvailable: true;
+    storageModeApiAvailable: true;
+    allowedRuntimeModes: Array<typeof SETTINGS_ALLOWED_RUNTIME_MODES[number]>;
+    blockedRuntimeModes: typeof SETTINGS_BLOCKED_RUNTIME_MODES;
+    settingsRuntimeEndpointSwitched: false;
   };
   nextRecommendedStep: string;
 };
@@ -6642,7 +6686,11 @@ async function buildPBXPulsMigrationStatusReport(): Promise<MigrationStatusRepor
       ready: false,
       storageMode: 'legacy',
       effectiveRuntimeSource: 'legacy',
-      hybridReadLayerAvailable: true
+      hybridReadLayerAvailable: true,
+      storageModeApiAvailable: true,
+      allowedRuntimeModes: [...SETTINGS_ALLOWED_RUNTIME_MODES],
+      blockedRuntimeModes: SETTINGS_BLOCKED_RUNTIME_MODES,
+      settingsRuntimeEndpointSwitched: SETTINGS_RUNTIME_ENDPOINT_SWITCHED
     },
     nextRecommendedStep: 'Verify PBXPuls SQL connectivity'
   };
@@ -7005,7 +7053,10 @@ app.get('/api/pbxpuls/settings-migration-preview', requireAuth(['su', 'admin']),
 
 app.get('/api/pbxpuls/settings-runtime-preview', requireAuth(['su', 'admin']), async (_req, res) => {
   try {
-    const snapshot = await getPBXPulsRuntimeSettingsSnapshot();
+    const [snapshot, readiness] = await Promise.all([
+      getPBXPulsRuntimeSettingsSnapshot(),
+      compareLegacySettingsWithSqlRows(buildLegacySettingsSeedRows(JSON.parse(fs.readFileSync(DB_FILE, 'utf8'))))
+    ]);
     res.json({
       ok: true,
       mode: snapshot.metadata.mode,
@@ -7017,7 +7068,11 @@ app.get('/api/pbxpuls/settings-runtime-preview', requireAuth(['su', 'admin']), a
       secretsSource: snapshot.metadata.secretsSource,
       sqlOverlayCount: snapshot.metadata.sqlOverlayCount,
       settingsKeys: snapshot.metadata.settingsKeys,
-      secretKeysProtected: snapshot.metadata.secretKeysProtected
+      secretKeysProtected: snapshot.metadata.secretKeysProtected,
+      settingsRuntimeEndpointSwitched: SETTINGS_RUNTIME_ENDPOINT_SWITCHED,
+      canSwitchToHybrid: readiness.ready === true,
+      canSwitchToSql: false,
+      sqlBlockedReason: SETTINGS_BLOCKED_RUNTIME_MODES.sql
     });
   } catch (error: any) {
     console.warn('[PBXPULS_SETTINGS_RUNTIME] preview endpoint failed:', String(error?.message || error || 'unknown error').slice(0, 300));
@@ -7030,8 +7085,102 @@ app.get('/api/pbxpuls/settings-runtime-preview', requireAuth(['su', 'admin']), a
       secretsSource: 'legacy',
       sqlOverlayCount: 0,
       settingsKeys: 0,
-      secretKeysProtected: 0
+      secretKeysProtected: 0,
+      settingsRuntimeEndpointSwitched: SETTINGS_RUNTIME_ENDPOINT_SWITCHED,
+      canSwitchToHybrid: false,
+      canSwitchToSql: false,
+      sqlBlockedReason: SETTINGS_BLOCKED_RUNTIME_MODES.sql
     });
+  }
+});
+
+app.get('/api/pbxpuls/settings-storage-mode', requireAuth(['su', 'admin']), async (_req, res) => {
+  try {
+    const mode = await getSettingsStorageMode();
+    res.json(buildSettingsStorageModeResponse(mode));
+  } catch (error: any) {
+    console.warn('[PBXPULS_SETTINGS_STORAGE_MODE] failed:', String(error?.message || error || 'unknown error').slice(0, 300));
+    res.json(buildSettingsStorageModeResponse('legacy'));
+  }
+});
+
+app.post('/api/pbxpuls/settings-storage-mode', requireAuth(['su']), async (req, res) => {
+  const requestedMode = normalizeRequestedSettingsStorageMode(req.body?.mode);
+  if (!requestedMode) {
+    res.status(400).json({ ok: false, error: 'Invalid settings storage mode' });
+    return;
+  }
+
+  const actor = getSettingsStorageModeActor(req);
+
+  try {
+    const previousMode = await getSettingsStorageMode();
+
+    if (requestedMode === 'sql') {
+      await writePBXPulsSystemEvent({
+        event_type: 'settings_storage_mode_change_blocked',
+        severity: 'warning',
+        source: 'pbxpuls_settings',
+        message: 'Settings storage mode change blocked',
+        details: {
+          requestedMode,
+          actor,
+          reason: SETTINGS_BLOCKED_RUNTIME_MODES.sql
+        }
+      });
+      res.status(409).json({
+        ok: false,
+        error: SETTINGS_BLOCKED_RUNTIME_MODES.sql
+      });
+      return;
+    }
+
+    if (requestedMode === 'hybrid') {
+      const localDb = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+      const readiness = await compareLegacySettingsWithSql(localDb);
+      if (readiness.ready !== true) {
+        res.status(409).json({
+          ok: false,
+          error: 'settings_readiness_not_ready',
+          issues: readiness.issues
+        });
+        return;
+      }
+    }
+
+    const updated = await upsertPBXPulsSetting('settings.storage_mode', requestedMode, {
+      valueType: 'string',
+      category: 'settings',
+      isSecret: false,
+      description: 'Controls PBXPuls settings runtime source: legacy, hybrid or sql'
+    });
+
+    if (!updated) {
+      res.status(503).json({ ok: false, error: 'Failed to update settings storage mode' });
+      return;
+    }
+
+    await writePBXPulsSystemEvent({
+      event_type: 'settings_storage_mode_changed',
+      severity: 'info',
+      source: 'pbxpuls_settings',
+      message: 'Settings storage mode changed',
+      details: {
+        previousMode,
+        newMode: requestedMode,
+        actor,
+        settingsRuntimeEndpointSwitched: SETTINGS_RUNTIME_ENDPOINT_SWITCHED
+      }
+    });
+
+    res.json({
+      ok: true,
+      previousMode,
+      ...buildSettingsStorageModeResponse(requestedMode)
+    });
+  } catch (error: any) {
+    console.warn('[PBXPULS_SETTINGS_STORAGE_MODE_SET] failed:', sanitizePBXPulsDbError(error));
+    res.status(500).json({ ok: false, error: 'Failed to update settings storage mode' });
   }
 });
 
@@ -7081,7 +7230,11 @@ app.get('/api/pbxpuls/migration-status', requireAuth(['su', 'admin']), async (_r
         ready: false,
         storageMode: 'legacy',
         effectiveRuntimeSource: 'legacy',
-        hybridReadLayerAvailable: true
+        hybridReadLayerAvailable: true,
+        storageModeApiAvailable: true,
+        allowedRuntimeModes: [...SETTINGS_ALLOWED_RUNTIME_MODES],
+        blockedRuntimeModes: SETTINGS_BLOCKED_RUNTIME_MODES,
+        settingsRuntimeEndpointSwitched: SETTINGS_RUNTIME_ENDPOINT_SWITCHED
       },
       nextRecommendedStep: 'Verify PBXPuls SQL connectivity'
     });

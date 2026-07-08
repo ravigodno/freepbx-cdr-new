@@ -419,6 +419,21 @@ Secret settings remain protected and are not written to SQL or returned by diagn
 
 A read-only diagnostic endpoint `GET /api/pbxpuls/settings-runtime-preview` reports only safe metadata such as selected mode, effective source, overlay count and protected secret count. Runtime settings remain legacy for the application, auth stays controlled by `auth.storage_mode=legacy`, and `requireAuth()` is unchanged. The next stage should add a controlled settings storage mode API.
 
+## Stage 8.5: Controlled Settings Storage Mode API
+
+Stage 8.5 adds a protected backend API for controlled changes to the `settings.storage_mode` setting used by the settings read-layer preview.
+
+- endpoint: `GET /api/pbxpuls/settings-storage-mode` reports the current mode, effective source, allowed modes and blocked modes;
+- endpoint: `POST /api/pbxpuls/settings-storage-mode` allows `legacy` and `hybrid` changes for `su` users;
+- `hybrid` can be enabled only when `GET /api/pbxpuls/settings-readiness` is ready;
+- `sql` mode is blocked with `sql_settings_runtime_requires_secret_migration` until protected secret migration exists.
+
+Successful mode changes write safe `settings_storage_mode_changed` system events with mode names, actor and `settingsRuntimeEndpointSwitched=false`. Blocked `sql` attempts write safe `settings_storage_mode_change_blocked` events with the requested mode, actor and block reason. Secret values are never written to SQL, logs, system events or responses.
+
+This stage does not switch `/api/settings`. The production settings endpoint still reads `data/db.json`, `auth.storage_mode` remains separate, authentication is unchanged and `requireAuth()` is unchanged. The storage mode API controls only the backend settings read-layer preview introduced in Stage 8.4.
+
+The next stage should run a controlled hybrid smoke-test. Only after that should a separate stage consider switching `/api/settings` to the hybrid runtime source.
+
 ## Migration Order
 
 1. Inventory and documentation only.
