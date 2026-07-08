@@ -6577,6 +6577,7 @@ type SettingsApiRuntimeSource = 'data/db.json' | 'pbxpuls_hybrid';
 
 const SETTINGS_API_RUNTIME_SOURCE_LEGACY: SettingsApiRuntimeSource = 'data/db.json';
 const SETTINGS_API_RUNTIME_SOURCE_HYBRID: SettingsApiRuntimeSource = 'pbxpuls_hybrid';
+const SETTINGS_API_RUNTIME_SWITCH_KEY = 'settings.api_runtime_switch';
 const SETTINGS_EFFECTIVE_DIAGNOSTICS_AVAILABLE = true;
 const SETTINGS_API_SWITCH_GUARD_AVAILABLE = true;
 const SETTINGS_RUNTIME_AUDIT_AVAILABLE = true;
@@ -6653,6 +6654,25 @@ function getSettingsStorageModeActor(req: Request): string {
 function buildSettingsApiSwitchReason(switchEnabled: boolean, safeToEnable: boolean): string {
   if (!switchEnabled) return 'switch_disabled';
   return safeToEnable ? 'switch_enabled_guard_passed' : 'settings_readiness_failed';
+}
+
+function buildSettingsApiSwitchStatusResponse(settingsApiDecision: SettingsApiRuntimeDecision): Record<string, unknown> {
+  return {
+    ok: true,
+    enabled: settingsApiDecision.switchEnabled,
+    canEnable: settingsApiDecision.safeToEnable,
+    readiness: settingsApiDecision.readiness?.ready === true,
+    switchEnabled: settingsApiDecision.switchEnabled,
+    settingsApiRuntimeSource: settingsApiDecision.runtimeSource,
+    settingsApiSwitched: settingsApiDecision.switched,
+    hybridAvailable: true,
+    secretsSource: settingsApiDecision.secretsSource,
+    safeToEnable: settingsApiDecision.safeToEnable,
+    reason: settingsApiDecision.reason,
+    readinessDetails: settingsApiDecision.readiness,
+    secretKeysProtected: settingsApiDecision.secretKeysProtected,
+    sqlOverlayCount: settingsApiDecision.sqlOverlayCount
+  };
 }
 
 async function buildSettingsApiRuntimeDecision(localDb: Record<string, unknown> | null | undefined): Promise<SettingsApiRuntimeDecision> {
@@ -7347,29 +7367,99 @@ app.get('/api/pbxpuls/settings-api-switch-status', requireAuth(['su', 'admin']),
     const localDb = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
     const settingsApiDecision = await buildSettingsApiRuntimeDecision(localDb);
 
-    res.json({
-      ok: true,
-      switchEnabled: settingsApiDecision.switchEnabled,
-      settingsApiRuntimeSource: settingsApiDecision.runtimeSource,
-      settingsApiSwitched: settingsApiDecision.switched,
-      hybridAvailable: true,
-      secretsSource: settingsApiDecision.secretsSource,
-      safeToEnable: settingsApiDecision.safeToEnable,
-      reason: settingsApiDecision.reason,
-      readiness: settingsApiDecision.readiness,
-      secretKeysProtected: settingsApiDecision.secretKeysProtected,
-      sqlOverlayCount: settingsApiDecision.sqlOverlayCount
-    });
+    res.json(buildSettingsApiSwitchStatusResponse(settingsApiDecision));
   } catch (error: any) {
     console.warn('[PBXPULS_SETTINGS_API_SWITCH_STATUS] endpoint failed:', String(error?.message || error || 'unknown error').slice(0, 300));
     res.status(500).json({
       ok: false,
+      enabled: false,
+      canEnable: false,
+      readiness: false,
       switchEnabled: false,
       settingsApiRuntimeSource: SETTINGS_API_RUNTIME_SOURCE_LEGACY,
       hybridAvailable: true,
       secretsSource: 'legacy',
       safeToEnable: false,
       reason: 'settings_readiness_failed'
+    });
+  }
+});
+
+app.post('/api/pbxpuls/settings-api-switch', requireAuth(['su']), async (req, res) => {
+  if (typeof req.body?.enabled !== 'boolean') {
+    res.status(400).json({ ok: false, error: 'Invalid settings API switch value' });
+    return;
+  }
+
+  const requestedValue = req.body.enabled === true;
+  const actor = getSettingsStorageModeActor(req);
+
+  try {
+    const localDb = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    const previousValue = await isSettingsApiRuntimeSwitchEnabled();
+    const currentDecision = await buildSettingsApiRuntimeDecision(localDb);
+
+    if (requestedValue === true && currentDecision.safeToEnable !== true) {
+      const blockReason = currentDecision.readiness?.ready === true
+        ? currentDecision.reason
+        : 'settings_readiness_failed';
+      await writePBXPulsSystemEvent({
+        event_type: 'settings_api_switch_blocked',
+        severity: 'warning',
+        source: 'pbxpuls_settings_runtime',
+        message: 'Settings API runtime switch blocked',
+        details: {
+          requestedValue,
+          actor,
+          reason: blockReason,
+          readiness: currentDecision.readiness?.ready === true,
+          issuesCount: currentDecision.readiness?.issuesCount ?? 0
+        }
+      });
+
+      res.status(409).json({
+        ...buildSettingsApiSwitchStatusResponse(currentDecision),
+        ok: false,
+        error: 'settings_readiness_not_ready'
+      });
+      return;
+    }
+
+    const updated = await upsertPBXPulsSetting(SETTINGS_API_RUNTIME_SWITCH_KEY, requestedValue, {
+      valueType: 'boolean',
+      category: 'settings',
+      isSecret: false,
+      description: 'Controls whether /api/settings uses PBXPuls hybrid runtime layer'
+    });
+
+    if (!updated) {
+      res.status(503).json({ ok: false, error: 'Failed to update settings API switch' });
+      return;
+    }
+
+    await writePBXPulsSystemEvent({
+      event_type: 'settings_api_switch_changed',
+      severity: requestedValue ? 'warning' : 'info',
+      source: 'pbxpuls_settings_runtime',
+      message: 'Settings API runtime switch changed',
+      details: {
+        previousValue,
+        newValue: requestedValue,
+        actor
+      }
+    });
+
+    const nextDecision = await buildSettingsApiRuntimeDecision(JSON.parse(fs.readFileSync(DB_FILE, 'utf8')));
+    res.json({
+      ...buildSettingsApiSwitchStatusResponse(nextDecision),
+      previousValue,
+      newValue: requestedValue
+    });
+  } catch (error: any) {
+    console.warn('[PBXPULS_SETTINGS_API_SWITCH_SET] failed:', sanitizePBXPulsDbError(error));
+    res.status(500).json({
+      ok: false,
+      error: 'Failed to update settings API switch'
     });
   }
 });

@@ -477,6 +477,16 @@ Runtime audit events are throttled by an in-process cooldown so identical events
 
 This stage does not change `/api/settings` response behavior, does not enable `settings.api_runtime_switch`, does not add SQL write-through, does not migrate secrets and does not write setting values, API keys, passwords or tokens to logs, SQL event details or diagnostic responses. The audit prepares operators for a later controlled switch by making the effective runtime source observable without changing the runtime itself.
 
+## Stage 8.8.1: Settings API Switch Controller
+
+Stage 8.8.1 adds a protected controller for the existing guarded `/api/settings` runtime switch without enabling it by default.
+
+`POST /api/pbxpuls/settings-api-switch` accepts `{ "enabled": true|false }` for `su` users only. Enabling the switch is guarded by the settings readiness check; if readiness is not clean, PBXPuls returns `409 Conflict` and writes a safe `settings_api_switch_blocked` system event without settings values or secrets. Disabling the switch is always allowed so operators can roll back to `data/db.json`.
+
+Successful changes write `settings_api_switch_changed` to `system_events` with safe metadata only: previous value, new value and actor. The status endpoint `GET /api/pbxpuls/settings-api-switch-status` now exposes concise controller fields such as `enabled`, `canEnable` and `readiness` while keeping runtime source diagnostics safe.
+
+This stage does not change `/api/settings` selection logic, does not automatically enable `settings.api_runtime_switch`, does not add SQL write-through, does not migrate secrets, does not change auth and does not touch frontend behavior.
+
 ## Migration Order
 
 1. Inventory and documentation only.
