@@ -9432,7 +9432,7 @@ app.get('/api/settings', requireAuth(), async (req, res) => {
     if (runtime.decision.switched === true) {
       await writeSettingsRuntimeAuditEvent('settings_runtime_hybrid_used', 'info', {
         source: SETTINGS_API_RUNTIME_SOURCE_HYBRID,
-        settingsApiRuntimeSwitch: true
+        switchEnabled: true
       });
     } else {
       const fallbackReason = resolveSettingsRuntimeFallbackReason(runtime.decision);

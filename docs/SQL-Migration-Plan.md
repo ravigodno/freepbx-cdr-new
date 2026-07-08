@@ -471,7 +471,7 @@ This stage does not modify `POST /api/settings`, does not add SQL write-through,
 
 Stage 8.7.4 adds safe audit events for the actual runtime source used by `GET /api/settings`.
 
-When the guarded switch is enabled and `/api/settings` really uses the PBXPuls hybrid runtime source, PBXPuls writes `settings_runtime_hybrid_used` to `system_events` with safe metadata only: `source=pbxpuls_hybrid` and `settingsApiRuntimeSwitch=true`. When the switch is enabled but the hybrid source is not used, PBXPuls writes `settings_runtime_fallback` with only a safe reason such as `readiness_failed`, `sql_unavailable` or `runtime_error`.
+When the guarded switch is enabled and `/api/settings` really uses the PBXPuls hybrid runtime source, PBXPuls writes `settings_runtime_hybrid_used` to `system_events` with safe metadata only: `source=pbxpuls_hybrid` and `switchEnabled=true`. When the switch is enabled but the hybrid source is not used, PBXPuls writes `settings_runtime_fallback` with only a safe reason such as `readiness_failed`, `sql_unavailable` or `runtime_error`.
 
 Runtime audit events are throttled by an in-process cooldown so identical events are not written on every request. The diagnostic endpoint `GET /api/pbxpuls/settings-runtime-events` is protected with `requireAuth(['su', 'admin'])` and returns only recent event metadata; it does not return event `details`.
 
