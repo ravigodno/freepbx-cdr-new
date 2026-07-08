@@ -357,6 +357,16 @@ Changing to `sql` is guarded by the same readiness report used by `GET /api/pbxp
 
 Successful changes write `auth_mode_changed` to `system_events` with safe details only: previous mode, new mode and actor username. UI/frontend are unchanged in this stage, token shape is unchanged, `requireAuth()` is unchanged, and runtime login behavior remains controlled only by the setting.
 
+## Stage 7.3: Migration Status Diagnostic Endpoint
+
+Stage 7.3 adds a backend-only read-only migration status endpoint for checking PBXPuls SQL migration progress without changing runtime behavior.
+
+- endpoint: `GET /api/pbxpuls/migration-status`;
+- protection: `requireAuth(['su', 'admin'])`;
+- data sources: `schema_migrations`, `settings`, `users`, `roles` and `permissions` in the `pbxpuls` database;
+- no migrations, writes, table creation or data changes are performed.
+
+The endpoint reports applied migration count, latest migration, auth mode, SQL availability and whether auth users/roles/permissions are present in SQL. Non-auth storage domains remain marked as `legacy` until later migration stages. UI/frontend, login, `requireAuth()` and SQL auth runtime are unchanged.
 ## Migration Order
 
 1. Inventory and documentation only.

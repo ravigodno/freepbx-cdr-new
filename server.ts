@@ -6570,6 +6570,137 @@ function buildAuthReadinessBlockedDetails(readiness: AuthReadinessReport, actor:
   };
 }
 
+type MigrationStatusReport = {
+  database: 'pbxpuls';
+  migrationsApplied: number | null;
+  latestMigration: string | null;
+  auth: {
+    mode: 'legacy' | 'hybrid' | 'sql';
+    sqlAvailable: boolean;
+    usersMigrated: boolean;
+    rolesMigrated: boolean;
+    permissionsMigrated: boolean;
+  };
+  storage: {
+    settings: 'legacy';
+    directory: 'legacy';
+    callScripts: 'legacy';
+    ai: 'legacy';
+  };
+  nextRecommendedStep: string;
+};
+
+async function buildPBXPulsMigrationStatusReport(): Promise<MigrationStatusReport> {
+  const [mode, sqlAvailable] = await Promise.all([
+    getAuthStorageMode(),
+    isPBXPulsDbAvailable()
+  ]);
+
+  const report: MigrationStatusReport = {
+    database: 'pbxpuls',
+    migrationsApplied: null,
+    latestMigration: null,
+    auth: {
+      mode,
+      sqlAvailable,
+      usersMigrated: false,
+      rolesMigrated: false,
+      permissionsMigrated: false
+    },
+    storage: {
+      settings: 'legacy',
+      directory: 'legacy',
+      callScripts: 'legacy',
+      ai: 'legacy'
+    },
+    nextRecommendedStep: 'Verify PBXPuls SQL connectivity'
+  };
+
+  if (!sqlAvailable) return report;
+
+  const [migrationCount, latestMigration, settingsCount, usersCount, rolesCount, permissionsCount] = await Promise.all([
+    readPBXPulsMigrationTableCount(),
+    readPBXPulsLatestMigration(),
+    readPBXPulsDiagnosticTableCount('settings'),
+    readPBXPulsDiagnosticTableCount('users'),
+    readPBXPulsDiagnosticTableCount('roles'),
+    readPBXPulsDiagnosticTableCount('permissions')
+  ]);
+
+  report.migrationsApplied = migrationCount;
+  report.latestMigration = latestMigration;
+  report.auth.usersMigrated = Number(usersCount || 0) > 0;
+  report.auth.rolesMigrated = Number(rolesCount || 0) > 0;
+  report.auth.permissionsMigrated = Number(permissionsCount || 0) > 0;
+  report.nextRecommendedStep = choosePBXPulsMigrationNextStep(report, Number(settingsCount || 0));
+  return report;
+}
+
+function choosePBXPulsMigrationNextStep(report: MigrationStatusReport, settingsCount: number): string {
+  if (!report.auth.sqlAvailable) return 'Restore PBXPuls SQL connectivity';
+  if (!report.migrationsApplied) return 'Run PBXPuls SQL migrations';
+  if (!settingsCount) return 'Verify PBXPuls SQL settings seed';
+  if (!report.auth.usersMigrated || !report.auth.rolesMigrated || !report.auth.permissionsMigrated) {
+    return 'Complete legacy auth users, roles and permissions seed';
+  }
+  if (report.auth.mode === 'legacy') {
+    return 'Keep auth.storage_mode=legacy or use the secured API for a controlled hybrid/sql test';
+  }
+  return 'Continue with the next PBXPuls data-domain migration plan';
+}
+
+async function readPBXPulsMigrationTableCount(): Promise<number | null> {
+  return readPBXPulsDiagnosticTableCount('schema_migrations');
+}
+
+async function readPBXPulsLatestMigration(): Promise<string | null> {
+  try {
+    const columns = await queryPBXPulsDb('SHOW COLUMNS FROM schema_migrations', []);
+    const columnNames = new Set((columns as any[]).map((column) => String(column.Field || '')));
+    const keyColumn = columnNames.has('migration_key')
+      ? 'migration_key'
+      : columnNames.has('migration_name')
+        ? 'migration_name'
+        : null;
+    if (!keyColumn) return null;
+
+    const orderColumn = columnNames.has('applied_at') ? 'applied_at DESC,' : '';
+    const rows = await queryPBXPulsDb(
+      'SELECT ' + keyColumn + ' AS latest FROM schema_migrations ORDER BY ' + orderColumn + ' ' + keyColumn + ' DESC LIMIT 1',
+      []
+    );
+    const latest = rows[0]?.latest;
+    return latest ? String(latest) : null;
+  } catch (error: any) {
+    if (!isPBXPulsMissingTableError(error)) {
+      console.warn('[PBXPULS_MIGRATION_STATUS] latest migration read failed:', sanitizePBXPulsDbError(error));
+    }
+    return null;
+  }
+}
+
+type PBXPulsDiagnosticCountTable = 'schema_migrations' | 'settings' | 'users' | 'roles' | 'permissions';
+
+async function readPBXPulsDiagnosticTableCount(tableName: PBXPulsDiagnosticCountTable): Promise<number | null> {
+  try {
+    const rows = await queryPBXPulsDb('SELECT COUNT(*) AS count FROM ' + tableName, []);
+    const count = Number(rows[0]?.count);
+    return Number.isFinite(count) ? count : null;
+  } catch (error: any) {
+    if (!isPBXPulsMissingTableError(error)) {
+      console.warn('[PBXPULS_MIGRATION_STATUS] table count read failed:', {
+        tableName,
+        error: sanitizePBXPulsDbError(error)
+      });
+    }
+    return null;
+  }
+}
+
+function isPBXPulsMissingTableError(error: any): boolean {
+  return error?.code === 'ER_NO_SUCH_TABLE' || /table .* doesn't exist/i.test(String(error?.message || ''));
+}
+
 // API ROUTER START
 const app = express();
 
@@ -6588,6 +6719,33 @@ app.use(express.json({ limit: '25mb' }));
 
 registerPBXPulsSqlStatusRoutes(app, requireAuth);
 
+app.get('/api/pbxpuls/migration-status', requireAuth(['su', 'admin']), async (_req, res) => {
+  try {
+    const report = await buildPBXPulsMigrationStatusReport();
+    res.json(report);
+  } catch (error: any) {
+    console.warn('[PBXPULS_MIGRATION_STATUS] endpoint failed:', sanitizePBXPulsDbError(error));
+    res.json({
+      database: 'pbxpuls',
+      migrationsApplied: null,
+      latestMigration: null,
+      auth: {
+        mode: 'legacy',
+        sqlAvailable: false,
+        usersMigrated: false,
+        rolesMigrated: false,
+        permissionsMigrated: false
+      },
+      storage: {
+        settings: 'legacy',
+        directory: 'legacy',
+        callScripts: 'legacy',
+        ai: 'legacy'
+      },
+      nextRecommendedStep: 'Verify PBXPuls SQL connectivity'
+    });
+  }
+});
 app.get('/api/pbxpuls/auth-compare/:username', requireAuth(['su', 'admin']), async (req, res) => {
   try {
     const comparison = await compareLegacyUserWithSql(String(req.params.username || ''));
