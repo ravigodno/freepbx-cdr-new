@@ -33,6 +33,7 @@ import { writePBXPulsSystemEvent } from './server/pbxpulsEvents.js';
 import { upsertPBXPulsSetting } from './server/pbxpulsSettings.js';
 import { buildLegacySettingsSeedRows } from './server/pbxpulsLegacySettings.js';
 import { buildHybridSettingsSnapshot, getPBXPulsRuntimeSettingsSnapshot, getSettingsStorageMode, isSettingsApiRuntimeSwitchEnabled } from './server/pbxpulsSettingsRuntime.js';
+import { buildDirectoryMigrationPreview } from './server/pbxpulsDirectoryMigrationPreview.js';
 
 // Load environment variables
 dotenv.config();
@@ -7631,6 +7632,69 @@ app.get('/api/pbxpuls/settings-readiness', requireAuth(['su', 'admin']), async (
   } catch (error: any) {
     console.warn('[PBXPULS_SETTINGS_READINESS] endpoint failed:', String(error?.message || error || 'unknown error').slice(0, 300));
     res.status(500).json(buildDefaultSettingsReadinessReport());
+  }
+});
+
+app.get('/api/pbxpuls/directory-migration-preview', requireAuth(['su', 'admin']), async (_req, res) => {
+  try {
+    const localDb = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    res.json(buildDirectoryMigrationPreview(localDb));
+  } catch (error: any) {
+    console.warn('[PBXPULS_DIRECTORY_MIGRATION_PREVIEW] endpoint failed:', String(error?.message || error || 'unknown error').slice(0, 300));
+    res.status(500).json({
+      ok: false,
+      source: 'data/db.json',
+      safe: true,
+      contacts: {
+        total: 0,
+        common: 0,
+        personal: 0
+      },
+      owners: {
+        ownersCount: 0,
+        contactsWithoutOwner: 0
+      },
+      phones: {
+        totalPhones: 0,
+        emptyPhones: 0,
+        duplicatePhones: 0
+      },
+      customFields: {
+        count: 0,
+        valueCells: 0,
+        fields: []
+      },
+      checks: {
+        visibility: {
+          missing: 0,
+          invalid: 0
+        },
+        ownerUserId: {
+          missingForPersonal: 0
+        },
+        phones: {
+          multiPhoneContacts: 0,
+          contactsWithoutPhones: 0
+        },
+        type: {
+          missing: 0,
+          invalid: 0
+        },
+        flags: {
+          spam: 0,
+          blacklist: 0
+        }
+      },
+      plannedMapping: {
+        sharedVisibilityToContactType: 'common',
+        privateVisibilityToContactType: 'personal',
+        ownerField: 'owner_user_id',
+        customFieldsTarget: 'directory_contact_metadata',
+        valuesReturned: false
+      },
+      issues: [],
+      error: 'Unable to build directory migration preview'
+    });
   }
 });
 

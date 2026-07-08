@@ -541,3 +541,107 @@ CREATE TABLE IF NOT EXISTS directory_contact_metadata (...);
 ```
 
 This file is a migration skeleton only. It must not be executed automatically in Stage 9.2 or Stage 9.2.1.
+
+## Stage 9.3 Directory Migration Preview
+
+This stage adds a backend-only safe preview endpoint for the future Directory migration.
+
+Endpoint:
+
+- `GET /api/pbxpuls/directory-migration-preview`
+- Auth: `requireAuth(['su', 'admin'])`
+- Source: `data/db.json`
+- Runtime impact: read-only
+- SQL impact: none
+
+The endpoint must not return contact names, phone numbers, comments, emails, custom field values, or other personal data. It returns only safe aggregate statistics and custom field keys.
+
+### Current Safe Counts
+
+Current `data/db.json.directory` inventory:
+
+- total contacts: `1`
+- common contacts: `1`
+- personal contacts: `0`
+- owners count: `0`
+- personal contacts without owner: `0`
+- total normalized phone entries: `1`
+- contacts without phones: `0`
+- duplicate normalized phone values: `0`
+- custom fields count: `0`
+- spam contacts: `0`
+- blacklisted contacts: `0`
+
+### Preview Response Shape
+
+The preview response is intentionally aggregate-only:
+
+```json
+{
+  "ok": true,
+  "source": "data/db.json",
+  "safe": true,
+  "contacts": {
+    "total": 1,
+    "common": 1,
+    "personal": 0
+  },
+  "owners": {
+    "ownersCount": 0,
+    "contactsWithoutOwner": 0
+  },
+  "phones": {
+    "totalPhones": 1,
+    "emptyPhones": 0,
+    "duplicatePhones": 0
+  },
+  "customFields": {
+    "count": 0,
+    "valueCells": 0,
+    "fields": []
+  }
+}
+```
+
+### Conversion Rules
+
+Planned mapping from legacy JSON to SQL:
+
+- `visibility: "shared"` maps to `directory_contacts.contact_type = "common"`.
+- `visibility: "private"` maps to `directory_contacts.contact_type = "personal"`.
+- `ownerUserId`, `ownerId`, or `userId` maps to `directory_contacts.owner_user_id` for personal contacts.
+- `number` maps to `directory_contacts.phone`.
+- normalized primary phone maps to `directory_contacts.phone_normalized`.
+- `phone2` remains a compatibility field where possible.
+- full `phones` array is preserved through `directory_contact_metadata`.
+- `type` maps to the business category field.
+- `isSpam` maps to `is_spam`.
+- `isBlacklisted` maps to `is_blacklisted`.
+- unknown legacy keys become custom metadata candidates without exposing values in the preview.
+
+### Potential Issues
+
+The preview reports these classes of migration issues:
+
+- personal contacts without `ownerUserId`;
+- contacts without usable phone values;
+- invalid or missing `visibility`;
+- invalid or missing Directory `type`;
+- duplicate normalized phone values;
+- unknown custom fields that need metadata/custom-field mapping.
+
+Duplicate phone counts are counts of duplicated normalized phone values, not the values themselves.
+
+### Security Rules
+
+The preview must not return:
+
+- contact names or full names;
+- phone numbers or normalized phone values;
+- email addresses;
+- comments;
+- company-specific notes;
+- custom field values;
+- tokens or secrets from Directory import/sync settings.
+
+This keeps the endpoint safe for migration planning without leaking Directory personal data.
