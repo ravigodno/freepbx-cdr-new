@@ -428,6 +428,106 @@ Call lookup rules:
 
 The lookup layer must be owner-aware before any SQL-backed caller card, CDR lookup, or live call banner uses this table.
 
+## Stage 9.2.1 Directory Custom Fields Designer
+
+This stage extends the Directory SQL design with user-defined custom columns. It is design/documentation only: no SQL is executed, no tables are created, and the migration skeleton remains disconnected from runtime migrations.
+
+### Custom Field Definitions
+
+Future table: `directory_custom_fields`.
+
+Purpose:
+
+- allow PBXPuls users to create their own Directory columns;
+- describe field type, label, visibility, search behavior, card display, and caller popup display;
+- keep contact-specific values in `directory_contact_metadata`.
+
+Proposed fields:
+
+- `id`: stable field ID.
+- `field_key`: machine key, unique per entity type, for example `pet_name`.
+- `field_name`: human-readable label.
+- `field_type`: value type.
+- `entity_type`: target entity, initially `directory_contact`.
+- `is_required`: whether the field is required by UI/API validation.
+- `is_visible`: whether the field is visible in Directory UI by default.
+- `visibility`: field visibility policy, `common`, `personal`, or `private`.
+- `sort_order`: display ordering.
+- `show_in_card`: whether to display in contact cards.
+- `show_in_search`: whether to include in search indexing/filtering.
+- `show_in_caller_popup`: whether to display in caller popup/caller card.
+- `created_by`: user who created the field definition.
+- `created_at`: creation timestamp.
+- `updated_at`: update timestamp.
+
+Supported `field_type` values:
+
+- `string`
+- `text`
+- `number`
+- `date`
+- `boolean`
+- `select`
+- `phone`
+- `email`
+
+Example custom fields:
+
+- Veterinary clinic: `pet_name`, `pet_type`, `pet_breed`.
+- Auto service: `car_model`, `vin`, `plate_number`.
+- Medical office: `birth_date`, `policy_number`.
+
+### Custom Field Values
+
+Future table: `directory_contact_metadata`.
+
+Stage 9.2 originally described this as a generic key/value metadata table. Stage 9.2.1 refines it as the value table for custom fields and preserved legacy details.
+
+Core value fields:
+
+- `contact_id`: parent contact ID.
+- `field_id`: custom field definition ID from `directory_custom_fields.id`.
+- `value`: stored field value.
+
+Compatibility fields may remain in the skeleton for migration from legacy JSON:
+
+- `metadata_key`: legacy field key before a custom field definition exists.
+- `metadata_value`: text value for legacy/simple fields.
+- `metadata_json`: structured value for arrays and objects, such as `phones` and `tags`.
+
+Future runtime should prefer `field_id` when the value belongs to a designed custom field. Legacy metadata rows can use `metadata_key` until promoted to custom field definitions.
+
+### Custom Field Visibility
+
+Supported field visibility values:
+
+- `common`: visible to all users who can see the contact.
+- `personal`: available only for the owner of a personal contact.
+- `private`: visible only to the owner/user who created or owns the private field context.
+
+Rules:
+
+- Common fields are available to all users when the contact itself is visible.
+- Personal fields are available only to the owner of a personal contact.
+- Private fields are available only to the owner and must not be exposed in caller cards, search results, API responses, or audit details for other users.
+- Caller popup rendering must enforce both contact visibility and field visibility before showing a custom field value.
+
+### Custom Field Indexes
+
+Recommended indexes for `directory_custom_fields`:
+
+- `uniq_directory_custom_fields_key` on `entity_type, field_key`.
+- `idx_directory_custom_fields_entity` on `entity_type`.
+- `idx_directory_custom_fields_visibility` on `visibility`.
+- `idx_directory_custom_fields_sort_order` on `sort_order`.
+
+Recommended indexes for custom values:
+
+- `idx_directory_contact_metadata_contact_id` on `contact_id`.
+- `idx_directory_contact_metadata_field_id` on `field_id`.
+- `idx_directory_contact_metadata_key` on `metadata_key`.
+- `uniq_directory_contact_metadata_field` on `contact_id, field_id`.
+
 ### Proposed SQL Skeleton
 
 The design SQL is stored in `migrations/20260708_008_directory_schema_design.sql`.
@@ -436,7 +536,8 @@ Summary:
 
 ```sql
 CREATE TABLE IF NOT EXISTS directory_contacts (...);
+CREATE TABLE IF NOT EXISTS directory_custom_fields (...);
 CREATE TABLE IF NOT EXISTS directory_contact_metadata (...);
 ```
 
-This file is a migration skeleton only. It must not be executed automatically in Stage 9.2.
+This file is a migration skeleton only. It must not be executed automatically in Stage 9.2 or Stage 9.2.1.
