@@ -3,6 +3,7 @@ import path from 'path';
 import mysql, { Connection } from 'mysql2/promise';
 import { writePBXPulsSystemEvent } from './pbxpulsEvents.js';
 import { buildLegacySettingsSeedRows } from './pbxpulsLegacySettings.js';
+import { DIRECTORY_SQL_SCHEMA_STATEMENTS, seedLegacyDirectory } from './pbxpulsDirectorySeed.js';
 
 interface Migration {
   key: string;
@@ -210,6 +211,12 @@ const MIGRATIONS: Migration[] = [
     description: 'Seed settings API runtime switch guard',
     statements: [],
     seed: seedSettingsApiRuntimeSwitch
+  },
+  {
+    key: '20260708_009_seed_directory',
+    description: 'Seed legacy Directory data from data/db.json',
+    statements: DIRECTORY_SQL_SCHEMA_STATEMENTS,
+    seed: seedLegacyDirectory
   }
 ];
 

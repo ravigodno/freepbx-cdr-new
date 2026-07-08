@@ -859,3 +859,125 @@ Example output without personal data:
 ```
 
 This example intentionally excludes names, phone values, comments, emails, and custom field values.
+
+## Stage 9.5 Directory SQL Seed
+
+This stage prepares an idempotent legacy Directory seed into the PBXPuls SQL model. It does not switch Directory runtime, does not change `/api/directory`, does not add SQL write-through, and does not remove `data/db.json`.
+
+Migration key:
+
+- `20260708_009_seed_directory`
+
+Seed source:
+
+- `data/db.json.directory`
+
+Target tables:
+
+- `directory_contacts`
+- `directory_custom_fields`
+- `directory_contact_metadata`
+
+The migration uses `INSERT IGNORE` and must not overwrite existing SQL records.
+
+### Seed Scope
+
+`directory_contacts` receives core mapped fields:
+
+- `id`
+- `name`
+- `company`
+- `phone`
+- `phone_normalized`
+- `phone2`
+- `email`
+- `comment`
+- `contact_type`
+- `owner_user_id`
+- `visibility`
+- `type`
+- `is_spam`
+- `is_blacklisted`
+- `created_at`
+- `updated_at`
+
+`directory_custom_fields` receives definitions only for additional legacy fields that are not part of the known Directory core model and are not sensitive by key name.
+
+`directory_contact_metadata` receives:
+
+- safe legacy detail fields that are not first-class contact columns;
+- custom field values linked by `field_id`;
+- structured values through `metadata_json` when needed.
+
+Sensitive custom field keys are skipped. The seed must not log names, phone numbers, email addresses, comments, or custom field values.
+
+### Seed Preview Endpoint
+
+Endpoint:
+
+- `GET /api/pbxpuls/directory-seed-preview`
+- Auth: `requireAuth(['su', 'admin'])`
+- Source: `data/db.json`
+- SQL writes: none
+
+The endpoint returns only aggregate counts:
+
+```json
+{
+  "ok": true,
+  "source": "data/db.json",
+  "sqlAvailable": false,
+  "contacts": {
+    "legacyTotal": 1,
+    "willAdd": 1,
+    "skippedExisting": 0,
+    "skippedInvalid": 0
+  },
+  "customFields": {
+    "willAdd": 0,
+    "skippedExisting": 0
+  },
+  "metadata": {
+    "willAdd": 0,
+    "skippedExisting": 0,
+    "duplicateKeys": 0
+  },
+  "duplicates": {
+    "normalizedPhones": 0
+  },
+  "safe": true,
+  "valuesReturned": false
+}
+```
+
+If SQL tables are missing or SQL is unavailable, the endpoint still returns legacy-derived counts and reports `sqlAvailable: false`.
+
+### Audit
+
+After a successful seed migration, the migration writes a safe system event:
+
+```json
+{
+  "event_type": "directory_seed_completed",
+  "details": {
+    "contactsCount": 1,
+    "customFieldsCount": 0,
+    "metadataCount": 0,
+    "skippedCount": 0
+  }
+}
+```
+
+Audit details must not include:
+
+- contact names;
+- phone numbers;
+- email addresses;
+- comments;
+- custom field values.
+
+### Runtime Safety
+
+Stage 9.5 does not change read or write behavior for the Directory module.
+
+The application continues to use legacy `data/db.json` for existing Directory APIs until a later controlled runtime switch stage is designed, previewed, and explicitly enabled.

@@ -34,6 +34,7 @@ import { upsertPBXPulsSetting } from './server/pbxpulsSettings.js';
 import { buildLegacySettingsSeedRows } from './server/pbxpulsLegacySettings.js';
 import { buildHybridSettingsSnapshot, getPBXPulsRuntimeSettingsSnapshot, getSettingsStorageMode, isSettingsApiRuntimeSwitchEnabled } from './server/pbxpulsSettingsRuntime.js';
 import { buildDirectoryMigrationPreview } from './server/pbxpulsDirectoryMigrationPreview.js';
+import { buildDirectorySeedPreview } from './server/pbxpulsDirectorySeed.js';
 
 // Load environment variables
 dotenv.config();
@@ -7694,6 +7695,41 @@ app.get('/api/pbxpuls/directory-migration-preview', requireAuth(['su', 'admin'])
       },
       issues: [],
       error: 'Unable to build directory migration preview'
+    });
+  }
+});
+
+app.get('/api/pbxpuls/directory-seed-preview', requireAuth(['su', 'admin']), async (_req, res) => {
+  try {
+    const localDb = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    res.json(await buildDirectorySeedPreview(localDb));
+  } catch (error: any) {
+    console.warn('[PBXPULS_DIRECTORY_SEED_PREVIEW] endpoint failed:', String(error?.message || error || 'unknown error').slice(0, 300));
+    res.status(500).json({
+      ok: false,
+      source: 'data/db.json',
+      sqlAvailable: false,
+      contacts: {
+        legacyTotal: 0,
+        willAdd: 0,
+        skippedExisting: 0,
+        skippedInvalid: 0
+      },
+      customFields: {
+        willAdd: 0,
+        skippedExisting: 0
+      },
+      metadata: {
+        willAdd: 0,
+        skippedExisting: 0,
+        duplicateKeys: 0
+      },
+      duplicates: {
+        normalizedPhones: 0
+      },
+      safe: true,
+      valuesReturned: false,
+      error: 'Unable to build directory seed preview'
     });
   }
 });
