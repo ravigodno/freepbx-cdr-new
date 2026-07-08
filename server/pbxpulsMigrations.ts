@@ -62,6 +62,14 @@ const SETTINGS_STORAGE_MODE_SETTING = [
   'Controls PBXPuls settings runtime source: legacy, hybrid or sql'
 ] as const;
 
+const SETTINGS_API_RUNTIME_SWITCH_SETTING = [
+  'settings.api_runtime_switch',
+  'false',
+  'boolean',
+  'settings',
+  'Controls whether /api/settings uses PBXPuls hybrid runtime layer'
+] as const;
+
 const MIGRATIONS: Migration[] = [
   {
     key: '20260707_001_core_internal_tables',
@@ -196,6 +204,12 @@ const MIGRATIONS: Migration[] = [
     description: 'Seed settings storage mode setting',
     statements: [],
     seed: seedSettingsStorageMode
+  },
+  {
+    key: '20260708_007_seed_settings_api_runtime_switch',
+    description: 'Seed settings API runtime switch guard',
+    statements: [],
+    seed: seedSettingsApiRuntimeSwitch
   }
 ];
 
@@ -369,6 +383,15 @@ async function seedSettingsStorageMode(connection: Connection): Promise<void> {
       (setting_key, setting_value, value_type, category, is_secret, description)
      VALUES (?, ?, ?, ?, 0, ?)`,
     SETTINGS_STORAGE_MODE_SETTING
+  );
+}
+
+async function seedSettingsApiRuntimeSwitch(connection: Connection): Promise<void> {
+  await connection.execute(
+    `INSERT IGNORE INTO settings
+      (setting_key, setting_value, value_type, category, is_secret, description)
+     VALUES (?, ?, ?, ?, 0, ?)`,
+    SETTINGS_API_RUNTIME_SWITCH_SETTING
   );
 }
 

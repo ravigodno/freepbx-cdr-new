@@ -33,6 +33,7 @@ interface SqlRuntimeSettingRow {
 }
 
 const SETTINGS_STORAGE_MODE_KEY = 'settings.storage_mode';
+const SETTINGS_API_RUNTIME_SWITCH_KEY = 'settings.api_runtime_switch';
 const SECRET_RUNTIME_FALLBACK_REASON = 'sql_settings_runtime_requires_secret_migration';
 
 export async function getSettingsStorageMode(): Promise<SettingsStorageMode> {
@@ -42,6 +43,16 @@ export async function getSettingsStorageMode(): Promise<SettingsStorageMode> {
   } catch (error: any) {
     console.warn('[PBXPULS_SETTINGS_RUNTIME] storage mode fallback:', sanitizePBXPulsDbError(error));
     return 'legacy';
+  }
+}
+
+export async function isSettingsApiRuntimeSwitchEnabled(): Promise<boolean> {
+  try {
+    const value = await getPBXPulsSetting<boolean>(SETTINGS_API_RUNTIME_SWITCH_KEY, false);
+    return value === true;
+  } catch (error: any) {
+    console.warn('[PBXPULS_SETTINGS_RUNTIME] API switch fallback:', sanitizePBXPulsDbError(error));
+    return false;
   }
 }
 

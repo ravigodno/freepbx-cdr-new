@@ -32,7 +32,7 @@ import { isPBXPulsDbAvailable, queryPBXPulsDb, sanitizePBXPulsDbError } from './
 import { writePBXPulsSystemEvent } from './server/pbxpulsEvents.js';
 import { upsertPBXPulsSetting } from './server/pbxpulsSettings.js';
 import { buildLegacySettingsSeedRows } from './server/pbxpulsLegacySettings.js';
-import { getPBXPulsRuntimeSettingsSnapshot, getSettingsStorageMode } from './server/pbxpulsSettingsRuntime.js';
+import { getPBXPulsRuntimeSettingsSnapshot, getSettingsStorageMode, isSettingsApiRuntimeSwitchEnabled } from './server/pbxpulsSettingsRuntime.js';
 
 // Load environment variables
 dotenv.config();
@@ -6577,6 +6577,7 @@ type SettingsStorageModeApiMode = 'legacy' | 'hybrid' | 'sql';
 const SETTINGS_RUNTIME_ENDPOINT_SWITCHED = false;
 const SETTINGS_API_RUNTIME_SOURCE = 'data/db.json' as const;
 const SETTINGS_EFFECTIVE_DIAGNOSTICS_AVAILABLE = true;
+const SETTINGS_API_SWITCH_GUARD_AVAILABLE = true;
 const SETTINGS_ALLOWED_RUNTIME_MODES = ['legacy', 'hybrid'] as const;
 const SETTINGS_BLOCKED_RUNTIME_MODES = {
   sql: 'sql_settings_runtime_requires_secret_migration'
@@ -6612,6 +6613,11 @@ function buildSettingsStorageModeResponse(mode: SettingsStorageModeApiMode): Set
 function getSettingsStorageModeActor(req: Request): string {
   const authUser = (req as any).user || {};
   return String(authUser.username || 'unknown').trim().slice(0, 100) || 'unknown';
+}
+
+function buildSettingsApiSwitchReason(switchEnabled: boolean, safeToEnable: boolean): string {
+  if (!switchEnabled) return 'switch_disabled';
+  return safeToEnable ? 'switch_enabled_guard_passed' : 'settings_readiness_failed';
 }
 
 type MigrationStatusReport = {
@@ -6651,15 +6657,18 @@ type MigrationStatusReport = {
     effectiveDiagnosticsAvailable: true;
     settingsApiSwitched: false;
     settingsApiRuntimeSource: typeof SETTINGS_API_RUNTIME_SOURCE;
+    settingsApiSwitchAvailable: true;
+    settingsApiSwitchEnabled: boolean;
   };
   nextRecommendedStep: string;
 };
 
 async function buildPBXPulsMigrationStatusReport(): Promise<MigrationStatusReport> {
-  const [mode, sqlAvailable, settingsStorageMode] = await Promise.all([
+  const [mode, sqlAvailable, settingsStorageMode, settingsApiSwitchEnabled] = await Promise.all([
     getAuthStorageMode(),
     isPBXPulsDbAvailable(),
-    getSettingsStorageMode()
+    getSettingsStorageMode(),
+    isSettingsApiRuntimeSwitchEnabled()
   ]);
 
   const report: MigrationStatusReport = {
@@ -6698,7 +6707,9 @@ async function buildPBXPulsMigrationStatusReport(): Promise<MigrationStatusRepor
       settingsRuntimeEndpointSwitched: SETTINGS_RUNTIME_ENDPOINT_SWITCHED,
       effectiveDiagnosticsAvailable: SETTINGS_EFFECTIVE_DIAGNOSTICS_AVAILABLE,
       settingsApiSwitched: SETTINGS_RUNTIME_ENDPOINT_SWITCHED,
-      settingsApiRuntimeSource: SETTINGS_API_RUNTIME_SOURCE
+      settingsApiRuntimeSource: SETTINGS_API_RUNTIME_SOURCE,
+      settingsApiSwitchAvailable: SETTINGS_API_SWITCH_GUARD_AVAILABLE,
+      settingsApiSwitchEnabled
     },
     nextRecommendedStep: 'Verify PBXPuls SQL connectivity'
   };
@@ -7127,6 +7138,8 @@ app.get('/api/pbxpuls/settings-runtime-effective', requireAuth(['su', 'admin']),
       secretsSource: snapshot.metadata.secretsSource,
       secretKeysProtected: snapshot.metadata.secretKeysProtected,
       safeSqlSettings: readiness.safeToCompare,
+      settingsApiSwitchEnabled: await isSettingsApiRuntimeSwitchEnabled(),
+      switchGuardAvailable: SETTINGS_API_SWITCH_GUARD_AVAILABLE,
       readiness: {
         ready: readiness.ready,
         matched: readiness.matched,
@@ -7150,6 +7163,8 @@ app.get('/api/pbxpuls/settings-runtime-effective', requireAuth(['su', 'admin']),
       secretsSource: 'legacy',
       secretKeysProtected: 0,
       safeSqlSettings: 0,
+      settingsApiSwitchEnabled: false,
+      switchGuardAvailable: SETTINGS_API_SWITCH_GUARD_AVAILABLE,
       readiness: {
         ready: false,
         matched: 0,
@@ -7157,6 +7172,40 @@ app.get('/api/pbxpuls/settings-runtime-effective', requireAuth(['su', 'admin']),
       },
       nextStep: 'settings_api_hybrid_switch_not_enabled',
       error: 'Unable to build settings runtime effective diagnostics'
+    });
+  }
+});
+
+app.get('/api/pbxpuls/settings-api-switch-status', requireAuth(['su', 'admin']), async (_req, res) => {
+  try {
+    const localDb = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    const [switchEnabled, snapshot, readiness] = await Promise.all([
+      isSettingsApiRuntimeSwitchEnabled(),
+      getPBXPulsRuntimeSettingsSnapshot(),
+      compareLegacySettingsWithSql(localDb)
+    ]);
+    const safeToEnable = readiness.ready === true
+      && snapshot.metadata.secretKeysProtected > 0;
+
+    res.json({
+      ok: true,
+      switchEnabled,
+      settingsApiRuntimeSource: SETTINGS_API_RUNTIME_SOURCE,
+      hybridAvailable: true,
+      secretsSource: snapshot.metadata.secretsSource,
+      safeToEnable,
+      reason: buildSettingsApiSwitchReason(switchEnabled, safeToEnable)
+    });
+  } catch (error: any) {
+    console.warn('[PBXPULS_SETTINGS_API_SWITCH_STATUS] endpoint failed:', String(error?.message || error || 'unknown error').slice(0, 300));
+    res.status(500).json({
+      ok: false,
+      switchEnabled: false,
+      settingsApiRuntimeSource: SETTINGS_API_RUNTIME_SOURCE,
+      hybridAvailable: true,
+      secretsSource: 'legacy',
+      safeToEnable: false,
+      reason: 'settings_readiness_failed'
     });
   }
 });
@@ -7304,7 +7353,9 @@ app.get('/api/pbxpuls/migration-status', requireAuth(['su', 'admin']), async (_r
         settingsRuntimeEndpointSwitched: SETTINGS_RUNTIME_ENDPOINT_SWITCHED,
         effectiveDiagnosticsAvailable: SETTINGS_EFFECTIVE_DIAGNOSTICS_AVAILABLE,
         settingsApiSwitched: SETTINGS_RUNTIME_ENDPOINT_SWITCHED,
-        settingsApiRuntimeSource: SETTINGS_API_RUNTIME_SOURCE
+        settingsApiRuntimeSource: SETTINGS_API_RUNTIME_SOURCE,
+        settingsApiSwitchAvailable: SETTINGS_API_SWITCH_GUARD_AVAILABLE,
+        settingsApiSwitchEnabled: false
       },
       nextRecommendedStep: 'Verify PBXPuls SQL connectivity'
     });

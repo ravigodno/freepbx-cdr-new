@@ -447,6 +447,16 @@ This endpoint is a diagnostic guard before any future controlled settings API sw
 
 The existing migration status and runtime preview endpoints now also expose that effective diagnostics are available and that `/api/settings` still uses `data/db.json`. The next stage should add the controlled settings API switch guard.
 
+## Stage 8.7.2: Controlled Settings API Switch Guard
+
+Stage 8.7.2 adds the future switch guard for the production settings endpoint without changing the endpoint itself.
+
+A new migration `20260708_007_seed_settings_api_runtime_switch` seeds `settings.api_runtime_switch=false` with `INSERT IGNORE`, so existing deployments are not overwritten. The flag is stored as a boolean setting in the `settings` category and controls only whether a future stage may allow `/api/settings` to use the PBXPuls hybrid runtime layer.
+
+A helper `isSettingsApiRuntimeSwitchEnabled()` reads the flag with a default of `false`. A protected diagnostic endpoint `GET /api/pbxpuls/settings-api-switch-status` reports whether the switch is enabled, the current `settingsApiRuntimeSource=data/db.json`, hybrid availability, legacy secret source and whether readiness would allow a future switch. If readiness is not clean, the guard reports `safeToEnable=false` with `reason=settings_readiness_failed`.
+
+This stage does not modify `/api/settings` and does not add read-through logic to that route. The production settings endpoint remains legacy-only, secrets remain in legacy storage, auth and frontend behavior are unchanged, and no settings values or secret values are returned by diagnostics. The next stage, only after separate approval, should implement the controlled settings API switch.
+
 ## Migration Order
 
 1. Inventory and documentation only.
