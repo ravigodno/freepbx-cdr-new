@@ -487,6 +487,16 @@ Successful changes write `settings_api_switch_changed` to `system_events` with s
 
 This stage does not change `/api/settings` selection logic, does not automatically enable `settings.api_runtime_switch`, does not add SQL write-through, does not migrate secrets, does not change auth and does not touch frontend behavior.
 
+## Stage 8.8.3: Settings Secret Protection Layer
+
+Stage 8.8.3 adds a response-only secret protection layer for `GET /api/settings`.
+
+Before settings are returned to the client, PBXPuls sanitizes secret-like setting keys such as password, passwd, token, apiKey, secret, credential, private and key. The sanitizer preserves the response structure and replaces protected values with `********`, so existing frontend consumers keep the same key shape while real secret values are not sent to the browser.
+
+The protection is applied after the runtime source is selected, so it works the same way for legacy `data/db.json` settings and the guarded `pbxpuls_hybrid` runtime source. If values are sanitized, PBXPuls writes a safe `settings_secret_values_sanitized` system event with only a count and no key names or values.
+
+This stage does not change settings storage, does not modify SQL schema, does not migrate secrets, does not remove values from `data/db.json`, does not change `POST /api/settings`, does not change auth and does not enable `settings.api_runtime_switch`. Rollback to legacy runtime remains controlled by the existing switch.
+
 ## Migration Order
 
 1. Inventory and documentation only.

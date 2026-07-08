@@ -6588,11 +6588,15 @@ const SETTINGS_RUNTIME_AUDIT_EVENT_TYPES = [
   'settings_runtime_hybrid_used',
   'settings_runtime_fallback'
 ] as const;
+const SETTINGS_SECRET_SANITIZED_EVENT_TYPE = 'settings_secret_values_sanitized';
+const SETTINGS_SECRET_SANITIZED_MASK = '********';
+const SETTINGS_SECRET_KEY_PATTERN = /(password|passwd|token|apikey|apiKey|secret|credential|private|key)/i;
 const SETTINGS_ALLOWED_RUNTIME_MODES = ['legacy', 'hybrid'] as const;
 const SETTINGS_BLOCKED_RUNTIME_MODES = {
   sql: 'sql_settings_runtime_requires_secret_migration'
 } as const;
 const settingsRuntimeAuditCooldown = new Map<string, number>();
+const settingsSecretSanitizedAuditCooldown = new Map<string, number>();
 
 type SettingsStorageModeResponse = {
   mode: SettingsStorageModeApiMode;
@@ -6712,6 +6716,42 @@ async function getSettingsForApiResponse(localDb: LocalDb): Promise<{ settings: 
   };
 }
 
+function sanitizeSettingsForClient(settings: Record<string, unknown>): { settings: Record<string, unknown>; sanitizedCount: number } {
+  const state = { count: 0 };
+  const sanitized = sanitizeSettingsValue(settings, state);
+  return {
+    settings: sanitized && typeof sanitized === 'object' && !Array.isArray(sanitized)
+      ? sanitized as Record<string, unknown>
+      : {},
+    sanitizedCount: state.count
+  };
+}
+
+function sanitizeSettingsValue(value: unknown, state: { count: number }, key = ''): unknown {
+  if (isSettingsSecretKey(key)) {
+    state.count += 1;
+    return SETTINGS_SECRET_SANITIZED_MASK;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeSettingsValue(item, state));
+  }
+
+  if (value && typeof value === 'object') {
+    const result: Record<string, unknown> = {};
+    for (const [childKey, childValue] of Object.entries(value as Record<string, unknown>)) {
+      result[childKey] = sanitizeSettingsValue(childValue, state, childKey);
+    }
+    return result;
+  }
+
+  return value;
+}
+
+function isSettingsSecretKey(key: string): boolean {
+  return SETTINGS_SECRET_KEY_PATTERN.test(String(key || ''));
+}
+
 function buildSettingsRuntimeAuditCooldownKey(eventType: string, details: Record<string, unknown>): string {
   return `${eventType}:${JSON.stringify(details)}`;
 }
@@ -6739,6 +6779,29 @@ async function writeSettingsRuntimeAuditEvent(
 
   if (!written) {
     settingsRuntimeAuditCooldown.delete(cooldownKey);
+  }
+}
+
+async function writeSettingsSecretSanitizedAuditEvent(count: number): Promise<void> {
+  if (count <= 0) return;
+
+  const details = { count };
+  const cooldownKey = buildSettingsRuntimeAuditCooldownKey(SETTINGS_SECRET_SANITIZED_EVENT_TYPE, details);
+  const now = Date.now();
+  const previous = settingsSecretSanitizedAuditCooldown.get(cooldownKey) || 0;
+  if (now - previous < SETTINGS_RUNTIME_AUDIT_COOLDOWN_MS) return;
+
+  settingsSecretSanitizedAuditCooldown.set(cooldownKey, now);
+  const written = await writePBXPulsSystemEvent({
+    event_type: SETTINGS_SECRET_SANITIZED_EVENT_TYPE,
+    severity: 'info',
+    source: SETTINGS_RUNTIME_AUDIT_SOURCE,
+    message: 'Settings secret values sanitized from API response',
+    details
+  });
+
+  if (!written) {
+    settingsSecretSanitizedAuditCooldown.delete(cooldownKey);
   }
 }
 
@@ -9540,25 +9603,29 @@ app.get('/api/settings', requireAuth(), async (req, res) => {
     });
   }
 
+  const sanitizedRuntime = sanitizeSettingsForClient(runtimeSettings);
+  const clientSettings = sanitizedRuntime.settings;
+  await writeSettingsSecretSanitizedAuditEvent(sanitizedRuntime.sanitizedCount);
+
   if (await checkUserPermission(req, 'view_settings')) {
-    res.json(runtimeSettings);
+    res.json(clientSettings);
   } else {
     // Non-admins only get public/permissions settings
     const safeSettings = {
-      customCanViewCalls: runtimeSettings.customCanViewCalls,
-      customCanViewDirectory: runtimeSettings.customCanViewDirectory,
-      customCanViewReports: runtimeSettings.customCanViewReports,
-      customCanListenRecordings: runtimeSettings.customCanListenRecordings,
-      customCanMakeCalls: runtimeSettings.customCanMakeCalls,
-      customCanEditDirectory: runtimeSettings.customCanEditDirectory,
-      demoMode: runtimeSettings.demoMode,
-      directoryImportEnabled: runtimeSettings.directoryImportEnabled !== false,
-      googleImportEnabled: runtimeSettings.googleImportEnabled !== false,
-      fileImportEnabled: runtimeSettings.fileImportEnabled !== false,
-      yandexCarddavEnabled: runtimeSettings.yandexCarddavEnabled !== false,
-      mailruCarddavEnabled: runtimeSettings.mailruCarddavEnabled !== false,
-      customLogoUrl: runtimeSettings.customLogoUrl,
-      customCopyright: runtimeSettings.customCopyright,
+      customCanViewCalls: clientSettings.customCanViewCalls,
+      customCanViewDirectory: clientSettings.customCanViewDirectory,
+      customCanViewReports: clientSettings.customCanViewReports,
+      customCanListenRecordings: clientSettings.customCanListenRecordings,
+      customCanMakeCalls: clientSettings.customCanMakeCalls,
+      customCanEditDirectory: clientSettings.customCanEditDirectory,
+      demoMode: clientSettings.demoMode,
+      directoryImportEnabled: clientSettings.directoryImportEnabled !== false,
+      googleImportEnabled: clientSettings.googleImportEnabled !== false,
+      fileImportEnabled: clientSettings.fileImportEnabled !== false,
+      yandexCarddavEnabled: clientSettings.yandexCarddavEnabled !== false,
+      mailruCarddavEnabled: clientSettings.mailruCarddavEnabled !== false,
+      customLogoUrl: clientSettings.customLogoUrl,
+      customCopyright: clientSettings.customCopyright,
     };
     res.json(safeSettings);
   }
