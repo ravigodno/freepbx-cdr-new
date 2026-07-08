@@ -457,6 +457,16 @@ A helper `isSettingsApiRuntimeSwitchEnabled()` reads the flag with a default of 
 
 This stage does not modify `/api/settings` and does not add read-through logic to that route. The production settings endpoint remains legacy-only, secrets remain in legacy storage, auth and frontend behavior are unchanged, and no settings values or secret values are returned by diagnostics. The next stage, only after separate approval, should implement the controlled settings API switch.
 
+## Stage 8.7.3: Controlled Settings API Runtime Switch
+
+Stage 8.7.3 connects the guarded settings runtime layer to the production read endpoint without changing settings writes.
+
+When `settings.api_runtime_switch=true` and settings readiness is clean, `GET /api/settings` reads from the PBXPuls hybrid runtime snapshot. The hybrid snapshot overlays non-secret SQL settings on top of legacy `data/db.json` settings while secrets remain sourced from legacy storage. If the switch is disabled, readiness fails, SQL diagnostics fail or the runtime helper throws, `GET /api/settings` falls back to the existing `data/db.json` response shape.
+
+Diagnostics now report the effective `settingsApiRuntimeSource` as either `data/db.json` or `pbxpuls_hybrid`, plus whether the settings API is switched. The switch-status endpoint also reports readiness metadata, protected secret count and SQL overlay count without returning settings values or secrets.
+
+This stage does not modify `POST /api/settings`, does not add SQL write-through, does not migrate secrets, does not change auth and does not change FreePBX/PBX state.
+
 ## Migration Order
 
 1. Inventory and documentation only.

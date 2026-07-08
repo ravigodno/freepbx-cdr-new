@@ -32,7 +32,7 @@ import { isPBXPulsDbAvailable, queryPBXPulsDb, sanitizePBXPulsDbError } from './
 import { writePBXPulsSystemEvent } from './server/pbxpulsEvents.js';
 import { upsertPBXPulsSetting } from './server/pbxpulsSettings.js';
 import { buildLegacySettingsSeedRows } from './server/pbxpulsLegacySettings.js';
-import { getPBXPulsRuntimeSettingsSnapshot, getSettingsStorageMode, isSettingsApiRuntimeSwitchEnabled } from './server/pbxpulsSettingsRuntime.js';
+import { buildHybridSettingsSnapshot, getPBXPulsRuntimeSettingsSnapshot, getSettingsStorageMode, isSettingsApiRuntimeSwitchEnabled } from './server/pbxpulsSettingsRuntime.js';
 
 // Load environment variables
 dotenv.config();
@@ -6573,9 +6573,10 @@ function buildAuthReadinessBlockedDetails(readiness: AuthReadinessReport, actor:
 }
 
 type SettingsStorageModeApiMode = 'legacy' | 'hybrid' | 'sql';
+type SettingsApiRuntimeSource = 'data/db.json' | 'pbxpuls_hybrid';
 
-const SETTINGS_RUNTIME_ENDPOINT_SWITCHED = false;
-const SETTINGS_API_RUNTIME_SOURCE = 'data/db.json' as const;
+const SETTINGS_API_RUNTIME_SOURCE_LEGACY: SettingsApiRuntimeSource = 'data/db.json';
+const SETTINGS_API_RUNTIME_SOURCE_HYBRID: SettingsApiRuntimeSource = 'pbxpuls_hybrid';
 const SETTINGS_EFFECTIVE_DIAGNOSTICS_AVAILABLE = true;
 const SETTINGS_API_SWITCH_GUARD_AVAILABLE = true;
 const SETTINGS_ALLOWED_RUNTIME_MODES = ['legacy', 'hybrid'] as const;
@@ -6587,10 +6588,28 @@ type SettingsStorageModeResponse = {
   mode: SettingsStorageModeApiMode;
   effectiveSource: 'legacy' | 'hybrid';
   hybridReadLayerAvailable: true;
-  settingsRuntimeEndpointSwitched: false;
+  settingsRuntimeEndpointSwitched: boolean;
   secretsSource: 'legacy';
   allowedModes: Array<typeof SETTINGS_ALLOWED_RUNTIME_MODES[number]>;
   blockedModes: typeof SETTINGS_BLOCKED_RUNTIME_MODES;
+};
+
+type SettingsApiRuntimeDecision = {
+  switchEnabled: boolean;
+  safeToEnable: boolean;
+  switched: boolean;
+  runtimeSource: SettingsApiRuntimeSource;
+  reason: string;
+  settings?: Record<string, unknown>;
+  readiness?: {
+    ready: boolean;
+    matched: number;
+    issuesCount: number;
+    safeToCompare: number;
+  };
+  secretsSource: 'legacy';
+  secretKeysProtected: number;
+  sqlOverlayCount: number;
 };
 
 function normalizeRequestedSettingsStorageMode(value: unknown): SettingsStorageModeApiMode | null {
@@ -6598,12 +6617,12 @@ function normalizeRequestedSettingsStorageMode(value: unknown): SettingsStorageM
   return mode === 'legacy' || mode === 'hybrid' || mode === 'sql' ? mode : null;
 }
 
-function buildSettingsStorageModeResponse(mode: SettingsStorageModeApiMode): SettingsStorageModeResponse {
+function buildSettingsStorageModeResponse(mode: SettingsStorageModeApiMode, settingsRuntimeEndpointSwitched = false): SettingsStorageModeResponse {
   return {
     mode,
     effectiveSource: mode === 'legacy' ? 'legacy' : 'hybrid',
     hybridReadLayerAvailable: true,
-    settingsRuntimeEndpointSwitched: SETTINGS_RUNTIME_ENDPOINT_SWITCHED,
+    settingsRuntimeEndpointSwitched,
     secretsSource: 'legacy',
     allowedModes: [...SETTINGS_ALLOWED_RUNTIME_MODES],
     blockedModes: SETTINGS_BLOCKED_RUNTIME_MODES
@@ -6618,6 +6637,43 @@ function getSettingsStorageModeActor(req: Request): string {
 function buildSettingsApiSwitchReason(switchEnabled: boolean, safeToEnable: boolean): string {
   if (!switchEnabled) return 'switch_disabled';
   return safeToEnable ? 'switch_enabled_guard_passed' : 'settings_readiness_failed';
+}
+
+async function buildSettingsApiRuntimeDecision(localDb: Record<string, unknown> | null | undefined): Promise<SettingsApiRuntimeDecision> {
+  const [switchEnabled, snapshot, readiness] = await Promise.all([
+    isSettingsApiRuntimeSwitchEnabled(),
+    buildHybridSettingsSnapshot(),
+    compareLegacySettingsWithSql(localDb)
+  ]);
+  const safeToEnable = readiness.ready === true
+    && snapshot.metadata.secretKeysProtected > 0;
+  const switched = switchEnabled === true && safeToEnable === true;
+
+  return {
+    switchEnabled,
+    safeToEnable,
+    switched,
+    runtimeSource: switched ? SETTINGS_API_RUNTIME_SOURCE_HYBRID : SETTINGS_API_RUNTIME_SOURCE_LEGACY,
+    reason: buildSettingsApiSwitchReason(switchEnabled, safeToEnable),
+    settings: switched ? snapshot.settings : undefined,
+    readiness: {
+      ready: readiness.ready,
+      matched: readiness.matched,
+      issuesCount: readiness.issues.length,
+      safeToCompare: readiness.safeToCompare
+    },
+    secretsSource: snapshot.metadata.secretsSource,
+    secretKeysProtected: snapshot.metadata.secretKeysProtected,
+    sqlOverlayCount: snapshot.metadata.sqlOverlayCount
+  };
+}
+
+async function getSettingsForApiResponse(localDb: LocalDb): Promise<{ settings: Record<string, unknown>; decision: SettingsApiRuntimeDecision }> {
+  const decision = await buildSettingsApiRuntimeDecision(localDb);
+  return {
+    settings: decision.switched && decision.settings ? decision.settings : (localDb.settings || {}),
+    decision
+  };
 }
 
 type MigrationStatusReport = {
@@ -6653,10 +6709,10 @@ type MigrationStatusReport = {
     storageModeApiAvailable: true;
     allowedRuntimeModes: Array<typeof SETTINGS_ALLOWED_RUNTIME_MODES[number]>;
     blockedRuntimeModes: typeof SETTINGS_BLOCKED_RUNTIME_MODES;
-    settingsRuntimeEndpointSwitched: false;
+    settingsRuntimeEndpointSwitched: boolean;
     effectiveDiagnosticsAvailable: true;
-    settingsApiSwitched: false;
-    settingsApiRuntimeSource: typeof SETTINGS_API_RUNTIME_SOURCE;
+    settingsApiSwitched: boolean;
+    settingsApiRuntimeSource: SettingsApiRuntimeSource;
     settingsApiSwitchAvailable: true;
     settingsApiSwitchEnabled: boolean;
   };
@@ -6704,10 +6760,10 @@ async function buildPBXPulsMigrationStatusReport(): Promise<MigrationStatusRepor
       storageModeApiAvailable: true,
       allowedRuntimeModes: [...SETTINGS_ALLOWED_RUNTIME_MODES],
       blockedRuntimeModes: SETTINGS_BLOCKED_RUNTIME_MODES,
-      settingsRuntimeEndpointSwitched: SETTINGS_RUNTIME_ENDPOINT_SWITCHED,
+      settingsRuntimeEndpointSwitched: false,
       effectiveDiagnosticsAvailable: SETTINGS_EFFECTIVE_DIAGNOSTICS_AVAILABLE,
-      settingsApiSwitched: SETTINGS_RUNTIME_ENDPOINT_SWITCHED,
-      settingsApiRuntimeSource: SETTINGS_API_RUNTIME_SOURCE,
+      settingsApiSwitched: false,
+      settingsApiRuntimeSource: SETTINGS_API_RUNTIME_SOURCE_LEGACY,
       settingsApiSwitchAvailable: SETTINGS_API_SWITCH_GUARD_AVAILABLE,
       settingsApiSwitchEnabled
     },
@@ -6716,6 +6772,16 @@ async function buildPBXPulsMigrationStatusReport(): Promise<MigrationStatusRepor
 
   report.settingsMigration.storageMode = settingsStorageMode;
   report.settingsMigration.effectiveRuntimeSource = settingsStorageMode === 'legacy' ? 'legacy' : 'hybrid';
+
+  try {
+    const settingsApiDecision = await buildSettingsApiRuntimeDecision(JSON.parse(fs.readFileSync(DB_FILE, 'utf8')));
+    report.settingsMigration.settingsRuntimeEndpointSwitched = settingsApiDecision.switched;
+    report.settingsMigration.settingsApiSwitched = settingsApiDecision.switched;
+    report.settingsMigration.settingsApiRuntimeSource = settingsApiDecision.runtimeSource;
+    report.settingsMigration.settingsApiSwitchEnabled = settingsApiDecision.switchEnabled;
+  } catch (error: any) {
+    console.warn('[PBXPULS_MIGRATION_STATUS] settings API runtime decision failed:', String(error?.message || error || 'unknown error').slice(0, 300));
+  }
 
   if (!sqlAvailable) return report;
 
@@ -7072,9 +7138,11 @@ app.get('/api/pbxpuls/settings-migration-preview', requireAuth(['su', 'admin']),
 
 app.get('/api/pbxpuls/settings-runtime-preview', requireAuth(['su', 'admin']), async (_req, res) => {
   try {
-    const [snapshot, readiness] = await Promise.all([
+    const localDb = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    const [snapshot, readiness, settingsApiDecision] = await Promise.all([
       getPBXPulsRuntimeSettingsSnapshot(),
-      compareLegacySettingsWithSqlRows(buildLegacySettingsSeedRows(JSON.parse(fs.readFileSync(DB_FILE, 'utf8'))))
+      compareLegacySettingsWithSqlRows(buildLegacySettingsSeedRows(localDb)),
+      buildSettingsApiRuntimeDecision(localDb)
     ]);
     res.json({
       ok: true,
@@ -7088,11 +7156,11 @@ app.get('/api/pbxpuls/settings-runtime-preview', requireAuth(['su', 'admin']), a
       sqlOverlayCount: snapshot.metadata.sqlOverlayCount,
       settingsKeys: snapshot.metadata.settingsKeys,
       secretKeysProtected: snapshot.metadata.secretKeysProtected,
-      settingsRuntimeEndpointSwitched: SETTINGS_RUNTIME_ENDPOINT_SWITCHED,
+      settingsRuntimeEndpointSwitched: settingsApiDecision.switched,
       canSwitchToHybrid: readiness.ready === true,
       canSwitchToSql: false,
       sqlBlockedReason: SETTINGS_BLOCKED_RUNTIME_MODES.sql,
-      settingsApiRuntimeSource: SETTINGS_API_RUNTIME_SOURCE,
+      settingsApiRuntimeSource: settingsApiDecision.runtimeSource,
       effectiveDiagnosticsAvailable: SETTINGS_EFFECTIVE_DIAGNOSTICS_AVAILABLE
     });
   } catch (error: any) {
@@ -7107,11 +7175,11 @@ app.get('/api/pbxpuls/settings-runtime-preview', requireAuth(['su', 'admin']), a
       sqlOverlayCount: 0,
       settingsKeys: 0,
       secretKeysProtected: 0,
-      settingsRuntimeEndpointSwitched: SETTINGS_RUNTIME_ENDPOINT_SWITCHED,
+      settingsRuntimeEndpointSwitched: false,
       canSwitchToHybrid: false,
       canSwitchToSql: false,
       sqlBlockedReason: SETTINGS_BLOCKED_RUNTIME_MODES.sql,
-      settingsApiRuntimeSource: SETTINGS_API_RUNTIME_SOURCE,
+      settingsApiRuntimeSource: SETTINGS_API_RUNTIME_SOURCE_LEGACY,
       effectiveDiagnosticsAvailable: SETTINGS_EFFECTIVE_DIAGNOSTICS_AVAILABLE
     });
   }
@@ -7120,9 +7188,10 @@ app.get('/api/pbxpuls/settings-runtime-preview', requireAuth(['su', 'admin']), a
 app.get('/api/pbxpuls/settings-runtime-effective', requireAuth(['su', 'admin']), async (_req, res) => {
   try {
     const localDb = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
-    const [snapshot, readiness] = await Promise.all([
+    const [snapshot, readiness, settingsApiDecision] = await Promise.all([
       getPBXPulsRuntimeSettingsSnapshot(),
-      compareLegacySettingsWithSql(localDb)
+      compareLegacySettingsWithSql(localDb),
+      buildSettingsApiRuntimeDecision(localDb)
     ]);
     const configuredMode = snapshot.metadata.mode;
 
@@ -7130,24 +7199,24 @@ app.get('/api/pbxpuls/settings-runtime-effective', requireAuth(['su', 'admin']),
       ok: true,
       configuredMode,
       effectiveReadLayerSource: snapshot.metadata.effectiveSource,
-      settingsApiRuntimeSource: SETTINGS_API_RUNTIME_SOURCE,
-      settingsApiSwitched: SETTINGS_RUNTIME_ENDPOINT_SWITCHED,
+      settingsApiRuntimeSource: settingsApiDecision.runtimeSource,
+      settingsApiSwitched: settingsApiDecision.switched,
       hybridReadLayerAvailable: true,
       sqlRuntimeBlocked: true,
       sqlBlockedReason: SETTINGS_BLOCKED_RUNTIME_MODES.sql,
       secretsSource: snapshot.metadata.secretsSource,
       secretKeysProtected: snapshot.metadata.secretKeysProtected,
       safeSqlSettings: readiness.safeToCompare,
-      settingsApiSwitchEnabled: await isSettingsApiRuntimeSwitchEnabled(),
+      settingsApiSwitchEnabled: settingsApiDecision.switchEnabled,
       switchGuardAvailable: SETTINGS_API_SWITCH_GUARD_AVAILABLE,
       readiness: {
         ready: readiness.ready,
         matched: readiness.matched,
         issuesCount: readiness.issues.length
       },
-      nextStep: configuredMode === 'legacy'
-        ? 'settings_api_hybrid_switch_not_enabled'
-        : 'controlled_settings_api_switch'
+      nextStep: settingsApiDecision.switched
+        ? 'settings_api_runtime_switched'
+        : settingsApiDecision.reason
     });
   } catch (error: any) {
     console.warn('[PBXPULS_SETTINGS_RUNTIME_EFFECTIVE] endpoint failed:', String(error?.message || error || 'unknown error').slice(0, 300));
@@ -7155,8 +7224,8 @@ app.get('/api/pbxpuls/settings-runtime-effective', requireAuth(['su', 'admin']),
       ok: false,
       configuredMode: 'legacy',
       effectiveReadLayerSource: 'legacy',
-      settingsApiRuntimeSource: SETTINGS_API_RUNTIME_SOURCE,
-      settingsApiSwitched: SETTINGS_RUNTIME_ENDPOINT_SWITCHED,
+      settingsApiRuntimeSource: SETTINGS_API_RUNTIME_SOURCE_LEGACY,
+      settingsApiSwitched: false,
       hybridReadLayerAvailable: true,
       sqlRuntimeBlocked: true,
       sqlBlockedReason: SETTINGS_BLOCKED_RUNTIME_MODES.sql,
@@ -7179,29 +7248,27 @@ app.get('/api/pbxpuls/settings-runtime-effective', requireAuth(['su', 'admin']),
 app.get('/api/pbxpuls/settings-api-switch-status', requireAuth(['su', 'admin']), async (_req, res) => {
   try {
     const localDb = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
-    const [switchEnabled, snapshot, readiness] = await Promise.all([
-      isSettingsApiRuntimeSwitchEnabled(),
-      getPBXPulsRuntimeSettingsSnapshot(),
-      compareLegacySettingsWithSql(localDb)
-    ]);
-    const safeToEnable = readiness.ready === true
-      && snapshot.metadata.secretKeysProtected > 0;
+    const settingsApiDecision = await buildSettingsApiRuntimeDecision(localDb);
 
     res.json({
       ok: true,
-      switchEnabled,
-      settingsApiRuntimeSource: SETTINGS_API_RUNTIME_SOURCE,
+      switchEnabled: settingsApiDecision.switchEnabled,
+      settingsApiRuntimeSource: settingsApiDecision.runtimeSource,
+      settingsApiSwitched: settingsApiDecision.switched,
       hybridAvailable: true,
-      secretsSource: snapshot.metadata.secretsSource,
-      safeToEnable,
-      reason: buildSettingsApiSwitchReason(switchEnabled, safeToEnable)
+      secretsSource: settingsApiDecision.secretsSource,
+      safeToEnable: settingsApiDecision.safeToEnable,
+      reason: settingsApiDecision.reason,
+      readiness: settingsApiDecision.readiness,
+      secretKeysProtected: settingsApiDecision.secretKeysProtected,
+      sqlOverlayCount: settingsApiDecision.sqlOverlayCount
     });
   } catch (error: any) {
     console.warn('[PBXPULS_SETTINGS_API_SWITCH_STATUS] endpoint failed:', String(error?.message || error || 'unknown error').slice(0, 300));
     res.status(500).json({
       ok: false,
       switchEnabled: false,
-      settingsApiRuntimeSource: SETTINGS_API_RUNTIME_SOURCE,
+      settingsApiRuntimeSource: SETTINGS_API_RUNTIME_SOURCE_LEGACY,
       hybridAvailable: true,
       secretsSource: 'legacy',
       safeToEnable: false,
@@ -7212,8 +7279,12 @@ app.get('/api/pbxpuls/settings-api-switch-status', requireAuth(['su', 'admin']),
 
 app.get('/api/pbxpuls/settings-storage-mode', requireAuth(['su', 'admin']), async (_req, res) => {
   try {
-    const mode = await getSettingsStorageMode();
-    res.json(buildSettingsStorageModeResponse(mode));
+    const localDb = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    const [mode, settingsApiDecision] = await Promise.all([
+      getSettingsStorageMode(),
+      buildSettingsApiRuntimeDecision(localDb)
+    ]);
+    res.json(buildSettingsStorageModeResponse(mode, settingsApiDecision.switched));
   } catch (error: any) {
     console.warn('[PBXPULS_SETTINGS_STORAGE_MODE] failed:', String(error?.message || error || 'unknown error').slice(0, 300));
     res.json(buildSettingsStorageModeResponse('legacy'));
@@ -7285,14 +7356,16 @@ app.post('/api/pbxpuls/settings-storage-mode', requireAuth(['su']), async (req, 
         previousMode,
         newMode: requestedMode,
         actor,
-        settingsRuntimeEndpointSwitched: SETTINGS_RUNTIME_ENDPOINT_SWITCHED
+        settingsRuntimeEndpointSwitched: false
       }
     });
+
+    const settingsApiDecision = await buildSettingsApiRuntimeDecision(JSON.parse(fs.readFileSync(DB_FILE, 'utf8')));
 
     res.json({
       ok: true,
       previousMode,
-      ...buildSettingsStorageModeResponse(requestedMode)
+      ...buildSettingsStorageModeResponse(requestedMode, settingsApiDecision.switched)
     });
   } catch (error: any) {
     console.warn('[PBXPULS_SETTINGS_STORAGE_MODE_SET] failed:', sanitizePBXPulsDbError(error));
@@ -7350,10 +7423,10 @@ app.get('/api/pbxpuls/migration-status', requireAuth(['su', 'admin']), async (_r
         storageModeApiAvailable: true,
         allowedRuntimeModes: [...SETTINGS_ALLOWED_RUNTIME_MODES],
         blockedRuntimeModes: SETTINGS_BLOCKED_RUNTIME_MODES,
-        settingsRuntimeEndpointSwitched: SETTINGS_RUNTIME_ENDPOINT_SWITCHED,
+        settingsRuntimeEndpointSwitched: false,
         effectiveDiagnosticsAvailable: SETTINGS_EFFECTIVE_DIAGNOSTICS_AVAILABLE,
-        settingsApiSwitched: SETTINGS_RUNTIME_ENDPOINT_SWITCHED,
-        settingsApiRuntimeSource: SETTINGS_API_RUNTIME_SOURCE,
+        settingsApiSwitched: false,
+        settingsApiRuntimeSource: SETTINGS_API_RUNTIME_SOURCE_LEGACY,
         settingsApiSwitchAvailable: SETTINGS_API_SWITCH_GUARD_AVAILABLE,
         settingsApiSwitchEnabled: false
       },
@@ -9253,25 +9326,34 @@ app.get('/api/settings/public', async (req, res) => {
 // Settings endpoint
 app.get('/api/settings', requireAuth(), async (req, res) => {
   const localDb = await readLocalDb();
+  let runtimeSettings: Record<string, unknown> = localDb.settings || {};
+
+  try {
+    const runtime = await getSettingsForApiResponse(localDb);
+    runtimeSettings = runtime.settings;
+  } catch (error: any) {
+    console.warn('[SETTINGS_API_RUNTIME] falling back to data/db.json:', String(error?.message || error || 'unknown error').slice(0, 300));
+  }
+
   if (await checkUserPermission(req, 'view_settings')) {
-    res.json(localDb.settings);
+    res.json(runtimeSettings);
   } else {
     // Non-admins only get public/permissions settings
     const safeSettings = {
-      customCanViewCalls: localDb.settings.customCanViewCalls,
-      customCanViewDirectory: localDb.settings.customCanViewDirectory,
-      customCanViewReports: localDb.settings.customCanViewReports,
-      customCanListenRecordings: localDb.settings.customCanListenRecordings,
-      customCanMakeCalls: localDb.settings.customCanMakeCalls,
-      customCanEditDirectory: localDb.settings.customCanEditDirectory,
-      demoMode: localDb.settings.demoMode,
-      directoryImportEnabled: localDb.settings.directoryImportEnabled !== false,
-      googleImportEnabled: localDb.settings.googleImportEnabled !== false,
-      fileImportEnabled: localDb.settings.fileImportEnabled !== false,
-      yandexCarddavEnabled: localDb.settings.yandexCarddavEnabled !== false,
-      mailruCarddavEnabled: localDb.settings.mailruCarddavEnabled !== false,
-      customLogoUrl: localDb.settings.customLogoUrl,
-      customCopyright: localDb.settings.customCopyright,
+      customCanViewCalls: runtimeSettings.customCanViewCalls,
+      customCanViewDirectory: runtimeSettings.customCanViewDirectory,
+      customCanViewReports: runtimeSettings.customCanViewReports,
+      customCanListenRecordings: runtimeSettings.customCanListenRecordings,
+      customCanMakeCalls: runtimeSettings.customCanMakeCalls,
+      customCanEditDirectory: runtimeSettings.customCanEditDirectory,
+      demoMode: runtimeSettings.demoMode,
+      directoryImportEnabled: runtimeSettings.directoryImportEnabled !== false,
+      googleImportEnabled: runtimeSettings.googleImportEnabled !== false,
+      fileImportEnabled: runtimeSettings.fileImportEnabled !== false,
+      yandexCarddavEnabled: runtimeSettings.yandexCarddavEnabled !== false,
+      mailruCarddavEnabled: runtimeSettings.mailruCarddavEnabled !== false,
+      customLogoUrl: runtimeSettings.customLogoUrl,
+      customCopyright: runtimeSettings.customCopyright,
     };
     res.json(safeSettings);
   }
