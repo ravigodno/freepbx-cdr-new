@@ -32,6 +32,7 @@ import { isPBXPulsDbAvailable, queryPBXPulsDb, sanitizePBXPulsDbError } from './
 import { writePBXPulsSystemEvent } from './server/pbxpulsEvents.js';
 import { upsertPBXPulsSetting } from './server/pbxpulsSettings.js';
 import { buildLegacySettingsSeedRows } from './server/pbxpulsLegacySettings.js';
+import { getPBXPulsRuntimeSettingsSnapshot, getSettingsStorageMode } from './server/pbxpulsSettingsRuntime.js';
 
 // Load environment variables
 dotenv.config();
@@ -6598,14 +6599,18 @@ type MigrationStatusReport = {
     secretsSkipped: number;
     readinessAvailable: true;
     ready: boolean;
+    storageMode: 'legacy' | 'hybrid' | 'sql';
+    effectiveRuntimeSource: 'legacy' | 'hybrid';
+    hybridReadLayerAvailable: true;
   };
   nextRecommendedStep: string;
 };
 
 async function buildPBXPulsMigrationStatusReport(): Promise<MigrationStatusReport> {
-  const [mode, sqlAvailable] = await Promise.all([
+  const [mode, sqlAvailable, settingsStorageMode] = await Promise.all([
     getAuthStorageMode(),
-    isPBXPulsDbAvailable()
+    isPBXPulsDbAvailable(),
+    getSettingsStorageMode()
   ]);
 
   const report: MigrationStatusReport = {
@@ -6634,10 +6639,16 @@ async function buildPBXPulsMigrationStatusReport(): Promise<MigrationStatusRepor
       sqlSeeded: 0,
       secretsSkipped: 0,
       readinessAvailable: true,
-      ready: false
+      ready: false,
+      storageMode: 'legacy',
+      effectiveRuntimeSource: 'legacy',
+      hybridReadLayerAvailable: true
     },
     nextRecommendedStep: 'Verify PBXPuls SQL connectivity'
   };
+
+  report.settingsMigration.storageMode = settingsStorageMode;
+  report.settingsMigration.effectiveRuntimeSource = settingsStorageMode === 'legacy' ? 'legacy' : 'hybrid';
 
   if (!sqlAvailable) return report;
 
@@ -6992,6 +7003,38 @@ app.get('/api/pbxpuls/settings-migration-preview', requireAuth(['su', 'admin']),
   }
 });
 
+app.get('/api/pbxpuls/settings-runtime-preview', requireAuth(['su', 'admin']), async (_req, res) => {
+  try {
+    const snapshot = await getPBXPulsRuntimeSettingsSnapshot();
+    res.json({
+      ok: true,
+      mode: snapshot.metadata.mode,
+      effectiveSource: snapshot.metadata.effectiveSource,
+      requestedMode: snapshot.metadata.requestedMode,
+      fallbackReason: snapshot.metadata.fallbackReason,
+      legacyUsed: snapshot.metadata.legacyUsed,
+      sqlUsed: snapshot.metadata.sqlUsed,
+      secretsSource: snapshot.metadata.secretsSource,
+      sqlOverlayCount: snapshot.metadata.sqlOverlayCount,
+      settingsKeys: snapshot.metadata.settingsKeys,
+      secretKeysProtected: snapshot.metadata.secretKeysProtected
+    });
+  } catch (error: any) {
+    console.warn('[PBXPULS_SETTINGS_RUNTIME] preview endpoint failed:', String(error?.message || error || 'unknown error').slice(0, 300));
+    res.status(500).json({
+      ok: false,
+      mode: 'legacy',
+      effectiveSource: 'legacy',
+      legacyUsed: true,
+      sqlUsed: false,
+      secretsSource: 'legacy',
+      sqlOverlayCount: 0,
+      settingsKeys: 0,
+      secretKeysProtected: 0
+    });
+  }
+});
+
 app.get('/api/pbxpuls/settings-readiness', requireAuth(['su', 'admin']), async (_req, res) => {
   try {
     const localDb = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
@@ -7035,7 +7078,10 @@ app.get('/api/pbxpuls/migration-status', requireAuth(['su', 'admin']), async (_r
         sqlSeeded: 0,
         secretsSkipped: 0,
         readinessAvailable: true,
-        ready: false
+        ready: false,
+        storageMode: 'legacy',
+        effectiveRuntimeSource: 'legacy',
+        hybridReadLayerAvailable: true
       },
       nextRecommendedStep: 'Verify PBXPuls SQL connectivity'
     });

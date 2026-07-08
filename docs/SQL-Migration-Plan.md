@@ -409,6 +409,16 @@ The endpoint rebuilds legacy seed rows with `buildLegacySettingsSeedRows(localDb
 
 Runtime settings remain legacy-only: `/api/settings` still reads `data/db.json`, `settingsMigration.runtimeSource` remains `data/db.json`, `sqlRuntimeEnabled` remains `false`, authentication remains controlled by `auth.storage_mode=legacy`, and `requireAuth()` is unchanged. The next stage can add a settings hybrid read layer after readiness is clean.
 
+## Stage 8.4: Settings Hybrid Read Layer
+
+Stage 8.4 adds migration `20260708_006_seed_settings_storage_mode` and seeds `settings.storage_mode=legacy` with `INSERT IGNORE`, so existing deployments are not overwritten.
+
+A backend-only settings runtime helper now supports `legacy`, `hybrid` and guarded `sql` read modes. The default remains `legacy`, and `/api/settings` is not switched in this stage. The helper can build a legacy snapshot from `data/db.json`, a SQL non-secret snapshot from seeded SQL settings, and a hybrid snapshot that overlays SQL non-secret settings on top of legacy while keeping secret values from legacy.
+
+Secret settings remain protected and are not written to SQL or returned by diagnostic responses. If `settings.storage_mode=sql` is requested before secret migration exists, the runtime helper safely falls back to the hybrid snapshot and reports `fallbackReason=sql_settings_runtime_requires_secret_migration`.
+
+A read-only diagnostic endpoint `GET /api/pbxpuls/settings-runtime-preview` reports only safe metadata such as selected mode, effective source, overlay count and protected secret count. Runtime settings remain legacy for the application, auth stays controlled by `auth.storage_mode=legacy`, and `requireAuth()` is unchanged. The next stage should add a controlled settings storage mode API.
+
 ## Migration Order
 
 1. Inventory and documentation only.

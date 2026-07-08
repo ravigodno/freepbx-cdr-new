@@ -54,6 +54,14 @@ const AUTH_STORAGE_MODE_SETTING = [
   'Authentication source mode: legacy/sql/hybrid'
 ] as const;
 
+const SETTINGS_STORAGE_MODE_SETTING = [
+  'settings.storage_mode',
+  'legacy',
+  'string',
+  'settings',
+  'Controls PBXPuls settings runtime source: legacy, hybrid or sql'
+] as const;
+
 const MIGRATIONS: Migration[] = [
   {
     key: '20260707_001_core_internal_tables',
@@ -182,6 +190,12 @@ const MIGRATIONS: Migration[] = [
     description: 'Seed non-secret legacy settings from data/db.json',
     statements: [],
     seed: seedLegacyNonSecretSettings
+  },
+  {
+    key: '20260708_006_seed_settings_storage_mode',
+    description: 'Seed settings storage mode setting',
+    statements: [],
+    seed: seedSettingsStorageMode
   }
 ];
 
@@ -346,6 +360,15 @@ async function seedAuthStorageMode(connection: Connection): Promise<void> {
       (setting_key, setting_value, value_type, category, is_secret, description)
      VALUES (?, ?, ?, ?, 0, ?)`,
     AUTH_STORAGE_MODE_SETTING
+  );
+}
+
+async function seedSettingsStorageMode(connection: Connection): Promise<void> {
+  await connection.execute(
+    `INSERT IGNORE INTO settings
+      (setting_key, setting_value, value_type, category, is_secret, description)
+     VALUES (?, ?, ?, ?, 0, ?)`,
+    SETTINGS_STORAGE_MODE_SETTING
   );
 }
 
