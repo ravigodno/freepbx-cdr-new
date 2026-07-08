@@ -31,6 +31,7 @@ import { authenticatePBXPulsSqlUser, compareLegacyUserWithSql, getAuthStorageMod
 import { isPBXPulsDbAvailable, sanitizePBXPulsDbError } from './server/pbxpulsDb.js';
 import { writePBXPulsSystemEvent } from './server/pbxpulsEvents.js';
 import { upsertPBXPulsSetting } from './server/pbxpulsSettings.js';
+import { buildLegacySettingsSeedRows } from './server/pbxpulsLegacySettings.js';
 
 // Load environment variables
 dotenv.config();
@@ -6587,6 +6588,11 @@ type MigrationStatusReport = {
     callScripts: 'legacy';
     ai: 'legacy';
   };
+  settingsMigration: {
+    legacyPreviewAvailable: true;
+    runtimeSource: 'data/db.json';
+    sqlRuntimeEnabled: false;
+  };
   nextRecommendedStep: string;
 };
 
@@ -6612,6 +6618,11 @@ async function buildPBXPulsMigrationStatusReport(): Promise<MigrationStatusRepor
       directory: 'legacy',
       callScripts: 'legacy',
       ai: 'legacy'
+    },
+    settingsMigration: {
+      legacyPreviewAvailable: true,
+      runtimeSource: 'data/db.json',
+      sqlRuntimeEnabled: false
     },
     nextRecommendedStep: 'Verify PBXPuls SQL connectivity'
   };
@@ -6719,6 +6730,46 @@ app.use(express.json({ limit: '25mb' }));
 
 registerPBXPulsSqlStatusRoutes(app, requireAuth);
 
+app.get('/api/pbxpuls/settings-migration-preview', requireAuth(['su', 'admin']), async (_req, res) => {
+  try {
+    const localDb = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    const rows = buildLegacySettingsSeedRows(localDb);
+    const categories = rows.reduce<Record<string, number>>((acc, row) => {
+      acc[row.category] = (acc[row.category] || 0) + 1;
+      return acc;
+    }, {});
+
+    res.json({
+      ok: true,
+      total: rows.length,
+      safeToSeed: rows.filter((row) => row.willSeed).length,
+      secretsSkipped: rows.filter((row) => row.is_secret || row.value_type === 'secret').length,
+      jsonValues: rows.filter((row) => row.value_type === 'json').length,
+      categories,
+      items: rows.map((row) => ({
+        setting_key: row.setting_key,
+        value_type: row.value_type,
+        category: row.category,
+        is_secret: row.is_secret,
+        willSeed: row.willSeed,
+        skippedReason: row.skippedReason
+      }))
+    });
+  } catch (error: any) {
+    console.warn('[PBXPULS_SETTINGS_MIGRATION_PREVIEW] endpoint failed:', String(error?.message || error || 'unknown error').slice(0, 300));
+    res.status(500).json({
+      ok: false,
+      total: 0,
+      safeToSeed: 0,
+      secretsSkipped: 0,
+      jsonValues: 0,
+      categories: {},
+      items: [],
+      error: 'Unable to build settings migration preview'
+    });
+  }
+});
+
 app.get('/api/pbxpuls/migration-status', requireAuth(['su', 'admin']), async (_req, res) => {
   try {
     const report = await buildPBXPulsMigrationStatusReport();
@@ -6741,6 +6792,11 @@ app.get('/api/pbxpuls/migration-status', requireAuth(['su', 'admin']), async (_r
         directory: 'legacy',
         callScripts: 'legacy',
         ai: 'legacy'
+      },
+      settingsMigration: {
+        legacyPreviewAvailable: true,
+        runtimeSource: 'data/db.json',
+        sqlRuntimeEnabled: false
       },
       nextRecommendedStep: 'Verify PBXPuls SQL connectivity'
     });

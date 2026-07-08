@@ -367,6 +367,23 @@ Stage 7.3 adds a backend-only read-only migration status endpoint for checking P
 - no migrations, writes, table creation or data changes are performed.
 
 The endpoint reports applied migration count, latest migration, auth mode, SQL availability and whether auth users/roles/permissions are present in SQL. Non-auth storage domains remain marked as `legacy` until later migration stages. UI/frontend, login, `requireAuth()` and SQL auth runtime are unchanged.
+
+## Stage 8.1: Legacy Settings Migration Preview
+
+Stage 8.1 adds a backend-only preparation layer for inspecting legacy runtime settings before any SQL seed is executed.
+
+- helper module: `server/pbxpulsLegacySettings.ts`;
+- endpoint: `GET /api/pbxpuls/settings-migration-preview`;
+- protection: `requireAuth(['su', 'admin'])`;
+- source: read-only `data/db.json`;
+- target prepared for later stages: existing SQL `settings` table.
+
+The preview flattens legacy settings domains into future `settings.setting_key` candidates, classifies each candidate as `string`, `number`, `boolean`, `json` or `secret`, assigns a category and reports whether a row is safe to seed later. It covers current runtime settings, module visibility, directory settings, contact sync state, calltracking configuration, marketing integration settings and AI settings/configuration records that still live in `data/db.json`.
+
+This stage is preview-only. It does not write to SQL, does not overwrite existing SQL settings, does not switch `/api/settings` to SQL, does not change frontend/UI behavior and does not change runtime settings reads. Runtime settings continue to come from `data/db.json`.
+
+Secrets are not migrated automatically in this stage. Keys containing password, pass, token, secret, apiKey, api_key, authorization, clientSecret, refreshToken or accessToken are classified as `secret`, marked `willSeed=false` and omitted from preview values. The next stage can safely seed only non-secret settings after the preview output has been reviewed.
+
 ## Migration Order
 
 1. Inventory and documentation only.
