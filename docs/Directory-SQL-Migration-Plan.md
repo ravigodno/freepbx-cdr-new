@@ -1078,3 +1078,38 @@ A later controlled Directory SQL runtime switch may be considered only when:
 - no SQL write-through is enabled without a separate preview/audit/rollback stage.
 
 Stage 9.6 does not enable SQL runtime and does not change existing Directory APIs.
+
+## Stage 9.7 Directory Runtime Switch
+
+This stage adds a guarded backend controller for the future Directory SQL runtime switch.
+
+Setting:
+
+- `directory.storage_mode`
+- Allowed values: `legacy`, `sql`
+- Default: `legacy`
+
+Endpoints:
+
+- `GET /api/pbxpuls/directory-storage-mode`
+- Auth: `requireAuth(['su', 'admin'])`
+- Returns: `mode`, `readiness`, `sqlAvailable`, `runtimeSource`
+
+- `POST /api/pbxpuls/directory-storage-mode`
+- Auth: `requireAuth(['su'])`
+- Body: `{ "mode": "legacy" | "sql" }`
+
+Rules:
+
+- `legacy` is always allowed.
+- `sql` is allowed only when `/api/pbxpuls/directory-readiness` returns `ready: true`.
+- If SQL readiness is not clean, the endpoint returns `409 Conflict` with safe error code `directory_sql_readiness_failed`.
+- Successful changes write `directory_storage_mode_changed` to `system_events` with safe details only: `previousMode`, `newMode`, `actor`.
+- Audit details must not include contacts, phone numbers, comments, custom field values, customer data or raw Directory payloads.
+
+Runtime impact:
+
+- Stage 9.7 does not enable SQL runtime.
+- Existing Directory UI and APIs continue to use `data/db.json`.
+- Imports, Click2Call, CDR, Bitrix24 and SQL write-through are unchanged.
+- `runtimeSource` remains `data/db.json` until a later explicit runtime integration stage.

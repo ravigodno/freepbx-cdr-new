@@ -71,6 +71,14 @@ const SETTINGS_API_RUNTIME_SWITCH_SETTING = [
   'Controls whether /api/settings uses PBXPuls hybrid runtime layer'
 ] as const;
 
+const DIRECTORY_STORAGE_MODE_SETTING = [
+  'directory.storage_mode',
+  'legacy',
+  'string',
+  'directory',
+  'Controls PBXPuls Directory runtime source: legacy or sql'
+] as const;
+
 const MIGRATIONS: Migration[] = [
   {
     key: '20260707_001_core_internal_tables',
@@ -217,6 +225,12 @@ const MIGRATIONS: Migration[] = [
     description: 'Seed legacy Directory data from data/db.json',
     statements: DIRECTORY_SQL_SCHEMA_STATEMENTS,
     seed: seedLegacyDirectory
+  },
+  {
+    key: '20260708_010_seed_directory_storage_mode',
+    description: 'Seed Directory storage mode setting',
+    statements: [],
+    seed: seedDirectoryStorageMode
   }
 ];
 
@@ -399,6 +413,15 @@ async function seedSettingsApiRuntimeSwitch(connection: Connection): Promise<voi
       (setting_key, setting_value, value_type, category, is_secret, description)
      VALUES (?, ?, ?, ?, 0, ?)`,
     SETTINGS_API_RUNTIME_SWITCH_SETTING
+  );
+}
+
+async function seedDirectoryStorageMode(connection: Connection): Promise<void> {
+  await connection.execute(
+    `INSERT IGNORE INTO settings
+      (setting_key, setting_value, value_type, category, is_secret, description)
+     VALUES (?, ?, ?, ?, 0, ?)`,
+    DIRECTORY_STORAGE_MODE_SETTING
   );
 }
 

@@ -30,7 +30,7 @@ import { registerPBXPulsSqlStatusRoutes } from './server/pbxpulsSqlStatus.js';
 import { authenticatePBXPulsSqlUser, compareLegacyUserWithSql, getAuthStorageMode, getPBXPulsUsers } from './server/pbxpulsAuthDb.js';
 import { isPBXPulsDbAvailable, queryPBXPulsDb, sanitizePBXPulsDbError } from './server/pbxpulsDb.js';
 import { writePBXPulsSystemEvent } from './server/pbxpulsEvents.js';
-import { upsertPBXPulsSetting } from './server/pbxpulsSettings.js';
+import { getPBXPulsSetting, upsertPBXPulsSetting } from './server/pbxpulsSettings.js';
 import { buildLegacySettingsSeedRows } from './server/pbxpulsLegacySettings.js';
 import { buildHybridSettingsSnapshot, getPBXPulsRuntimeSettingsSnapshot, getSettingsStorageMode, isSettingsApiRuntimeSwitchEnabled } from './server/pbxpulsSettingsRuntime.js';
 import { buildDirectoryMigrationPreview } from './server/pbxpulsDirectoryMigrationPreview.js';
@@ -6576,6 +6576,8 @@ function buildAuthReadinessBlockedDetails(readiness: AuthReadinessReport, actor:
 
 type SettingsStorageModeApiMode = 'legacy' | 'hybrid' | 'sql';
 type SettingsApiRuntimeSource = 'data/db.json' | 'pbxpuls_hybrid';
+type DirectoryStorageMode = 'legacy' | 'sql';
+type DirectoryRuntimeSource = 'data/db.json';
 
 const SETTINGS_API_RUNTIME_SOURCE_LEGACY: SettingsApiRuntimeSource = 'data/db.json';
 const SETTINGS_API_RUNTIME_SOURCE_HYBRID: SettingsApiRuntimeSource = 'pbxpuls_hybrid';
@@ -6655,6 +6657,34 @@ function buildSettingsStorageModeResponse(mode: SettingsStorageModeApiMode, sett
 function getSettingsStorageModeActor(req: Request): string {
   const authUser = (req as any).user || {};
   return String(authUser.username || 'unknown').trim().slice(0, 100) || 'unknown';
+}
+
+function normalizeRequestedDirectoryStorageMode(value: unknown): DirectoryStorageMode | null {
+  const mode = String(value ?? '').trim().toLowerCase();
+  return mode === 'legacy' || mode === 'sql' ? mode : null;
+}
+
+async function getDirectoryStorageMode(): Promise<DirectoryStorageMode> {
+  const mode = await getPBXPulsSetting<DirectoryStorageMode>('directory.storage_mode', 'legacy');
+  return mode === 'sql' ? 'sql' : 'legacy';
+}
+
+function getDirectoryStorageModeActor(req: Request): string {
+  const authUser = (req as any).user || {};
+  return String(authUser.username || 'unknown').trim().slice(0, 100) || 'unknown';
+}
+
+function buildDirectoryStorageModeResponse(
+  mode: DirectoryStorageMode,
+  readiness: Awaited<ReturnType<typeof buildDirectoryReadiness>>
+): Record<string, unknown> {
+  const runtimeSource: DirectoryRuntimeSource = 'data/db.json';
+  return {
+    mode,
+    readiness,
+    sqlAvailable: readiness.sqlAvailable === true,
+    runtimeSource
+  };
 }
 
 function buildSettingsApiSwitchReason(switchEnabled: boolean, safeToEnable: boolean): string {
@@ -7794,6 +7824,95 @@ app.get('/api/pbxpuls/directory-readiness', requireAuth(['su', 'admin']), async 
       ],
       error: 'Unable to build directory readiness report'
     });
+  }
+});
+
+app.get('/api/pbxpuls/directory-storage-mode', requireAuth(['su', 'admin']), async (_req, res) => {
+  try {
+    const localDb = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    const [mode, readiness] = await Promise.all([
+      getDirectoryStorageMode(),
+      buildDirectoryReadiness(localDb)
+    ]);
+    res.json(buildDirectoryStorageModeResponse(mode, readiness));
+  } catch (error: any) {
+    console.warn('[PBXPULS_DIRECTORY_STORAGE_MODE] failed:', String(error?.message || error || 'unknown error').slice(0, 300));
+    res.status(500).json({
+      mode: 'legacy',
+      readiness: {
+        ok: false,
+        ready: false,
+        source: 'data/db.json',
+        sqlAvailable: false,
+        valuesReturned: false,
+        issues: [{ code: 'directory_storage_mode_failed', count: 1 }]
+      },
+      sqlAvailable: false,
+      runtimeSource: 'data/db.json'
+    });
+  }
+});
+
+app.post('/api/pbxpuls/directory-storage-mode', requireAuth(['su']), async (req, res) => {
+  const requestedMode = normalizeRequestedDirectoryStorageMode(req.body?.mode);
+  if (!requestedMode) {
+    res.status(400).json({ ok: false, error: 'Invalid directory storage mode' });
+    return;
+  }
+
+  const actor = getDirectoryStorageModeActor(req);
+
+  try {
+    const localDb = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    const [previousMode, readiness] = await Promise.all([
+      getDirectoryStorageMode(),
+      buildDirectoryReadiness(localDb)
+    ]);
+
+    if (requestedMode === 'sql' && readiness.ready !== true) {
+      res.status(409).json({
+        ok: false,
+        error: 'directory_sql_readiness_failed',
+        mode: previousMode,
+        readiness,
+        sqlAvailable: readiness.sqlAvailable === true,
+        runtimeSource: 'data/db.json'
+      });
+      return;
+    }
+
+    const updated = await upsertPBXPulsSetting('directory.storage_mode', requestedMode, {
+      valueType: 'string',
+      category: 'directory',
+      isSecret: false,
+      description: 'Controls PBXPuls Directory runtime source: legacy or sql'
+    });
+
+    if (!updated) {
+      res.status(503).json({ ok: false, error: 'Failed to update directory storage mode' });
+      return;
+    }
+
+    await writePBXPulsSystemEvent({
+      event_type: 'directory_storage_mode_changed',
+      severity: requestedMode === 'sql' ? 'warning' : 'info',
+      source: 'pbxpuls_directory',
+      message: 'Directory storage mode changed',
+      details: {
+        previousMode,
+        newMode: requestedMode,
+        actor
+      }
+    });
+
+    res.json({
+      ok: true,
+      previousMode,
+      ...buildDirectoryStorageModeResponse(requestedMode, readiness)
+    });
+  } catch (error: any) {
+    console.warn('[PBXPULS_DIRECTORY_STORAGE_MODE_SET] failed:', sanitizePBXPulsDbError(error));
+    res.status(500).json({ ok: false, error: 'Failed to update directory storage mode' });
   }
 });
 
