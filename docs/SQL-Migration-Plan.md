@@ -384,6 +384,18 @@ This stage is preview-only. It does not write to SQL, does not overwrite existin
 
 Secrets are not migrated automatically in this stage. Keys containing password, pass, token, secret, apiKey, api_key, authorization, clientSecret, refreshToken or accessToken are classified as `secret`, marked `willSeed=false` and omitted from preview values. The next stage can safely seed only non-secret settings after the preview output has been reviewed.
 
+## Stage 8.2: Safe Non-Secret Legacy Settings Seed
+
+Stage 8.2 adds migration `20260708_005_seed_legacy_non_secret_settings` with description `Seed non-secret legacy settings from data/db.json`.
+
+The migration reads legacy `data/db.json`, reuses `buildLegacySettingsSeedRows(localDb)` and inserts only rows where `willSeed=true`, `is_secret=false` and `value_type` is not `secret`. Values are stored in the existing SQL `settings` table as scalar strings or JSON text in `LONGTEXT`; MariaDB JSON columns are not introduced.
+
+The seed uses `INSERT IGNORE`, so existing SQL settings are not overwritten. Secret keys are skipped entirely and no secret values are inserted, logged, returned by diagnostics or written to system events. Missing or invalid `data/db.json` produces a sanitized warning and does not stop server startup.
+
+After a successful seed pass, PBXPuls writes a safe `legacy_settings_seeded` system event from `pbxpuls_settings` with counts only: `total`, `seeded`, `skippedSecrets` and `skippedExisting`.
+
+Runtime settings remain legacy-only in this stage: `/api/settings` still reads `data/db.json`, SQL settings are not used as runtime source, `auth.storage_mode` remains `legacy`, authentication and `requireAuth()` are unchanged, and no frontend/UI behavior is changed. The next stage should add settings compare/readiness diagnostics before any read-through or runtime switch is considered.
+
 ## Migration Order
 
 1. Inventory and documentation only.

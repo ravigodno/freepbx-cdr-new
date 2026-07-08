@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import mysql, { Connection } from 'mysql2/promise';
 import { writePBXPulsSystemEvent } from './pbxpulsEvents.js';
+import { buildLegacySettingsSeedRows } from './pbxpulsLegacySettings.js';
 
 interface Migration {
   key: string;
@@ -175,6 +176,12 @@ const MIGRATIONS: Migration[] = [
     description: 'Seed auth storage mode setting',
     statements: [],
     seed: seedAuthStorageMode
+  },
+  {
+    key: '20260708_005_seed_legacy_non_secret_settings',
+    description: 'Seed non-secret legacy settings from data/db.json',
+    statements: [],
+    seed: seedLegacyNonSecretSettings
   }
 ];
 
@@ -340,6 +347,66 @@ async function seedAuthStorageMode(connection: Connection): Promise<void> {
      VALUES (?, ?, ?, ?, 0, ?)`,
     AUTH_STORAGE_MODE_SETTING
   );
+}
+
+interface LegacySettingsSeedStats {
+  total: number;
+  seeded: number;
+  skippedSecrets: number;
+  skippedExisting: number;
+}
+
+async function seedLegacyNonSecretSettings(connection: Connection): Promise<void> {
+  const legacyPath = path.join(process.cwd(), 'data', 'db.json');
+  const stats: LegacySettingsSeedStats = {
+    total: 0,
+    seeded: 0,
+    skippedSecrets: 0,
+    skippedExisting: 0
+  };
+
+  let legacyDb: any;
+  try {
+    if (!fs.existsSync(legacyPath)) {
+      console.warn('[PBXPULS_DB] legacy settings seed skipped: data/db.json not found');
+      return;
+    }
+    legacyDb = JSON.parse(fs.readFileSync(legacyPath, 'utf8'));
+  } catch (error: any) {
+    console.warn('[PBXPULS_DB] legacy settings seed skipped:', sanitizeMigrationError(error));
+    return;
+  }
+
+  const rows = buildLegacySettingsSeedRows(legacyDb);
+  const safeRows = rows.filter(row => row.willSeed === true && row.is_secret !== true && row.value_type !== 'secret');
+  stats.total = rows.length;
+  stats.skippedSecrets = rows.length - safeRows.length;
+
+  for (const row of safeRows) {
+    stats.seeded += await executeInsertIgnore(connection,
+      `INSERT IGNORE INTO settings
+        (setting_key, setting_value, value_type, category, is_secret, description)
+       VALUES (?, ?, ?, ?, 0, ?)`,
+      [
+        row.setting_key,
+        row.setting_value,
+        row.value_type,
+        row.category,
+        row.description
+      ]
+    );
+  }
+
+  stats.skippedExisting = safeRows.length - stats.seeded;
+  console.log('[PBXPULS_DB] legacy non-secret settings seed applied:', stats);
+
+  await writePBXPulsSystemEvent({
+    event_type: 'legacy_settings_seeded',
+    severity: 'info',
+    source: 'pbxpuls_settings',
+    message: 'Legacy non-secret settings seeded',
+    details: stats
+  });
 }
 
 interface LegacySeedStats {

@@ -28,7 +28,7 @@ import { registerAiPbxAdminRoutes } from './server/aiPbxAdmin.js';
 import { runPBXPulsMigrations } from './server/pbxpulsMigrations.js';
 import { registerPBXPulsSqlStatusRoutes } from './server/pbxpulsSqlStatus.js';
 import { authenticatePBXPulsSqlUser, compareLegacyUserWithSql, getAuthStorageMode, getPBXPulsUsers } from './server/pbxpulsAuthDb.js';
-import { isPBXPulsDbAvailable, sanitizePBXPulsDbError } from './server/pbxpulsDb.js';
+import { isPBXPulsDbAvailable, queryPBXPulsDb, sanitizePBXPulsDbError } from './server/pbxpulsDb.js';
 import { writePBXPulsSystemEvent } from './server/pbxpulsEvents.js';
 import { upsertPBXPulsSetting } from './server/pbxpulsSettings.js';
 import { buildLegacySettingsSeedRows } from './server/pbxpulsLegacySettings.js';
@@ -6592,6 +6592,10 @@ type MigrationStatusReport = {
     legacyPreviewAvailable: true;
     runtimeSource: 'data/db.json';
     sqlRuntimeEnabled: false;
+    legacyTotal: number;
+    safeToSeed: number;
+    sqlSeeded: number;
+    secretsSkipped: number;
   };
   nextRecommendedStep: string;
 };
@@ -6622,20 +6626,25 @@ async function buildPBXPulsMigrationStatusReport(): Promise<MigrationStatusRepor
     settingsMigration: {
       legacyPreviewAvailable: true,
       runtimeSource: 'data/db.json',
-      sqlRuntimeEnabled: false
+      sqlRuntimeEnabled: false,
+      legacyTotal: 0,
+      safeToSeed: 0,
+      sqlSeeded: 0,
+      secretsSkipped: 0
     },
     nextRecommendedStep: 'Verify PBXPuls SQL connectivity'
   };
 
   if (!sqlAvailable) return report;
 
-  const [migrationCount, latestMigration, settingsCount, usersCount, rolesCount, permissionsCount] = await Promise.all([
+  const [migrationCount, latestMigration, settingsCount, usersCount, rolesCount, permissionsCount, legacySettingsSummary] = await Promise.all([
     readPBXPulsMigrationTableCount(),
     readPBXPulsLatestMigration(),
     readPBXPulsDiagnosticTableCount('settings'),
     readPBXPulsDiagnosticTableCount('users'),
     readPBXPulsDiagnosticTableCount('roles'),
-    readPBXPulsDiagnosticTableCount('permissions')
+    readPBXPulsDiagnosticTableCount('permissions'),
+    buildLegacySettingsMigrationSummary()
   ]);
 
   report.migrationsApplied = migrationCount;
@@ -6643,8 +6652,42 @@ async function buildPBXPulsMigrationStatusReport(): Promise<MigrationStatusRepor
   report.auth.usersMigrated = Number(usersCount || 0) > 0;
   report.auth.rolesMigrated = Number(rolesCount || 0) > 0;
   report.auth.permissionsMigrated = Number(permissionsCount || 0) > 0;
+  report.settingsMigration.legacyTotal = legacySettingsSummary.legacyTotal;
+  report.settingsMigration.safeToSeed = legacySettingsSummary.safeToSeed;
+  report.settingsMigration.sqlSeeded = legacySettingsSummary.sqlSeeded;
+  report.settingsMigration.secretsSkipped = legacySettingsSummary.secretsSkipped;
   report.nextRecommendedStep = choosePBXPulsMigrationNextStep(report, Number(settingsCount || 0));
   return report;
+}
+
+type LegacySettingsMigrationSummary = {
+  legacyTotal: number;
+  safeToSeed: number;
+  sqlSeeded: number;
+  secretsSkipped: number;
+};
+
+async function buildLegacySettingsMigrationSummary(): Promise<LegacySettingsMigrationSummary> {
+  const summary: LegacySettingsMigrationSummary = {
+    legacyTotal: 0,
+    safeToSeed: 0,
+    sqlSeeded: 0,
+    secretsSkipped: 0
+  };
+
+  try {
+    const localDb = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    const rows = buildLegacySettingsSeedRows(localDb);
+    const safeRows = rows.filter((row) => row.willSeed === true && row.is_secret !== true && row.value_type !== 'secret');
+    summary.legacyTotal = rows.length;
+    summary.safeToSeed = safeRows.length;
+    summary.secretsSkipped = rows.length - safeRows.length;
+    summary.sqlSeeded = await countExistingPBXPulsSettings(safeRows.map((row) => row.setting_key));
+  } catch (error: any) {
+    console.warn('[PBXPULS_SETTINGS_MIGRATION] summary failed:', String(error?.message || error || 'unknown error').slice(0, 300));
+  }
+
+  return summary;
 }
 
 function choosePBXPulsMigrationNextStep(report: MigrationStatusReport, settingsCount: number): string {
@@ -6708,6 +6751,43 @@ async function readPBXPulsDiagnosticTableCount(tableName: PBXPulsDiagnosticCount
   }
 }
 
+async function countExistingPBXPulsSettings(settingKeys: string[]): Promise<number> {
+  if (!settingKeys.length) return 0;
+
+  try {
+    const placeholders = settingKeys.map(() => '?').join(', ');
+    const rows = await queryPBXPulsDb(
+      `SELECT COUNT(*) AS count FROM settings WHERE setting_key IN (${placeholders})`,
+      settingKeys
+    );
+    const count = Number(rows[0]?.count);
+    return Number.isFinite(count) ? count : 0;
+  } catch (error: any) {
+    if (!isPBXPulsMissingTableError(error)) {
+      console.warn('[PBXPULS_SETTINGS_MIGRATION] existing settings count failed:', sanitizePBXPulsDbError(error));
+    }
+    return 0;
+  }
+}
+
+async function readExistingPBXPulsSettingKeys(settingKeys: string[]): Promise<Set<string>> {
+  if (!settingKeys.length) return new Set();
+
+  try {
+    const placeholders = settingKeys.map(() => '?').join(', ');
+    const rows = await queryPBXPulsDb(
+      `SELECT setting_key FROM settings WHERE setting_key IN (${placeholders})`,
+      settingKeys
+    );
+    return new Set((rows as any[]).map((row) => String(row.setting_key || '')));
+  } catch (error: any) {
+    if (!isPBXPulsMissingTableError(error)) {
+      console.warn('[PBXPULS_SETTINGS_MIGRATION] existing settings read failed:', sanitizePBXPulsDbError(error));
+    }
+    return new Set();
+  }
+}
+
 function isPBXPulsMissingTableError(error: any): boolean {
   return error?.code === 'ER_NO_SUCH_TABLE' || /table .* doesn't exist/i.test(String(error?.message || ''));
 }
@@ -6734,17 +6814,21 @@ app.get('/api/pbxpuls/settings-migration-preview', requireAuth(['su', 'admin']),
   try {
     const localDb = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
     const rows = buildLegacySettingsSeedRows(localDb);
+    const existingKeys = await readExistingPBXPulsSettingKeys(rows.map((row) => row.setting_key));
     const categories = rows.reduce<Record<string, number>>((acc, row) => {
       acc[row.category] = (acc[row.category] || 0) + 1;
       return acc;
     }, {});
+    const safeRows = rows.filter((row) => row.willSeed === true && row.is_secret !== true && row.value_type !== 'secret');
 
     res.json({
       ok: true,
       total: rows.length,
-      safeToSeed: rows.filter((row) => row.willSeed).length,
-      secretsSkipped: rows.filter((row) => row.is_secret || row.value_type === 'secret').length,
+      safeToSeed: safeRows.length,
+      secretsSkipped: rows.length - safeRows.length,
       jsonValues: rows.filter((row) => row.value_type === 'json').length,
+      sqlExistingCount: existingKeys.size,
+      alreadySeeded: safeRows.filter((row) => existingKeys.has(row.setting_key)).length,
       categories,
       items: rows.map((row) => ({
         setting_key: row.setting_key,
@@ -6752,6 +6836,7 @@ app.get('/api/pbxpuls/settings-migration-preview', requireAuth(['su', 'admin']),
         category: row.category,
         is_secret: row.is_secret,
         willSeed: row.willSeed,
+        existsInSql: existingKeys.has(row.setting_key),
         skippedReason: row.skippedReason
       }))
     });
@@ -6796,7 +6881,11 @@ app.get('/api/pbxpuls/migration-status', requireAuth(['su', 'admin']), async (_r
       settingsMigration: {
         legacyPreviewAvailable: true,
         runtimeSource: 'data/db.json',
-        sqlRuntimeEnabled: false
+        sqlRuntimeEnabled: false,
+        legacyTotal: 0,
+        safeToSeed: 0,
+        sqlSeeded: 0,
+        secretsSkipped: 0
       },
       nextRecommendedStep: 'Verify PBXPuls SQL connectivity'
     });
