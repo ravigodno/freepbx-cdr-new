@@ -1619,3 +1619,40 @@ Production Directory mode remains legacy by default:
 - `directory.production_sql_write_unlock = false`
 
 This is a code wiring milestone only. The production-shaped `/api/directory` SQL write smoke has not been executed after this wiring. The next milestone should run a controlled one-contact runtime smoke and then roll back to legacy mode.
+
+## Milestone 10.6 Metadata and Custom Fields Readiness Check
+
+This milestone checked Directory SQL metadata/custom-field readiness after the first production-shaped SQL write smoke.
+
+Read-only findings:
+
+- SQL Directory metadata tables are present: `directory_custom_fields` and `directory_contact_metadata`.
+- SQL currently has `0` custom field definitions in `directory_custom_fields`.
+- SQL currently has metadata rows only for known safe metadata keys from the seed path, such as `phones` and `tags`.
+- Legacy `data/db.json` has no explicit custom field definitions, but contacts do contain known safe metadata keys.
+- The SQL write helper accepts metadata from either `metadata` or `customFields` objects.
+
+Reason for `metadata_field_not_defined:test_key`:
+
+- `test_key` is not a known safe metadata key and is not defined in `directory_custom_fields`.
+- The SQL write helper intentionally skips unknown metadata keys and returns `metadata_field_not_defined:<key>`.
+- This is expected protection against silently creating unreviewed metadata fields during production writes.
+
+Future metadata smoke payload:
+
+- If no custom field definition exists, use a known safe metadata key such as `tags` or `phones`.
+- A safe single-field metadata example is:
+
+```json
+{
+  "metadata": {
+    "tags": ["PBXPULS_SQL_METADATA_TEST"]
+  }
+}
+```
+
+Cutover guidance:
+
+- The SQL read/write switch can continue without arbitrary metadata writes because core contact create/update/delete already works and unknown metadata keys are guarded.
+- Before final production cutover, decide whether PBXPuls should create controlled `directory_custom_fields` definitions for domain-specific metadata or keep accepting only the current safe metadata allow-list.
+- If domain-specific custom fields are required, add a separate controlled migration/fix stage before enabling final SQL storage mode.
