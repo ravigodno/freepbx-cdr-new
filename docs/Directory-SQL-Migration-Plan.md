@@ -1542,3 +1542,46 @@ Diagnostics:
   - `productionSqlWriteBlockReason`
 
 The next milestone should temporarily enable the unlock flag and verify blocked/unblocked behavior in a separate controlled runtime stage. Production SQL write must still remain guarded and must not be enabled casually.
+
+## Milestone 10.4 Enable Guarded SQL Branch Decision in Router
+
+This milestone replaces the router's permanent SQL branch block with a controlled readiness decision.
+
+Router behavior:
+
+- When `directory.write_mode = legacy`:
+  - `useLegacy = true`
+  - `useSql = false`
+  - `blocked = false`
+  - `reason = directory_write_mode_legacy`
+- When `directory.write_mode = sql` and production SQL write readiness is not complete:
+  - `useLegacy = false`
+  - `useSql = false`
+  - `blocked = true`
+  - `reason` is the current readiness failure, such as `production_sql_write_not_unlocked`
+- When `directory.write_mode = sql` and production SQL write readiness is complete:
+  - `useLegacy = false`
+  - `useSql = true`
+  - `blocked = false`
+  - `reason = directory_sql_write_ready`
+
+Readiness still requires:
+
+- SQL database is available.
+- SQL write layer is available.
+- Isolated SQL write smoke has passed.
+- `directory.storage_mode = legacy`.
+- `directory.sql_write_test_enabled = false`.
+- `directory.production_sql_write_unlock = true`.
+
+Diagnostics:
+
+- `GET /api/pbxpuls/directory-write-router-status` reports per operation:
+  - `useLegacy`
+  - `useSql`
+  - `blocked`
+  - `reason`
+  - `productionSqlWriteReady`
+  - `productionSqlWriteUnlock`
+
+Production SQL write has still not been tested through `/api/directory`. The next milestone should runtime-check the router readiness states, followed by a separate one-contact production-shaped SQL write smoke.

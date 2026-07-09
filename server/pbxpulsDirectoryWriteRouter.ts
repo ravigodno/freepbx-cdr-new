@@ -1,5 +1,10 @@
 import { writePBXPulsSystemEvent } from './pbxpulsEvents.js';
-import { getDirectoryWriteMode, getDirectoryWriteModeBlockedReason, type DirectoryWriteMode } from './pbxpulsDirectoryWriteMode.js';
+import {
+  canEnableDirectorySqlWrite,
+  getDirectoryWriteMode,
+  getDirectoryWriteModeBlockedReason,
+  type DirectoryWriteMode
+} from './pbxpulsDirectoryWriteMode.js';
 
 export type DirectoryWriteOperation = 'create' | 'update' | 'delete';
 
@@ -9,7 +14,9 @@ export interface DirectoryWriteRuntimeDecision {
   useLegacy: boolean;
   useSql: boolean;
   blocked: boolean;
-  reason: 'directory_write_mode_legacy' | 'directory_sql_write_runtime_not_connected';
+  reason: string;
+  productionSqlWriteReady: boolean;
+  productionSqlWriteUnlock: boolean;
 }
 
 export interface DirectoryWriteRouterStatus {
@@ -17,10 +24,9 @@ export interface DirectoryWriteRouterStatus {
   mode: DirectoryWriteMode;
   operations: Record<DirectoryWriteOperation, DirectoryWriteRuntimeDecision>;
   existingDirectoryEndpointsSwitched: false;
-  sqlWriteBranchBlocked: true;
+  sqlWriteBranchBlocked: boolean;
 }
 
-const SQL_WRITE_BRANCH_BLOCKED = true;
 const EXISTING_DIRECTORY_ENDPOINTS_SWITCHED = false;
 
 export async function getDirectoryWriteRuntimeDecision(
@@ -36,19 +42,15 @@ export async function getDirectoryWriteRuntimeDecision(
       useLegacy: true,
       useSql: false,
       blocked: false,
-      reason: 'directory_write_mode_legacy'
+      reason: 'directory_write_mode_legacy',
+      productionSqlWriteReady: false,
+      productionSqlWriteUnlock: false
     };
   }
 
-  const decision: DirectoryWriteRuntimeDecision = {
-    operation,
-    mode,
-    useLegacy: false,
-    useSql: false,
-    blocked: true,
-    reason: 'directory_sql_write_runtime_not_connected'
-  };
-  await writeDirectoryWriteEndpointBlockedEvent(decision, actor);
+  const sqlEnableDecision = await canEnableDirectorySqlWrite();
+  const decision = buildDecisionForSqlReadiness(operation, mode, sqlEnableDecision);
+  if (decision.blocked) await writeDirectoryWriteEndpointBlockedEvent(decision, actor);
   return decision;
 }
 
@@ -72,24 +74,20 @@ export async function assertDirectorySqlWriteAllowed(
   operation: DirectoryWriteOperation,
   actor: string | { id?: string | number | null; username?: string | null; role?: string | null }
 ): Promise<DirectoryWriteRuntimeDecision> {
-  const decision: DirectoryWriteRuntimeDecision = {
-    operation,
-    mode: 'sql',
-    useLegacy: false,
-    useSql: false,
-    blocked: true,
-    reason: 'directory_sql_write_runtime_not_connected'
-  };
-  await writeDirectoryWriteEndpointBlockedEvent(decision, actor);
+  const mode = await getDirectoryWriteMode();
+  const sqlEnableDecision = await canEnableDirectorySqlWrite();
+  const decision = buildDecisionForSqlReadiness(operation, mode === 'sql' ? 'sql' : mode, sqlEnableDecision);
+  if (decision.blocked) await writeDirectoryWriteEndpointBlockedEvent(decision, actor);
   return decision;
 }
 
 export async function getDirectoryWriteRouterStatus(): Promise<DirectoryWriteRouterStatus> {
   const mode = await getDirectoryWriteMode();
+  const sqlEnableDecision = await canEnableDirectorySqlWrite();
   const operations = {
-    create: buildDecisionForMode('create', mode),
-    update: buildDecisionForMode('update', mode),
-    delete: buildDecisionForMode('delete', mode)
+    create: buildDecisionForMode('create', mode, sqlEnableDecision),
+    update: buildDecisionForMode('update', mode, sqlEnableDecision),
+    delete: buildDecisionForMode('delete', mode, sqlEnableDecision)
   };
 
   return {
@@ -97,7 +95,7 @@ export async function getDirectoryWriteRouterStatus(): Promise<DirectoryWriteRou
     mode,
     operations,
     existingDirectoryEndpointsSwitched: EXISTING_DIRECTORY_ENDPOINTS_SWITCHED,
-    sqlWriteBranchBlocked: SQL_WRITE_BRANCH_BLOCKED
+    sqlWriteBranchBlocked: Object.values(operations).some(operation => operation.blocked)
   };
 }
 
@@ -105,11 +103,17 @@ export function buildBlockedDirectoryWriteEndpointResponse(decision: DirectoryWr
   return {
     ok: false,
     reason: decision.reason || getDirectoryWriteModeBlockedReason(),
+    productionSqlWriteReady: decision.productionSqlWriteReady,
+    productionSqlWriteUnlock: decision.productionSqlWriteUnlock,
     existingDirectoryEndpointsSwitched: EXISTING_DIRECTORY_ENDPOINTS_SWITCHED
   };
 }
 
-function buildDecisionForMode(operation: DirectoryWriteOperation, mode: DirectoryWriteMode): DirectoryWriteRuntimeDecision {
+function buildDecisionForMode(
+  operation: DirectoryWriteOperation,
+  mode: DirectoryWriteMode,
+  sqlEnableDecision: Awaited<ReturnType<typeof canEnableDirectorySqlWrite>>
+): DirectoryWriteRuntimeDecision {
   if (mode === 'legacy') {
     return {
       operation,
@@ -117,7 +121,30 @@ function buildDecisionForMode(operation: DirectoryWriteOperation, mode: Director
       useLegacy: true,
       useSql: false,
       blocked: false,
-      reason: 'directory_write_mode_legacy'
+      reason: 'directory_write_mode_legacy',
+      productionSqlWriteReady: sqlEnableDecision.canEnable,
+      productionSqlWriteUnlock: sqlEnableDecision.productionSqlWriteUnlock
+    };
+  }
+
+  return buildDecisionForSqlReadiness(operation, mode, sqlEnableDecision);
+}
+
+function buildDecisionForSqlReadiness(
+  operation: DirectoryWriteOperation,
+  mode: DirectoryWriteMode,
+  sqlEnableDecision: Awaited<ReturnType<typeof canEnableDirectorySqlWrite>>
+): DirectoryWriteRuntimeDecision {
+  if (mode === 'sql' && sqlEnableDecision.canEnable) {
+    return {
+      operation,
+      mode,
+      useLegacy: false,
+      useSql: true,
+      blocked: false,
+      reason: 'directory_sql_write_ready',
+      productionSqlWriteReady: true,
+      productionSqlWriteUnlock: sqlEnableDecision.productionSqlWriteUnlock
     };
   }
 
@@ -127,7 +154,9 @@ function buildDecisionForMode(operation: DirectoryWriteOperation, mode: Director
     useLegacy: false,
     useSql: false,
     blocked: true,
-    reason: 'directory_sql_write_runtime_not_connected'
+    reason: sqlEnableDecision.reason || getDirectoryWriteModeBlockedReason(),
+    productionSqlWriteReady: sqlEnableDecision.canEnable,
+    productionSqlWriteUnlock: sqlEnableDecision.productionSqlWriteUnlock
   };
 }
 

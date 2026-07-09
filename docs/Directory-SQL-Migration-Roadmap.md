@@ -60,7 +60,16 @@
 - Verify search and lookup behavior against expected results.
 - Report differences without exposing personal data.
 
-## Milestone 10.4 Controlled SQL Read Switch
+## Milestone 10.4 Guarded SQL Branch Router Decision
+
+- Replace the router's permanent SQL branch block with controlled readiness.
+- Keep `useLegacy=true` while `directory.write_mode = legacy`.
+- Return a blocked SQL decision with the current readiness reason when `directory.write_mode = sql` but readiness is incomplete.
+- Return `useSql=true` only when `directory.write_mode = sql` and production SQL write readiness is complete.
+- Do not run production `/api/directory` writes in this milestone.
+- Use the next milestone for runtime-checking router readiness states before a one-contact production-shaped smoke.
+
+## Milestone 10.5 Controlled SQL Read Switch
 
 - Temporarily enable `directory.storage_mode = sql`.
 - Verify Directory UI reads, search and lookup behavior.
@@ -68,7 +77,7 @@
 - Roll back to `directory.storage_mode = legacy`.
 - Keep production writes legacy during this milestone.
 
-## Milestone 10.5 Controlled SQL Write Switch
+## Milestone 10.6 Controlled SQL Write Switch
 
 - Temporarily enable `directory.write_mode = sql` under explicit guard.
 - Verify production create, update and delete workflows.
@@ -76,7 +85,7 @@
 - Verify rollback to legacy write mode.
 - Keep a documented rollback plan before any broader use.
 
-## Milestone 10.6 Production Cutover and Cleanup
+## Milestone 10.7 Production Cutover and Cleanup
 
 - Make SQL the primary Directory storage only after read/write checks pass.
 - Keep legacy fallback available.
