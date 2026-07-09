@@ -1656,3 +1656,30 @@ Cutover guidance:
 - The SQL read/write switch can continue without arbitrary metadata writes because core contact create/update/delete already works and unknown metadata keys are guarded.
 - Before final production cutover, decide whether PBXPuls should create controlled `directory_custom_fields` definitions for domain-specific metadata or keep accepting only the current safe metadata allow-list.
 - If domain-specific custom fields are required, add a separate controlled migration/fix stage before enabling final SQL storage mode.
+
+## Milestone 10.7.1 Phones Mismatch Diagnostics
+
+This milestone diagnosed the `phones_mismatch` readiness blocker that prevented the guarded Directory SQL storage smoke.
+
+Read-only findings:
+
+- Legacy Directory contacts count: `4`.
+- SQL `directory_contacts` count: `4`.
+- Contacts count mismatch: `0`.
+- Readiness issue: `phones_mismatch`, count `2`.
+- Both mismatches are `normalization_or_stale_seed_diff`: the SQL primary `phone_normalized` value differs from the legacy primary phone expected by the current seed/readiness logic.
+- The mismatched SQL phone values are not present in the current legacy `phones` arrays for those contacts, so this is not a simple `+7`/`8`/formatting normalization difference.
+- SQL rows were seeded earlier, while the corresponding legacy contacts were updated later.
+- `GET /api/pbxpuls/directory-seed-preview` reports `contacts.skippedExisting = 4`, because the existing seed path uses `INSERT IGNORE` and does not refresh existing contact rows.
+
+Root cause:
+
+- SQL Directory seed is stale for two existing contacts after legacy `data/db.json` changes.
+- Current readiness compares expected primary `phone_normalized` from legacy seed rows with SQL `directory_contacts.phone_normalized`.
+- Current seed preview cannot repair this state because it skips existing SQL contacts.
+
+Required next stage:
+
+- Add a controlled Directory SQL re-seed/sync stage that previews stale existing rows and applies only explicitly reviewed Directory SQL updates.
+- The stage should update SQL `directory_contacts` and known safe metadata from legacy without manual ad hoc `UPDATE` statements.
+- After the controlled sync passes and readiness is clean, repeat the Directory SQL read/storage smoke.
