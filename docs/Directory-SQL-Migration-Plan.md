@@ -1333,3 +1333,58 @@ Diagnostics:
 - `GET /api/pbxpuls/directory-runtime-effective` now reports `writePreviewAvailable: true`.
 
 Stage 9.9.3 keeps SQL write mode intentionally blocked. Existing Directory write endpoints remain legacy-only. The next stage should be guarded endpoint wiring or a runtime-switch guarded write path, with preview and rollback still required before production SQL writes.
+
+## Stage 9.9.5 Guarded Directory Write Endpoint Wiring Design
+
+This stage adds a guarded write endpoint router for the existing Directory create, update and delete endpoints.
+
+Helper:
+
+- `server/pbxpulsDirectoryWriteRouter.ts`
+- `getDirectoryWriteRuntimeDecision(operation, actor)`
+- `shouldUseLegacyDirectoryWrite(operation, actor)`
+- `shouldUseSqlDirectoryWrite(operation, actor)`
+- `assertDirectorySqlWriteAllowed(operation, actor)`
+
+Endpoint wiring:
+
+- `POST /api/directory`
+- `PUT /api/directory/:id`
+- `DELETE /api/directory/:id`
+
+Behavior:
+
+- When `directory.write_mode = legacy`, the existing legacy branch continues to run and writes `data/db.json` exactly as before.
+- When `directory.write_mode = sql`, the SQL branch is intentionally blocked in this stage.
+- The SQL branch returns a safe conflict response with reason `directory_sql_write_runtime_not_connected`.
+- The SQL branch does not write to SQL.
+- The SQL branch does not write to `data/db.json`.
+- `directory.write_mode = sql` is still blocked by the write-mode controller, so the SQL branch is not reachable in normal runtime.
+
+Unchanged paths:
+
+- Directory import write paths are unchanged.
+- Directory sync write paths are unchanged.
+- Spam and blacklist write paths are unchanged.
+- Directory read endpoints are unchanged.
+- Frontend code is unchanged.
+- CDR, FreePBX and Asterisk logic are unchanged.
+
+Diagnostics:
+
+- `GET /api/pbxpuls/directory-write-readiness` now reports:
+  - `writeEndpointRouterAvailable`
+  - `existingDirectoryEndpointsSwitched`
+  - `sqlWriteBranchBlocked`
+- `GET /api/pbxpuls/directory-runtime-effective` now reports:
+  - `writeEndpointRouterAvailable`
+  - `sqlWriteBranchBlocked`
+- `GET /api/pbxpuls/directory-write-router-status` reports the current route decision for create, update and delete.
+
+Audit:
+
+- `directory_write_endpoint_sql_blocked` is written only if the blocked SQL branch is reached.
+- Audit details are safe and limited to operation, actor, mode and reason.
+- Audit details must not include names, phone numbers, email addresses, comments, metadata values, raw payloads, tokens or secrets.
+
+Stage 9.9.5 is wiring design only. SQL writes remain disabled. The next stage should be controlled SQL branch enablement only after a separate decision, preview and rollback plan.

@@ -52,6 +52,11 @@ import {
   previewUpdateDirectoryContactSql,
   type DirectoryWritePreviewOperation
 } from './server/pbxpulsDirectoryWritePreview.js';
+import {
+  buildBlockedDirectoryWriteEndpointResponse,
+  getDirectoryWriteRouterStatus,
+  getDirectoryWriteRuntimeDecision
+} from './server/pbxpulsDirectoryWriteRouter.js';
 
 // Load environment variables
 dotenv.config();
@@ -7868,6 +7873,8 @@ app.get('/api/pbxpuls/directory-write-readiness', requireAuth(['su', 'admin']), 
       canEnableSqlWrite: sqlEnableDecision.canEnable,
       blockReason: sqlEnableDecision.reason,
       writePreviewAvailable: true,
+      writeEndpointRouterAvailable: true,
+      sqlWriteBranchBlocked: true,
       supportedOperations: {
         create: true,
         update: true,
@@ -7888,6 +7895,8 @@ app.get('/api/pbxpuls/directory-write-readiness', requireAuth(['su', 'admin']), 
       canEnableSqlWrite: false,
       blockReason: getDirectoryWriteModeBlockedReason(),
       writePreviewAvailable: true,
+      writeEndpointRouterAvailable: true,
+      sqlWriteBranchBlocked: true,
       supportedOperations: {
         create: true,
         update: true,
@@ -7895,6 +7904,40 @@ app.get('/api/pbxpuls/directory-write-readiness', requireAuth(['su', 'admin']), 
         metadata: true
       },
       nextStep: 'controlled_directory_sql_write_switch'
+    });
+  }
+});
+
+app.get('/api/pbxpuls/directory-write-router-status', requireAuth(['su', 'admin']), async (_req, res) => {
+  try {
+    res.json(await getDirectoryWriteRouterStatus());
+  } catch (error: any) {
+    console.warn('[PBXPULS_DIRECTORY_WRITE_ROUTER_STATUS] failed:', sanitizePBXPulsDbError(error));
+    res.status(500).json({
+      ok: false,
+      mode: 'legacy',
+      operations: {
+        create: {
+          useLegacy: true,
+          useSql: false,
+          blocked: false,
+          reason: 'directory_write_mode_legacy'
+        },
+        update: {
+          useLegacy: true,
+          useSql: false,
+          blocked: false,
+          reason: 'directory_write_mode_legacy'
+        },
+        delete: {
+          useLegacy: true,
+          useSql: false,
+          blocked: false,
+          reason: 'directory_write_mode_legacy'
+        }
+      },
+      existingDirectoryEndpointsSwitched: false,
+      sqlWriteBranchBlocked: true
     });
   }
 });
@@ -8128,6 +8171,8 @@ app.get('/api/pbxpuls/directory-runtime-effective', requireAuth(['su', 'admin'])
       directoryWriteMode,
       writeSwitchControllerAvailable: true,
       writePreviewAvailable: true,
+      writeEndpointRouterAvailable: true,
+      sqlWriteBranchBlocked: true,
       existingDirectoryEndpointsSwitched: false
     });
   } catch (error: any) {
@@ -8149,6 +8194,8 @@ app.get('/api/pbxpuls/directory-runtime-effective', requireAuth(['su', 'admin'])
       directoryWriteMode: 'legacy',
       writeSwitchControllerAvailable: true,
       writePreviewAvailable: true,
+      writeEndpointRouterAvailable: true,
+      sqlWriteBranchBlocked: true,
       existingDirectoryEndpointsSwitched: false
     });
   }
@@ -11076,6 +11123,12 @@ app.post('/api/directory', requireAuth(), async (req, res) => {
       return;
     }
 
+    const writeDecision = await getDirectoryWriteRuntimeDecision('create', getDirectoryStorageModeActor(req));
+    if (!writeDecision.useLegacy) {
+      res.status(409).json(buildBlockedDirectoryWriteEndpointResponse(writeDecision));
+      return;
+    }
+
     const localDb = await readLocalDb();
     if (!localDb.directory) localDb.directory = [];
 
@@ -11107,6 +11160,12 @@ app.put('/api/directory/:id', requireAuth(), async (req, res) => {
     const authUser = (req as any).user;
     if (authUser?.role !== 'su' && authUser?.permissions?.edit_directory !== true) {
       res.status(403).json({ error: 'Нет прав на редактирование справочника' });
+      return;
+    }
+
+    const writeDecision = await getDirectoryWriteRuntimeDecision('update', getDirectoryStorageModeActor(req));
+    if (!writeDecision.useLegacy) {
+      res.status(409).json(buildBlockedDirectoryWriteEndpointResponse(writeDecision));
       return;
     }
 
@@ -11514,6 +11573,12 @@ app.delete('/api/directory/:id', requireAuth(), async (req, res) => {
     const authUser = (req as any).user;
     if (authUser?.role !== 'su' && authUser?.permissions?.edit_directory !== true) {
       res.status(403).json({ error: 'Нет прав на удаление записей ��правочника' });
+      return;
+    }
+
+    const writeDecision = await getDirectoryWriteRuntimeDecision('delete', getDirectoryStorageModeActor(req));
+    if (!writeDecision.useLegacy) {
+      res.status(409).json(buildBlockedDirectoryWriteEndpointResponse(writeDecision));
       return;
     }
 
