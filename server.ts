@@ -10332,6 +10332,7 @@ app.get('/api/settings', requireAuth(), async (req, res) => {
       mailruCarddavEnabled: clientSettings.mailruCarddavEnabled !== false,
       customLogoUrl: clientSettings.customLogoUrl,
       customCopyright: clientSettings.customCopyright,
+      moduleVisibility: normalizeModuleVisibilitySettings(clientSettings.moduleVisibility),
     };
     res.json(safeSettings);
   }
@@ -13351,8 +13352,10 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
 
 // App metrics / KPI endpoint
 app.get('/api/stats', requireAuth(), async (req, res) => {
-  if (!(await checkUserPermission(req, 'view_reports'))) {
-    return res.status(403).json({ error: 'Access denied: view_reports permission required' });
+  const canViewCalls = await checkUserPermission(req, 'view_calls');
+  const canViewReports = await checkUserPermission(req, 'view_reports');
+  if (!canViewCalls && !canViewReports) {
+    return res.status(403).json({ error: 'Access denied: view_calls permission required' });
   }
 
   try {
