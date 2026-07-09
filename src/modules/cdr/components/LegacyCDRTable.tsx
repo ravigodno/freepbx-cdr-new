@@ -17,7 +17,7 @@ interface LegacyCDRTableProps {
   playingCallId?: string | null;
   isAudioPaused?: boolean;
   activeDropdownCallId?: string | null;
-  handleCopy?: (num: string) => void;
+  handleCopy?: (num: string, copiedKey?: string) => void;
   triggerClickToCall?: (targetPhone: string, targetName?: string) => void;
   openAddFromCall?: (number: string, initialName?: string) => void;
   playRecording?: (call: any) => void;
@@ -114,6 +114,7 @@ export default function LegacyCDRTable({
                 callerName={callerName}
                 callerType={callerType}
                 displayedSrc={displayedSrc}
+                copiedKey={`${call.uniqueid}:${displayedSrc}`}
                 copiedNumber={copiedNumber}
                 isFound={isFound}
                 handleCopy={handleCopy}

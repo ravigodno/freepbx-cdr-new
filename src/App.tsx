@@ -1859,12 +1859,34 @@ export default function App() {
     localStorage.setItem('operator_asterisk_ext', myExt);
   }, [myExt, session?.role, session?.extension]);
 
-  const handleCopy = (num: string) => {
-    navigator.clipboard.writeText(num.trim());
-    setCopiedNumber(num.trim());
-    setTimeout(() => {
+  const handleCopy = async (num: string, copiedKey?: string) => {
+    const value = num.trim();
+    if (!value) return;
+
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = value;
+        textarea.setAttribute('readonly', 'true');
+        textarea.style.position = 'fixed';
+        textarea.style.left = '-9999px';
+        textarea.style.top = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+
+      setCopiedNumber(copiedKey || value);
+      setTimeout(() => {
+        setCopiedNumber(null);
+      }, 1500);
+    } catch (error) {
+      console.warn('Clipboard copy failed:', error);
       setCopiedNumber(null);
-    }, 1500);
+    }
   };
 
   const triggerClickToCall = async (targetPhone: string, targetName?: string) => {

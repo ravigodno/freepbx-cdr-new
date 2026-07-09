@@ -11,10 +11,11 @@ interface Props {
   callerName: string;
   callerType: string;
   displayedSrc: string;
+  copiedKey: string;
   copiedNumber?: string | null;
   isFound: boolean;
 
-  handleCopy: (num: string) => void;
+  handleCopy: (num: string, copiedKey?: string) => void;
   triggerClickToCall: (phone: string, name?: string) => void;
   openAddFromCall: (number: string, initialName?: string) => void;
 }
@@ -23,6 +24,7 @@ export default function CDRCallerCell({
   callerName,
   callerType,
   displayedSrc,
+  copiedKey,
   copiedNumber,
   isFound,
   handleCopy,
@@ -51,10 +53,10 @@ export default function CDRCallerCell({
           </span>
 
           <button
-            onClick={() => handleCopy(displayedSrc)}
+            onClick={() => handleCopy(displayedSrc, copiedKey)}
             className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-600 dark:hover:text-slate-303 transition-colors cursor-pointer"
           >
-            {copiedNumber === displayedSrc ? (
+            {copiedNumber === copiedKey ? (
               <Check className="h-3.5 w-3.5 text-emerald-500" />
             ) : (
               <Copy className="h-3.5 w-3.5" />
