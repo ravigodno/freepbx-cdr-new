@@ -18,6 +18,7 @@ interface Props {
 }
 
 export default function CDRCalleeCell({
+  call,
   calleeName,
   calleeType,
   displayedDst,
@@ -26,6 +27,9 @@ export default function CDRCalleeCell({
   openAddFromCall,
 }: Props) {
   const isMultiDst = isMultiNumberValue(displayedDst);
+  const transferTargetExt = String(call?.transferTargetExt || '').trim();
+  const transferTargetLabel = String(call?.transferTargetLabel || '').trim();
+  const hasTransferTarget = Boolean(call?.wasTransferred && transferTargetExt);
 
   return (
     <td className="py-4 px-4">
@@ -78,6 +82,18 @@ export default function CDRCalleeCell({
               </div>
             )}
           </div>
+
+          {hasTransferTarget && (
+            <div className="inline-flex w-fit items-center gap-1.5 rounded-md border border-blue-100 bg-blue-50 px-2 py-1 text-[10px] font-black uppercase tracking-wide text-blue-700">
+              <span>Переведён на</span>
+              <span className="font-mono text-xs">{transferTargetExt}</span>
+              {transferTargetLabel && (
+                <span className="max-w-[160px] truncate normal-case tracking-normal text-blue-600">
+                  {transferTargetLabel}
+                </span>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </td>

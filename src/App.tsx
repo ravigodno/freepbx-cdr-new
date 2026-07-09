@@ -3,8 +3,11 @@ import {
   Phone,
   PhoneIncoming,
   PhoneOutgoing,
+  PhoneForwarded,
   PhoneMissed,
   PhoneCall,
+  Headphones,
+  Mic2,
   Settings,
   Play,
   Pause,
@@ -526,7 +529,51 @@ interface LiveCallBanner {
   durationSec?: number;
   durationText?: string;
   startedAt?: string;
+  transferTargets?: LiveCallTransferTarget[];
 }
+
+interface LiveCallTransferTarget {
+  id: string;
+  extension: string;
+  label: string;
+}
+
+const getLiveTransferExtension = (entry: DirectoryEntry): string => {
+  const candidates = [
+    entry.internalExtension,
+    entry.number,
+    ...(Array.isArray(entry.phones) ? entry.phones : [])
+  ];
+
+  for (const value of candidates) {
+    const digits = String(value || '').replace(/\D/g, '');
+    if (digits && isInternalExt(digits)) return digits;
+  }
+
+  return '';
+};
+
+const buildLiveCallTransferTargets = (entries: DirectoryEntry[], currentExt?: string): LiveCallTransferTarget[] => {
+  const current = String(currentExt || '').replace(/\D/g, '');
+  const seen = new Set<string>();
+
+  return (entries || [])
+    .filter(entry => entry.type === 'internal' && entry.isSpam !== true && entry.isBlacklisted !== true)
+    .map(entry => {
+      const extension = getLiveTransferExtension(entry);
+      if (!extension || extension === current || seen.has(extension)) return null;
+      seen.add(extension);
+      const name = entry.name || entry.company || 'Внутренний номер';
+      const detail = entry.position || entry.department || entry.group || '';
+      return {
+        id: entry.id || extension,
+        extension,
+        label: detail ? `${name} · ${detail}` : name
+      };
+    })
+    .filter((item): item is LiveCallTransferTarget => Boolean(item))
+    .sort((a, b) => a.extension.localeCompare(b.extension, 'ru', { numeric: true }));
+};
 
 export default function App() {
   // Authentication states
@@ -1781,6 +1828,9 @@ export default function App() {
     return localStorage.getItem('operator_asterisk_ext') || '101';
   });
   const [liveCallBanner, setLiveCallBanner] = useState<LiveCallBanner | null>(null);
+  const [isLiveTransferLoading, setIsLiveTransferLoading] = useState(false);
+  const [isLiveMonitorLoading, setIsLiveMonitorLoading] = useState(false);
+  const [liveTransferStatus, setLiveTransferStatus] = useState('');
   const [liveCallBannerPos, setLiveCallBannerPos] = useState(() => {
     try {
       const saved = localStorage.getItem('pbxpuls_live_call_banner_pos');
@@ -1897,7 +1947,8 @@ export default function App() {
     try {
       const qParams = new URLSearchParams({ operatorExt: myExt.trim() });
       const resp = await fetch(`/api/live/call-banner?${qParams.toString()}`, {
-        headers: { 'Authorization': `Bearer ${session.token}` }
+        headers: { 'Authorization': `Bearer ${session.token}` },
+        cache: 'no-store'
       });
       if (resp.status === 401) {
         handleAuthError(resp);
@@ -1908,6 +1959,93 @@ export default function App() {
       setLiveCallBanner(data && data.active ? data : null);
     } catch (e) {
       // Live popup is auxiliary; ignore network errors here.
+    }
+  };
+
+  const handleLiveCallTransfer = async (targetExtension: string) => {
+    if (!session || !liveCallBanner?.active || isLiveTransferLoading) return;
+    const cleanedTarget = String(targetExtension || '').replace(/\D/g, '');
+    if (!cleanedTarget) return;
+
+    setIsLiveTransferLoading(true);
+    setLiveTransferStatus(`Переводим на ${cleanedTarget}...`);
+
+    try {
+      const resp = await fetch('/api/live/call-transfer', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.token}`
+        },
+        body: JSON.stringify({
+          operatorExt: (liveCallBanner.operatorExt || myExt || '').trim(),
+          targetExtension: cleanedTarget
+        })
+      });
+
+      if (resp.status === 401) {
+        handleAuthError(resp);
+        return;
+      }
+
+      const data = await resp.json().catch(() => ({}));
+      if (resp.ok && data.success) {
+        setLiveTransferStatus(`Звонок переведён на ${cleanedTarget}`);
+        setTimeout(() => setLiveTransferStatus(''), 4000);
+        loadLiveCallBanner();
+        return;
+      }
+
+      setLiveTransferStatus(data.error || 'Не удалось перевести звонок');
+    } catch (_error) {
+      setLiveTransferStatus('Ошибка сети при переводе звонка');
+    } finally {
+      setIsLiveTransferLoading(false);
+    }
+  };
+
+  const handleLiveCallMonitor = async (mode: 'listen' | 'whisper') => {
+    if (!session || !liveCallBanner?.active || isLiveMonitorLoading) return;
+    const supervisorExt = ((session.role === 'operator' || session.permissions?.own_calls_only === true) ? (session.extension || myExt) : myExt).trim();
+    if (!supervisorExt) {
+      setLiveTransferStatus('Укажите ваш внутренний номер');
+      return;
+    }
+
+    setIsLiveMonitorLoading(true);
+    setLiveTransferStatus(mode === 'whisper' ? `Суфлёр: звонок на ${supervisorExt}...` : `Прослушивание: звонок на ${supervisorExt}...`);
+
+    try {
+      const resp = await fetch('/api/live/call-monitor', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.token}`
+        },
+        body: JSON.stringify({
+          mode,
+          operatorExt: (liveCallBanner.operatorExt || myExt || '').trim(),
+          supervisorExt
+        })
+      });
+
+      if (resp.status === 401) {
+        handleAuthError(resp);
+        return;
+      }
+
+      const data = await resp.json().catch(() => ({}));
+      if (resp.ok && data.success) {
+        setLiveTransferStatus(mode === 'whisper' ? 'Ответьте на SIP: режим суфлёра' : 'Ответьте на SIP: режим прослушивания');
+        setTimeout(() => setLiveTransferStatus(''), 5000);
+        return;
+      }
+
+      setLiveTransferStatus(data.error || 'Не удалось подключиться к звонку');
+    } catch (_error) {
+      setLiveTransferStatus('Ошибка сети при подключении к звонку');
+    } finally {
+      setIsLiveMonitorLoading(false);
     }
   };
 
@@ -5046,7 +5184,7 @@ export default function App() {
           if (event.button !== 0) return;
 
           const target = event.target as HTMLElement | null;
-          if (target?.closest('button,a,input,textarea,select')) return;
+          if (target?.closest('button,a,input,textarea,select,summary,details')) return;
 
           event.preventDefault();
 
@@ -5101,6 +5239,11 @@ export default function App() {
         const positionMatch = display.match(/\(([^)]*)\)\s*$/);
         const position = positionMatch?.[1] || liveCallBanner.contactComment || '';
         const durationText = liveCallBanner.durationText || `${Math.floor((liveCallBanner.durationSec || 0) / 60)}:${String((liveCallBanner.durationSec || 0) % 60).padStart(2, '0')}`;
+        const transferTargets = Array.isArray(liveCallBanner.transferTargets) && liveCallBanner.transferTargets.length
+          ? liveCallBanner.transferTargets
+          : buildLiveCallTransferTargets(directoryLookup.length ? directoryLookup : directory, liveCallBanner.operatorExt || myExt);
+        const canUseLiveMonitorActions = session?.role === 'su' || session?.role === 'admin' || session?.role === 'manager';
+        const liveActionButtonClass = 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60';
 
         return (
           <div
@@ -5113,12 +5256,58 @@ export default function App() {
           >
             <div
               onMouseDown={handleLiveCallBannerDragStart}
-              className="pointer-events-auto relative overflow-hidden rounded-2xl border border-blue-200 bg-white shadow-2xl shadow-slate-900/12 animate-fade-in select-none cursor-grab active:cursor-grabbing"
+              className="pointer-events-auto relative overflow-visible rounded-2xl border border-blue-200 bg-white shadow-2xl shadow-slate-900/12 animate-fade-in select-none cursor-grab active:cursor-grabbing"
               title="Перетащить окно звонка"
             >
-              <div className="absolute inset-y-0 left-0 w-2 bg-gradient-to-b from-red-500 to-rose-600" />
+              <div className="absolute inset-y-0 left-0 w-2 bg-gradient-to-b from-blue-500 to-sky-600" />
               <div className="flex items-stretch min-h-[104px]">
-                <div className="flex items-center gap-4 px-6 py-4 min-w-[420px] max-w-[520px] border-r border-slate-200">
+                <div className="relative flex items-center gap-4 py-4 pl-20 pr-6 min-w-[420px] max-w-[520px] border-r border-slate-200">
+                  <div className="absolute left-4 top-3 bottom-3 z-10 flex flex-col justify-center gap-1">
+                    <details className="group relative">
+                      <summary className={liveActionButtonClass} title="Переадресовать звонок">
+                        <PhoneForwarded className="h-4 w-4" />
+                      </summary>
+                      <div className="absolute left-10 top-0 z-20 max-h-64 w-72 overflow-y-auto rounded-xl border border-slate-200 bg-white p-2 text-left shadow-xl">
+                        {transferTargets.length ? transferTargets.map(target => (
+                          <button
+                            key={target.id + target.extension}
+                            type="button"
+                            disabled={isLiveTransferLoading}
+                            onClick={() => handleLiveCallTransfer(target.extension)}
+                            className="flex w-full min-w-0 items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-xs font-bold text-slate-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60"
+                            title={`${target.label} · ${target.extension}`}
+                          >
+                            <span className="min-w-0 truncate">{target.label}</span>
+                            <span className="shrink-0 font-mono text-sm font-black text-blue-700">{target.extension}</span>
+                          </button>
+                        )) : (
+                          <div className="px-3 py-2 text-xs font-bold text-slate-400">Нет внутренних номеров в справочнике</div>
+                        )}
+                      </div>
+                    </details>
+                    {canUseLiveMonitorActions && (
+                      <>
+                        <button
+                          type="button"
+                          disabled={isLiveMonitorLoading}
+                          onClick={() => handleLiveCallMonitor('listen')}
+                          className={liveActionButtonClass}
+                          title="Прослушать активный звонок: система позвонит на ваш SIP"
+                        >
+                          <Headphones className="h-4 w-4" />
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isLiveMonitorLoading}
+                          onClick={() => handleLiveCallMonitor('whisper')}
+                          className={liveActionButtonClass}
+                          title="Суфлёр: система позвонит на ваш SIP, клиент не должен слышать подсказку"
+                        >
+                          <Mic2 className="h-4 w-4" />
+                        </button>
+                      </>
+                    )}
+                  </div>
                   <div className={`h-14 w-14 rounded-full flex items-center justify-center shadow-sm shrink-0 ${iconClass}`}>
                     {isIncomingLive ? <PhoneIncoming className="h-7 w-7" /> : isOutgoingLive ? <PhoneOutgoing className="h-7 w-7" /> : <PhoneCall className="h-7 w-7" />}
                   </div>
@@ -5139,7 +5328,8 @@ export default function App() {
                     </div>
                     <div className="mt-1 flex items-center gap-2 text-sm font-bold text-slate-800">
                       <Phone className="h-4 w-4 text-cyan-500" />
-                      <span>{liveCallBanner.number || '—'}</span></div>
+                      <span className="font-mono">{liveCallBanner.number || '—'}</span>
+                    </div>
                   </div></div>
 
                 <div className="grid grid-cols-2 xl:grid-cols-6 flex-1 divide-x divide-slate-200">
@@ -5161,7 +5351,11 @@ export default function App() {
                   <div className="px-6 py-4 flex flex-col justify-center items-start xl:items-end">
                     <span className="text-sm font-black text-slate-900">{liveCallBanner.startedAt || ''}</span>
                     <span className="mt-2 text-[11px] uppercase tracking-wider font-bold text-slate-500">Длительность</span>
-                    <span className="mt-1 text-base font-black text-slate-950 font-mono">{durationText}</span></div>
+                    <span className="mt-1 text-base font-black text-slate-950 font-mono">{durationText}</span>
+                    {liveTransferStatus && (
+                      <span className="mt-2 max-w-[220px] text-right text-[11px] font-bold text-slate-500">{liveTransferStatus}</span>
+                    )}
+                  </div>
                 </div></div>
             </div></div>
         );

@@ -1983,6 +1983,31 @@ const uniqueExts = (values: any[]): string[] => {
   return result;
 };
 
+const getAnsweredInternalExtFromCdrLeg = (c: any): string => {
+  const disposition = String(c?.disposition || '').toUpperCase();
+  if (disposition !== 'ANSWERED' || Number(c?.billsec || 0) <= 0) return '';
+
+  const fromDst = getCalleeInternalExt(c);
+  if (fromDst) return fromDst;
+
+  const fromChannel = getChannelInternalExt(c?.dstchannel);
+  if (fromChannel) return fromChannel;
+
+  return '';
+};
+
+const findCdrTransferTargetExt = (group: any[]): string => {
+  const answeredExts = uniqueExts(
+    [...group]
+      .sort((a, b) => getCallDateMs(a?.calldate) - getCallDateMs(b?.calldate))
+      .map(getAnsweredInternalExtFromCdrLeg)
+  );
+
+  if (answeredExts.length < 2) return '';
+
+  return answeredExts[answeredExts.length - 1];
+};
+
 const buildDidWithAnsweredAndMissed = (baseDid: any, answeredExts: string[], missedExts: string[]): string => {
   const did = String(baseDid || '').trim();
   const parts: string[] = [];
@@ -3689,6 +3714,7 @@ function normalizeLocalDbSchema(db: any): any {
       ...(db?.settings || {})
     },
     missedCallStatuses: Array.isArray(db?.missedCallStatuses) ? db.missedCallStatuses : [],
+    liveCallTransfers: Array.isArray(db?.liveCallTransfers) ? db.liveCallTransfers : [],
     directory: Array.isArray(db?.directory) ? db.directory : [],
     blacklist: Array.isArray(db?.blacklist) ? db.blacklist : [],
     calltrackingSites: Array.isArray(db?.calltrackingSites) && db.calltrackingSites.length ? db.calltrackingSites : [createDefaultCalltrackingSite()],
@@ -3985,6 +4011,7 @@ function getDefaultLocalDb(): any {
       }
     ],
     missedCallStatuses: [],
+    liveCallTransfers: [],
     directory: [],
     blacklist: [],
     calltrackingSites: [createDefaultCalltrackingSite()],
@@ -11931,9 +11958,16 @@ interface LiveCallBanner {
   durationSec?: number;
   durationText?: string;
   startedAt?: string;
+  transferTargets?: LiveTransferTarget[];
 }
 
 type AmiBlock = Record<string, string>;
+
+type LiveTransferTarget = {
+  id: string;
+  extension: string;
+  label: string;
+};
 
 function parseAmiBlocks(raw: string): AmiBlock[] {
   return raw
@@ -12010,6 +12044,207 @@ function runAmiCoreShowChannels(settings: AppSettings): Promise<AmiBlock[]> {
     socket.on('timeout', () => {
       socket.destroy();
       resolve([]);
+    });
+  });
+}
+
+function runAmiBlindTransfer(
+  settings: AppSettings,
+  channel: string,
+  targetExtension: string
+): Promise<{ success: boolean; error?: string; message?: string }> {
+  return new Promise((resolve) => {
+    const host = settings.amiHost || 'localhost';
+    const port = Number(settings.amiPort || 5038);
+    const user = settings.amiUser || 'clicktocall';
+    const pass = settings.amiPass || '';
+    const context = settings.amiContext || 'from-internal';
+    const safeChannel = String(channel || '').replace(/[\r\n]+/g, '').trim();
+    const safeTarget = onlyDigits(targetExtension);
+
+    if (!host || !user || !pass) {
+      resolve({ success: false, error: 'AMI не настроен' });
+      return;
+    }
+    if (!safeChannel || !safeTarget || !isInternalExt(safeTarget)) {
+      resolve({ success: false, error: 'Некорректные параметры перевода' });
+      return;
+    }
+
+    const socket = new net.Socket();
+    socket.setTimeout(6500);
+    let buffer = '';
+    let stage: 'greeting' | 'login' | 'transfer' = 'greeting';
+    let finished = false;
+
+    const finish = (result: { success: boolean; error?: string; message?: string }) => {
+      if (finished) return;
+      finished = true;
+      try {
+        socket.write('Action: Logoff\r\n\r\n');
+        socket.end();
+      } catch (_error) {
+        socket.destroy();
+      }
+      resolve(result);
+    };
+
+    socket.connect(port, host, () => {});
+
+    socket.on('data', (data) => {
+      buffer += data.toString();
+
+      if (stage === 'greeting' && buffer.includes('\n')) {
+        buffer = '';
+        socket.write(`Action: Login\r\nUsername: ${user}\r\nSecret: ${pass}\r\nEvents: off\r\n\r\n`);
+        stage = 'login';
+        return;
+      }
+
+      if (stage === 'login' && (buffer.includes('\r\n\r\n') || buffer.includes('\n\n'))) {
+        const lower = buffer.toLowerCase();
+        if (!lower.includes('success') && !lower.includes('authentication accepted')) {
+          finish({ success: false, error: 'Ошибка аутентификации Asterisk AMI' });
+          return;
+        }
+        buffer = '';
+        socket.write(
+          `Action: BlindTransfer\r\n` +
+          `Channel: ${safeChannel}\r\n` +
+          `Exten: ${safeTarget}\r\n` +
+          `Context: ${context}\r\n\r\n`
+        );
+        stage = 'transfer';
+        return;
+      }
+
+      if (stage === 'transfer' && (buffer.includes('\r\n\r\n') || buffer.includes('\n\n'))) {
+        const lower = buffer.toLowerCase();
+        const message = buffer
+          .split(/\r?\n/)
+          .map(line => line.trim())
+          .find(line => /^message:/i.test(line))
+          ?.replace(/^message:\s*/i, '')
+          .slice(0, 200);
+
+        if (lower.includes('response: success')) {
+          finish({ success: true, message: message || 'Transfer queued' });
+        } else {
+          finish({ success: false, error: message || 'Asterisk AMI отклонил перевод звонка' });
+        }
+      }
+    });
+
+    socket.on('error', (error) => {
+      finish({ success: false, error: error.message || 'Ошибка подключения к Asterisk AMI' });
+    });
+
+    socket.on('timeout', () => {
+      socket.destroy();
+      finish({ success: false, error: 'AMI timeout при переводе звонка' });
+    });
+  });
+}
+
+function runAmiChanSpyOriginate(
+  settings: AppSettings,
+  supervisorExt: string,
+  spyTarget: string,
+  mode: 'listen' | 'whisper'
+): Promise<{ success: boolean; error?: string; message?: string }> {
+  return new Promise((resolve) => {
+    const host = settings.amiHost || 'localhost';
+    const port = Number(settings.amiPort || 5038);
+    const user = settings.amiUser || 'clicktocall';
+    const pass = settings.amiPass || '';
+    const channelPrefix = process.env.CLICK2CALL_CHANNEL_PREFIX || 'SIP';
+    const safeSupervisorExt = onlyDigits(supervisorExt);
+    const safeSpyTarget = String(spyTarget || '').replace(/[\r\n]+/g, '').trim();
+    const spyOptions = mode === 'whisper' ? 'qw' : 'q';
+
+    if (!host || !user || !pass) {
+      resolve({ success: false, error: 'AMI не настроен' });
+      return;
+    }
+    if (!safeSupervisorExt || !isInternalExt(safeSupervisorExt) || !safeSpyTarget) {
+      resolve({ success: false, error: 'Некорректные параметры подключения к звонку' });
+      return;
+    }
+
+    const socket = new net.Socket();
+    socket.setTimeout(6500);
+    let buffer = '';
+    let stage: 'greeting' | 'login' | 'originate' = 'greeting';
+    let finished = false;
+
+    const finish = (result: { success: boolean; error?: string; message?: string }) => {
+      if (finished) return;
+      finished = true;
+      try {
+        socket.write('Action: Logoff\r\n\r\n');
+        socket.end();
+      } catch (_error) {
+        socket.destroy();
+      }
+      resolve(result);
+    };
+
+    socket.connect(port, host, () => {});
+
+    socket.on('data', (data) => {
+      buffer += data.toString();
+
+      if (stage === 'greeting' && buffer.includes('\n')) {
+        buffer = '';
+        socket.write(`Action: Login\r\nUsername: ${user}\r\nSecret: ${pass}\r\nEvents: off\r\n\r\n`);
+        stage = 'login';
+        return;
+      }
+
+      if (stage === 'login' && (buffer.includes('\r\n\r\n') || buffer.includes('\n\n'))) {
+        const lower = buffer.toLowerCase();
+        if (!lower.includes('success') && !lower.includes('authentication accepted')) {
+          finish({ success: false, error: 'Ошибка аутентификации Asterisk AMI' });
+          return;
+        }
+        buffer = '';
+        socket.write(
+          `Action: Originate\r\n` +
+          `Channel: ${channelPrefix}/${safeSupervisorExt}\r\n` +
+          `Application: ChanSpy\r\n` +
+          `Data: ${safeSpyTarget},${spyOptions}\r\n` +
+          `CallerID: "PBXPuls Monitor" <${safeSupervisorExt}>\r\n` +
+          `Variable: __PBXPULS_LIVE_MONITOR=1\r\n` +
+          `Async: true\r\n\r\n`
+        );
+        stage = 'originate';
+        return;
+      }
+
+      if (stage === 'originate' && (buffer.includes('\r\n\r\n') || buffer.includes('\n\n'))) {
+        const lower = buffer.toLowerCase();
+        const message = buffer
+          .split(/\r?\n/)
+          .map(line => line.trim())
+          .find(line => /^message:/i.test(line))
+          ?.replace(/^message:\s*/i, '')
+          .slice(0, 200);
+
+        if (lower.includes('response: success')) {
+          finish({ success: true, message: message || 'ChanSpy originate queued' });
+        } else {
+          finish({ success: false, error: message || 'Asterisk AMI отклонил подключение к звонку' });
+        }
+      }
+    });
+
+    socket.on('error', (error) => {
+      finish({ success: false, error: error.message || 'Ошибка подключения к Asterisk AMI' });
+    });
+
+    socket.on('timeout', () => {
+      socket.destroy();
+      finish({ success: false, error: 'AMI timeout при подключении к звонку' });
     });
   });
 }
@@ -12116,6 +12351,94 @@ function liveFormatSeconds(value: number): string {
   const minutes = Math.floor(total / 60);
   const seconds = total % 60;
   return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
+function getDirectoryInternalTransferExtension(entry: any): string {
+  const normalized = normalizeDirectoryEntry(entry);
+  const candidates = [
+    normalized.internalExtension,
+    normalized.number,
+    ...(Array.isArray(normalized.phones) ? normalized.phones : [])
+  ];
+
+  for (const value of candidates) {
+    const digits = onlyDigits(value);
+    if (digits && isInternalExt(digits)) return digits;
+  }
+
+  return '';
+}
+
+function buildLiveTransferTargets(directory: any[], req: Request, localDb: any, operatorExt: string): LiveTransferTarget[] {
+  const currentExt = onlyDigits(operatorExt);
+  const seen = new Set<string>();
+
+  return (directory || [])
+    .map((entry: any) => normalizeDirectoryEntry(entry, localDb.settings))
+    .filter((entry: any) => canReadDirectoryEntry(entry, (req as any).user, getAuthenticatedDbUser(localDb, req), localDb.settings))
+    .filter((entry: any) => entry.type === 'internal' && entry.isSpam !== true && entry.isBlacklisted !== true)
+    .map((entry: any) => {
+      const extension = getDirectoryInternalTransferExtension(entry);
+      if (!extension || extension === currentExt || seen.has(extension)) return null;
+      seen.add(extension);
+      return {
+        id: String(entry.id || extension),
+        extension,
+        label: String(entry.name || entry.company || 'Внутренний номер').slice(0, 120)
+      };
+    })
+    .filter((item: LiveTransferTarget | null): item is LiveTransferTarget => Boolean(item))
+    .sort((a, b) => a.extension.localeCompare(b.extension, 'ru', { numeric: true }));
+}
+
+function findLiveTransferChannelForOperator(channels: AmiBlock[], operatorExt: string): { channel: string; linkedid: string } | null {
+  const ext = onlyDigits(operatorExt);
+  if (!ext) return null;
+
+  const grouped = new Map<string, AmiBlock[]>();
+  channels.forEach(ch => {
+    const key = ch.Linkedid || ch.Uniqueid || ch.Channel || Math.random().toString();
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key)!.push(ch);
+  });
+
+  for (const group of grouped.values()) {
+    const endpointChannel = group.find(ch => {
+      const channel = String(ch.Channel || '');
+      return /^(SIP|PJSIP)\//i.test(channel) && getLiveChannelEndpointExt(channel) === ext;
+    });
+    if (endpointChannel?.Channel) {
+      return {
+        channel: endpointChannel.Channel,
+        linkedid: endpointChannel.Linkedid || endpointChannel.Uniqueid || ''
+      };
+    }
+
+    const localChannel = group.find(ch => {
+      const channel = String(ch.Channel || '');
+      return /^Local\//i.test(channel) && getLiveChannelEndpointExt(channel) === ext;
+    });
+    if (localChannel?.Channel) {
+      return {
+        channel: localChannel.Channel,
+        linkedid: localChannel.Linkedid || localChannel.Uniqueid || ''
+      };
+    }
+  }
+
+  return null;
+}
+
+function getChanSpyTargetFromChannel(channel: string, operatorExt: string): string {
+  const raw = String(channel || '').trim();
+  const endpointPrefix = raw.match(/^((?:SIP|PJSIP)\/[0-9]{2,5})-/i);
+  if (endpointPrefix) return endpointPrefix[1];
+
+  const localPrefix = raw.match(/^(Local\/[0-9]{2,5})@/i);
+  if (localPrefix) return localPrefix[1];
+
+  const ext = onlyDigits(operatorExt);
+  return ext || raw.replace(/[\r\n]+/g, '').trim();
 }
 
 function buildLiveCallBannerFromAmiChannels(channels: AmiBlock[], operatorExt: string, directory: any[], settings: AppSettings): LiveCallBanner {
@@ -12232,6 +12555,7 @@ function buildLiveCallBannerFromAmiChannels(channels: AmiBlock[], operatorExt: s
 
 app.get('/api/live/call-banner', requireAuth(), async (req, res) => {
   try {
+    res.setHeader('Cache-Control', 'no-store');
     const operatorExt = String(req.query.operatorExt || '').trim();
     if (!operatorExt) {
       res.json({ active: false });
@@ -12247,9 +12571,140 @@ app.get('/api/live/call-banner', requireAuth(), async (req, res) => {
     const directoryRuntime = await getDirectoryRuntimeSnapshotForRequest(localDb, req);
     const channels = await runAmiCoreShowChannels(localDb.settings);
     const banner = buildLiveCallBannerFromAmiChannels(channels, effectiveOperatorExt, directoryRuntime.contacts, localDb.settings);
-    res.json(banner);
+    res.json({
+      ...banner,
+      transferTargets: banner.active ? buildLiveTransferTargets(directoryRuntime.contacts, req, localDb, effectiveOperatorExt) : []
+    });
   } catch (error: any) {
     res.json({ active: false, error: error.message });
+  }
+});
+
+app.post('/api/live/call-transfer', requireAuth(), async (req, res) => {
+  try {
+    const authUser = (req as any).user;
+    if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.make_calls !== true) {
+      res.status(403).json({ error: 'Нет прав на перевод звонков' });
+      return;
+    }
+
+    const requestedOperatorExt = String(req.body?.operatorExt || '').trim();
+    const targetExtension = onlyDigits(req.body?.targetExtension);
+    if (!requestedOperatorExt || !targetExtension) {
+      res.status(400).json({ error: 'Нужны operatorExt и targetExtension' });
+      return;
+    }
+    if (!isInternalExt(targetExtension)) {
+      res.status(400).json({ error: 'Перевод разрешён только на внутренний номер' });
+      return;
+    }
+
+    const localDb = await readLocalDb();
+    const effectiveOperatorExt = getEffectiveOperatorExt(localDb, req, requestedOperatorExt);
+    if (!effectiveOperatorExt) {
+      res.status(400).json({ error: 'Для пользователя не назначен SIP-номер' });
+      return;
+    }
+
+    const directoryRuntime = await getDirectoryRuntimeSnapshotForRequest(localDb, req);
+    const transferTargets = buildLiveTransferTargets(directoryRuntime.contacts, req, localDb, effectiveOperatorExt);
+    const target = transferTargets.find(item => item.extension === targetExtension);
+    if (!target) {
+      res.status(400).json({ error: 'Номер назначения не найден среди внутренних контактов справочника' });
+      return;
+    }
+
+    const channels = await runAmiCoreShowChannels(localDb.settings);
+    const transferChannel = findLiveTransferChannelForOperator(channels, effectiveOperatorExt);
+    if (!transferChannel) {
+      res.status(409).json({ error: 'Активный канал оператора для перевода не найден' });
+      return;
+    }
+
+    const result = await runAmiBlindTransfer(localDb.settings, transferChannel.channel, target.extension);
+    if (!result.success) {
+      res.status(502).json({ success: false, error: result.error || 'Не удалось перевести звонок' });
+      return;
+    }
+
+    const transferEvent = {
+      id: `transfer_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`,
+      linkedid: transferChannel.linkedid || '',
+      operatorExt: effectiveOperatorExt,
+      targetExtension: target.extension,
+      targetLabel: target.label,
+      source: 'pbxpuls_live_transfer',
+      createdAt: new Date().toISOString()
+    };
+    localDb.liveCallTransfers = Array.isArray(localDb.liveCallTransfers) ? localDb.liveCallTransfers : [];
+    localDb.liveCallTransfers.push(transferEvent);
+    localDb.liveCallTransfers = localDb.liveCallTransfers.slice(-500);
+    await writeLocalDb(localDb);
+
+    res.json({
+      success: true,
+      targetExtension: target.extension,
+      targetLabel: target.label,
+      linkedid: transferChannel.linkedid,
+      message: result.message || 'Transfer queued'
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Не удалось перевести звонок' });
+  }
+});
+
+app.post('/api/live/call-monitor', requireAuth(), async (req, res) => {
+  try {
+    const authUser = (req as any).user;
+    const role = String(authUser?.role || '');
+    if (!['su', 'admin', 'manager'].includes(role)) {
+      res.status(403).json({ error: 'Прослушивание доступно только SU, администратору и руководителю' });
+      return;
+    }
+
+    const mode = String(req.body?.mode || '').trim() === 'whisper' ? 'whisper' : 'listen';
+    const requestedOperatorExt = String(req.body?.operatorExt || '').trim();
+    const supervisorExt = onlyDigits(req.body?.supervisorExt);
+    if (!requestedOperatorExt || !supervisorExt) {
+      res.status(400).json({ error: 'Нужны operatorExt и supervisorExt' });
+      return;
+    }
+    if (!isInternalExt(supervisorExt)) {
+      res.status(400).json({ error: 'Ваш номер для подключения должен быть внутренним' });
+      return;
+    }
+
+    const localDb = await readLocalDb();
+    const effectiveOperatorExt = getEffectiveOperatorExt(localDb, req, requestedOperatorExt);
+    if (!effectiveOperatorExt) {
+      res.status(400).json({ error: 'Активный внутренний номер оператора не найден' });
+      return;
+    }
+
+    const channels = await runAmiCoreShowChannels(localDb.settings);
+    const transferChannel = findLiveTransferChannelForOperator(channels, effectiveOperatorExt);
+    if (!transferChannel) {
+      res.status(409).json({ error: 'Активный канал оператора для подключения не найден' });
+      return;
+    }
+
+    const spyTarget = getChanSpyTargetFromChannel(transferChannel.channel, effectiveOperatorExt);
+    const result = await runAmiChanSpyOriginate(localDb.settings, supervisorExt, spyTarget, mode);
+    if (!result.success) {
+      res.status(502).json({ success: false, error: result.error || 'Не удалось подключиться к звонку' });
+      return;
+    }
+
+    res.json({
+      success: true,
+      mode,
+      supervisorExt,
+      operatorExt: effectiveOperatorExt,
+      linkedid: transferChannel.linkedid,
+      message: result.message || 'ChanSpy originate queued'
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Не удалось подключиться к звонку' });
   }
 });
 
@@ -13026,6 +13481,7 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
         ...answeredExts,
         ...missedExts
       ]);
+      const transferTargetExt = findCdrTransferTargetExt(sorted);
 
       const answeredChannel = String(answered?.dstchannel || "");
       const answeredMatch = answeredChannel.match(/(?:SIP|PJSIP)\/([0-9]{2,5})-/i);
@@ -13051,6 +13507,7 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
         did: buildDidWithAnsweredAndMissed((queueLeg?.did || groupLeg?.did || sorted.find(c => c.did)?.did || ""), answeredExts, missedExts) || (sorted.find(c => c.did)?.did || first.did),
         answeredExts,
         missedExts,
+        transferTargetExt,
       };
     });
 
@@ -13090,6 +13547,7 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
         ...answeredExts,
         ...missedExts
       ]);
+      const transferTargetExt = findCdrTransferTargetExt(sorted);
 
       const answeredChannel = String(answered?.dstchannel || "");
       const answeredMatch = answeredChannel.match(/(?:SIP|PJSIP)\/([0-9]{2,5})-/i);
@@ -13123,6 +13581,7 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
         did: buildDidWithAnsweredAndMissed(did, answeredExts, missedExts) || did,
         answeredExts,
         missedExts,
+        transferTargetExt,
         disposition: answered ? "ANSWERED" : "NO ANSWER",
         billsec: answered ? answered.billsec : 0,
         duration: Math.max(...sorted.map(c => Number(c.duration || 0))),
@@ -13132,9 +13591,27 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
 
     const directoryRuntime = await getDirectoryRuntimeSnapshotForRequest(localDb, req);
     const directory = directoryRuntime.contacts;
+    const transferEventsByLinkedId = new Map<string, any>();
+    (Array.isArray(localDb.liveCallTransfers) ? localDb.liveCallTransfers : []).forEach((event: any) => {
+      const linkedid = String(event?.linkedid || '').trim();
+      const targetExtension = onlyDigits(event?.targetExtension);
+      if (!linkedid || !targetExtension || !isInternalExt(targetExtension)) return;
+      transferEventsByLinkedId.set(linkedid, event);
+    });
 
     const callMap = new Map<string, CallEntry>();
     calls.forEach(call => {
+      const linkedid = String(call.linkedid || call.uniqueid || '').trim();
+      const transferEvent = linkedid ? transferEventsByLinkedId.get(linkedid) : null;
+      const eventTargetExt = transferEvent ? onlyDigits(transferEvent.targetExtension) : '';
+      const cdrTargetExt = onlyDigits((call as any).transferTargetExt);
+      const transferTargetExt = eventTargetExt || cdrTargetExt;
+      if (transferTargetExt && isInternalExt(transferTargetExt)) {
+        (call as any).wasTransferred = true;
+        (call as any).transferTargetExt = transferTargetExt;
+        (call as any).transferTargetLabel = String(transferEvent?.targetLabel || '').trim();
+      }
+
       const localStatus = localDb.missedCallStatuses.find(s => s.uniqueid === call.uniqueid);
       if (localStatus) {
         call.processed = localStatus.processed;

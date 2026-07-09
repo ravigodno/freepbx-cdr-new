@@ -53,6 +53,11 @@ export interface CallEntry {
   callbackCallId?: string;     // UniqueId of the call that resolved this
   callbackTime?: string;       // Time of the callback resolution
   wasKpiResolved?: boolean;    // Was resolved within the KPI timeframe?
+
+  // Transfer tracking
+  wasTransferred?: boolean;
+  transferTargetExt?: string;
+  transferTargetLabel?: string;
 }
 
 export interface MissedCallStatus {
@@ -330,5 +335,4 @@ export interface CallScriptAssignment {
   workingHours?: string;
   isActive: boolean;
 }
-
 
