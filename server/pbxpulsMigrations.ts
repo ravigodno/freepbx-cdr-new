@@ -79,6 +79,14 @@ const DIRECTORY_STORAGE_MODE_SETTING = [
   'Controls PBXPuls Directory runtime source: legacy or sql'
 ] as const;
 
+const DIRECTORY_WRITE_MODE_SETTING = [
+  'directory.write_mode',
+  'legacy',
+  'string',
+  'directory',
+  'Controls PBXPuls Directory write source: legacy or sql'
+] as const;
+
 const MIGRATIONS: Migration[] = [
   {
     key: '20260707_001_core_internal_tables',
@@ -231,6 +239,12 @@ const MIGRATIONS: Migration[] = [
     description: 'Seed Directory storage mode setting',
     statements: [],
     seed: seedDirectoryStorageMode
+  },
+  {
+    key: '20260709_010_seed_directory_write_mode',
+    description: 'Seed Directory write mode setting',
+    statements: [],
+    seed: seedDirectoryWriteMode
   }
 ];
 
@@ -422,6 +436,15 @@ async function seedDirectoryStorageMode(connection: Connection): Promise<void> {
       (setting_key, setting_value, value_type, category, is_secret, description)
      VALUES (?, ?, ?, ?, 0, ?)`,
     DIRECTORY_STORAGE_MODE_SETTING
+  );
+}
+
+async function seedDirectoryWriteMode(connection: Connection): Promise<void> {
+  await connection.execute(
+    `INSERT IGNORE INTO settings
+      (setting_key, setting_value, value_type, category, is_secret, description)
+     VALUES (?, ?, ?, ?, 0, ?)`,
+    DIRECTORY_WRITE_MODE_SETTING
   );
 }
 

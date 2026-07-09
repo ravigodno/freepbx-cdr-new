@@ -1162,3 +1162,68 @@ Audit:
 - Audit details must not include contacts, phone numbers, names, comments, custom field values, customer data or raw Directory payloads.
 
 Stage 9.8.1 does not add SQL write-through and does not change import, create, update, delete, spam or blacklist write behavior.
+
+## Stage 9.9.1 Directory SQL Write Layer Foundation
+
+This stage prepares a SQL write service for Directory, but does not switch production writes to SQL.
+
+Helper:
+
+- `server/pbxpulsDirectoryWrite.ts`
+- `createDirectoryContactSql(input, actor)`
+- `updateDirectoryContactSql(id, input, actor)`
+- `deleteDirectoryContactSql(id, actor)`
+- `upsertDirectoryContactMetadataSql(contactId, metadata, actor)`
+- `validateDirectoryContactInput(input)`
+- `normalizeDirectoryContactForSql(input)`
+
+Runtime behavior:
+
+- Existing Directory write endpoints remain legacy-only.
+- `POST /api/directory`, `PUT /api/directory/:id`, `DELETE /api/directory/:id`, spam, blacklist, import and sync write paths still write `data/db.json`.
+- No frontend behavior changes are introduced.
+- No SQL write-through is connected to current runtime endpoints.
+
+Setting:
+
+- `directory.write_mode`
+- Allowed future values: `legacy`, `sql`
+- Default: `legacy`
+- Seed migration: `20260709_010_seed_directory_write_mode`
+
+Ownership rules:
+
+- Common contacts use `contact_type = common` and `owner_user_id = NULL`.
+- Personal contacts use `contact_type = personal`.
+- For personal contacts, `owner_user_id` is the user who added the contact.
+- At this stage, creator and owner are treated as the same user for personal contacts.
+
+Custom fields and metadata:
+
+- Custom field values are stored through `directory_contact_metadata`.
+- Existing `directory_custom_fields.field_key` definitions can be used by metadata writes.
+- New custom field definitions are not created automatically by this foundation layer.
+- Unknown metadata keys are skipped with warnings instead of being promoted silently.
+
+Audit safety:
+
+- SQL write helper audit events are limited to counts and IDs:
+  - `directory_sql_contact_created`
+  - `directory_sql_contact_updated`
+  - `directory_sql_contact_deleted`
+- Event details are safe and limited to `contactId`, `contactType`, `actor`, and `metadataCount`.
+- Audit details must not include names, phone numbers, email addresses, comments, metadata values, raw contact payloads, tokens or secrets.
+
+Diagnostic endpoint:
+
+- `GET /api/pbxpuls/directory-write-readiness`
+- Auth: `requireAuth(['su', 'admin'])`
+- Reports SQL availability, helper availability, current write mode, supported operations and the next controlled switch step.
+
+`GET /api/pbxpuls/directory-runtime-effective` also reports:
+
+- `writeMode`
+- `writeLayerAvailable`
+- `directoryWriteMode`
+
+Stage 9.9.1 keeps `directory.write_mode = legacy` and leaves `directory.storage_mode` unchanged. The next step is `controlled_directory_sql_write_switch`, where any production write switch must be gated, audited and reversible.
