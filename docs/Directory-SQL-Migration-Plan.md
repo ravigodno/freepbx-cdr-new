@@ -1456,3 +1456,44 @@ Audit:
 - Audit details must not include names, phone numbers, email addresses, comments, metadata values, raw payloads, tokens or secrets.
 
 The next stage should be a runtime-check of the blocked SQL write test endpoint. A separate later stage can run a controlled one-contact isolated SQL write smoke only after explicitly enabling the safety flag.
+
+## Stage 9.9.11 Directory SQL Isolated Smoke Documentation and Diagnostics Hardening
+
+Stage 9.9.10 completed the first controlled isolated SQL write smoke for Directory.
+
+Smoke result:
+
+- The isolated endpoint created one artificial SQL contact.
+- The isolated endpoint updated only that test contact.
+- The isolated endpoint deleted only that test contact.
+- Cleanup was verified with read-only SQL checks.
+- `directory_contacts` had zero rows for the test id after cleanup.
+- `directory_contact_metadata` had zero rows for the test id after cleanup.
+
+Production state after the smoke:
+
+- Directory reads remain `data/db.json`.
+- Directory writes remain `data/db.json`.
+- `directory.storage_mode = legacy`.
+- `directory.write_mode = legacy`.
+- `directory.sql_write_test_enabled = false`.
+- `directory.write_mode = sql` remains blocked.
+- Production SQL write is not unlocked.
+
+Diagnostics:
+
+- `GET /api/pbxpuls/directory-runtime-effective` now reports:
+  - `isolatedSqlWriteSmokeAvailable: true`
+  - `lastKnownIsolatedSqlWriteSmoke: "passed_manual_stage_9_9_10"`
+  - `productionWriteEndpointsUseSql: false`
+  - `existingDirectoryEndpointsSwitched: false`
+  - `sqlWriteBranchBlocked: true`
+- `GET /api/pbxpuls/directory-write-readiness` now reports:
+  - `isolatedSqlWriteSmokePassed: true`
+  - `isolatedSqlWriteSmokeStage: "9.9.10"`
+  - `productionSqlWriteReady: false`
+  - `productionSqlWriteBlockReason: "production_sql_write_not_unlocked"`
+
+These fields are diagnostic status only. They do not run SQL writes, do not inspect contact data, and do not return personal data.
+
+The next stage should design a controlled production SQL write unlock, still guarded and still separate from enabling `directory.write_mode = sql` in production.
