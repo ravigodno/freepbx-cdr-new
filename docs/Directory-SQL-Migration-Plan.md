@@ -1388,3 +1388,71 @@ Audit:
 - Audit details must not include names, phone numbers, email addresses, comments, metadata values, raw payloads, tokens or secrets.
 
 Stage 9.9.5 is wiring design only. SQL writes remain disabled. The next stage should be controlled SQL branch enablement only after a separate decision, preview and rollback plan.
+
+## Stage 9.9.8 SQL Write Isolated Test Endpoint Design
+
+This stage adds an isolated, guarded endpoint for a future one-contact Directory SQL write smoke test.
+
+Helper:
+
+- `server/pbxpulsDirectorySqlWriteTest.ts`
+- `getDirectorySqlWriteTestStatus()`
+- `canRunDirectorySqlWriteTest()`
+- `assertDirectorySqlWriteTestAllowed()`
+- `validateSqlWriteTestPayload(input)`
+- `buildSqlWriteTestPayload(input)`
+
+Endpoints:
+
+- `GET /api/pbxpuls/directory-sql-write-test-status`
+- `POST /api/pbxpuls/directory-sql-write-test`
+- Auth: `requireAuth(['su'])`
+
+Safety flag:
+
+- `directory.sql_write_test_enabled`
+- Default value: `false`
+- Seed migration: `20260709_011_seed_directory_sql_write_test_enabled`
+
+Behavior:
+
+- The isolated SQL write test endpoint is available but blocked while `directory.sql_write_test_enabled = false`.
+- The blocked response uses reason `directory_sql_write_test_disabled`.
+- Production Directory endpoints remain legacy.
+- `directory.write_mode = sql` remains blocked by the write-mode controller.
+- `directory.storage_mode` remains `legacy`.
+- SQL writes are not performed in this stage.
+- No contacts are created, updated or deleted in this stage.
+- The endpoint is intended only for the next controlled smoke-test stage.
+
+Runtime requirements before a future isolated SQL write smoke:
+
+- `directory.sql_write_test_enabled = true`
+- SQL database is available.
+- SQL write layer is available.
+- `directory.write_mode = legacy`
+- `directory.storage_mode = legacy`
+
+The production modes must remain legacy during the isolated test so the smoke test cannot affect production Directory read or write behavior.
+
+Diagnostics:
+
+- `GET /api/pbxpuls/directory-write-readiness` now reports:
+  - `sqlWriteTestEndpointAvailable`
+  - `sqlWriteTestEnabled`
+  - `canRunSqlWriteTest`
+  - `sqlWriteTestBlockReason`
+- `GET /api/pbxpuls/directory-runtime-effective` now reports:
+  - `sqlWriteTestEndpointAvailable`
+  - `sqlWriteTestEnabled`
+  - `canRunSqlWriteTest`
+  - `sqlWriteTestBlockReason`
+  - `productionWriteEndpointsUseSql`
+
+Audit:
+
+- Blocked POST attempts write `directory_sql_write_test_blocked`.
+- Audit details are safe and limited to actor, reason and `sqlWritePerformed: false`.
+- Audit details must not include names, phone numbers, email addresses, comments, metadata values, raw payloads, tokens or secrets.
+
+The next stage should be a runtime-check of the blocked SQL write test endpoint. A separate later stage can run a controlled one-contact isolated SQL write smoke only after explicitly enabling the safety flag.

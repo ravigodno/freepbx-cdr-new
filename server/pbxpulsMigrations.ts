@@ -87,6 +87,14 @@ const DIRECTORY_WRITE_MODE_SETTING = [
   'Controls PBXPuls Directory write source: legacy or sql'
 ] as const;
 
+const DIRECTORY_SQL_WRITE_TEST_ENABLED_SETTING = [
+  'directory.sql_write_test_enabled',
+  'false',
+  'boolean',
+  'directory',
+  'Controls isolated PBXPuls Directory SQL write smoke test endpoint'
+] as const;
+
 const MIGRATIONS: Migration[] = [
   {
     key: '20260707_001_core_internal_tables',
@@ -245,6 +253,12 @@ const MIGRATIONS: Migration[] = [
     description: 'Seed Directory write mode setting',
     statements: [],
     seed: seedDirectoryWriteMode
+  },
+  {
+    key: '20260709_011_seed_directory_sql_write_test_enabled',
+    description: 'Seed Directory SQL write test safety flag',
+    statements: [],
+    seed: seedDirectorySqlWriteTestEnabled
   }
 ];
 
@@ -445,6 +459,15 @@ async function seedDirectoryWriteMode(connection: Connection): Promise<void> {
       (setting_key, setting_value, value_type, category, is_secret, description)
      VALUES (?, ?, ?, ?, 0, ?)`,
     DIRECTORY_WRITE_MODE_SETTING
+  );
+}
+
+async function seedDirectorySqlWriteTestEnabled(connection: Connection): Promise<void> {
+  await connection.execute(
+    `INSERT IGNORE INTO settings
+      (setting_key, setting_value, value_type, category, is_secret, description)
+     VALUES (?, ?, ?, ?, 0, ?)`,
+    DIRECTORY_SQL_WRITE_TEST_ENABLED_SETTING
   );
 }
 

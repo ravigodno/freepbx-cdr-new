@@ -57,6 +57,13 @@ import {
   getDirectoryWriteRouterStatus,
   getDirectoryWriteRuntimeDecision
 } from './server/pbxpulsDirectoryWriteRouter.js';
+import {
+  assertDirectorySqlWriteTestAllowed,
+  buildSqlWriteTestPayload,
+  getDirectorySqlWriteTestDisabledReason,
+  getDirectorySqlWriteTestStatus,
+  validateSqlWriteTestPayload
+} from './server/pbxpulsDirectorySqlWriteTest.js';
 
 // Load environment variables
 dotenv.config();
@@ -7857,10 +7864,11 @@ app.get('/api/pbxpuls/directory-readiness', requireAuth(['su', 'admin']), async 
 
 app.get('/api/pbxpuls/directory-write-readiness', requireAuth(['su', 'admin']), async (_req, res) => {
   try {
-    const [sqlAvailable, directoryWriteMode, sqlEnableDecision] = await Promise.all([
+    const [sqlAvailable, directoryWriteMode, sqlEnableDecision, sqlWriteTestStatus] = await Promise.all([
       isDirectorySqlWriteLayerAvailable(),
       getDirectoryWriteMode(),
-      canEnableDirectorySqlWrite()
+      canEnableDirectorySqlWrite(),
+      getDirectorySqlWriteTestStatus()
     ]);
 
     res.json({
@@ -7875,6 +7883,10 @@ app.get('/api/pbxpuls/directory-write-readiness', requireAuth(['su', 'admin']), 
       writePreviewAvailable: true,
       writeEndpointRouterAvailable: true,
       sqlWriteBranchBlocked: true,
+      sqlWriteTestEndpointAvailable: true,
+      sqlWriteTestEnabled: sqlWriteTestStatus.enabled,
+      canRunSqlWriteTest: sqlWriteTestStatus.canRun,
+      sqlWriteTestBlockReason: sqlWriteTestStatus.reason,
       supportedOperations: {
         create: true,
         update: true,
@@ -7897,6 +7909,10 @@ app.get('/api/pbxpuls/directory-write-readiness', requireAuth(['su', 'admin']), 
       writePreviewAvailable: true,
       writeEndpointRouterAvailable: true,
       sqlWriteBranchBlocked: true,
+      sqlWriteTestEndpointAvailable: true,
+      sqlWriteTestEnabled: false,
+      canRunSqlWriteTest: false,
+      sqlWriteTestBlockReason: getDirectorySqlWriteTestDisabledReason(),
       supportedOperations: {
         create: true,
         update: true,
@@ -7904,6 +7920,80 @@ app.get('/api/pbxpuls/directory-write-readiness', requireAuth(['su', 'admin']), 
         metadata: true
       },
       nextStep: 'controlled_directory_sql_write_switch'
+    });
+  }
+});
+
+app.get('/api/pbxpuls/directory-sql-write-test-status', requireAuth(['su']), async (_req, res) => {
+  try {
+    res.json(await getDirectorySqlWriteTestStatus());
+  } catch (error: any) {
+    console.warn('[PBXPULS_DIRECTORY_SQL_WRITE_TEST_STATUS] failed:', sanitizePBXPulsDbError(error));
+    res.status(500).json({
+      ok: false,
+      enabled: false,
+      canRun: false,
+      reason: getDirectorySqlWriteTestDisabledReason(),
+      sqlAvailable: false,
+      writeLayerAvailable: false,
+      directoryWriteMode: 'legacy',
+      directoryStorageMode: 'legacy',
+      productionWriteEndpointsUseSql: false,
+      isolatedTestOnly: true
+    });
+  }
+});
+
+app.post('/api/pbxpuls/directory-sql-write-test', requireAuth(['su']), async (req, res) => {
+  const actor = getDirectoryStorageModeActor(req);
+
+  try {
+    const status = await assertDirectorySqlWriteTestAllowed(actor);
+    if (!status.canRun) {
+      res.status(409).json({
+        ok: false,
+        canRun: false,
+        reason: status.reason || getDirectorySqlWriteTestDisabledReason(),
+        sqlWritePerformed: false
+      });
+      return;
+    }
+
+    if (req.body?.confirm !== 'PBXPULS_SQL_WRITE_TEST_ONLY') {
+      res.status(400).json({
+        ok: false,
+        canRun: true,
+        reason: 'directory_sql_write_test_confirmation_required',
+        sqlWritePerformed: false
+      });
+      return;
+    }
+
+    const validation = validateSqlWriteTestPayload(req.body?.input);
+    if (!validation.ok) {
+      res.status(400).json({
+        ok: false,
+        canRun: true,
+        reason: validation.reason || 'directory_sql_write_test_payload_invalid',
+        sqlWritePerformed: false
+      });
+      return;
+    }
+
+    res.status(501).json({
+      ok: false,
+      canRun: true,
+      reason: 'directory_sql_write_test_not_implemented_in_this_stage',
+      sqlWritePerformed: false,
+      payloadShape: buildSqlWriteTestPayload(req.body?.input)
+    });
+  } catch (error: any) {
+    console.warn('[PBXPULS_DIRECTORY_SQL_WRITE_TEST] blocked:', sanitizePBXPulsDbError(error));
+    res.status(409).json({
+      ok: false,
+      canRun: false,
+      reason: getDirectorySqlWriteTestDisabledReason(),
+      sqlWritePerformed: false
     });
   }
 });
@@ -8155,10 +8245,11 @@ app.post('/api/pbxpuls/directory-storage-mode', requireAuth(['su']), async (req,
 app.get('/api/pbxpuls/directory-runtime-effective', requireAuth(['su', 'admin']), async (req, res) => {
   try {
     const localDb = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
-    const [runtime, readiness, directoryWriteMode] = await Promise.all([
+    const [runtime, readiness, directoryWriteMode, sqlWriteTestStatus] = await Promise.all([
       getDirectoryRuntimeSnapshotForRequest(localDb, req),
       buildDirectoryReadiness(localDb),
-      getDirectoryWriteMode()
+      getDirectoryWriteMode(),
+      getDirectorySqlWriteTestStatus()
     ]);
 
     res.json({
@@ -8173,6 +8264,11 @@ app.get('/api/pbxpuls/directory-runtime-effective', requireAuth(['su', 'admin'])
       writePreviewAvailable: true,
       writeEndpointRouterAvailable: true,
       sqlWriteBranchBlocked: true,
+      sqlWriteTestEndpointAvailable: true,
+      sqlWriteTestEnabled: sqlWriteTestStatus.enabled,
+      canRunSqlWriteTest: sqlWriteTestStatus.canRun,
+      sqlWriteTestBlockReason: sqlWriteTestStatus.reason,
+      productionWriteEndpointsUseSql: false,
       existingDirectoryEndpointsSwitched: false
     });
   } catch (error: any) {
@@ -8196,6 +8292,11 @@ app.get('/api/pbxpuls/directory-runtime-effective', requireAuth(['su', 'admin'])
       writePreviewAvailable: true,
       writeEndpointRouterAvailable: true,
       sqlWriteBranchBlocked: true,
+      sqlWriteTestEndpointAvailable: true,
+      sqlWriteTestEnabled: false,
+      canRunSqlWriteTest: false,
+      sqlWriteTestBlockReason: getDirectorySqlWriteTestDisabledReason(),
+      productionWriteEndpointsUseSql: false,
       existingDirectoryEndpointsSwitched: false
     });
   }
