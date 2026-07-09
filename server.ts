@@ -59,9 +59,10 @@ import {
 } from './server/pbxpulsDirectoryWriteRouter.js';
 import {
   assertDirectorySqlWriteTestAllowed,
-  buildSqlWriteTestPayload,
+  getDirectorySqlWriteTestConfirmPhrase,
   getDirectorySqlWriteTestDisabledReason,
   getDirectorySqlWriteTestStatus,
+  runDirectorySqlWriteTest,
   validateSqlWriteTestPayload
 } from './server/pbxpulsDirectorySqlWriteTest.js';
 
@@ -7959,7 +7960,7 @@ app.post('/api/pbxpuls/directory-sql-write-test', requireAuth(['su']), async (re
       return;
     }
 
-    if (req.body?.confirm !== 'PBXPULS_SQL_WRITE_TEST_ONLY') {
+    if (req.body?.confirm !== getDirectorySqlWriteTestConfirmPhrase()) {
       res.status(400).json({
         ok: false,
         canRun: true,
@@ -7980,19 +7981,13 @@ app.post('/api/pbxpuls/directory-sql-write-test', requireAuth(['su']), async (re
       return;
     }
 
-    res.status(501).json({
-      ok: false,
-      canRun: true,
-      reason: 'directory_sql_write_test_not_implemented_in_this_stage',
-      sqlWritePerformed: false,
-      payloadShape: buildSqlWriteTestPayload(req.body?.input)
-    });
+    res.json(await runDirectorySqlWriteTest(req.body?.input, actor));
   } catch (error: any) {
     console.warn('[PBXPULS_DIRECTORY_SQL_WRITE_TEST] blocked:', sanitizePBXPulsDbError(error));
-    res.status(409).json({
+    res.status(500).json({
       ok: false,
-      canRun: false,
-      reason: getDirectorySqlWriteTestDisabledReason(),
+      canRun: true,
+      reason: 'directory_sql_write_test_failed',
       sqlWritePerformed: false
     });
   }
