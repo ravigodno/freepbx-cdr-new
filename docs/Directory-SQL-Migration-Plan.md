@@ -1497,3 +1497,48 @@ Diagnostics:
 These fields are diagnostic status only. They do not run SQL writes, do not inspect contact data, and do not return personal data.
 
 The next stage should design a controlled production SQL write unlock, still guarded and still separate from enabling `directory.write_mode = sql` in production.
+
+## Milestone 10.1 Controlled SQL Write Unlock Design
+
+This milestone adds an explicit guard for future temporary production SQL write mode unlock.
+
+New safety flag:
+
+- `directory.production_sql_write_unlock`
+- Default value: `false`
+- Seed migration: `20260709_012_seed_directory_production_sql_write_unlock`
+
+Unlock readiness now requires:
+
+- SQL database is available.
+- SQL write layer is available.
+- Isolated SQL write smoke has passed.
+- `directory.storage_mode = legacy`.
+- `directory.sql_write_test_enabled = false`.
+- `directory.production_sql_write_unlock = true`.
+
+Current behavior:
+
+- `directory.production_sql_write_unlock = false`.
+- `directory.write_mode = sql` cannot be enabled.
+- The blocked reason is `production_sql_write_not_unlocked`.
+- Production `/api/directory` read and write behavior remains legacy.
+- No SQL writes are performed by this milestone.
+
+Diagnostics:
+
+- `GET /api/pbxpuls/directory-write-mode` reports:
+  - `productionSqlWriteUnlock`
+  - `isolatedSqlWriteSmokePassed`
+  - `productionSqlWriteReady`
+  - `productionSqlWriteBlockReason`
+- `GET /api/pbxpuls/directory-write-readiness` reports:
+  - `productionSqlWriteUnlock`
+  - `productionSqlWriteReady`
+  - `productionSqlWriteBlockReason`
+- `GET /api/pbxpuls/directory-runtime-effective` reports:
+  - `productionSqlWriteUnlock`
+  - `productionSqlWriteReady`
+  - `productionSqlWriteBlockReason`
+
+The next milestone should temporarily enable the unlock flag and verify blocked/unblocked behavior in a separate controlled runtime stage. Production SQL write must still remain guarded and must not be enabled casually.

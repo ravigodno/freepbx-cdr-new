@@ -95,6 +95,14 @@ const DIRECTORY_SQL_WRITE_TEST_ENABLED_SETTING = [
   'Controls isolated PBXPuls Directory SQL write smoke test endpoint'
 ] as const;
 
+const DIRECTORY_PRODUCTION_SQL_WRITE_UNLOCK_SETTING = [
+  'directory.production_sql_write_unlock',
+  'false',
+  'boolean',
+  'directory',
+  'Controls temporary guarded unlock for PBXPuls Directory production SQL write mode'
+] as const;
+
 const MIGRATIONS: Migration[] = [
   {
     key: '20260707_001_core_internal_tables',
@@ -259,6 +267,12 @@ const MIGRATIONS: Migration[] = [
     description: 'Seed Directory SQL write test safety flag',
     statements: [],
     seed: seedDirectorySqlWriteTestEnabled
+  },
+  {
+    key: '20260709_012_seed_directory_production_sql_write_unlock',
+    description: 'Seed Directory production SQL write unlock safety flag',
+    statements: [],
+    seed: seedDirectoryProductionSqlWriteUnlock
   }
 ];
 
@@ -468,6 +482,15 @@ async function seedDirectorySqlWriteTestEnabled(connection: Connection): Promise
       (setting_key, setting_value, value_type, category, is_secret, description)
      VALUES (?, ?, ?, ?, 0, ?)`,
     DIRECTORY_SQL_WRITE_TEST_ENABLED_SETTING
+  );
+}
+
+async function seedDirectoryProductionSqlWriteUnlock(connection: Connection): Promise<void> {
+  await connection.execute(
+    `INSERT IGNORE INTO settings
+      (setting_key, setting_value, value_type, category, is_secret, description)
+     VALUES (?, ?, ?, ?, 0, ?)`,
+    DIRECTORY_PRODUCTION_SQL_WRITE_UNLOCK_SETTING
   );
 }
 

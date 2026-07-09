@@ -7886,8 +7886,9 @@ app.get('/api/pbxpuls/directory-write-readiness', requireAuth(['su', 'admin']), 
       sqlWriteBranchBlocked: true,
       isolatedSqlWriteSmokePassed: true,
       isolatedSqlWriteSmokeStage: '9.9.10',
-      productionSqlWriteReady: false,
-      productionSqlWriteBlockReason: 'production_sql_write_not_unlocked',
+      productionSqlWriteUnlock: sqlEnableDecision.productionSqlWriteUnlock,
+      productionSqlWriteReady: sqlEnableDecision.canEnable,
+      productionSqlWriteBlockReason: sqlEnableDecision.reason,
       sqlWriteTestEndpointAvailable: true,
       sqlWriteTestEnabled: sqlWriteTestStatus.enabled,
       canRunSqlWriteTest: sqlWriteTestStatus.canRun,
@@ -7916,6 +7917,7 @@ app.get('/api/pbxpuls/directory-write-readiness', requireAuth(['su', 'admin']), 
       sqlWriteBranchBlocked: true,
       isolatedSqlWriteSmokePassed: true,
       isolatedSqlWriteSmokeStage: '9.9.10',
+      productionSqlWriteUnlock: false,
       productionSqlWriteReady: false,
       productionSqlWriteBlockReason: 'production_sql_write_not_unlocked',
       sqlWriteTestEndpointAvailable: true,
@@ -8248,11 +8250,12 @@ app.post('/api/pbxpuls/directory-storage-mode', requireAuth(['su']), async (req,
 app.get('/api/pbxpuls/directory-runtime-effective', requireAuth(['su', 'admin']), async (req, res) => {
   try {
     const localDb = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
-    const [runtime, readiness, directoryWriteMode, sqlWriteTestStatus] = await Promise.all([
+    const [runtime, readiness, directoryWriteMode, sqlWriteTestStatus, sqlEnableDecision] = await Promise.all([
       getDirectoryRuntimeSnapshotForRequest(localDb, req),
       buildDirectoryReadiness(localDb),
       getDirectoryWriteMode(),
-      getDirectorySqlWriteTestStatus()
+      getDirectorySqlWriteTestStatus(),
+      canEnableDirectorySqlWrite()
     ]);
 
     res.json({
@@ -8273,6 +8276,9 @@ app.get('/api/pbxpuls/directory-runtime-effective', requireAuth(['su', 'admin'])
       sqlWriteTestEnabled: sqlWriteTestStatus.enabled,
       canRunSqlWriteTest: sqlWriteTestStatus.canRun,
       sqlWriteTestBlockReason: sqlWriteTestStatus.reason,
+      productionSqlWriteUnlock: sqlEnableDecision.productionSqlWriteUnlock,
+      productionSqlWriteReady: sqlEnableDecision.canEnable,
+      productionSqlWriteBlockReason: sqlEnableDecision.reason,
       productionWriteEndpointsUseSql: false,
       existingDirectoryEndpointsSwitched: false
     });
@@ -8303,6 +8309,9 @@ app.get('/api/pbxpuls/directory-runtime-effective', requireAuth(['su', 'admin'])
       sqlWriteTestEnabled: false,
       canRunSqlWriteTest: false,
       sqlWriteTestBlockReason: getDirectorySqlWriteTestDisabledReason(),
+      productionSqlWriteUnlock: false,
+      productionSqlWriteReady: false,
+      productionSqlWriteBlockReason: 'production_sql_write_not_unlocked',
       productionWriteEndpointsUseSql: false,
       existingDirectoryEndpointsSwitched: false
     });

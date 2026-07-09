@@ -1,6 +1,7 @@
 import { isPBXPulsDbAvailable, sanitizePBXPulsDbError } from './pbxpulsDb.js';
 import { writePBXPulsSystemEvent } from './pbxpulsEvents.js';
 import { getPBXPulsSetting, upsertPBXPulsSetting } from './pbxpulsSettings.js';
+import { getDirectoryStorageMode } from './pbxpulsDirectoryRuntime.js';
 
 export type DirectoryWriteMode = 'legacy' | 'sql';
 
@@ -12,6 +13,10 @@ export interface DirectoryWriteModeStatus {
   reason: string | null;
   existingDirectoryEndpointsSwitched: boolean;
   writeLayerAvailable: boolean;
+  productionSqlWriteUnlock: boolean;
+  isolatedSqlWriteSmokePassed: boolean;
+  productionSqlWriteReady: boolean;
+  productionSqlWriteBlockReason: string | null;
 }
 
 export interface DirectoryWriteModeSetResult extends DirectoryWriteModeStatus {
@@ -21,7 +26,11 @@ export interface DirectoryWriteModeSetResult extends DirectoryWriteModeStatus {
 }
 
 const DIRECTORY_WRITE_MODE_KEY = 'directory.write_mode';
+const DIRECTORY_SQL_WRITE_TEST_ENABLED_KEY = 'directory.sql_write_test_enabled';
+const DIRECTORY_PRODUCTION_SQL_WRITE_UNLOCK_KEY = 'directory.production_sql_write_unlock';
 const SQL_WRITE_BLOCK_REASON = 'directory_sql_write_runtime_not_connected';
+const PRODUCTION_SQL_WRITE_NOT_UNLOCKED_REASON = 'production_sql_write_not_unlocked';
+const ISOLATED_SQL_WRITE_SMOKE_PASSED = true;
 const EXISTING_DIRECTORY_ENDPOINTS_SWITCHED = false;
 
 export async function getDirectoryWriteMode(): Promise<DirectoryWriteMode> {
@@ -43,22 +52,75 @@ export async function getDirectoryWriteModeStatus(): Promise<DirectoryWriteModeS
     canEnableSql: sqlEnableDecision.canEnable,
     reason: sqlEnableDecision.reason,
     existingDirectoryEndpointsSwitched: EXISTING_DIRECTORY_ENDPOINTS_SWITCHED,
-    writeLayerAvailable
+    writeLayerAvailable,
+    productionSqlWriteUnlock: sqlEnableDecision.productionSqlWriteUnlock,
+    isolatedSqlWriteSmokePassed: sqlEnableDecision.isolatedSqlWriteSmokePassed,
+    productionSqlWriteReady: sqlEnableDecision.canEnable,
+    productionSqlWriteBlockReason: sqlEnableDecision.reason
   };
 }
 
-export async function canEnableDirectorySqlWrite(): Promise<{ canEnable: boolean; reason: string | null }> {
-  if (!EXISTING_DIRECTORY_ENDPOINTS_SWITCHED) {
-    return {
-      canEnable: false,
-      reason: SQL_WRITE_BLOCK_REASON
-    };
-  }
+export async function canEnableDirectorySqlWrite(): Promise<{
+  canEnable: boolean;
+  reason: string | null;
+  sqlAvailable: boolean;
+  writeLayerAvailable: boolean;
+  isolatedSqlWriteSmokePassed: boolean;
+  directoryStorageMode: 'legacy' | 'sql';
+  sqlWriteTestEnabled: boolean;
+  productionSqlWriteUnlock: boolean;
+}> {
+  const [
+    sqlAvailable,
+    directoryStorageMode,
+    sqlWriteTestEnabledValue,
+    productionSqlWriteUnlockValue
+  ] = await Promise.all([
+    isPBXPulsDbAvailable(),
+    getDirectoryStorageMode(),
+    getPBXPulsSetting<unknown>(DIRECTORY_SQL_WRITE_TEST_ENABLED_KEY, false),
+    getPBXPulsSetting<unknown>(DIRECTORY_PRODUCTION_SQL_WRITE_UNLOCK_KEY, false)
+  ]);
+
+  const writeLayerAvailable = sqlAvailable;
+  const sqlWriteTestEnabled = normalizeBoolean(sqlWriteTestEnabledValue);
+  const productionSqlWriteUnlock = normalizeBoolean(productionSqlWriteUnlockValue);
+  let reason: string | null = null;
+
+  if (!sqlAvailable) reason = 'directory_sql_unavailable';
+  else if (!writeLayerAvailable) reason = 'directory_sql_write_layer_unavailable';
+  else if (!ISOLATED_SQL_WRITE_SMOKE_PASSED) reason = 'isolated_sql_write_smoke_not_passed';
+  else if (directoryStorageMode !== 'legacy') reason = 'directory_storage_mode_not_legacy';
+  else if (sqlWriteTestEnabled) reason = 'directory_sql_write_test_still_enabled';
+  else if (!productionSqlWriteUnlock) reason = PRODUCTION_SQL_WRITE_NOT_UNLOCKED_REASON;
 
   return {
-    canEnable: true,
-    reason: null
+    canEnable: reason === null,
+    reason,
+    sqlAvailable,
+    writeLayerAvailable,
+    isolatedSqlWriteSmokePassed: ISOLATED_SQL_WRITE_SMOKE_PASSED,
+    directoryStorageMode,
+    sqlWriteTestEnabled,
+    productionSqlWriteUnlock
   };
+}
+
+export async function getDirectoryProductionSqlWriteUnlock(): Promise<boolean> {
+  const value = await getPBXPulsSetting<unknown>(DIRECTORY_PRODUCTION_SQL_WRITE_UNLOCK_KEY, false);
+  return normalizeBoolean(value);
+}
+
+export function getDirectoryProductionSqlWriteNotUnlockedReason(): string {
+  return PRODUCTION_SQL_WRITE_NOT_UNLOCKED_REASON;
+}
+
+export function hasDirectoryIsolatedSqlWriteSmokePassed(): boolean {
+  return ISOLATED_SQL_WRITE_SMOKE_PASSED;
+}
+
+export function getDirectoryWriteModeRuntimeBlockedReason(): string {
+  return SQL_WRITE_BLOCK_REASON;
 }
 
 export async function setDirectoryWriteMode(
@@ -105,7 +167,7 @@ export async function setDirectoryWriteMode(
 }
 
 export function getDirectoryWriteModeBlockedReason(): string {
-  return SQL_WRITE_BLOCK_REASON;
+  return PRODUCTION_SQL_WRITE_NOT_UNLOCKED_REASON;
 }
 
 export function sanitizeDirectoryWriteModeError(error: any): string {
@@ -116,6 +178,12 @@ function normalizeDirectoryWriteMode(value: unknown): DirectoryWriteMode | null 
   const mode = String(value || '').trim().toLowerCase();
   if (mode === 'legacy' || mode === 'sql') return mode;
   return null;
+}
+
+function normalizeBoolean(value: unknown): boolean {
+  if (value === true) return true;
+  const raw = String(value ?? '').trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
 }
 
 async function writeDirectoryWriteModeEvent(

@@ -40,6 +40,9 @@
 - Preserve `directory.storage_mode = legacy`.
 - Keep SQL write branch guarded until the unlock is explicitly enabled.
 - Add diagnostics that explain why production SQL write is or is not unlockable.
+- Add `directory.production_sql_write_unlock = false` as the explicit production SQL write unlock flag.
+- Keep `directory.write_mode = sql` blocked while the unlock flag is false.
+- Report `production_sql_write_not_unlocked` as the current block reason.
 
 ## Milestone 10.2 Production-Shaped SQL Write Smoke
 
