@@ -70,6 +70,12 @@ import {
   runDirectorySqlWriteTest,
   validateSqlWriteTestPayload
 } from './server/pbxpulsDirectorySqlWriteTest.js';
+import {
+  applyDirectorySqlSyncFromLegacy,
+  getDirectorySqlSyncStatus,
+  isDirectorySqlSyncApplyEnabled,
+  previewDirectorySqlSyncFromLegacy
+} from './server/pbxpulsDirectorySync.js';
 
 // Load environment variables
 dotenv.config();
@@ -7967,6 +7973,90 @@ app.get('/api/pbxpuls/directory-write-readiness', requireAuth(['su', 'admin']), 
   }
 });
 
+app.get('/api/pbxpuls/directory-sql-sync-status', requireAuth(['su', 'admin']), async (_req, res) => {
+  try {
+    const localDb = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    res.json(await getDirectorySqlSyncStatus(localDb));
+  } catch (error: any) {
+    console.warn('[PBXPULS_DIRECTORY_SQL_SYNC_STATUS] failed:', sanitizePBXPulsDbError(error));
+    res.status(500).json({
+      ok: false,
+      source: 'data/db.json',
+      sqlAvailable: false,
+      applyEnabled: false,
+      syncAvailable: false,
+      applyReason: 'directory_sql_sync_apply_disabled',
+      valuesReturned: false,
+      legacyContactsCount: 0,
+      sqlContactsCount: 0,
+      staleContactsCount: 0,
+      phonesMismatchCount: 0,
+      metadataSyncCandidatesCount: 0,
+      wouldUpdateContactsCount: 0,
+      wouldInsertContactsCount: 0,
+      wouldDeleteContactsCount: 0,
+      skippedInvalidLegacyContacts: 0,
+      contacts: [],
+      reasonCounts: {},
+      error: 'directory_sql_sync_status_failed'
+    });
+  }
+});
+
+app.post('/api/pbxpuls/directory-sql-sync-preview', requireAuth(['su', 'admin']), async (_req, res) => {
+  try {
+    const localDb = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    res.json(await previewDirectorySqlSyncFromLegacy(localDb));
+  } catch (error: any) {
+    console.warn('[PBXPULS_DIRECTORY_SQL_SYNC_PREVIEW] failed:', sanitizePBXPulsDbError(error));
+    res.status(500).json({
+      ok: false,
+      source: 'data/db.json',
+      sqlAvailable: false,
+      applyEnabled: false,
+      valuesReturned: false,
+      legacyContactsCount: 0,
+      sqlContactsCount: 0,
+      staleContactsCount: 0,
+      phonesMismatchCount: 0,
+      metadataSyncCandidatesCount: 0,
+      wouldUpdateContactsCount: 0,
+      wouldInsertContactsCount: 0,
+      wouldDeleteContactsCount: 0,
+      skippedInvalidLegacyContacts: 0,
+      contacts: [],
+      reasonCounts: {},
+      error: 'directory_sql_sync_preview_failed'
+    });
+  }
+});
+
+app.post('/api/pbxpuls/directory-sql-sync-apply', requireAuth(['su']), async (req, res) => {
+  try {
+    const localDb = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    const result = await applyDirectorySqlSyncFromLegacy(localDb, getDirectoryStorageModeActor(req));
+
+    if (!result.applied && result.reason === 'directory_sql_sync_apply_disabled') {
+      res.status(409).json(result);
+      return;
+    }
+
+    res.json(result);
+  } catch (error: any) {
+    console.warn('[PBXPULS_DIRECTORY_SQL_SYNC_APPLY] failed:', sanitizePBXPulsDbError(error));
+    res.status(500).json({
+      ok: false,
+      applied: false,
+      reason: 'directory_sql_sync_apply_failed',
+      applyEnabled: false,
+      updatedContactsCount: 0,
+      insertedContactsCount: 0,
+      deletedContactsCount: 0,
+      syncedMetadataCount: 0
+    });
+  }
+});
+
 app.get('/api/pbxpuls/directory-sql-write-test-status', requireAuth(['su']), async (_req, res) => {
   try {
     res.json(await getDirectorySqlWriteTestStatus());
@@ -8289,6 +8379,7 @@ app.get('/api/pbxpuls/directory-runtime-effective', requireAuth(['su', 'admin'])
       directoryWriteMode,
       sqlWriteTestStatus,
       sqlEnableDecision,
+      directorySqlSyncApplyEnabled,
       createWriteDecision,
       updateWriteDecision,
       deleteWriteDecision
@@ -8298,6 +8389,7 @@ app.get('/api/pbxpuls/directory-runtime-effective', requireAuth(['su', 'admin'])
       getDirectoryWriteMode(),
       getDirectorySqlWriteTestStatus(),
       canEnableDirectorySqlWrite(),
+      isDirectorySqlSyncApplyEnabled(),
       getDirectoryWriteRuntimeDecision('create', actor),
       getDirectoryWriteRuntimeDecision('update', actor),
       getDirectoryWriteRuntimeDecision('delete', actor)
@@ -8329,6 +8421,8 @@ app.get('/api/pbxpuls/directory-runtime-effective', requireAuth(['su', 'admin'])
       productionSqlWriteBlockReason: sqlEnableDecision.reason,
       productionWriteEndpointsUseSql: directoryWriteRouterReadyForSql,
       directoryWriteRouterReadyForSql,
+      directorySqlSyncAvailable: true,
+      directorySqlSyncApplyEnabled,
       existingDirectoryEndpointsSwitched: false
     });
   } catch (error: any) {
@@ -8362,6 +8456,8 @@ app.get('/api/pbxpuls/directory-runtime-effective', requireAuth(['su', 'admin'])
       productionSqlWriteReady: false,
       productionSqlWriteBlockReason: 'production_sql_write_not_unlocked',
       productionWriteEndpointsUseSql: false,
+      directorySqlSyncAvailable: true,
+      directorySqlSyncApplyEnabled: false,
       existingDirectoryEndpointsSwitched: false
     });
   }

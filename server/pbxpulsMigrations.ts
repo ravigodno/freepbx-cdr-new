@@ -103,6 +103,14 @@ const DIRECTORY_PRODUCTION_SQL_WRITE_UNLOCK_SETTING = [
   'Controls temporary guarded unlock for PBXPuls Directory production SQL write mode'
 ] as const;
 
+const DIRECTORY_SQL_SYNC_APPLY_ENABLED_SETTING = [
+  'directory.sql_sync_apply_enabled',
+  'false',
+  'boolean',
+  'directory',
+  'Controls guarded apply for PBXPuls Directory SQL sync from legacy'
+] as const;
+
 const MIGRATIONS: Migration[] = [
   {
     key: '20260707_001_core_internal_tables',
@@ -273,6 +281,12 @@ const MIGRATIONS: Migration[] = [
     description: 'Seed Directory production SQL write unlock safety flag',
     statements: [],
     seed: seedDirectoryProductionSqlWriteUnlock
+  },
+  {
+    key: '20260709_013_seed_directory_sql_sync_apply_enabled',
+    description: 'Seed Directory SQL sync apply safety flag',
+    statements: [],
+    seed: seedDirectorySqlSyncApplyEnabled
   }
 ];
 
@@ -491,6 +505,15 @@ async function seedDirectoryProductionSqlWriteUnlock(connection: Connection): Pr
       (setting_key, setting_value, value_type, category, is_secret, description)
      VALUES (?, ?, ?, ?, 0, ?)`,
     DIRECTORY_PRODUCTION_SQL_WRITE_UNLOCK_SETTING
+  );
+}
+
+async function seedDirectorySqlSyncApplyEnabled(connection: Connection): Promise<void> {
+  await connection.execute(
+    `INSERT IGNORE INTO settings
+      (setting_key, setting_value, value_type, category, is_secret, description)
+     VALUES (?, ?, ?, ?, 0, ?)`,
+    DIRECTORY_SQL_SYNC_APPLY_ENABLED_SETTING
   );
 }
 

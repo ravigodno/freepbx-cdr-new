@@ -1683,3 +1683,28 @@ Required next stage:
 - Add a controlled Directory SQL re-seed/sync stage that previews stale existing rows and applies only explicitly reviewed Directory SQL updates.
 - The stage should update SQL `directory_contacts` and known safe metadata from legacy without manual ad hoc `UPDATE` statements.
 - After the controlled sync passes and readiness is clean, repeat the Directory SQL read/storage smoke.
+
+## Milestone 10.7.2 Controlled SQL Sync Preview Guard
+
+This milestone adds a guarded Directory SQL sync mechanism for stale SQL seed rows.
+
+Endpoints:
+
+- `GET /api/pbxpuls/directory-sql-sync-status`
+- `POST /api/pbxpuls/directory-sql-sync-preview`
+- `POST /api/pbxpuls/directory-sql-sync-apply`
+
+Safety model:
+
+- Preview and status return safe counts and contact ids with reason categories only.
+- Preview does not return names, phone values, email values, comments or metadata values.
+- Apply is blocked by `directory.sql_sync_apply_enabled = false`.
+- When blocked, apply returns `409` with `reason = directory_sql_sync_apply_disabled` and `applied = false`.
+- The future apply path must not delete SQL contacts and must only sync known safe Directory fields and known safe metadata keys from legacy.
+
+The mechanism exists because the original Directory SQL seed uses `INSERT IGNORE`; it can seed missing rows, but it does not refresh existing SQL contacts that changed later in `data/db.json`.
+
+Next stages:
+
+- Runtime-check sync status, preview, and blocked apply.
+- In a separate controlled stage, temporarily enable `directory.sql_sync_apply_enabled`, run the sync, disable it again, then re-check Directory readiness.

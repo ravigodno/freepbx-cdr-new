@@ -98,6 +98,8 @@
 ## Milestone 10.7 Production Cutover and Cleanup
 
 - Make SQL the primary Directory storage only after read/write checks pass.
+- Run the controlled Directory SQL sync from legacy first if readiness reports stale SQL seed rows.
+- Keep `directory.sql_sync_apply_enabled` disabled except during a separate controlled sync apply stage.
 - Keep legacy fallback available.
 - Update diagnostics and migration documentation.
 - Do not delete `data/db.json` immediately.
