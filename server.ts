@@ -8250,13 +8250,29 @@ app.post('/api/pbxpuls/directory-storage-mode', requireAuth(['su']), async (req,
 app.get('/api/pbxpuls/directory-runtime-effective', requireAuth(['su', 'admin']), async (req, res) => {
   try {
     const localDb = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
-    const [runtime, readiness, directoryWriteMode, sqlWriteTestStatus, sqlEnableDecision] = await Promise.all([
+    const actor = getDirectoryStorageModeActor(req);
+    const [
+      runtime,
+      readiness,
+      directoryWriteMode,
+      sqlWriteTestStatus,
+      sqlEnableDecision,
+      createWriteDecision,
+      updateWriteDecision,
+      deleteWriteDecision
+    ] = await Promise.all([
       getDirectoryRuntimeSnapshotForRequest(localDb, req),
       buildDirectoryReadiness(localDb),
       getDirectoryWriteMode(),
       getDirectorySqlWriteTestStatus(),
-      canEnableDirectorySqlWrite()
+      canEnableDirectorySqlWrite(),
+      getDirectoryWriteRuntimeDecision('create', actor),
+      getDirectoryWriteRuntimeDecision('update', actor),
+      getDirectoryWriteRuntimeDecision('delete', actor)
     ]);
+    const directoryWriteRouterDecisions = [createWriteDecision, updateWriteDecision, deleteWriteDecision];
+    const directoryWriteRouterReadyForSql = directoryWriteRouterDecisions.every((decision) => decision.useSql === true && decision.blocked === false);
+    const directoryWriteRouterBlocked = directoryWriteRouterDecisions.some((decision) => decision.blocked === true);
 
     res.json({
       configuredMode: runtime.configuredMode,
@@ -8269,7 +8285,7 @@ app.get('/api/pbxpuls/directory-runtime-effective', requireAuth(['su', 'admin'])
       writeSwitchControllerAvailable: true,
       writePreviewAvailable: true,
       writeEndpointRouterAvailable: true,
-      sqlWriteBranchBlocked: true,
+      sqlWriteBranchBlocked: directoryWriteRouterBlocked,
       isolatedSqlWriteSmokeAvailable: true,
       lastKnownIsolatedSqlWriteSmoke: 'passed_manual_stage_9_9_10',
       sqlWriteTestEndpointAvailable: true,
@@ -8279,7 +8295,8 @@ app.get('/api/pbxpuls/directory-runtime-effective', requireAuth(['su', 'admin'])
       productionSqlWriteUnlock: sqlEnableDecision.productionSqlWriteUnlock,
       productionSqlWriteReady: sqlEnableDecision.canEnable,
       productionSqlWriteBlockReason: sqlEnableDecision.reason,
-      productionWriteEndpointsUseSql: false,
+      productionWriteEndpointsUseSql: directoryWriteRouterReadyForSql,
+      directoryWriteRouterReadyForSql,
       existingDirectoryEndpointsSwitched: false
     });
   } catch (error: any) {

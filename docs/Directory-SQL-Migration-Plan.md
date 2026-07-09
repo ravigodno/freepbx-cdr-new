@@ -1585,3 +1585,17 @@ Diagnostics:
   - `productionSqlWriteUnlock`
 
 Production SQL write has still not been tested through `/api/directory`. The next milestone should runtime-check the router readiness states, followed by a separate one-contact production-shaped SQL write smoke.
+
+## Milestone 10.4.2 Runtime Effective Router Diagnostic Alignment
+
+This milestone aligns `GET /api/pbxpuls/directory-runtime-effective` with the guarded Directory write router decision.
+
+Diagnostics:
+
+- `productionWriteEndpointsUseSql` is now derived from the guarded router decisions for `create`, `update`, and `delete`.
+- The value is `true` only when all three production write operations report `useSql = true` and `blocked = false`.
+- The value remains `false` when the router is in legacy mode or any operation is blocked.
+- `directoryWriteRouterReadyForSql` reports the same all-operations readiness as a safe boolean summary.
+- `existingDirectoryEndpointsSwitched` remains `false` because it represents permanent cutover state, not temporary guarded readiness.
+
+This is a diagnostics-only change. It does not run SQL writes and does not call production `/api/directory` write endpoints.
