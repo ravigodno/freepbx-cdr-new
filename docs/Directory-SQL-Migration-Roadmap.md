@@ -23,10 +23,11 @@
 - Isolated SQL write test endpoint.
 - One-contact isolated SQL write smoke: create, update, delete, cleanup.
 - Diagnostics hardening after isolated smoke.
+- Production Directory write endpoint SQL branch wiring.
 
 ## Not Done Yet
 
-- Production `/api/directory` SQL write.
+- Production `/api/directory` SQL write smoke after SQL branch wiring.
 - Production SQL read/write cutover.
 - Legacy vs SQL consistency checks.
 - Directory import, sync, spam and blacklist path migration.
@@ -68,6 +69,15 @@
 - Return `useSql=true` only when `directory.write_mode = sql` and production SQL write readiness is complete.
 - Do not run production `/api/directory` writes in this milestone.
 - Use the next milestone for runtime-checking router readiness states before a one-contact production-shaped smoke.
+
+## Milestone 10.5.1 Production Directory Write SQL Branch Wiring
+
+- Wire `POST /api/directory`, `PUT /api/directory/:id` and `DELETE /api/directory/:id` to SQL helpers.
+- Make the SQL branch reachable only when the guarded router decision reports `useSql=true` and `blocked=false`.
+- Preserve legacy write behavior when the router decision reports `useLegacy=true`.
+- Keep production mode legacy by default.
+- Do not execute the production-shaped SQL write smoke in the wiring milestone.
+- Use the next runtime-check milestone for the one-contact `/api/directory` SQL write smoke.
 
 ## Milestone 10.5 Controlled SQL Read Switch
 

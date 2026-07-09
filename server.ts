@@ -36,7 +36,12 @@ import { buildHybridSettingsSnapshot, getPBXPulsRuntimeSettingsSnapshot, getSett
 import { buildDirectoryMigrationPreview } from './server/pbxpulsDirectoryMigrationPreview.js';
 import { buildDirectoryReadiness, buildDirectorySeedPreview } from './server/pbxpulsDirectorySeed.js';
 import { getDirectoryRuntimeSnapshot, getDirectoryStorageMode, type DirectoryStorageMode } from './server/pbxpulsDirectoryRuntime.js';
-import { isDirectorySqlWriteLayerAvailable } from './server/pbxpulsDirectoryWrite.js';
+import {
+  createDirectoryContactSql,
+  deleteDirectoryContactSql,
+  isDirectorySqlWriteLayerAvailable,
+  updateDirectoryContactSql
+} from './server/pbxpulsDirectoryWrite.js';
 import {
   canEnableDirectorySqlWrite,
   getDirectoryWriteMode,
@@ -11257,7 +11262,22 @@ app.post('/api/directory', requireAuth(), async (req, res) => {
       return;
     }
 
-    const writeDecision = await getDirectoryWriteRuntimeDecision('create', getDirectoryStorageModeActor(req));
+    const actor = getDirectoryStorageModeActor(req);
+    const writeDecision = await getDirectoryWriteRuntimeDecision('create', actor);
+    if (writeDecision.useSql === true && writeDecision.blocked === false) {
+      const result = await createDirectoryContactSql(req.body, actor);
+      res.json({
+        ok: true,
+        success: true,
+        source: 'pbxpuls_sql',
+        id: result.contactId,
+        contactId: result.contactId,
+        writeMode: 'sql',
+        metadataCount: result.metadataCount,
+        warnings: result.warnings
+      });
+      return;
+    }
     if (!writeDecision.useLegacy) {
       res.status(409).json(buildBlockedDirectoryWriteEndpointResponse(writeDecision));
       return;
@@ -11297,7 +11317,22 @@ app.put('/api/directory/:id', requireAuth(), async (req, res) => {
       return;
     }
 
-    const writeDecision = await getDirectoryWriteRuntimeDecision('update', getDirectoryStorageModeActor(req));
+    const actor = getDirectoryStorageModeActor(req);
+    const writeDecision = await getDirectoryWriteRuntimeDecision('update', actor);
+    if (writeDecision.useSql === true && writeDecision.blocked === false) {
+      const result = await updateDirectoryContactSql(req.params.id, req.body, actor);
+      res.json({
+        ok: true,
+        success: true,
+        source: 'pbxpuls_sql',
+        id: result.contactId,
+        contactId: result.contactId,
+        writeMode: 'sql',
+        metadataCount: result.metadataCount,
+        warnings: result.warnings
+      });
+      return;
+    }
     if (!writeDecision.useLegacy) {
       res.status(409).json(buildBlockedDirectoryWriteEndpointResponse(writeDecision));
       return;
@@ -11710,7 +11745,22 @@ app.delete('/api/directory/:id', requireAuth(), async (req, res) => {
       return;
     }
 
-    const writeDecision = await getDirectoryWriteRuntimeDecision('delete', getDirectoryStorageModeActor(req));
+    const actor = getDirectoryStorageModeActor(req);
+    const writeDecision = await getDirectoryWriteRuntimeDecision('delete', actor);
+    if (writeDecision.useSql === true && writeDecision.blocked === false) {
+      const result = await deleteDirectoryContactSql(req.params.id, actor);
+      res.json({
+        ok: true,
+        success: true,
+        source: 'pbxpuls_sql',
+        id: result.contactId,
+        contactId: result.contactId,
+        writeMode: 'sql',
+        metadataCount: result.metadataCount,
+        warnings: result.warnings
+      });
+      return;
+    }
     if (!writeDecision.useLegacy) {
       res.status(409).json(buildBlockedDirectoryWriteEndpointResponse(writeDecision));
       return;

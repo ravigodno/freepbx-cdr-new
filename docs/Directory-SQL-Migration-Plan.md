@@ -1599,3 +1599,23 @@ Diagnostics:
 - `existingDirectoryEndpointsSwitched` remains `false` because it represents permanent cutover state, not temporary guarded readiness.
 
 This is a diagnostics-only change. It does not run SQL writes and does not call production `/api/directory` write endpoints.
+
+## Milestone 10.5.1 Production Directory SQL Write Endpoint Wiring
+
+This milestone wires the existing production Directory write endpoints to the SQL write helpers behind the guarded router decision.
+
+Endpoint behavior:
+
+- `POST /api/directory` can call `createDirectoryContactSql` only when the router decision reports `useSql = true` and `blocked = false`.
+- `PUT /api/directory/:id` can call `updateDirectoryContactSql` only when the router decision reports `useSql = true` and `blocked = false`.
+- `DELETE /api/directory/:id` can call `deleteDirectoryContactSql` only when the router decision reports `useSql = true` and `blocked = false`.
+- Legacy behavior remains unchanged when the router decision reports `useLegacy = true`.
+- Blocked or invalid router decisions still return `409` and do not run SQL writes.
+
+Production Directory mode remains legacy by default:
+
+- `directory.storage_mode = legacy`
+- `directory.write_mode = legacy`
+- `directory.production_sql_write_unlock = false`
+
+This is a code wiring milestone only. The production-shaped `/api/directory` SQL write smoke has not been executed after this wiring. The next milestone should run a controlled one-contact runtime smoke and then roll back to legacy mode.
