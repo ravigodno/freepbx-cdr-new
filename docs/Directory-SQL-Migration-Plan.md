@@ -1289,3 +1289,47 @@ Audit details are safe and limited to:
 Audit details must not include names, phone numbers, email addresses, comments, metadata values, raw contact payloads, tokens or secrets.
 
 Stage 9.9.2 is preparation only. The next stage should be guarded endpoint wiring or a SQL write preview flow before any production write path can use SQL.
+
+## Stage 9.9.3 Directory SQL Write Preview / Dry-run
+
+This stage adds a safe preview-only layer for future Directory SQL writes.
+
+Helper:
+
+- `server/pbxpulsDirectoryWritePreview.ts`
+- `previewCreateDirectoryContactSql(input, actor)`
+- `previewUpdateDirectoryContactSql(id, input, actor)`
+- `previewDeleteDirectoryContactSql(id, actor)`
+
+Endpoint:
+
+- `POST /api/pbxpuls/directory-write-preview`
+- Auth: `requireAuth(['su', 'admin'])`
+- Body: `{ "operation": "create" | "update" | "delete", "id": "...", "input": {} }`
+
+Preview behavior:
+
+- `create` requires contact input and performs normalize plus validation.
+- `update` requires contact id and input, then performs normalize plus validation.
+- `delete` requires contact id only and validates only the target id shape.
+- The endpoint always returns `dryRun: true`.
+- The endpoint never writes to `directory_contacts`, `directory_contact_metadata`, or `data/db.json`.
+- The endpoint never calls SQL write helpers such as `createDirectoryContactSql`, `updateDirectoryContactSql`, `deleteDirectoryContactSql`, or `upsertDirectoryContactMetadataSql`.
+
+Response safety:
+
+- Preview responses include only safe diagnostic fields such as validation status, booleans for normalized shape, metadata key count, current write mode, and `wouldWriteSql: false`.
+- Preview responses must not return names, phone numbers, email addresses, comments, metadata values, raw input, or raw normalized payloads.
+
+Audit:
+
+- Every valid preview operation writes `directory_write_preview_checked`.
+- Audit details are limited to operation, actor, `dryRun`, validation result, and reason.
+- Audit details must not include names, phone numbers, email addresses, comments, metadata values, raw payloads, tokens or secrets.
+
+Diagnostics:
+
+- `GET /api/pbxpuls/directory-write-readiness` now reports `writePreviewAvailable: true`.
+- `GET /api/pbxpuls/directory-runtime-effective` now reports `writePreviewAvailable: true`.
+
+Stage 9.9.3 keeps SQL write mode intentionally blocked. Existing Directory write endpoints remain legacy-only. The next stage should be guarded endpoint wiring or a runtime-switch guarded write path, with preview and rollback still required before production SQL writes.

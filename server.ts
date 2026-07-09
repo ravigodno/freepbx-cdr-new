@@ -46,6 +46,12 @@ import {
   setDirectoryWriteMode,
   type DirectoryWriteMode
 } from './server/pbxpulsDirectoryWriteMode.js';
+import {
+  previewCreateDirectoryContactSql,
+  previewDeleteDirectoryContactSql,
+  previewUpdateDirectoryContactSql,
+  type DirectoryWritePreviewOperation
+} from './server/pbxpulsDirectoryWritePreview.js';
 
 // Load environment variables
 dotenv.config();
@@ -7861,6 +7867,7 @@ app.get('/api/pbxpuls/directory-write-readiness', requireAuth(['su', 'admin']), 
       controlledSwitchAvailable: true,
       canEnableSqlWrite: sqlEnableDecision.canEnable,
       blockReason: sqlEnableDecision.reason,
+      writePreviewAvailable: true,
       supportedOperations: {
         create: true,
         update: true,
@@ -7880,6 +7887,7 @@ app.get('/api/pbxpuls/directory-write-readiness', requireAuth(['su', 'admin']), 
       controlledSwitchAvailable: true,
       canEnableSqlWrite: false,
       blockReason: getDirectoryWriteModeBlockedReason(),
+      writePreviewAvailable: true,
       supportedOperations: {
         create: true,
         update: true,
@@ -7887,6 +7895,68 @@ app.get('/api/pbxpuls/directory-write-readiness', requireAuth(['su', 'admin']), 
         metadata: true
       },
       nextStep: 'controlled_directory_sql_write_switch'
+    });
+  }
+});
+
+app.post('/api/pbxpuls/directory-write-preview', requireAuth(['su', 'admin']), async (req, res) => {
+  const operation = String(req.body?.operation || '').trim().toLowerCase() as DirectoryWritePreviewOperation;
+  const actor = getDirectoryStorageModeActor(req);
+
+  if (operation !== 'create' && operation !== 'update' && operation !== 'delete') {
+    res.status(400).json({
+      ok: false,
+      dryRun: true,
+      operation: operation || 'unknown',
+      validation: {
+        ok: false,
+        reason: 'invalid_directory_write_preview_operation'
+      },
+      reason: 'directory_sql_write_preview_validation_failed'
+    });
+    return;
+  }
+
+  try {
+    const input = req.body?.input && typeof req.body.input === 'object' && !Array.isArray(req.body.input)
+      ? req.body.input
+      : null;
+    const id = String(req.body?.id ?? '').trim();
+
+    let preview;
+    if (operation === 'create') {
+      if (!input) {
+        preview = await previewCreateDirectoryContactSql({}, actor);
+      } else {
+        preview = await previewCreateDirectoryContactSql(input, actor);
+      }
+    } else if (operation === 'update') {
+      if (!id || !input) {
+        preview = await previewUpdateDirectoryContactSql(id, input || {}, actor);
+      } else {
+        preview = await previewUpdateDirectoryContactSql(id, input, actor);
+      }
+    } else {
+      preview = await previewDeleteDirectoryContactSql(id, actor);
+    }
+
+    if (!preview.ok) {
+      res.status(400).json(preview);
+      return;
+    }
+
+    res.json(preview);
+  } catch (error: any) {
+    console.warn('[PBXPULS_DIRECTORY_WRITE_PREVIEW] failed:', sanitizePBXPulsDbError(error));
+    res.status(500).json({
+      ok: false,
+      dryRun: true,
+      operation,
+      validation: {
+        ok: false,
+        reason: 'directory_sql_write_preview_failed'
+      },
+      reason: 'directory_sql_write_preview_validation_failed'
     });
   }
 });
@@ -8057,6 +8127,7 @@ app.get('/api/pbxpuls/directory-runtime-effective', requireAuth(['su', 'admin'])
       writeLayerAvailable: true,
       directoryWriteMode,
       writeSwitchControllerAvailable: true,
+      writePreviewAvailable: true,
       existingDirectoryEndpointsSwitched: false
     });
   } catch (error: any) {
@@ -8077,6 +8148,7 @@ app.get('/api/pbxpuls/directory-runtime-effective', requireAuth(['su', 'admin'])
       writeLayerAvailable: true,
       directoryWriteMode: 'legacy',
       writeSwitchControllerAvailable: true,
+      writePreviewAvailable: true,
       existingDirectoryEndpointsSwitched: false
     });
   }
