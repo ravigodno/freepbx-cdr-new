@@ -36,7 +36,16 @@ import { buildHybridSettingsSnapshot, getPBXPulsRuntimeSettingsSnapshot, getSett
 import { buildDirectoryMigrationPreview } from './server/pbxpulsDirectoryMigrationPreview.js';
 import { buildDirectoryReadiness, buildDirectorySeedPreview } from './server/pbxpulsDirectorySeed.js';
 import { getDirectoryRuntimeSnapshot, getDirectoryStorageMode, type DirectoryStorageMode } from './server/pbxpulsDirectoryRuntime.js';
-import { getDirectoryWriteMode, isDirectorySqlWriteLayerAvailable } from './server/pbxpulsDirectoryWrite.js';
+import { isDirectorySqlWriteLayerAvailable } from './server/pbxpulsDirectoryWrite.js';
+import {
+  canEnableDirectorySqlWrite,
+  getDirectoryWriteMode,
+  getDirectoryWriteModeBlockedReason,
+  getDirectoryWriteModeStatus,
+  sanitizeDirectoryWriteModeError,
+  setDirectoryWriteMode,
+  type DirectoryWriteMode
+} from './server/pbxpulsDirectoryWriteMode.js';
 
 // Load environment variables
 dotenv.config();
@@ -6664,6 +6673,11 @@ function normalizeRequestedDirectoryStorageMode(value: unknown): DirectoryStorag
   return mode === 'legacy' || mode === 'sql' ? mode : null;
 }
 
+function normalizeRequestedDirectoryWriteMode(value: unknown): DirectoryWriteMode | null {
+  const mode = String(value ?? '').trim().toLowerCase();
+  return mode === 'legacy' || mode === 'sql' ? mode : null;
+}
+
 function getDirectoryStorageModeActor(req: Request): string {
   const authUser = (req as any).user || {};
   return String(authUser.username || 'unknown').trim().slice(0, 100) || 'unknown';
@@ -7832,9 +7846,10 @@ app.get('/api/pbxpuls/directory-readiness', requireAuth(['su', 'admin']), async 
 
 app.get('/api/pbxpuls/directory-write-readiness', requireAuth(['su', 'admin']), async (_req, res) => {
   try {
-    const [sqlAvailable, directoryWriteMode] = await Promise.all([
+    const [sqlAvailable, directoryWriteMode, sqlEnableDecision] = await Promise.all([
       isDirectorySqlWriteLayerAvailable(),
-      getDirectoryWriteMode()
+      getDirectoryWriteMode(),
+      canEnableDirectorySqlWrite()
     ]);
 
     res.json({
@@ -7843,6 +7858,9 @@ app.get('/api/pbxpuls/directory-write-readiness', requireAuth(['su', 'admin']), 
       writeLayerAvailable: true,
       runtimeWriteMode: directoryWriteMode,
       existingDirectoryEndpointsSwitched: false,
+      controlledSwitchAvailable: true,
+      canEnableSqlWrite: sqlEnableDecision.canEnable,
+      blockReason: sqlEnableDecision.reason,
       supportedOperations: {
         create: true,
         update: true,
@@ -7859,6 +7877,9 @@ app.get('/api/pbxpuls/directory-write-readiness', requireAuth(['su', 'admin']), 
       writeLayerAvailable: true,
       runtimeWriteMode: 'legacy',
       existingDirectoryEndpointsSwitched: false,
+      controlledSwitchAvailable: true,
+      canEnableSqlWrite: false,
+      blockReason: getDirectoryWriteModeBlockedReason(),
       supportedOperations: {
         create: true,
         update: true,
@@ -7867,6 +7888,65 @@ app.get('/api/pbxpuls/directory-write-readiness', requireAuth(['su', 'admin']), 
       },
       nextStep: 'controlled_directory_sql_write_switch'
     });
+  }
+});
+
+app.get('/api/pbxpuls/directory-write-mode', requireAuth(['su', 'admin']), async (_req, res) => {
+  try {
+    const localDb = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    const [status, directoryReadiness] = await Promise.all([
+      getDirectoryWriteModeStatus(),
+      buildDirectoryReadiness(localDb)
+    ]);
+
+    res.json({
+      ...status,
+      readiness: {
+        directoryReadinessReady: directoryReadiness.ready === true,
+        writeReadinessOk: status.ok === true && status.writeLayerAvailable === true
+      }
+    });
+  } catch (error: any) {
+    console.warn('[PBXPULS_DIRECTORY_WRITE_MODE] failed:', sanitizeDirectoryWriteModeError(error));
+    res.status(500).json({
+      ok: false,
+      mode: 'legacy',
+      allowedModes: ['legacy', 'sql'],
+      canEnableSql: false,
+      reason: getDirectoryWriteModeBlockedReason(),
+      existingDirectoryEndpointsSwitched: false,
+      writeLayerAvailable: false,
+      readiness: {
+        directoryReadinessReady: false,
+        writeReadinessOk: false
+      }
+    });
+  }
+});
+
+app.post('/api/pbxpuls/directory-write-mode', requireAuth(['su']), async (req, res) => {
+  const requestedMode = normalizeRequestedDirectoryWriteMode(req.body?.mode);
+  if (!requestedMode) {
+    res.status(400).json({ ok: false, error: 'Invalid directory write mode' });
+    return;
+  }
+
+  const actor = getDirectoryStorageModeActor(req);
+
+  try {
+    const result = await setDirectoryWriteMode(requestedMode, actor);
+    if (requestedMode === 'sql' && result.ok !== true) {
+      res.status(409).json({
+        ...result,
+        error: result.reason || getDirectoryWriteModeBlockedReason()
+      });
+      return;
+    }
+
+    res.json(result);
+  } catch (error: any) {
+    console.warn('[PBXPULS_DIRECTORY_WRITE_MODE_SET] failed:', sanitizeDirectoryWriteModeError(error));
+    res.status(500).json({ ok: false, error: 'Failed to update directory write mode' });
   }
 });
 
@@ -7975,7 +8055,9 @@ app.get('/api/pbxpuls/directory-runtime-effective', requireAuth(['su', 'admin'])
       readiness,
       writeMode: directoryWriteMode,
       writeLayerAvailable: true,
-      directoryWriteMode
+      directoryWriteMode,
+      writeSwitchControllerAvailable: true,
+      existingDirectoryEndpointsSwitched: false
     });
   } catch (error: any) {
     console.warn('[PBXPULS_DIRECTORY_RUNTIME_EFFECTIVE] failed:', String(error?.message || error || 'unknown error').slice(0, 300));
@@ -7993,7 +8075,9 @@ app.get('/api/pbxpuls/directory-runtime-effective', requireAuth(['su', 'admin'])
       },
       writeMode: 'legacy',
       writeLayerAvailable: true,
-      directoryWriteMode: 'legacy'
+      directoryWriteMode: 'legacy',
+      writeSwitchControllerAvailable: true,
+      existingDirectoryEndpointsSwitched: false
     });
   }
 });

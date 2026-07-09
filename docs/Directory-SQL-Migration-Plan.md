@@ -1227,3 +1227,65 @@ Diagnostic endpoint:
 - `directoryWriteMode`
 
 Stage 9.9.1 keeps `directory.write_mode = legacy` and leaves `directory.storage_mode` unchanged. The next step is `controlled_directory_sql_write_switch`, where any production write switch must be gated, audited and reversible.
+
+## Stage 9.9.2 Controlled Directory SQL Write Switch Design
+
+This stage adds the controlled Directory write-mode controller and status endpoints for a future SQL write switch.
+
+Controller:
+
+- `server/pbxpulsDirectoryWriteMode.ts`
+- `getDirectoryWriteMode()`
+- `getDirectoryWriteModeStatus()`
+- `canEnableDirectorySqlWrite()`
+- `setDirectoryWriteMode(mode, actor)`
+
+Endpoints:
+
+- `GET /api/pbxpuls/directory-write-mode`
+- Auth: `requireAuth(['su', 'admin'])`
+- Returns the current `directory.write_mode`, allowed modes, SQL enable decision, write layer availability, and safe readiness booleans.
+
+- `POST /api/pbxpuls/directory-write-mode`
+- Auth: `requireAuth(['su'])`
+- Body: `{ "mode": "legacy" | "sql" }`
+
+Switch behavior:
+
+- `legacy` is always allowed and writes `directory.write_mode = legacy`.
+- `sql` is intentionally blocked in this stage, even if Directory SQL read readiness is clean.
+- The current block reason is `directory_sql_write_runtime_not_connected`.
+- Existing Directory write endpoints are still legacy-only.
+- `POST /api/directory`, `PUT /api/directory/:id`, `DELETE /api/directory/:id`, import, sync, spam and blacklist write paths are not connected to the SQL write helper.
+- No frontend changes are introduced.
+- No SQL contact write tests are performed by this stage.
+
+Diagnostics:
+
+- `GET /api/pbxpuls/directory-write-readiness` now reports:
+  - `controlledSwitchAvailable`
+  - `canEnableSqlWrite`
+  - `blockReason`
+- `GET /api/pbxpuls/directory-runtime-effective` now reports:
+  - `writeSwitchControllerAvailable`
+  - `existingDirectoryEndpointsSwitched`
+
+Audit:
+
+- `directory_write_mode_changed`
+- `directory_write_mode_blocked`
+
+Audit details are safe and limited to:
+
+```json
+{
+  "from": "legacy",
+  "to": "legacy",
+  "actor": "su",
+  "reason": null
+}
+```
+
+Audit details must not include names, phone numbers, email addresses, comments, metadata values, raw contact payloads, tokens or secrets.
+
+Stage 9.9.2 is preparation only. The next stage should be guarded endpoint wiring or a SQL write preview flow before any production write path can use SQL.
