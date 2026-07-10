@@ -1,5 +1,14 @@
 # Changelog
 
+## 5.6.5 - 2026-07-10
+
+### Fixed
+
+- Восстановлен бейдж «Переведён на» для реальных BlindTransfer-событий из Asterisk CEL.
+- Target перевода определяется из explicit CEL fields или последующих событий того же `linkedid` с приоритетной проверкой общего `bridge_id`.
+- В хронологию звонка добавлен отдельный шаг BlindTransfer с номером назначения.
+- Обычные Queue, Ring Group, Inbound Route, IVR, Follow Me и Time Condition по-прежнему не считаются переводом.
+
 ## 5.6.4 - 2026-07-10
 
 ### Fixed
