@@ -78,6 +78,7 @@ import {
 } from './server/pbxpulsDirectorySync.js';
 import { findBlindTransferTargetFromCel, getExplicitBlindTransferTarget } from './server/cdrBlindTransfer.js';
 import { buildReportHourlyTimeline, formatReportHourBucket } from './server/reportDynamicsBuckets.js';
+import { calculateCpuPercent, parseProcStatCpuSample, type ProcStatCpuSample } from './server/healthCpu.js';
 
 // Load environment variables
 dotenv.config();
@@ -15459,23 +15460,13 @@ function getInterfaceBytes(iface: string) {
   };
 }
 
-function parseCpuPercentFromTop() {
-  const out = runHealthCommand('bash', ['-lc', "top -bn1 | grep -E 'Cpu\\(s\\)|%Cpu' | head -1"], 5000).stdout;
-  if (!out) return null;
+let lastHealthCpuSample: ProcStatCpuSample | null = null;
 
-  const idleMatch = out.match(/([0-9]+(?:\.[0-9]+)?)\s*(?:id|idle)/i);
-  if (idleMatch) {
-    const idle = Number(idleMatch[1]);
-    if (Number.isFinite(idle)) return Math.max(0, Math.min(100, Math.round((100 - idle) * 10) / 10));
-  }
-
-  const parts = out.match(/[0-9]+(?:\.[0-9]+)?/g) || [];
-  if (parts.length >= 4) {
-    const idle = Number(parts[3]);
-    if (Number.isFinite(idle)) return Math.max(0, Math.min(100, Math.round((100 - idle) * 10) / 10));
-  }
-
-  return null;
+function readCpuPercentFromProcStat() {
+  const currentSample = parseProcStatCpuSample(runHealthCommand('cat', ['/proc/stat'], 2000).stdout);
+  const cpuPercent = calculateCpuPercent(lastHealthCpuSample, currentSample);
+  if (currentSample) lastHealthCpuSample = currentSample;
+  return cpuPercent;
 }
 
 async function collectHealthHistoryPoint() {
@@ -15493,7 +15484,7 @@ async function collectHealthHistoryPoint() {
 
   const bootId = runHealthCommand('cat', ['/proc/sys/kernel/random/boot_id'], 2000).stdout || '';
 
-  const cpuPercent = parseCpuPercentFromTop();
+  const cpuPercent = readCpuPercentFromProcStat();
 
   const free = runHealthCommand('free', ['-m'], 3000).stdout;
   const memLine = free.split('\n').find(l => /^Mem:/i.test(l)) || '';
