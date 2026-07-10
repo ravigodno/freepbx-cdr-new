@@ -972,18 +972,12 @@ export default function QualityTab({ token }: Props) {
         </div>
       )}
 
-      <div className="flex flex-wrap items-center justify-end gap-3 text-[11px] font-bold text-slate-500">
-        {isLoading && !devices.length && <span className="inline-flex items-center gap-1.5"><RefreshCw className="h-3.5 w-3.5 animate-spin" />Загрузка сохранённого среза…</span>}
-        {isRefreshing && <span className="inline-flex items-center gap-1.5 text-blue-600"><RefreshCw className="h-3.5 w-3.5 animate-spin" />Обновляется…</span>}
-        {lastUpdated && <span>Последнее обновление: {new Date(lastUpdated).toLocaleString('ru-RU')}</span>}
-        <button
-          type="button"
-          onClick={() => setIsDiagnosticsOpen(true)}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-blue-700 transition hover:bg-blue-100 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-300"
-        >
-          <Terminal className="h-3.5 w-3.5" /> Диагностика
-        </button>
-      </div>
+      {(isLoading && !devices.length || isRefreshing) && (
+        <div className="flex flex-wrap items-center justify-end gap-3 text-[11px] font-bold text-slate-500">
+          {isLoading && !devices.length && <span className="inline-flex items-center gap-1.5"><RefreshCw className="h-3.5 w-3.5 animate-spin" />Загрузка сохранённого среза…</span>}
+          {isRefreshing && <span className="inline-flex items-center gap-1.5 text-blue-600"><RefreshCw className="h-3.5 w-3.5 animate-spin" />Обновляется…</span>}
+        </div>
+      )}
 
       {/* ОБЩАЯ СВОДКА (Summary Cards) */}
       <div className="grid grid-cols-2 xl:grid-cols-7 gap-3">
@@ -1060,10 +1054,22 @@ export default function QualityTab({ token }: Props) {
                   <Sliders className="h-4 w-4 text-blue-500" />
                   Мониторинг качества связи
                 </h3>
-                <p className="text-xs text-slate-500 mt-0.5">Разделите просмотр на транки и абонентские устройства. Кликните по строке для детальной аналитики и диагностики.</p>
               </div>
               
               <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                {lastUpdated && (
+                  <span className="inline-flex whitespace-nowrap items-center gap-1.5 text-[10px] font-bold text-slate-500 dark:text-slate-400">
+                    <Clock className="h-3.5 w-3.5 text-blue-500" />
+                    {new Date(lastUpdated).toLocaleString('ru-RU')}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setIsDiagnosticsOpen(true)}
+                  className="inline-flex whitespace-nowrap items-center justify-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-[11px] font-bold text-blue-700 transition hover:bg-blue-100 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-300"
+                >
+                  <Terminal className="h-3.5 w-3.5" /> Диагностика
+                </button>
                 <select
                   value={qualityStatusFilter}
                   onChange={(e) => setQualityStatusFilter(e.target.value as QualityStatusFilter)}
