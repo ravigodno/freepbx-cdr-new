@@ -76,7 +76,7 @@ import {
   isDirectorySqlSyncApplyEnabled,
   previewDirectorySqlSyncFromLegacy
 } from './server/pbxpulsDirectorySync.js';
-import { getExplicitBlindTransferTarget } from './server/cdrBlindTransfer.js';
+import { findBlindTransferTargetFromCel, getExplicitBlindTransferTarget } from './server/cdrBlindTransfer.js';
 
 // Load environment variables
 dotenv.config();
@@ -2004,22 +2004,30 @@ const loadCelBlindTransferEvents = async (
     const rows = await queryFreePBXCDR(
       settings,
       false,
-      `SELECT uniqueid, linkedid, eventtype, exten, context, extra
+      `SELECT id, eventtime, uniqueid, linkedid, eventtype, cid_num, exten, context, appname, channame, peer, extra
        FROM cel
-       WHERE eventtype = 'BLINDTRANSFER' AND linkedid IN (${placeholders})
-       ORDER BY eventtime ASC`,
+       WHERE eventtype IN ('BLINDTRANSFER', 'BlindTransfer', 'blindtransfer', 'CHAN_START', 'ANSWER', 'BRIDGE_ENTER', 'BRIDGE_EXIT')
+         AND linkedid IN (${placeholders})
+       ORDER BY eventtime ASC, id ASC`,
       safeLinkedIds
     );
 
+    const rowsByLinkedId = new Map<string, any[]>();
     rows.forEach((event: any) => {
       const linkedid = String(event?.linkedid || '').trim();
-      const target = getExplicitBlindTransferTarget(event);
-      if (!linkedid || !target) return;
+      if (!linkedid) return;
+      if (!rowsByLinkedId.has(linkedid)) rowsByLinkedId.set(linkedid, []);
+      rowsByLinkedId.get(linkedid)!.push(event);
+    });
+
+    rowsByLinkedId.forEach((events, linkedid) => {
+      const evidence = findBlindTransferTargetFromCel(events);
+      if (!evidence) return;
       evidenceByLinkedId.set(linkedid, {
-        ...event,
+        ...evidence.event,
         eventName: 'BlindTransfer',
         blindTransfer: true,
-        blindTransferTargetExt: target,
+        blindTransferTargetExt: evidence.target,
         source: 'asterisk_cel'
       });
     });

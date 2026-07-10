@@ -16,6 +16,11 @@ const parseCelExtra = (value: unknown): Record<string, any> => {
   }
 };
 
+const getChannelEndpoint = (value: unknown): string => {
+  const match = String(value || '').match(/(?:PJSIP|SIP)\/(\d{2,20})(?:[-@]|$)/i);
+  return normalizeBlindTransferTarget(match?.[1]);
+};
+
 export const getExplicitBlindTransferTarget = (event: any): string => {
   if (!event || typeof event !== 'object') return '';
 
@@ -40,4 +45,62 @@ export const getExplicitBlindTransferTarget = (event: any): string => {
       || extra.targetExtension
       || event.exten
   );
+};
+
+export type BlindTransferCelEvidence = {
+  event: any;
+  target: string;
+};
+
+export const findBlindTransferTargetFromCel = (inputRows: any[]): BlindTransferCelEvidence | null => {
+  const rows = Array.isArray(inputRows) ? inputRows : [];
+  let result: BlindTransferCelEvidence | null = null;
+
+  rows.forEach((event, index) => {
+    if (String(event?.eventtype || '').trim().toUpperCase() !== 'BLINDTRANSFER') return;
+
+    const explicitTarget = getExplicitBlindTransferTarget(event);
+    if (explicitTarget) {
+      result = { event, target: explicitTarget };
+      return;
+    }
+
+    const transferExtra = parseCelExtra(event?.extra);
+    const excludedParticipants = new Set([
+      normalizeBlindTransferTarget(event?.cid_num),
+      getChannelEndpoint(event?.channame),
+      getChannelEndpoint(transferExtra?.transferee_channel_name)
+    ].filter(Boolean));
+    for (let nextIndex = index + 1; nextIndex < rows.length; nextIndex++) {
+      const next = rows[nextIndex];
+      const eventType = String(next?.eventtype || '').trim().toUpperCase();
+      if (eventType === 'BLINDTRANSFER') break;
+      if (!['CHAN_START', 'ANSWER', 'BRIDGE_ENTER', 'BRIDGE_EXIT'].includes(eventType)) continue;
+
+      const extenTarget = normalizeBlindTransferTarget(next?.exten);
+      if (extenTarget && !excludedParticipants.has(extenTarget)) {
+        result = { event, target: extenTarget };
+        return;
+      }
+
+      const channelTarget = getChannelEndpoint(next?.channame);
+      if (channelTarget && !excludedParticipants.has(channelTarget)) {
+        result = { event, target: channelTarget };
+        return;
+      }
+
+      const cidTarget = normalizeBlindTransferTarget(next?.cid_num);
+      if (
+        cidTarget
+        && !excludedParticipants.has(cidTarget)
+        && ['CHAN_START', 'ANSWER'].includes(eventType)
+        && cidTarget === channelTarget
+      ) {
+        result = { event, target: cidTarget };
+        return;
+      }
+    }
+  });
+
+  return result;
 };
