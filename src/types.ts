@@ -53,6 +53,10 @@ export interface CallEntry {
   callbackCallId?: string;     // UniqueId of the call that resolved this
   callbackTime?: string;       // Time of the callback resolution
   wasKpiResolved?: boolean;    // Was resolved within the KPI timeframe?
+  callbackStatus?: 'processed' | 'called_back' | 'repeated_inbound' | 'pending_callback' | 'not_called_back';
+  callbackDeadlineExpired?: boolean;
+  isPendingCallback?: boolean;
+  isLostCall?: boolean;
 
   // Transfer tracking
   blindTransfer?: boolean;
@@ -158,6 +162,7 @@ export interface DashboardStats {
   internalCalls: number;
   missedCalls: number;
   processedCalls: number;
+  pendingCallback?: number;
   lostCalls: number;
 }
 

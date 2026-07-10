@@ -33,8 +33,10 @@ function statusBadge(status: unknown) {
     return <span className="rounded-full bg-emerald-50 px-2 py-1 text-[10px] font-black text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300">Перезвонили</span>;
   }
   if (status === 'repeated_inbound') {
-    return <span className="rounded-full bg-amber-50 px-2 py-1 text-[10px] font-black text-amber-700 dark:bg-amber-950/30 dark:text-amber-300">Повторный входящий</span>;
+    return <span className="rounded-full bg-emerald-50 px-2 py-1 text-[10px] font-black text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300">Повторный входящий</span>;
   }
+  if (status === 'processed') return <span className="rounded-full bg-emerald-50 px-2 py-1 text-[10px] font-black text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300">Обработано</span>;
+  if (status === 'pending_callback') return <span className="rounded-full bg-amber-50 px-2 py-1 text-[10px] font-black text-amber-700 dark:bg-amber-950/30 dark:text-amber-300">Ожидает</span>;
   return <span className="rounded-full bg-rose-50 px-2 py-1 text-[10px] font-black text-rose-700 dark:bg-rose-950/30 dark:text-rose-300">Не перезвонили</span>;
 }
 

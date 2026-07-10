@@ -79,6 +79,7 @@ import {
 import { findBlindTransferTargetFromCel, getExplicitBlindTransferTarget } from './server/cdrBlindTransfer.js';
 import { buildReportHourlyTimeline, formatReportHourBucket } from './server/reportDynamicsBuckets.js';
 import { calculateCpuPercent, parseProcStatCpuSample, type ProcStatCpuSample } from './server/healthCpu.js';
+import { classifyMissedCallResolution, type MissedCallResolutionStatus } from './server/missedCallResolution.js';
 
 // Load environment variables
 dotenv.config();
@@ -2117,7 +2118,7 @@ const isInternal = (c: any): boolean => {
 };
 
 
-type LostCallCallbackStatus = 'not_called_back' | 'called_back' | 'repeated_inbound' | 'pending_callback';
+type LostCallCallbackStatus = MissedCallResolutionStatus;
 
 type LostCallAnalyticsItem = {
   externalNumber: string | null;
@@ -2132,6 +2133,11 @@ type LostCallAnalyticsItem = {
   callbackStatus: LostCallCallbackStatus;
   callbackWithinSla: boolean;
   slaExpired: boolean;
+  callbackDeadlineExpired: boolean;
+  isProcessed: boolean;
+  isPending: boolean;
+  isLost: boolean;
+  reasonCategory: string;
   lastRelatedCallAt: string | null;
   recordingAvailable: boolean;
   uniqueid: string;
@@ -2603,8 +2609,10 @@ const calculateTrunkMetrics = (rows: any[]): TrunkSummaryItem[] => {
   }).sort((a, b) => b.totalCalls - a.totalCalls || a.trunkName.localeCompare(b.trunkName)).slice(0, 50);
 };
 
-const buildLostCallAnalytics = (calls: any[], options: { startMs: number; endMs: number; callbackWindowHours?: number; directory?: any[]; ownerMap?: Map<string, ExtensionOwner>; nowMs?: number }): LostCallAnalytics => {
-  const callbackWindowMs = Math.max(1, Math.min(168, Number(options.callbackWindowHours || 24))) * 60 * 60 * 1000;
+const buildLostCallAnalytics = (calls: any[], options: { startMs: number; endMs: number; callbackWindowHours?: number; callbackWindowMinutes?: number; directory?: any[]; ownerMap?: Map<string, ExtensionOwner>; nowMs?: number }): LostCallAnalytics => {
+  const callbackWindowMs = Number.isFinite(Number(options.callbackWindowMinutes))
+    ? Math.max(1, Math.min(10080, Number(options.callbackWindowMinutes))) * 60 * 1000
+    : Math.max(1, Math.min(168, Number(options.callbackWindowHours || 24))) * 60 * 60 * 1000;
   const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
   const directory = options.directory || [];
   const ownerMap = options.ownerMap || buildExtensionOwnerMap(directory, []);
@@ -2614,7 +2622,7 @@ const buildLostCallAnalytics = (calls: any[], options: { startMs: number; endMs:
       return callMs >= options.startMs && callMs <= options.endMs && isIncoming(call) && isMissedDisposition(call.disposition);
     })
     .map(call => ({ call, normalizedNumber: normalizePhoneNumberForAnalytics(call.src), missedMs: getCallDateMs(call.calldate) }))
-    .filter(item => item.normalizedNumber && item.normalizedNumber.length >= 7 && Number.isFinite(item.missedMs));
+    .filter(item => Number.isFinite(item.missedMs));
 
   const outboundByNumber = new Map<string, any[]>();
   const inboundByNumber = new Map<string, any[]>();
@@ -2661,25 +2669,31 @@ const buildLostCallAnalytics = (calls: any[], options: { startMs: number; endMs:
     });
     const firstOutbound = outbound[0] || null;
     const firstInboundContact = repeatedInbound[0] || null;
-    const callbackWithinSla = Boolean(firstOutbound && getCallDateMs(firstOutbound.calldate) <= deadline);
-    const slaExpired = nowMs > deadline;
-
-    let callbackStatus: LostCallCallbackStatus;
-    if (firstOutbound) {
-      callbackStatus = 'called_back';
+    const firstRelatedContact = firstOutbound || firstInboundContact || null;
+    const processedAtMs = getCallDateMs(call.processedAt);
+    const callbackWithinSla = Boolean(
+      (firstRelatedContact && getCallDateMs(firstRelatedContact.calldate) <= deadline)
+      || (call.processed === true && Number.isFinite(processedAtMs) && processedAtMs <= deadline)
+    );
+    const resolution = classifyMissedCallResolution({
+      missedMs,
+      nowMs,
+      callbackWindowMs,
+      manuallyProcessed: call.processed === true,
+      hasOutboundCallback: Boolean(firstOutbound),
+      hasRepeatedInbound: Boolean(firstInboundContact)
+    });
+    const callbackStatus = resolution.status;
+    if (resolution.isProcessed) {
       callbackAfterMissed++;
       if (callbackWithinSla) callbackRecoveredWithinSla++;
-    } else if (firstInboundContact) {
-      callbackStatus = 'repeated_inbound';
-    } else if (slaExpired) {
-      callbackStatus = 'not_called_back';
+    } else if (resolution.isLost) {
       notCalledBack++;
-    } else {
-      callbackStatus = 'pending_callback';
+    } else if (resolution.isPending) {
       pendingCallback++;
     }
 
-    const related = firstOutbound || firstInboundContact || null;
+    const related = firstRelatedContact;
     const responsibleExtension = getResponsibleExtension(call);
     const owner = resolveExtensionOwner(ownerMap, responsibleExtension);
 
@@ -2695,7 +2709,12 @@ const buildLostCallAnalytics = (calls: any[], options: { startMs: number; endMs:
       attempts: outbound.length,
       callbackStatus,
       callbackWithinSla,
-      slaExpired,
+      slaExpired: resolution.deadlineExpired,
+      callbackDeadlineExpired: resolution.deadlineExpired,
+      isProcessed: resolution.isProcessed,
+      isPending: resolution.isPending,
+      isLost: resolution.isLost,
+      reasonCategory: resolution.reasonCategory,
       lastRelatedCallAt: related?.calldate || null,
       recordingAvailable: Boolean(call.recordingfile),
       uniqueid: call.uniqueid,
@@ -2759,10 +2778,10 @@ const calculateCallBusinessCounters = (rows: any[], options: { callbackWindowHou
     }
   });
 
-  const processedMissedCalls = relevantLostItems.filter(item => item.callbackStatus === 'called_back').length;
+  const processedMissedCalls = relevantLostItems.filter(item => item.isProcessed).length;
   const callbackRecoveredWithinSla = relevantLostItems.filter(item => item.callbackWithinSla === true).length;
-  const pendingCallback = relevantLostItems.filter(item => item.callbackStatus === 'pending_callback').length;
-  const lostCalls = relevantLostItems.filter(item => item.callbackStatus === 'not_called_back').length;
+  const pendingCallback = relevantLostItems.filter(item => item.isPending).length;
+  const lostCalls = relevantLostItems.filter(item => item.isLost).length;
   const callbackRecoveryRate = missedCalls ? Math.round((processedMissedCalls / missedCalls) * 100) : 0;
   const slaRate = inboundCalls ? Math.round((answeredWithinSla / inboundCalls) * 100) : 0;
 
@@ -13924,10 +13943,19 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
       startMs: callsStartMs,
       endMs: callsEndMs,
       callbackWindowHours,
+      callbackWindowMinutes: Number(settings.callbackKpiMinutes || 60),
       directory,
       ownerMap: callsOwnerMap
     });
     const callsLostByUniqueId = new Map(callsLostAnalytics.items.map(item => [item.uniqueid, item]));
+    calls.forEach(call => {
+      const item = callsLostByUniqueId.get(call.uniqueid);
+      if (!item) return;
+      call.callbackStatus = item.callbackStatus;
+      call.callbackDeadlineExpired = item.callbackDeadlineExpired;
+      call.isPendingCallback = item.isPending;
+      call.isLostCall = item.isLost;
+    });
 
     // Status filtering logic
     if (statusFilter && statusFilter !== 'ALL') {
@@ -13954,9 +13982,9 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
       } else if (statusFilter === 'INTERNAL') {
         filteredCalls = filteredCalls.filter(c => isInternal(c));
       } else if (statusFilter === 'PROCESSED') {
-        filteredCalls = filteredCalls.filter(c => callsLostByUniqueId.get(c.uniqueid)?.callbackStatus === 'called_back');
+        filteredCalls = filteredCalls.filter(c => callsLostByUniqueId.get(c.uniqueid)?.isProcessed === true);
       } else if (statusFilter === 'LOST') {
-        filteredCalls = filteredCalls.filter(c => callsLostByUniqueId.get(c.uniqueid)?.callbackStatus === 'not_called_back');
+        filteredCalls = filteredCalls.filter(c => callsLostByUniqueId.get(c.uniqueid)?.isLost === true);
       }
     }
 
@@ -14241,6 +14269,7 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
       startMs: statsStartMs,
       endMs: statsEndMs,
       callbackWindowHours,
+      callbackWindowMinutes: Number(settings.callbackKpiMinutes || 60),
       directory,
       ownerMap
     });
@@ -14694,6 +14723,7 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
       startMs: reportStartMs,
       endMs: reportEndMs,
       callbackWindowHours,
+      callbackWindowMinutes: Number(settings.callbackKpiMinutes || 60),
       directory,
       ownerMap
     });
@@ -14776,9 +14806,9 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
       if (isIncomingMissed) {
         bin.missedCalls++;
         const lostItem = lostByUniqueId.get(c.uniqueid);
-        if (lostItem?.callbackStatus === 'called_back') {
+        if (lostItem?.isProcessed) {
           bin.processedCalls++;
-        } else if (lostItem?.callbackStatus === 'not_called_back') {
+        } else if (lostItem?.isLost) {
           bin.lostCalls++;
         }
       }
@@ -14813,8 +14843,8 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
       const owner = resolveExtensionOwner(ownerMap, responsibleExt);
       const waitSecondsForSummary = calculateWaitSeconds(c);
       const lostItemForSummary = lostByUniqueId.get(c.uniqueid);
-      const callbackResolved = lostItemForSummary?.callbackStatus === 'called_back';
-      const lostUnresolved = lostItemForSummary?.callbackStatus === 'not_called_back';
+      const callbackResolved = lostItemForSummary?.isProcessed === true;
+      const lostUnresolved = lostItemForSummary?.isLost === true;
 
       const touchSummary = (map: Map<string, any>, key: string, base: any) => {
         let entry = map.get(key);

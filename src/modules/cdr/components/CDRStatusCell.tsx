@@ -12,7 +12,7 @@ interface CDRStatusCellProps {
   wasCallbacked?: boolean;
   wasKpiResolved?: boolean;
   callbackTime?: string;
-  index: number;
+  callbackStatus?: 'processed' | 'called_back' | 'repeated_inbound' | 'pending_callback' | 'not_called_back';
 }
 
 export function CDRStatusCell({
@@ -22,13 +22,10 @@ export function CDRStatusCell({
   wasCallbacked,
   wasKpiResolved,
   callbackTime,
-  index,
+  callbackStatus,
 }: CDRStatusCellProps) {
-  const isAwaitingBadge =
-    isMissed &&
-    !processed &&
-    !wasCallbacked &&
-    (index === 1 || index === 4 || index === 6 || (index > 6 && index % 2 === 0));
+  const isAwaitingBadge = isMissed && callbackStatus === 'pending_callback';
+  const isLostBadge = isMissed && callbackStatus === 'not_called_back';
 
   return (
     <td className="py-4 px-4">
@@ -43,6 +40,11 @@ export function CDRStatusCell({
             <AlertTriangle className="h-3.5 w-3.5" />
             Ожидает
           </span>
+        ) : isLostBadge ? (
+          <span className="inline-flex items-center gap-1.5 bg-rose-50/40 dark:bg-rose-950/10 text-rose-500 dark:text-rose-400 border border-rose-250/30 dark:border-rose-905/30 px-2.5 py-1 rounded-lg text-[11px] font-bold">
+            <Target className="h-3.5 w-3.5" />
+            Потерян
+          </span>
         ) : (
           <span className="inline-flex items-center gap-1.5 bg-rose-50/40 dark:bg-rose-950/10 text-rose-500 dark:text-rose-400 border border-rose-250/30 dark:border-rose-905/30 px-2.5 py-1 rounded-lg text-[11px] font-bold">
             <Target className="h-3.5 w-3.5" />
@@ -50,14 +52,14 @@ export function CDRStatusCell({
           </span>
         )}
 
-        {wasCallbacked && (
+        {(processed || wasCallbacked) && (
           <span
             className="inline-flex items-center gap-1.5 mt-1 px-2 py-0.5 rounded-lg border border-slate-200 bg-white text-[10px] font-bold text-slate-700 shadow-xs"
-            title={`Клиенту успешно перезвонили в ${callbackTime}. Лимит времени по KPI: ${wasKpiResolved ? 'соблюден' : 'превышен!'}`}
+            title={wasCallbacked ? `Клиенту успешно перезвонили в ${callbackTime}. Лимит времени по KPI: ${wasKpiResolved ? 'соблюден' : 'превышен!'}` : 'Звонок обработан вручную или автоматически.'}
           >
             <span
               className={`h-1.5 w-1.5 rounded-full shrink-0 ${
-                wasKpiResolved ? 'bg-emerald-500' : 'bg-rose-500'
+              processed || wasKpiResolved ? 'bg-emerald-500' : 'bg-rose-500'
               }`}
             />
             <span>Обработано</span>

@@ -140,7 +140,7 @@ export default function LegacyCDRTable({
                 wasCallbacked={call.wasCallbacked}
                 wasKpiResolved={call.wasKpiResolved}
                 callbackTime={call.callbackTime}
-                index={index}
+                callbackStatus={call.callbackStatus}
               />
 
               {/* Column 5: ЗАПИСЬ */}

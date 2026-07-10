@@ -387,6 +387,7 @@ export default function ReportsTab({
   const slaPercentValue = slaSummary && Number.isFinite(Number(slaSummary.slaPercent)) ? Number(slaSummary.slaPercent) : summary.sla;
   const averageWaitValue = slaSummary ? slaSummary.averageWaitSeconds : summary.avgWait;
   const callbackAfterMissedValue = lostCallSummary && Number.isFinite(Number(lostCallSummary.callbackAfterMissed)) ? Number(lostCallSummary.callbackAfterMissed) : summary.processed;
+  const pendingCallbackValue = lostCallSummary && Number.isFinite(Number(lostCallSummary.pendingCallback)) ? Number(lostCallSummary.pendingCallback) : 0;
   const lostCallsValue = lostCallSummary && Number.isFinite(Number(lostCallSummary.lostCalls)) ? Number(lostCallSummary.lostCalls) : summary.lost;
 
   const tabs = [
@@ -481,6 +482,7 @@ export default function ReportsTab({
         <StatsKpiCard label="SLA" value={slaPercentValue + '%'} hint={'Ответ до ' + effectiveAnswerSlaSeconds + ' сек'} icon={ShieldCheck} tone="purple" />
         <StatsKpiCard label="Среднее ожидание" value={formatNullableDuration(averageWaitValue)} hint="По отвеченным" icon={Clock} tone="orange" />
         <StatsKpiCard label="Обработанные пропущенные" value={callbackAfterMissedValue.toLocaleString('ru-RU')} hint="Был успешный перезвон" icon={TrendingUp} tone="green" />
+        <StatsKpiCard label="Ожидают обработки" value={pendingCallbackValue.toLocaleString('ru-RU')} hint="Срок KPI ещё не истёк" icon={Clock} tone="blue" />
       </div>
 
       {activeTab === 'overview' ? (
