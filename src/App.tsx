@@ -5540,24 +5540,11 @@ export default function App() {
 
               {/* Потерянные */}
               <button
-                type="button"
-                title="Ожидают обработки = срок KPI для обратного звонка ещё не истёк."
-                className="text-left p-4 flex flex-col justify-between rounded-xl shadow-sm border border-sky-100 bg-white"
-              >
-                <span className="text-xs text-sky-600 font-bold tracking-wide">Ожидают обработки</span>
-                <div className="mt-2 flex items-baseline justify-between w-full">
-                  {isLoadingStats ? <Loader2 className="h-6 w-6 animate-spin text-slate-400" /> : <span className="text-2xl font-bold text-sky-600 font-mono">{stats?.pendingCallback ?? 0}</span>}
-                  <Clock className="h-5 w-5 text-sky-500/80 self-center" />
-                </div>
-              </button>
-
-              {/* Потерянные */}
-              <button
                 onClick={() => {
                   setStatusFilter(statusFilter === 'LOST' ? 'ALL' : 'LOST');
                   setPage(1);
                 }}
-                title="Потерянные = пропущенные + SLA уже истёк + нет отзвона + не обработан вручную."
+                title="Потерянные = пропущенные минус обработанные."
                 className={`text-left p-4 flex flex-col justify-between rounded-xl shadow-sm hover:shadow-md transition-all cursor-pointer border hover:scale-[1.01] active:scale-[0.99] ${
                   statusFilter === 'LOST'
                     ? 'bg-amber-50/70 border-amber-400 ring-2 ring-amber-500/30'

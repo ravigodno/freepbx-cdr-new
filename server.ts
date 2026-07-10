@@ -13984,7 +13984,10 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
       } else if (statusFilter === 'PROCESSED') {
         filteredCalls = filteredCalls.filter(c => callsLostByUniqueId.get(c.uniqueid)?.isProcessed === true);
       } else if (statusFilter === 'LOST') {
-        filteredCalls = filteredCalls.filter(c => callsLostByUniqueId.get(c.uniqueid)?.isLost === true);
+        filteredCalls = filteredCalls.filter(c => {
+          const item = callsLostByUniqueId.get(c.uniqueid);
+          return item ? !item.isProcessed : false;
+        });
       }
     }
 
@@ -14305,7 +14308,7 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
       missedCalls: counters.missedCalls,
       processedCalls: counters.processedMissedCalls,
       pendingCallback: counters.pendingCallback,
-      lostCalls: counters.lostCalls,
+      lostCalls: Math.max(0, counters.missedCalls - counters.processedMissedCalls),
       dbError: (req as any).dbError || undefined,
       demoModeActive: isDemo
     });
@@ -15054,7 +15057,7 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
       detailing: detailingResults,
       lostCallSummary: {
         missedCalls: businessCounters.missedCalls,
-        lostCalls: businessCounters.lostCalls,
+        lostCalls: Math.max(0, businessCounters.missedCalls - businessCounters.processedMissedCalls),
         callbackAfterMissed: businessCounters.processedMissedCalls,
         callbackRecoveredWithinSla: businessCounters.callbackRecoveredWithinSla,
         pendingCallback: businessCounters.pendingCallback,
