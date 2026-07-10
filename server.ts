@@ -14541,9 +14541,10 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
     // Pre-populate empty bins
     const bins = new Map<string, any>();
     if (groupType === 'hour') {
-      buildReportHourlyTimeline(startDate, endDate).forEach(({ key, sortKey }) => {
+      buildReportHourlyTimeline(startDate, endDate).forEach(({ key, label, sortKey }) => {
         bins.set(key, {
-          label: key,
+          key,
+          label,
           sortKey,
           totalCalls: 0,
           inboundCalls: 0,
@@ -14736,11 +14737,12 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
       }
 
       // Increment trends line
-      const { key, sortKey } = formatGroupKey(c.calldate, groupType);
+      const { key, label, sortKey } = formatGroupKey(c.calldate, groupType) as { key: string; label?: string; sortKey: number };
       let bin = bins.get(key);
       if (!bin) {
         bin = {
-          label: key,
+          key,
+          label: label || key,
           sortKey,
           totalCalls: 0,
           inboundCalls: 0,

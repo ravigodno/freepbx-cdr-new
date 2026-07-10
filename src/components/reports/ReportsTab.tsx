@@ -32,6 +32,7 @@ type Props = {
 };
 
 interface DynamicDatapoint {
+  key?: string;
   label: string;
   sortKey: number;
   totalCalls: number;

@@ -4,6 +4,7 @@ import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YA
 type OverviewSeriesKey = 'inboundCalls' | 'outboundCalls' | 'internalCalls' | 'missedCalls' | 'processedCalls' | 'lostCalls' | 'slaPercent';
 
 type OverviewPoint = {
+  key?: string;
   label: string;
   sortKey?: number;
   inboundCalls?: number;
@@ -32,15 +33,19 @@ function parseDate(value: string): Date | null {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-function formatHourLabel(date: Date): string {
+function formatHourBucket(date: Date): { key: string; label: string } {
   const day = String(date.getDate()).padStart(2, '0');
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const hour = String(date.getHours()).padStart(2, '0');
-  return `${day}.${month} ${hour}:00`;
+  return {
+    key: `${date.getFullYear()}-${month}-${day} ${hour}:00`,
+    label: `${day}.${month} ${hour}:00`
+  };
 }
 
-function normalizePoint(point: OverviewPoint | undefined, label: string, sortKey: number): OverviewPoint {
+function normalizePoint(point: OverviewPoint | undefined, key: string, label: string, sortKey: number): OverviewPoint {
   return {
+    key,
     label,
     sortKey,
     inboundCalls: Number(point?.inboundCalls || 0),
@@ -57,21 +62,21 @@ export function buildOverviewData(data: OverviewPoint[], groupType: string, star
   if (groupType !== 'hour') {
     return [...data]
       .sort((a, b) => Number(a.sortKey || 0) - Number(b.sortKey || 0))
-      .map(point => normalizePoint(point, point.label, Number(point.sortKey || 0)));
+      .map(point => normalizePoint(point, point.key || point.label, point.label, Number(point.sortKey || 0)));
   }
 
   const start = parseDate(startDate);
   const endDateValue = parseDate(endDate);
   if (!start || !endDateValue || start > endDateValue) return [];
   const end = new Date(endDateValue.getFullYear(), endDateValue.getMonth(), endDateValue.getDate(), 23);
-  const byLabel = new Map(data.map(point => [point.label, point]));
+  const byKey = new Map(data.map(point => [point.key || point.label, point]));
   const result: OverviewPoint[] = [];
   const current = new Date(start.getFullYear(), start.getMonth(), start.getDate(), 0);
   let safety = 0;
 
   while (current <= end && safety < 50000) {
-    const label = formatHourLabel(current);
-    result.push(normalizePoint(byLabel.get(label), label, current.getTime()));
+    const { key, label } = formatHourBucket(current);
+    result.push(normalizePoint(byKey.get(key), key, label, current.getTime()));
     current.setHours(current.getHours() + 1);
     safety++;
   }
