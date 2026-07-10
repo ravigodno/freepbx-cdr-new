@@ -16729,6 +16729,15 @@ interface TelemetryPoint {
   mos: number;
 }
 
+function calculateRtpLossPercent(receivedPackets: unknown, lostPackets: unknown): number {
+  const received = Math.max(0, Number(receivedPackets) || 0);
+  const lost = Math.max(0, Number(lostPackets) || 0);
+  if (lost === 0) return 0;
+  const total = received + lost;
+  if (total <= 0) return 0;
+  return parseFloat(((lost / total) * 100).toFixed(2));
+}
+
 interface TelemetryAlert {
   id: string;
   time: string;
@@ -16837,7 +16846,9 @@ async function getRealVoIPQualityDevices(settings: AppSettings): Promise<any[]> 
     }
     
     let jitter = 1.0;
-    let rtpLoss = 0.0;
+    const rtpReceivedPackets = Math.max(0, Number(dev.rtpReceivedPackets || dev.rtp_received_packets || 0) || 0);
+    const rtpLostPackets = Math.max(0, Number(dev.rtpLostPackets || dev.rtp_lost_packets || 0) || 0);
+    let rtpLoss = calculateRtpLossPercent(rtpReceivedPackets, rtpLostPackets);
     let status = "Отлично";
     let mos = 4.41;
 
@@ -16850,11 +16861,6 @@ async function getRealVoIPQualityDevices(settings: AppSettings): Promise<any[]> 
     } else {
       // Online or Conflict
       jitter = parseFloat((1.0 + (latency % 5) / 2 + Math.random() * 0.5).toFixed(1));
-      if (dev.status === 'Conflict') {
-        rtpLoss = parseFloat((1.5 + Math.random() * 2.0).toFixed(2));
-      } else {
-        rtpLoss = parseFloat((Math.random() * 0.05).toFixed(2));
-      }
 
       mos = 4.41;
       if (latency > 150) mos -= 1.0;
@@ -16897,6 +16903,8 @@ async function getRealVoIPQualityDevices(settings: AppSettings): Promise<any[]> 
       latency,
       jitter,
       rtpLoss,
+      rtpReceivedPackets,
+      rtpLostPackets,
       mos,
       status,
       lastCheck: new Date().toISOString()
@@ -16985,7 +16993,6 @@ setInterval(async () => {
         // drift metrics slightly for online devices
         let driftLat = (Math.random() * 4 - 2);
         let driftJit = (Math.random() * 0.4 - 0.2);
-        let driftLoss = (Math.random() * 0.1 - 0.05);
 
         // Keep close to real rtt if available
         if (!isDemo && dev.latency) {
@@ -16995,7 +17002,7 @@ setInterval(async () => {
         }
 
         metric.jitter = parseFloat(Math.max(0.5, metric.jitter + driftJit).toFixed(1));
-        metric.rtpLoss = parseFloat(Math.max(0.0, metric.rtpLoss + driftLoss).toFixed(2));
+        metric.rtpLoss = calculateRtpLossPercent((dev as any).rtpReceivedPackets || (dev as any).rtp_received_packets || 0, (dev as any).rtpLostPackets || (dev as any).rtp_lost_packets || 0);
 
         // Calculate new MOS based on typical G.107 E-model approximation
         let calculatedMos = 4.41;
@@ -17253,7 +17260,15 @@ app.get('/api/quality/device/:ext', requireAuth(), async (req, res) => {
       return;
     }
 
-    const metric = devicesMetrics[ext] || { latency: dev.latency || 15, jitter: dev.jitter || 1.2, rtpLoss: dev.rtpLoss || 0, mos: dev.mos || 4.4, status: dev.status || "Отлично" };
+    const metric = isDemoMode(settings)
+      ? (devicesMetrics[ext] || { latency: dev.latency || 15, jitter: dev.jitter || 1.2, rtpLoss: dev.rtpLoss || 0, mos: dev.mos || 4.4, status: dev.status || "Отлично" })
+      : {
+          latency: dev.latency || 0,
+          jitter: dev.jitter || 0,
+          rtpLoss: calculateRtpLossPercent(dev.rtpReceivedPackets || dev.rtp_received_packets || 0, dev.rtpLostPackets || dev.rtp_lost_packets || 0),
+          mos: dev.mos || 0,
+          status: dev.status || "Offline"
+        };
     let history = [];
     if (fs.existsSync(QUALITY_HISTORY_FILE)) {
       const allHist = JSON.parse(fs.readFileSync(QUALITY_HISTORY_FILE, 'utf8') || '[]');

@@ -360,6 +360,8 @@ interface QualityDevice {
   latency: number;
   jitter: number;
   rtpLoss: number;
+  rtpReceivedPackets?: number;
+  rtpLostPackets?: number;
   mos: number;
   status: 'Отлично' | 'Хорошо' | 'Предупреждение' | 'Критично' | 'Offline';
   lastCheck: string;
@@ -401,6 +403,15 @@ interface TelemetryAlert {
 type QualitySortKey = 'ext' | 'name' | 'ip' | 'type' | 'userAgent' | 'latency' | 'jitter' | 'rtpLoss' | 'mos' | 'status';
 type QualitySortDirection = 'asc' | 'desc';
 type QualityStatusFilter = 'ALL' | QualityDevice['status'];
+
+function calculateRtpLossPercent(receivedPackets: unknown, lostPackets: unknown): number {
+  const received = Math.max(0, Number(receivedPackets) || 0);
+  const lost = Math.max(0, Number(lostPackets) || 0);
+  if (lost === 0) return 0;
+  const total = received + lost;
+  if (total <= 0) return 0;
+  return parseFloat(((lost / total) * 100).toFixed(2));
+}
 
 function getStoredAuthToken(): string {
   try {
@@ -762,12 +773,15 @@ export default function QualityTab({ token }: Props) {
         output += `Статус Asterisk Contact Status: Avail (Qualify: ${dev.latency}ms)\n`;
         output += `Результат: Регистрация устройства активна в базе данных Asterisk.`;
       } else if (checkType === 'Проверка RTP потока') {
+        const receivedPackets = Math.max(0, Number(dev.rtpReceivedPackets ?? 852) || 0);
+        const lostPackets = Math.max(0, Number(dev.rtpLostPackets ?? 0) || 0);
+        const rtpLoss = calculateRtpLossPercent(receivedPackets, lostPackets);
         output += `Инициализация захвата RTP статистики для вызова EXT ${ext}...\n`;
         output += `Интерфейс: vlan${dev.network.vlan === 'None' ? '1' : dev.network.vlan}\n`;
         output += `RTP Кодек: G.711 a-law (PCMA)\n`;
-        output += `Получено аудио-пакетов: 852 (0 пропущено)\n`;
+        output += `Получено аудио-пакетов: ${receivedPackets} (${lostPackets} пропущено)\n`;
         output += `Средний джиттер со стороны абонента: ${dev.jitter} ms\n`;
-        output += `Потери кадров RTP: ${dev.rtpLoss}%\n`;
+        output += `Потери RTP пакетов: ${rtpLoss}%\n`;
         output += `Результат: RTP поток стабилен. Серьезных задержек не обнаружено.`;
       } else if (checkType === 'Проверка RTP симметрии') {
         output += `Тестирование симметрии портов RTP (Symmetric RTP) для EXT ${ext}...\n`;
