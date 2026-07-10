@@ -5,6 +5,7 @@ import RussianDatePicker, { toLocalDateInputValue } from '../common/RussianDateP
 import { DirectoryEntry, AppSettings } from '../../types';
 import { StatsKpiCard } from './dashboard/StatsKpiCard';
 import { CallDirectionChart, ChartMode } from './dashboard/CallDirectionChart';
+import { OverviewCallDynamicsChart } from './dashboard/OverviewCallDynamicsChart';
 import { CallHeatmap } from './dashboard/CallHeatmap';
 import { CallFunnelWidget } from './dashboard/CallFunnelWidget';
 import { ProblemDepartmentsTable, DepartmentSummaryRow } from './dashboard/ProblemDepartmentsTable';
@@ -484,7 +485,7 @@ export default function ReportsTab({
       {activeTab === 'overview' ? (
         <>
           <div className="grid grid-cols-1 items-stretch gap-4 xl:grid-cols-[minmax(0,3fr)_minmax(320px,1fr)]">
-            <CallDirectionChart data={visibleData} mode={chartMode} onModeChange={setChartMode} groupType={groupType} startDate={startDate} endDate={endDate} />
+            <OverviewCallDynamicsChart data={visibleData} groupType={groupType} startDate={startDate} endDate={endDate} />
             <div className="flex h-full min-h-[420px] flex-col rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
               <div className="text-[10px] font-black uppercase text-slate-500 dark:text-slate-400">Инициатива контакта</div>
               <div className="mt-1 text-xs font-semibold text-slate-500 dark:text-slate-400">Входящие и исходящие клиентские звонки</div>

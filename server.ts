@@ -77,6 +77,7 @@ import {
   previewDirectorySqlSyncFromLegacy
 } from './server/pbxpulsDirectorySync.js';
 import { findBlindTransferTargetFromCel, getExplicitBlindTransferTarget } from './server/cdrBlindTransfer.js';
+import { buildReportHourlyTimeline, formatReportHourBucket } from './server/reportDynamicsBuckets.js';
 
 // Load environment variables
 dotenv.config();
@@ -14507,8 +14508,7 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
       ];
 
       if (type === 'hour') {
-        const hr = d.getHours();
-        return { key: `${String(hr).padStart(2, '0')}:00`, sortKey: hr };
+        return formatReportHourBucket(d);
       }
       if (type === 'weekday') {
         const dayIndex = d.getDay(); // 0 is Sun, 1 is Mon, ... 6 is Sat
@@ -14541,11 +14541,10 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
     // Pre-populate empty bins
     const bins = new Map<string, any>();
     if (groupType === 'hour') {
-      for (let h = 0; h < 24; h++) {
-        const key = `${String(h).padStart(2, '0')}:00`;
+      buildReportHourlyTimeline(startDate, endDate).forEach(({ key, sortKey }) => {
         bins.set(key, {
           label: key,
-          sortKey: h,
+          sortKey,
           totalCalls: 0,
           inboundCalls: 0,
           outboundCalls: 0,
@@ -14557,7 +14556,7 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
           answeredDuration: 0,
           answeredCount: 0
         });
-      }
+      });
     } else if (groupType === 'weekday') {
       const ruWeekdaysOrdered = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье'];
       ruWeekdaysOrdered.forEach((key, index) => {

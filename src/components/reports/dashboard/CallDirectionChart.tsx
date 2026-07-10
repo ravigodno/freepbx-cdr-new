@@ -65,7 +65,7 @@ function getIsoWeekStart(year: number, week: number) {
 function formatGroupKey(date: Date, type: GroupType): { label: string; sortKey: number } {
   if (type === 'hour') {
     const hour = date.getHours();
-    return { label: String(hour).padStart(2, '0') + ':00', sortKey: hour };
+    return { label: formatDateShort(date) + ' ' + String(hour).padStart(2, '0') + ':00', sortKey: new Date(date.getFullYear(), date.getMonth(), date.getDate(), hour).getTime() };
   }
   if (type === 'weekday') {
     const dayIndex = date.getDay();
@@ -90,7 +90,6 @@ function formatGroupKey(date: Date, type: GroupType): { label: string; sortKey: 
 }
 
 function buildTimeline(startDate: string, endDate: string, groupType: GroupType) {
-  if (groupType === 'hour') return Array.from({ length: 24 }, (_, hour) => ({ label: String(hour).padStart(2, '0') + ':00', sortKey: hour }));
   if (groupType === 'weekday') return ruWeekdays.map((label, index) => ({ label, sortKey: index + 1 }));
 
   const start = parseDate(startDate);
@@ -98,6 +97,17 @@ function buildTimeline(startDate: string, endDate: string, groupType: GroupType)
   if (!start || !end || start > end) return [];
 
   const rows: Array<{ label: string; sortKey: number }> = [];
+  if (groupType === 'hour') {
+    const current = new Date(start.getFullYear(), start.getMonth(), start.getDate(), 0);
+    const last = new Date(end.getFullYear(), end.getMonth(), end.getDate(), 23);
+    let safety = 0;
+    while (current <= last && safety < 50000) {
+      rows.push(formatGroupKey(current, 'hour'));
+      current.setHours(current.getHours() + 1);
+      safety++;
+    }
+    return rows;
+  }
   const seen = new Set<string>();
   const current = cloneDate(start);
   let safety = 0;
@@ -143,7 +153,7 @@ function tooltipPeriod(label: string, groupType: GroupType, startDate: string) {
   }
   if (groupType === 'month') return label;
   if (groupType === 'year') return label;
-  if (groupType === 'hour') return label.slice(0, 2) + ':00-' + label.slice(0, 2) + ':59';
+  if (groupType === 'hour') return label;
   return label;
 }
 
