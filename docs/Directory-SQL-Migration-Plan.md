@@ -1708,3 +1708,66 @@ Next stages:
 
 - Runtime-check sync status, preview, and blocked apply.
 - In a separate controlled stage, temporarily enable `directory.sql_sync_apply_enabled`, run the sync, disable it again, then re-check Directory readiness.
+
+## Milestone 10.9 Permanent SQL Cutover
+
+Directory SQL cutover has been completed on the test PBX.
+
+Final test PBX runtime state:
+
+- `directory.storage_mode = sql`
+- `directory.write_mode = sql`
+- `directory.production_sql_write_unlock = true`
+- `effectiveSource = pbxpuls_sql`
+- Production `/api/directory` read endpoints use SQL.
+- Production `/api/directory` create, update, and delete endpoints route through the guarded SQL write branch.
+- `productionWriteEndpointsUseSql = true`
+- `directoryWriteRouterReadyForSql = true`
+- `directory.sql_write_test_enabled = false`
+- `directory.sql_sync_apply_enabled = false`
+
+Validation completed:
+
+- Controlled legacy to SQL sync completed before cutover.
+- Directory readiness returned no issues.
+- SQL read/storage smoke passed.
+- Full controlled SQL read/write smoke passed through production endpoints.
+- Test contact create/delete smoke passed after permanent cutover.
+- PM2 restart persistence was verified with SQL mode still active after restart.
+- Final Directory contact count remained stable.
+
+The legacy `data/db.json` Directory data remains available as rollback fallback. It was not deleted during cutover.
+
+## Rollback Directory To Legacy
+
+Rollback is available and should be executed in this order:
+
+1. `POST /api/pbxpuls/directory-write-mode` with body `{"mode":"legacy"}`
+2. Set `directory.production_sql_write_unlock = false`
+3. `POST /api/pbxpuls/directory-storage-mode` with body `{"mode":"legacy"}`
+
+Expected rollback state:
+
+- `directory.storage_mode = legacy`
+- `directory.write_mode = legacy`
+- `productionSqlWriteUnlock = false`
+- `effectiveSource = data/db.json`
+- `productionWriteEndpointsUseSql = false`
+- `directoryWriteRouterReadyForSql = false`
+
+Rollback must not use manual bulk SQL operations. Use the runtime controls above so the app state and diagnostics remain consistent.
+
+## Release Notes Draft
+
+Directory SQL migration release highlights:
+
+- Added PBXPuls Directory SQL backend for contact storage.
+- Added controlled legacy to SQL sync flow with preview, guarded apply, and readiness checks.
+- Added Directory SQL read runtime mode with safe fallback diagnostics.
+- Added Directory SQL write runtime mode guarded by production unlock and router readiness.
+- Routed production `/api/directory` create, update, and delete through SQL when SQL write mode is active and ready.
+- Added runtime diagnostics for `effectiveSource`, SQL write readiness, router decisions, sync apply guard, and SQL write test guard.
+- Verified full SQL read/write cycle through production endpoints on the test PBX.
+- Verified permanent SQL cutover persistence after PM2 restart on the test PBX.
+- Kept rollback controls to return Directory to legacy `data/db.json` mode.
+- Fixed inbound report out-of-hours calculation so it no longer invents synthetic out-of-hours missed calls.

@@ -2,14 +2,17 @@
 
 ## Current Baseline
 
-- Production Directory reads use legacy `data/db.json`.
-- Production Directory writes use legacy `data/db.json`.
-- `directory.storage_mode = legacy`.
-- `directory.write_mode = legacy`.
+- Production Directory reads use SQL on the test PBX.
+- Production Directory writes use SQL on the test PBX.
+- `directory.storage_mode = sql`.
+- `directory.write_mode = sql`.
+- `directory.production_sql_write_unlock = true`.
 - `directory.sql_write_test_enabled = false`.
-- SQL schema, read layer, write foundation and diagnostics are ready.
-- Isolated SQL write smoke passed in Stage 9.9.10.
-- Production SQL write is not enabled or unlocked.
+- `directory.sql_sync_apply_enabled = false`.
+- `effectiveSource = pbxpuls_sql`.
+- `productionWriteEndpointsUseSql = true`.
+- `directoryWriteRouterReadyForSql = true`.
+- Permanent SQL cutover and PM2 restart persistence have been verified on the test PBX.
 
 ## Completed
 
@@ -24,15 +27,19 @@
 - One-contact isolated SQL write smoke: create, update, delete, cleanup.
 - Diagnostics hardening after isolated smoke.
 - Production Directory write endpoint SQL branch wiring.
+- Controlled legacy to SQL sync.
+- SQL read/storage smoke.
+- Full controlled SQL read/write smoke through production `/api/directory` endpoints.
+- Permanent test PBX SQL cutover.
+- PM2 restart persistence check after cutover.
+- Rollback procedure documented.
 
 ## Not Done Yet
 
-- Production `/api/directory` SQL write smoke after SQL branch wiring.
-- Production SQL read/write cutover.
-- Legacy vs SQL consistency checks.
-- Directory import, sync, spam and blacklist path migration.
-- Rollback hardening for production SQL mode.
-- Final cleanup and long-term legacy fallback policy.
+- Package release notes and release artifact.
+- Roll out the same Directory SQL cutover procedure to a second test PBX.
+- Define long-term legacy fallback retention and cleanup policy.
+- Continue hardening Directory import, sync, spam, and blacklist paths under SQL mode.
 
 ## Milestone 10.1 Controlled SQL Write Unlock Design
 
@@ -104,6 +111,32 @@
 - Update diagnostics and migration documentation.
 - Do not delete `data/db.json` immediately.
 - Define a separate retention and cleanup policy for legacy data.
+
+## Milestone 10.9 Permanent Test PBX Cutover
+
+- SQL read complete.
+- SQL write complete.
+- Controlled legacy to SQL sync complete.
+- Permanent SQL cutover complete on the test PBX.
+- Production `/api/directory` create/delete smoke passed in persistent SQL mode.
+- PM2 restart persistence verified after cutover.
+- Current next step: package release and prepare rollout to a second test PBX.
+
+## Rollback Directory To Legacy
+
+Use this rollback order if SQL Directory mode must be disabled:
+
+1. `POST /api/pbxpuls/directory-write-mode` with body `{"mode":"legacy"}`
+2. Set `directory.production_sql_write_unlock = false`
+3. `POST /api/pbxpuls/directory-storage-mode` with body `{"mode":"legacy"}`
+
+Expected rollback state:
+
+- `directory.storage_mode = legacy`
+- `directory.write_mode = legacy`
+- `productionSqlWriteUnlock = false`
+- `effectiveSource = data/db.json`
+- `productionWriteEndpointsUseSql = false`
 
 ## Guardrails
 
