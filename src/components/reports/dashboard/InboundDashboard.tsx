@@ -283,6 +283,7 @@ export function InboundDashboard({
         if (day.hours) {
           day.hours.forEach(h => {
             const hr = Number(h.hour);
+            // TODO: Move business hours to report settings. Current working hours are 08:00-19:00.
             if (hr < 8 || hr >= 19) {
               outOfHoursMissed += h.missed || 0;
             }
@@ -290,12 +291,6 @@ export function InboundDashboard({
         }
       });
     }
-
-    // Default proportion calculations
-    if (outOfHoursMissed === 0 && missedInbound > 0) {
-      outOfHoursMissed = Math.round(missedInbound * 0.16); // 16% of missed is standard out of hours
-    }
-    outOfHoursMissed = Math.min(outOfHoursMissed, Math.round(missedInbound * 0.4));
     
     const inHoursMissed = Math.max(0, missedInbound - outOfHoursMissed);
     const didNotWaitMissed = Math.round(inHoursMissed * 0.58);
