@@ -105,7 +105,6 @@ export default function LegacyCDRTable({
                 uniqueid={call.uniqueid}
                 isIncoming={isIncoming}
                 isOutgoing={isOutgoing}
-                isAdmin={session?.role === 'admin'}
                 fetchChronology={fetchChronology}
               />
 

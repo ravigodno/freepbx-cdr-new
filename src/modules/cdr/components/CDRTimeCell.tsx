@@ -10,7 +10,6 @@ interface CDRTimeCellProps {
   uniqueid: string;
   isIncoming: boolean;
   isOutgoing: boolean;
-  isAdmin?: boolean;
   fetchChronology: (uniqueid: string) => void;
 }
 
@@ -19,7 +18,6 @@ export function CDRTimeCell({
   uniqueid,
   isIncoming,
   isOutgoing,
-  isAdmin,
   fetchChronology,
 }: CDRTimeCellProps) {
   return (
@@ -42,17 +40,13 @@ export function CDRTimeCell({
 
           <span className="text-[11px] text-slate-400 dark:text-slate-505 font-mono mt-0.5 animate-none">
             ID:{' '}
-            {isAdmin ? (
-              <button
-                onClick={() => fetchChronology(uniqueid)}
-                className="text-slate-400 hover:text-red-705 hover:underline cursor-pointer font-medium"
-                title="Посмотреть хронологию прохождения звонка"
-              >
-                {uniqueid}
-              </button>
-            ) : (
-              <span className="select-all">{uniqueid}</span>
-            )}
+            <button
+              onClick={() => fetchChronology(uniqueid)}
+              className="text-slate-400 hover:text-red-705 hover:underline cursor-pointer font-medium"
+              title="Посмотреть хронологию прохождения звонка"
+            >
+              {uniqueid}
+            </button>
           </span>
         </div>
       </div>
