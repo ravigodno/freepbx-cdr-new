@@ -1,5 +1,13 @@
 # Changelog
 
+## 5.6.4 - 2026-07-10
+
+### Fixed
+
+- Бейдж «Переведён на» теперь появляется только при наличии явного BlindTransfer evidence.
+- Обычная маршрутизация через Queue, Ring Group, Inbound Route, IVR, Follow Me и Time Condition больше не определяется как перевод.
+- AttendedTransfer не смешивается с бейджем BlindTransfer.
+
 ## 5.6.3 - 2026-07-10
 
 ### Fixed
