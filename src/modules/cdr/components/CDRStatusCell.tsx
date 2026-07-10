@@ -12,7 +12,7 @@ interface CDRStatusCellProps {
   wasCallbacked?: boolean;
   wasKpiResolved?: boolean;
   callbackTime?: string;
-  callbackStatus?: 'processed' | 'called_back' | 'repeated_inbound' | 'pending_callback' | 'not_called_back';
+  callbackStatus?: 'processed_in_sla' | 'processed_late' | 'pending_callback' | 'not_called_back' | 'processed' | 'called_back' | 'repeated_inbound';
 }
 
 export function CDRStatusCell({
@@ -28,7 +28,9 @@ export function CDRStatusCell({
   const isLostBadge = isMissed && callbackStatus === 'not_called_back';
   const hasProcessedCallbackStatus = callbackStatus === 'processed'
     || callbackStatus === 'called_back'
-    || callbackStatus === 'repeated_inbound';
+    || callbackStatus === 'repeated_inbound'
+    || callbackStatus === 'processed_in_sla'
+    || callbackStatus === 'processed_late';
   const showProcessedBadge = isMissed && (hasProcessedCallbackStatus || processed || wasCallbacked);
 
   return (
@@ -39,20 +41,24 @@ export function CDRStatusCell({
             <CheckCircle className="h-3.5 w-3.5" />
             Отвечен
           </span>
-        ) : isAwaitingBadge ? (
-          <span className="inline-flex items-center gap-1.5 bg-amber-50/40 dark:bg-amber-950/10 text-amber-500 dark:text-amber-400 border border-amber-250/30 dark:border-amber-800/40 px-2.5 py-1 rounded-lg text-[11px] font-bold">
-            <AlertTriangle className="h-3.5 w-3.5" />
-            Ожидает
-          </span>
-        ) : isLostBadge ? (
-          <span className="inline-flex items-center gap-1.5 bg-rose-50/40 dark:bg-rose-950/10 text-rose-500 dark:text-rose-400 border border-rose-250/30 dark:border-rose-905/30 px-2.5 py-1 rounded-lg text-[11px] font-bold">
-            <Target className="h-3.5 w-3.5" />
-            Потерян
-          </span>
         ) : (
           <span className="inline-flex items-center gap-1.5 bg-rose-50/40 dark:bg-rose-950/10 text-rose-500 dark:text-rose-400 border border-rose-250/30 dark:border-rose-905/30 px-2.5 py-1 rounded-lg text-[11px] font-bold">
             <Target className="h-3.5 w-3.5" />
             Без ответа
+          </span>
+        )}
+
+        {isAwaitingBadge && (
+          <span className="inline-flex items-center gap-1.5 mt-1 bg-amber-50/40 dark:bg-amber-950/10 text-amber-500 dark:text-amber-400 border border-amber-250/30 dark:border-amber-800/40 px-2 py-0.5 rounded-lg text-[10px] font-bold">
+            <AlertTriangle className="h-3.5 w-3.5" />
+            Ожидает обработки
+          </span>
+        )}
+
+        {isLostBadge && (
+          <span className="inline-flex items-center gap-1.5 mt-1 bg-rose-50/40 dark:bg-rose-950/10 text-rose-500 dark:text-rose-400 border border-rose-250/30 dark:border-rose-905/30 px-2 py-0.5 rounded-lg text-[10px] font-bold">
+            <Target className="h-3.5 w-3.5" />
+            Потерян
           </span>
         )}
 
@@ -63,7 +69,9 @@ export function CDRStatusCell({
           >
             <span
               className={`h-1.5 w-1.5 rounded-full shrink-0 ${
-              hasProcessedCallbackStatus || processed || wasKpiResolved ? 'bg-emerald-500' : 'bg-rose-500'
+              callbackStatus === 'processed_in_sla' || wasKpiResolved === true
+                ? 'bg-emerald-500'
+                : 'bg-rose-500'
               }`}
             />
             <span>Обработано</span>

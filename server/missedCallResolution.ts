@@ -1,37 +1,72 @@
-export type MissedCallResolutionStatus = 'processed' | 'called_back' | 'repeated_inbound' | 'pending_callback' | 'not_called_back';
+export type MissedCallResolutionStatus = 'processed_in_sla' | 'processed_late' | 'pending_callback' | 'not_called_back';
+
+export type MissedCallSlaStatus = 'in_sla' | 'late' | 'pending' | 'lost';
 
 export type MissedCallResolution = {
   status: MissedCallResolutionStatus;
+  processingStatusLabel: 'Обработано' | 'Ожидает обработки' | 'Потерян';
+  slaStatus: MissedCallSlaStatus;
   deadline: number;
   deadlineExpired: boolean;
+  processedAt: number | null;
+  callbackDelaySeconds: number | null;
+  slaExceededSeconds: number;
   isProcessed: boolean;
+  isProcessedInSla: boolean;
+  isProcessedLate: boolean;
   isPending: boolean;
   isLost: boolean;
-  reasonCategory: 'manual_or_auto_processed' | 'outbound_callback' | 'repeated_inbound' | 'within_callback_window' | 'callback_window_expired';
+  reasonCategory: 'processed_within_sla' | 'processed_after_sla' | 'within_callback_window' | 'no_callback_after_sla';
 };
 
 export function classifyMissedCallResolution(options: {
   missedMs: number;
   nowMs: number;
   callbackWindowMs: number;
-  manuallyProcessed?: boolean;
-  hasOutboundCallback?: boolean;
-  hasRepeatedInbound?: boolean;
+  processedAtMs?: number | null;
 }): MissedCallResolution {
   const deadline = options.missedMs + Math.max(0, options.callbackWindowMs);
   const deadlineExpired = options.nowMs >= deadline;
+  const processedAt = options.processedAtMs !== null
+    && options.processedAtMs !== undefined
+    && Number.isFinite(Number(options.processedAtMs))
+    ? Number(options.processedAtMs)
+    : null;
+  const callbackDelaySeconds = processedAt === null ? null : Math.max(0, Math.round((processedAt - options.missedMs) / 1000));
 
-  if (options.manuallyProcessed) {
-    return { status: 'processed', deadline, deadlineExpired, isProcessed: true, isPending: false, isLost: false, reasonCategory: 'manual_or_auto_processed' };
+  if (processedAt !== null) {
+    const isProcessedInSla = processedAt <= deadline;
+    return {
+      status: isProcessedInSla ? 'processed_in_sla' : 'processed_late',
+      processingStatusLabel: 'Обработано',
+      slaStatus: isProcessedInSla ? 'in_sla' : 'late',
+      deadline,
+      deadlineExpired,
+      processedAt,
+      callbackDelaySeconds,
+      slaExceededSeconds: Math.max(0, Math.round((processedAt - deadline) / 1000)),
+      isProcessed: true,
+      isProcessedInSla,
+      isProcessedLate: !isProcessedInSla,
+      isPending: false,
+      isLost: false,
+      reasonCategory: isProcessedInSla ? 'processed_within_sla' : 'processed_after_sla'
+    };
   }
-  if (options.hasOutboundCallback) {
-    return { status: 'called_back', deadline, deadlineExpired, isProcessed: true, isPending: false, isLost: false, reasonCategory: 'outbound_callback' };
-  }
-  if (options.hasRepeatedInbound) {
-    return { status: 'repeated_inbound', deadline, deadlineExpired, isProcessed: true, isPending: false, isLost: false, reasonCategory: 'repeated_inbound' };
-  }
+
   if (!deadlineExpired) {
-    return { status: 'pending_callback', deadline, deadlineExpired, isProcessed: false, isPending: true, isLost: false, reasonCategory: 'within_callback_window' };
+    return {
+      status: 'pending_callback', processingStatusLabel: 'Ожидает обработки', slaStatus: 'pending', deadline, deadlineExpired,
+      processedAt: null, callbackDelaySeconds: null, slaExceededSeconds: 0,
+      isProcessed: false, isProcessedInSla: false, isProcessedLate: false, isPending: true, isLost: false,
+      reasonCategory: 'within_callback_window'
+    };
   }
-  return { status: 'not_called_back', deadline, deadlineExpired, isProcessed: false, isPending: false, isLost: true, reasonCategory: 'callback_window_expired' };
+
+  return {
+    status: 'not_called_back', processingStatusLabel: 'Потерян', slaStatus: 'lost', deadline, deadlineExpired,
+    processedAt: null, callbackDelaySeconds: null, slaExceededSeconds: Math.max(0, Math.round((options.nowMs - deadline) / 1000)),
+    isProcessed: false, isProcessedInSla: false, isProcessedLate: false, isPending: false, isLost: true,
+    reasonCategory: 'no_callback_after_sla'
+  };
 }

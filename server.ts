@@ -2131,10 +2131,21 @@ type LostCallAnalyticsItem = {
   responsibleName: string | null;
   attempts: number;
   callbackStatus: LostCallCallbackStatus;
+  processingStatus: LostCallCallbackStatus;
+  processingStatusLabel: string;
+  slaStatus: 'in_sla' | 'late' | 'pending' | 'lost';
+  deadline: string;
+  processedAt: string | null;
+  callbackAt: string | null;
+  repeatedInboundAt: string | null;
+  callbackDelaySeconds: number | null;
+  slaExceededSeconds: number;
   callbackWithinSla: boolean;
   slaExpired: boolean;
   callbackDeadlineExpired: boolean;
   isProcessed: boolean;
+  isProcessedInSla: boolean;
+  isProcessedLate: boolean;
   isPending: boolean;
   isLost: boolean;
   reasonCategory: string;
@@ -2149,6 +2160,8 @@ type LostCallAnalytics = {
   lostCalls: number;
   callbackAfterMissed: number;
   callbackRecoveredWithinSla: number;
+  processedInSla: number;
+  processedLate: number;
   pendingCallback: number;
   notCalledBack: number;
   callbackRate: number;
@@ -2163,6 +2176,8 @@ type CallBusinessCounters = {
   answeredCalls: number;
   missedCalls: number;
   processedMissedCalls: number;
+  processedInSla: number;
+  processedLate: number;
   pendingCallback: number;
   lostCalls: number;
   callbackRecovered: number;
@@ -2656,6 +2671,7 @@ const buildLostCallAnalytics = (calls: any[], options: { startMs: number; endMs:
   let callbackAfterMissed = 0;
   let callbackRecoveredWithinSla = 0;
   let notCalledBack = 0;
+  let processedLate = 0;
   let pendingCallback = 0;
   const items: LostCallAnalyticsItem[] = missedCalls.map(({ call, normalizedNumber, missedMs }) => {
     const deadline = missedMs + callbackWindowMs;
@@ -2669,24 +2685,26 @@ const buildLostCallAnalytics = (calls: any[], options: { startMs: number; endMs:
     });
     const firstOutbound = outbound[0] || null;
     const firstInboundContact = repeatedInbound[0] || null;
-    const firstRelatedContact = firstOutbound || firstInboundContact || null;
+    const firstRelatedContact = [firstOutbound, firstInboundContact]
+      .filter(Boolean)
+      .sort((a, b) => getCallDateMs(a.calldate) - getCallDateMs(b.calldate))[0] || null;
     const processedAtMs = getCallDateMs(call.processedAt);
-    const callbackWithinSla = Boolean(
-      (firstRelatedContact && getCallDateMs(firstRelatedContact.calldate) <= deadline)
-      || (call.processed === true && Number.isFinite(processedAtMs) && processedAtMs <= deadline)
-    );
+    const processingCandidates = [
+      firstRelatedContact ? getCallDateMs(firstRelatedContact.calldate) : NaN,
+      call.processed === true && Number.isFinite(processedAtMs) ? processedAtMs : NaN
+    ].filter(Number.isFinite);
+    const effectiveProcessedAtMs = processingCandidates.length ? Math.min(...processingCandidates) : null;
     const resolution = classifyMissedCallResolution({
       missedMs,
       nowMs,
       callbackWindowMs,
-      manuallyProcessed: call.processed === true,
-      hasOutboundCallback: Boolean(firstOutbound),
-      hasRepeatedInbound: Boolean(firstInboundContact)
+      processedAtMs: effectiveProcessedAtMs
     });
     const callbackStatus = resolution.status;
     if (resolution.isProcessed) {
       callbackAfterMissed++;
-      if (callbackWithinSla) callbackRecoveredWithinSla++;
+      if (resolution.isProcessedInSla) callbackRecoveredWithinSla++;
+      if (resolution.isProcessedLate) processedLate++;
     } else if (resolution.isLost) {
       notCalledBack++;
     } else if (resolution.isPending) {
@@ -2708,10 +2726,21 @@ const buildLostCallAnalytics = (calls: any[], options: { startMs: number; endMs:
       responsibleName: owner?.employeeName || getDirectoryNameByExtension(directory, responsibleExtension),
       attempts: outbound.length,
       callbackStatus,
-      callbackWithinSla,
+      processingStatus: callbackStatus,
+      processingStatusLabel: resolution.processingStatusLabel,
+      slaStatus: resolution.slaStatus,
+      deadline: new Date(resolution.deadline).toISOString(),
+      processedAt: resolution.processedAt === null ? null : new Date(resolution.processedAt).toISOString(),
+      callbackAt: firstOutbound?.calldate || null,
+      repeatedInboundAt: firstInboundContact?.calldate || null,
+      callbackDelaySeconds: resolution.callbackDelaySeconds,
+      slaExceededSeconds: resolution.slaExceededSeconds,
+      callbackWithinSla: resolution.isProcessedInSla,
       slaExpired: resolution.deadlineExpired,
       callbackDeadlineExpired: resolution.deadlineExpired,
       isProcessed: resolution.isProcessed,
+      isProcessedInSla: resolution.isProcessedInSla,
+      isProcessedLate: resolution.isProcessedLate,
       isPending: resolution.isPending,
       isLost: resolution.isLost,
       reasonCategory: resolution.reasonCategory,
@@ -2727,6 +2756,8 @@ const buildLostCallAnalytics = (calls: any[], options: { startMs: number; endMs:
     lostCalls: notCalledBack,
     callbackAfterMissed,
     callbackRecoveredWithinSla,
+    processedInSla: callbackRecoveredWithinSla,
+    processedLate,
     pendingCallback,
     notCalledBack,
     callbackRate: missedCalls.length ? Math.round((callbackAfterMissed / missedCalls.length) * 100) : 0,
@@ -2779,7 +2810,9 @@ const calculateCallBusinessCounters = (rows: any[], options: { callbackWindowHou
   });
 
   const processedMissedCalls = relevantLostItems.filter(item => item.isProcessed).length;
-  const callbackRecoveredWithinSla = relevantLostItems.filter(item => item.callbackWithinSla === true).length;
+  const processedInSla = relevantLostItems.filter(item => item.isProcessedInSla).length;
+  const processedLate = relevantLostItems.filter(item => item.isProcessedLate).length;
+  const callbackRecoveredWithinSla = processedInSla;
   const pendingCallback = relevantLostItems.filter(item => item.isPending).length;
   const lostCalls = relevantLostItems.filter(item => item.isLost).length;
   const callbackRecoveryRate = missedCalls ? Math.round((processedMissedCalls / missedCalls) * 100) : 0;
@@ -2793,6 +2826,8 @@ const calculateCallBusinessCounters = (rows: any[], options: { callbackWindowHou
     answeredCalls,
     missedCalls,
     processedMissedCalls,
+    processedInSla,
+    processedLate,
     pendingCallback,
     lostCalls,
     callbackRecovered: processedMissedCalls,
@@ -13952,6 +13987,18 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
       const item = callsLostByUniqueId.get(call.uniqueid);
       if (!item) return;
       call.callbackStatus = item.callbackStatus;
+      call.processingStatus = item.processingStatus;
+      call.processingStatusLabel = item.processingStatusLabel;
+      call.slaStatus = item.slaStatus;
+      call.missedAt = item.missedAt;
+      call.callbackDeadline = item.deadline;
+      call.callbackAt = item.callbackAt;
+      call.repeatedInboundAt = item.repeatedInboundAt;
+      call.callbackDelaySeconds = item.callbackDelaySeconds;
+      call.slaExceededSeconds = item.slaExceededSeconds;
+      call.isProcessed = item.isProcessed;
+      call.isProcessedInSla = item.isProcessedInSla;
+      call.isProcessedLate = item.isProcessedLate;
       call.callbackDeadlineExpired = item.callbackDeadlineExpired;
       call.isPendingCallback = item.isPending;
       call.isLostCall = item.isLost;
@@ -13986,7 +14033,7 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
       } else if (statusFilter === 'LOST') {
         filteredCalls = filteredCalls.filter(c => {
           const item = callsLostByUniqueId.get(c.uniqueid);
-          return item ? !item.isProcessed : false;
+          return item?.isLost === true;
         });
       }
     }
@@ -14295,6 +14342,8 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
         internalCalls: counters.internalCalls,
         missedCalls: counters.missedCalls,
         processedMissedCalls: counters.processedMissedCalls,
+        processedInSla: counters.processedInSla,
+        processedLate: counters.processedLate,
         pendingCallback: counters.pendingCallback,
         lostCalls: counters.lostCalls,
         callbackRecovered: counters.callbackRecovered
@@ -14307,8 +14356,11 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
       internalCalls: counters.internalCalls,
       missedCalls: counters.missedCalls,
       processedCalls: counters.processedMissedCalls,
+      processedMissedCalls: counters.processedMissedCalls,
+      processedInSla: counters.processedInSla,
+      processedLate: counters.processedLate,
       pendingCallback: counters.pendingCallback,
-      lostCalls: Math.max(0, counters.missedCalls - counters.processedMissedCalls),
+      lostCalls: counters.lostCalls,
       dbError: (req as any).dbError || undefined,
       demoModeActive: isDemo
     });
@@ -14752,6 +14804,8 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
         internalCalls: businessCounters.internalCalls,
         missedCalls: businessCounters.missedCalls,
         processedMissedCalls: businessCounters.processedMissedCalls,
+        processedInSla: businessCounters.processedInSla,
+        processedLate: businessCounters.processedLate,
         pendingCallback: businessCounters.pendingCallback,
         lostCalls: businessCounters.lostCalls,
         callbackRecovered: businessCounters.callbackRecovered
@@ -15057,8 +15111,10 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
       detailing: detailingResults,
       lostCallSummary: {
         missedCalls: businessCounters.missedCalls,
-        lostCalls: Math.max(0, businessCounters.missedCalls - businessCounters.processedMissedCalls),
+        lostCalls: businessCounters.lostCalls,
         callbackAfterMissed: businessCounters.processedMissedCalls,
+        processedInSla: businessCounters.processedInSla,
+        processedLate: businessCounters.processedLate,
         callbackRecoveredWithinSla: businessCounters.callbackRecoveredWithinSla,
         pendingCallback: businessCounters.pendingCallback,
         callbackRate: businessCounters.callbackRecoveryRate,

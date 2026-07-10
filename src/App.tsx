@@ -5536,6 +5536,12 @@ export default function App() {
                     <span className="text-2xl font-bold text-emerald-605 font-mono">{stats?.processedCalls ?? 0}</span>
                   )}
                   <CheckCircle className="h-5 w-5 text-emerald-500/80 self-center" /></div>
+                {!isLoadingStats && (
+                  <div className="mt-1 flex gap-2 text-[10px] font-bold">
+                    <span className="text-emerald-600">В SLA: {stats?.processedInSla ?? 0}</span>
+                    <span className="text-rose-600">Позже SLA: {stats?.processedLate ?? 0}</span>
+                  </div>
+                )}
               </button>
 
               {/* Потерянные */}
@@ -5544,7 +5550,7 @@ export default function App() {
                   setStatusFilter(statusFilter === 'LOST' ? 'ALL' : 'LOST');
                   setPage(1);
                 }}
-                title="Потерянные = пропущенные минус обработанные."
+                title="Потерянные = SLA истёк, а успешного контакта или обработки не было."
                 className={`text-left p-4 flex flex-col justify-between rounded-xl shadow-sm hover:shadow-md transition-all cursor-pointer border hover:scale-[1.01] active:scale-[0.99] ${
                   statusFilter === 'LOST'
                     ? 'bg-amber-50/70 border-amber-400 ring-2 ring-amber-500/30'

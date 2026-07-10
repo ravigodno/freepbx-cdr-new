@@ -53,7 +53,19 @@ export interface CallEntry {
   callbackCallId?: string;     // UniqueId of the call that resolved this
   callbackTime?: string;       // Time of the callback resolution
   wasKpiResolved?: boolean;    // Was resolved within the KPI timeframe?
-  callbackStatus?: 'processed' | 'called_back' | 'repeated_inbound' | 'pending_callback' | 'not_called_back';
+  callbackStatus?: 'processed_in_sla' | 'processed_late' | 'pending_callback' | 'not_called_back' | 'processed' | 'called_back' | 'repeated_inbound';
+  processingStatus?: 'processed_in_sla' | 'processed_late' | 'pending_callback' | 'not_called_back';
+  processingStatusLabel?: string;
+  slaStatus?: 'in_sla' | 'late' | 'pending' | 'lost';
+  missedAt?: string;
+  callbackDeadline?: string;
+  callbackAt?: string | null;
+  repeatedInboundAt?: string | null;
+  callbackDelaySeconds?: number | null;
+  slaExceededSeconds?: number;
+  isProcessed?: boolean;
+  isProcessedInSla?: boolean;
+  isProcessedLate?: boolean;
   callbackDeadlineExpired?: boolean;
   isPendingCallback?: boolean;
   isLostCall?: boolean;
@@ -162,6 +174,9 @@ export interface DashboardStats {
   internalCalls: number;
   missedCalls: number;
   processedCalls: number;
+  processedMissedCalls?: number;
+  processedInSla?: number;
+  processedLate?: number;
   pendingCallback?: number;
   lostCalls: number;
 }
