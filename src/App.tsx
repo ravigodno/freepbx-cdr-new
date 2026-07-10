@@ -5529,19 +5529,17 @@ export default function App() {
                 <span className="text-xs text-emerald-600 font-bold tracking-wide flex items-center gap-1">
                   Обработанные
                 </span>
-                <div className="mt-2 flex items-baseline justify-between w-full">
+                <div className="mt-2 flex items-center justify-between gap-2 w-full">
                   {isLoadingStats ? (
                     <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
                   ) : (
-                    <span className="text-2xl font-bold text-emerald-605 font-mono">{stats?.processedCalls ?? 0}</span>
+                    <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                      <span className="text-2xl font-bold text-emerald-605 font-mono">{stats?.processedCalls ?? 0}</span>
+                      <span className="whitespace-nowrap text-[10px] font-bold text-emerald-600">В SLA: {stats?.processedInSla ?? 0}</span>
+                      <span className="whitespace-nowrap text-[10px] font-bold text-rose-600">Позже SLA: {stats?.processedLate ?? 0}</span>
+                    </div>
                   )}
                   <CheckCircle className="h-5 w-5 text-emerald-500/80 self-center" /></div>
-                {!isLoadingStats && (
-                  <div className="mt-1 flex gap-2 text-[10px] font-bold">
-                    <span className="text-emerald-600">В SLA: {stats?.processedInSla ?? 0}</span>
-                    <span className="text-rose-600">Позже SLA: {stats?.processedLate ?? 0}</span>
-                  </div>
-                )}
               </button>
 
               {/* Потерянные */}
