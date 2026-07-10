@@ -208,6 +208,18 @@ export function buildCallRouteView(chronologyData: any): RouteView {
           }] : []),
         ]);
 
+  const blindTransferTarget = String(chronologyData?.blindTransferTargetExt || '').trim();
+  if (chronologyData?.blindTransfer === true && blindTransferTarget) {
+    routeSteps.push({
+      label: 'BLIND TRANSFER',
+      title: `Переведён на ${blindTransferTarget}`,
+      pattern: '',
+      destination: blindTransferTarget,
+      number: blindTransferTarget,
+      members: [],
+    } as any);
+  }
+
   const ivrStepForResult = routeSteps.find((step: any) => step.label === 'IVR' || step.type === 'ivr');
 
   const ivrOnlyNoDigit =

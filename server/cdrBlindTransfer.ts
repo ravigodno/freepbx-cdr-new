@@ -66,11 +66,31 @@ export const findBlindTransferTargetFromCel = (inputRows: any[]): BlindTransferC
     }
 
     const transferExtra = parseCelExtra(event?.extra);
+    const transferBridgeId = String(transferExtra?.bridge_id || '').trim();
     const excludedParticipants = new Set([
       normalizeBlindTransferTarget(event?.cid_num),
       getChannelEndpoint(event?.channame),
       getChannelEndpoint(transferExtra?.transferee_channel_name)
     ].filter(Boolean));
+
+    if (transferBridgeId) {
+      for (let nextIndex = index + 1; nextIndex < rows.length; nextIndex++) {
+        const next = rows[nextIndex];
+        const eventType = String(next?.eventtype || '').trim().toUpperCase();
+        if (eventType === 'BLINDTRANSFER') break;
+        if (eventType !== 'BRIDGE_EXIT') continue;
+
+        const nextExtra = parseCelExtra(next?.extra);
+        if (String(nextExtra?.bridge_id || '').trim() !== transferBridgeId) continue;
+
+        const sameBridgeTarget = normalizeBlindTransferTarget(next?.exten);
+        if (sameBridgeTarget && !excludedParticipants.has(sameBridgeTarget)) {
+          result = { event, target: sameBridgeTarget };
+          return;
+        }
+      }
+    }
+
     for (let nextIndex = index + 1; nextIndex < rows.length; nextIndex++) {
       const next = rows[nextIndex];
       const eventType = String(next?.eventtype || '').trim().toUpperCase();

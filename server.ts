@@ -13259,14 +13259,14 @@ app.get('/api/calls/:uniqueid/chronology', requireAuth(), async (req, res) => {
     const isDemo = isDemoMode(settings);
 
     let legs: CallEntry[] = [];
+    let targetLinkedId = uniqueid;
 
     if (isDemo) {
       const found = mockCDRData.find(c => c.uniqueid === uniqueid || c.linkedid === uniqueid);
-      const targetLinkedId = found ? (found.linkedid || found.uniqueid) : uniqueid;
+      targetLinkedId = found ? (found.linkedid || found.uniqueid) : uniqueid;
       legs = mockCDRData.filter(c => c.uniqueid === targetLinkedId || c.linkedid === targetLinkedId);
     } else {
       // 1. Find linkedid
-      let targetLinkedId = uniqueid;
       try {
         const findLinkedIdSql = "SELECT COALESCE(nullif(linkedid, ''), uniqueid) as target_id FROM cdr WHERE uniqueid = ? LIMIT 1";
         const result = await queryFreePBXCDR(settings, false, findLinkedIdSql, [uniqueid]);
@@ -13363,6 +13363,33 @@ app.get('/api/calls/:uniqueid/chronology', requireAuth(), async (req, res) => {
       };
     });
 
+    const chronologyTransferEvents = await loadCelBlindTransferEvents(settings, isDemo, [targetLinkedId]);
+    const chronologyTransferEvent = chronologyTransferEvents.get(targetLinkedId) || null;
+    const chronologyTransferTarget = getExplicitBlindTransferTarget(chronologyTransferEvent);
+    if (chronologyTransferTarget) {
+      timeline.push({
+        id: String(chronologyTransferEvent?.uniqueid || `${targetLinkedId}:blind-transfer`),
+        calldate: String(chronologyTransferEvent?.eventtime || ''),
+        src: '',
+        dst: chronologyTransferTarget,
+        dcontext: String(chronologyTransferEvent?.context || ''),
+        channel: '',
+        dstchannel: '',
+        lastapp: 'BlindTransfer',
+        lastdata: chronologyTransferTarget,
+        duration: 0,
+        billsec: 0,
+        disposition: '',
+        recordingfile: '',
+        did: '',
+        actionType: 'blind_transfer',
+        type: 'blind_transfer',
+        eventName: 'BlindTransfer',
+        title: `Перевод на ${chronologyTransferTarget}`,
+        description: `Вызов переведён на ${chronologyTransferTarget} через BlindTransfer.`
+      } as any);
+    }
+
     const routeAnalysis = isDemo ? null : await enrichFreePBXRoute(settings, legs);
     console.log('ROUTE_ANALYSIS_DEBUG', JSON.stringify(routeAnalysis));
 
@@ -13371,6 +13398,8 @@ app.get('/api/calls/:uniqueid/chronology', requireAuth(), async (req, res) => {
       uniqueid,
       linkedid: legs[0]?.linkedid || uniqueid,
       legsCount: legs.length,
+      blindTransfer: Boolean(chronologyTransferTarget),
+      blindTransferTargetExt: chronologyTransferTarget,
       timeline,
       routeAnalysis
     });
