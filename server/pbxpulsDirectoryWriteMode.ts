@@ -90,7 +90,6 @@ export async function canEnableDirectorySqlWrite(): Promise<{
   if (!sqlAvailable) reason = 'directory_sql_unavailable';
   else if (!writeLayerAvailable) reason = 'directory_sql_write_layer_unavailable';
   else if (!ISOLATED_SQL_WRITE_SMOKE_PASSED) reason = 'isolated_sql_write_smoke_not_passed';
-  else if (directoryStorageMode !== 'legacy') reason = 'directory_storage_mode_not_legacy';
   else if (sqlWriteTestEnabled) reason = 'directory_sql_write_test_still_enabled';
   else if (!productionSqlWriteUnlock) reason = PRODUCTION_SQL_WRITE_NOT_UNLOCKED_REASON;
 
