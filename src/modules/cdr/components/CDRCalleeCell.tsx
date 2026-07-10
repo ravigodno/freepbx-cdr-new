@@ -5,6 +5,7 @@ import {
   UserPlus,
 } from 'lucide-react';
 import { isMultiNumberValue } from '../utils/CDRRowHelpers';
+import { isBlindTransferBadgeEligible } from '../utils/isBlindTransferBadgeEligible';
 
 interface Props {
   call: any;
@@ -27,9 +28,9 @@ export default function CDRCalleeCell({
   openAddFromCall,
 }: Props) {
   const isMultiDst = isMultiNumberValue(displayedDst);
-  const transferTargetExt = String(call?.transferTargetExt || '').trim();
+  const transferTargetExt = String(call?.blindTransferTargetExt || call?.transferTargetExt || '').trim();
   const transferTargetLabel = String(call?.transferTargetLabel || '').trim();
-  const hasTransferTarget = Boolean(call?.wasTransferred && transferTargetExt);
+  const hasTransferTarget = Boolean(isBlindTransferBadgeEligible(call) && transferTargetExt);
 
   return (
     <td className="py-4 px-4">

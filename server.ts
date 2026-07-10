@@ -1989,29 +1989,22 @@ const uniqueExts = (values: any[]): string[] => {
   return result;
 };
 
-const getAnsweredInternalExtFromCdrLeg = (c: any): string => {
-  const disposition = String(c?.disposition || '').toUpperCase();
-  if (disposition !== 'ANSWERED' || Number(c?.billsec || 0) <= 0) return '';
+const getExplicitBlindTransferTargetExt = (event: any): string => {
+  const eventName = String(event?.eventName || event?.event || '').trim().toLowerCase();
+  const transferType = String(event?.transferType || event?.type || '').trim().toLowerCase();
+  const source = String(event?.source || '').trim().toLowerCase();
+  const hasBlindTransferEvidence = event?.blindTransfer === true
+    || eventName === 'blindtransfer'
+    || transferType === 'blind'
+    || transferType === 'blind_transfer'
+    // Existing records with this source were created only after a successful
+    // runAmiBlindTransfer() call, so they are explicit BlindTransfer evidence.
+    || source === 'pbxpuls_live_transfer';
 
-  const fromDst = getCalleeInternalExt(c);
-  if (fromDst) return fromDst;
+  if (!hasBlindTransferEvidence) return '';
 
-  const fromChannel = getChannelInternalExt(c?.dstchannel);
-  if (fromChannel) return fromChannel;
-
-  return '';
-};
-
-const findCdrTransferTargetExt = (group: any[]): string => {
-  const answeredExts = uniqueExts(
-    [...group]
-      .sort((a, b) => getCallDateMs(a?.calldate) - getCallDateMs(b?.calldate))
-      .map(getAnsweredInternalExtFromCdrLeg)
-  );
-
-  if (answeredExts.length < 2) return '';
-
-  return answeredExts[answeredExts.length - 1];
+  const targetExtension = onlyDigits(event?.blindTransferTargetExt || event?.targetExtension);
+  return isInternalExt(targetExtension) ? targetExtension : '';
 };
 
 const buildDidWithAnsweredAndMissed = (baseDid: any, answeredExts: string[], missedExts: string[]): string => {
@@ -12728,7 +12721,11 @@ app.post('/api/live/call-transfer', requireAuth(), async (req, res) => {
       linkedid: transferChannel.linkedid || '',
       operatorExt: effectiveOperatorExt,
       targetExtension: target.extension,
+      blindTransferTargetExt: target.extension,
       targetLabel: target.label,
+      blindTransfer: true,
+      transferType: 'blind',
+      eventName: 'BlindTransfer',
       source: 'pbxpuls_live_transfer',
       createdAt: new Date().toISOString()
     };
@@ -13577,8 +13574,6 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
         ...answeredExts,
         ...missedExts
       ]);
-      const transferTargetExt = findCdrTransferTargetExt(sorted);
-
       const answeredChannel = String(answered?.dstchannel || "");
       const answeredMatch = answeredChannel.match(/(?:SIP|PJSIP)\/([0-9]{2,5})-/i);
       if (answered && answeredMatch && answeredMatch[1]) {
@@ -13603,7 +13598,6 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
         did: buildDidWithAnsweredAndMissed((queueLeg?.did || groupLeg?.did || sorted.find(c => c.did)?.did || ""), answeredExts, missedExts) || (sorted.find(c => c.did)?.did || first.did),
         answeredExts,
         missedExts,
-        transferTargetExt,
       };
     });
 
@@ -13643,8 +13637,6 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
         ...answeredExts,
         ...missedExts
       ]);
-      const transferTargetExt = findCdrTransferTargetExt(sorted);
-
       const answeredChannel = String(answered?.dstchannel || "");
       const answeredMatch = answeredChannel.match(/(?:SIP|PJSIP)\/([0-9]{2,5})-/i);
       if (answered && answeredMatch && answeredMatch[1]) {
@@ -13677,7 +13669,6 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
         did: buildDidWithAnsweredAndMissed(did, answeredExts, missedExts) || did,
         answeredExts,
         missedExts,
-        transferTargetExt,
         disposition: answered ? "ANSWERED" : "NO ANSWER",
         billsec: answered ? answered.billsec : 0,
         duration: Math.max(...sorted.map(c => Number(c.duration || 0))),
@@ -13690,8 +13681,8 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
     const transferEventsByLinkedId = new Map<string, any>();
     (Array.isArray(localDb.liveCallTransfers) ? localDb.liveCallTransfers : []).forEach((event: any) => {
       const linkedid = String(event?.linkedid || '').trim();
-      const targetExtension = onlyDigits(event?.targetExtension);
-      if (!linkedid || !targetExtension || !isInternalExt(targetExtension)) return;
+      const targetExtension = getExplicitBlindTransferTargetExt(event);
+      if (!linkedid || !targetExtension) return;
       transferEventsByLinkedId.set(linkedid, event);
     });
 
@@ -13699,10 +13690,10 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
     calls.forEach(call => {
       const linkedid = String(call.linkedid || call.uniqueid || '').trim();
       const transferEvent = linkedid ? transferEventsByLinkedId.get(linkedid) : null;
-      const eventTargetExt = transferEvent ? onlyDigits(transferEvent.targetExtension) : '';
-      const cdrTargetExt = onlyDigits((call as any).transferTargetExt);
-      const transferTargetExt = eventTargetExt || cdrTargetExt;
+      const transferTargetExt = getExplicitBlindTransferTargetExt(transferEvent);
       if (transferTargetExt && isInternalExt(transferTargetExt)) {
+        (call as any).blindTransfer = true;
+        (call as any).blindTransferTargetExt = transferTargetExt;
         (call as any).wasTransferred = true;
         (call as any).transferTargetExt = transferTargetExt;
         (call as any).transferTargetLabel = String(transferEvent?.targetLabel || '').trim();

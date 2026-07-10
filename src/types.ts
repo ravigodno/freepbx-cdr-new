@@ -55,6 +55,8 @@ export interface CallEntry {
   wasKpiResolved?: boolean;    // Was resolved within the KPI timeframe?
 
   // Transfer tracking
+  blindTransfer?: boolean;
+  blindTransferTargetExt?: string;
   wasTransferred?: boolean;
   transferTargetExt?: string;
   transferTargetLabel?: string;
@@ -335,4 +337,3 @@ export interface CallScriptAssignment {
   workingHours?: string;
   isActive: boolean;
 }
-
