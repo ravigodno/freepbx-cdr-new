@@ -76,6 +76,7 @@ import {
   isDirectorySqlSyncApplyEnabled,
   previewDirectorySqlSyncFromLegacy
 } from './server/pbxpulsDirectorySync.js';
+import { getExplicitBlindTransferTarget } from './server/cdrBlindTransfer.js';
 
 // Load environment variables
 dotenv.config();
@@ -1989,22 +1990,45 @@ const uniqueExts = (values: any[]): string[] => {
   return result;
 };
 
-const getExplicitBlindTransferTargetExt = (event: any): string => {
-  const eventName = String(event?.eventName || event?.event || '').trim().toLowerCase();
-  const transferType = String(event?.transferType || event?.type || '').trim().toLowerCase();
-  const source = String(event?.source || '').trim().toLowerCase();
-  const hasBlindTransferEvidence = event?.blindTransfer === true
-    || eventName === 'blindtransfer'
-    || transferType === 'blind'
-    || transferType === 'blind_transfer'
-    // Existing records with this source were created only after a successful
-    // runAmiBlindTransfer() call, so they are explicit BlindTransfer evidence.
-    || source === 'pbxpuls_live_transfer';
+const loadCelBlindTransferEvents = async (
+  settings: AppSettings,
+  isDemo: boolean,
+  linkedIds: string[]
+): Promise<Map<string, any>> => {
+  const evidenceByLinkedId = new Map<string, any>();
+  const safeLinkedIds = Array.from(new Set(linkedIds.map(value => String(value || '').trim()).filter(Boolean))).slice(0, 1000);
+  if (isDemo || !safeLinkedIds.length) return evidenceByLinkedId;
 
-  if (!hasBlindTransferEvidence) return '';
+  const placeholders = safeLinkedIds.map(() => '?').join(', ');
+  try {
+    const rows = await queryFreePBXCDR(
+      settings,
+      false,
+      `SELECT uniqueid, linkedid, eventtype, exten, context, extra
+       FROM cel
+       WHERE eventtype = 'BLINDTRANSFER' AND linkedid IN (${placeholders})
+       ORDER BY eventtime ASC`,
+      safeLinkedIds
+    );
 
-  const targetExtension = onlyDigits(event?.blindTransferTargetExt || event?.targetExtension);
-  return isInternalExt(targetExtension) ? targetExtension : '';
+    rows.forEach((event: any) => {
+      const linkedid = String(event?.linkedid || '').trim();
+      const target = getExplicitBlindTransferTarget(event);
+      if (!linkedid || !target) return;
+      evidenceByLinkedId.set(linkedid, {
+        ...event,
+        eventName: 'BlindTransfer',
+        blindTransfer: true,
+        blindTransferTargetExt: target,
+        source: 'asterisk_cel'
+      });
+    });
+  } catch (error: any) {
+    // CEL is optional on some PBX installations; CDR loading must keep working.
+    console.warn('[CDR] CEL BlindTransfer evidence unavailable:', error?.code || error?.message || 'unknown error');
+  }
+
+  return evidenceByLinkedId;
 };
 
 const buildDidWithAnsweredAndMissed = (baseDid: any, answeredExts: string[], missedExts: string[]): string => {
@@ -13678,10 +13702,14 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
 
     const directoryRuntime = await getDirectoryRuntimeSnapshotForRequest(localDb, req);
     const directory = directoryRuntime.contacts;
-    const transferEventsByLinkedId = new Map<string, any>();
+    const transferEventsByLinkedId = await loadCelBlindTransferEvents(
+      settings,
+      isDemo,
+      calls.map(call => String(call.linkedid || call.uniqueid || ''))
+    );
     (Array.isArray(localDb.liveCallTransfers) ? localDb.liveCallTransfers : []).forEach((event: any) => {
       const linkedid = String(event?.linkedid || '').trim();
-      const targetExtension = getExplicitBlindTransferTargetExt(event);
+      const targetExtension = getExplicitBlindTransferTarget(event);
       if (!linkedid || !targetExtension) return;
       transferEventsByLinkedId.set(linkedid, event);
     });
@@ -13690,8 +13718,8 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
     calls.forEach(call => {
       const linkedid = String(call.linkedid || call.uniqueid || '').trim();
       const transferEvent = linkedid ? transferEventsByLinkedId.get(linkedid) : null;
-      const transferTargetExt = getExplicitBlindTransferTargetExt(transferEvent);
-      if (transferTargetExt && isInternalExt(transferTargetExt)) {
+      const transferTargetExt = getExplicitBlindTransferTarget(transferEvent);
+      if (transferTargetExt) {
         (call as any).blindTransfer = true;
         (call as any).blindTransferTargetExt = transferTargetExt;
         (call as any).wasTransferred = true;
