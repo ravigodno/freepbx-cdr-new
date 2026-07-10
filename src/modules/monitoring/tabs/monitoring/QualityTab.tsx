@@ -18,7 +18,8 @@ import {
   FileText,
   AlertCircle,
   Sparkles,
-  Info
+  Info,
+  X
 } from 'lucide-react';
 
 // Pure React/SVG charting components to prevent any ResizeObserver, Canvas or React 19 compatibility crashes
@@ -27,16 +28,19 @@ function CustomMiniAreaChart({
   dataKey, 
   strokeColor, 
   fillColor, 
-  yDomain 
+  yDomain,
+  rangeStartMs,
+  rangeEndMs
 }: { 
   data: any[], 
   dataKey: string, 
   strokeColor: string, 
   fillColor: string, 
-  yDomain?: [number, number] 
+  yDomain?: [number, number],
+  rangeStartMs: number,
+  rangeEndMs: number
 }) {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
-  if (data.length === 0) return null;
   const vals = data.map(d => d[dataKey] || 0);
   const minVal = yDomain ? yDomain[0] : Math.min(...vals, 0);
   const maxVal = yDomain ? yDomain[1] : Math.max(...vals, 1) * 1.15;
@@ -50,7 +54,8 @@ function CustomMiniAreaChart({
   const chartHeight = height - padding.top - padding.bottom;
 
   const points = data.map((d, idx) => {
-    const x = padding.left + (idx / (data.length - 1 || 1)) * chartWidth;
+    const timestampMs = new Date(d.timestamp).getTime();
+    const x = padding.left + ((timestampMs - rangeStartMs) / Math.max(1, rangeEndMs - rangeStartMs)) * chartWidth;
     const rawValue = Number(d[dataKey] ?? 0);
     const safeValue = Math.max(minVal, Math.min(maxVal, Number.isFinite(rawValue) ? rawValue : minVal));
     const y = padding.top + chartHeight - ((safeValue - minVal) / range) * chartHeight;
@@ -102,19 +107,18 @@ function CustomMiniAreaChart({
         })}
 
         {/* X labels */}
-        {data.length > 1 && [0, Math.floor(data.length / 2), data.length - 1].map((idx) => {
-          if (idx >= data.length) return null;
-          const p = points[idx];
+        {[rangeStartMs, rangeStartMs + (rangeEndMs - rangeStartMs) / 2, rangeEndMs].map((timestampMs, idx) => {
+          const x = padding.left + (idx / 2) * chartWidth;
           return (
             <text
               key={idx}
-              x={p.x}
+              x={x}
               y={height - 3}
-              textAnchor={idx === 0 ? 'start' : idx === data.length - 1 ? 'end' : 'middle'}
+              textAnchor={idx === 0 ? 'start' : idx === 2 ? 'end' : 'middle'}
               fontSize="8.5"
               className="fill-slate-400 font-mono font-bold"
             >
-              {data[idx].formattedTime}
+              {new Date(timestampMs).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
             </text>
           );
         })}
@@ -183,15 +187,18 @@ function CustomMiniLineChart({
   data, 
   keys, 
   colors, 
-  labels 
+  labels,
+  rangeStartMs,
+  rangeEndMs
 }: { 
   data: any[], 
   keys: string[], 
   colors: string[], 
-  labels: string[] 
+  labels: string[],
+  rangeStartMs: number,
+  rangeEndMs: number
 }) {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
-  if (data.length === 0) return null;
   
   const allVals = data.flatMap(d => keys.map(k => d[k] || 0));
   const minVal = 0;
@@ -207,7 +214,8 @@ function CustomMiniLineChart({
 
   const linePoints = keys.map((key) => {
     return data.map((d, idx) => {
-      const x = padding.left + (idx / (data.length - 1 || 1)) * chartWidth;
+      const timestampMs = new Date(d.timestamp).getTime();
+      const x = padding.left + ((timestampMs - rangeStartMs) / Math.max(1, rangeEndMs - rangeStartMs)) * chartWidth;
       const y = padding.top + chartHeight - (((d[key] || 0) - minVal) / range) * chartHeight;
       return { x, y, val: d[key] };
     });
@@ -250,19 +258,18 @@ function CustomMiniLineChart({
         })}
 
         {/* X labels */}
-        {data.length > 1 && [0, Math.floor(data.length / 2), data.length - 1].map((idx) => {
-          if (idx >= data.length) return null;
-          const x = padding.left + (idx / (data.length - 1 || 1)) * chartWidth;
+        {[rangeStartMs, rangeStartMs + (rangeEndMs - rangeStartMs) / 2, rangeEndMs].map((timestampMs, idx) => {
+          const x = padding.left + (idx / 2) * chartWidth;
           return (
             <text
               key={idx}
               x={x}
               y={height - 3}
-              textAnchor={idx === 0 ? 'start' : idx === data.length - 1 ? 'end' : 'middle'}
+              textAnchor={idx === 0 ? 'start' : idx === 2 ? 'end' : 'middle'}
               fontSize="8.5"
               className="fill-slate-400 font-mono font-bold"
             >
-              {data[idx].formattedTime}
+              {new Date(timestampMs).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
             </text>
           );
         })}
@@ -283,9 +290,9 @@ function CustomMiniLineChart({
         {/* Hover lines */}
         {hoveredIndex !== null && (
           <line
-            x1={padding.left + (hoveredIndex / (data.length - 1 || 1)) * chartWidth}
+            x1={linePoints[0][hoveredIndex].x}
             y1={padding.top}
-            x2={padding.left + (hoveredIndex / (data.length - 1 || 1)) * chartWidth}
+            x2={linePoints[0][hoveredIndex].x}
             y2={padding.top + chartHeight}
             stroke="#94a3b8"
             strokeWidth="1"
@@ -296,7 +303,8 @@ function CustomMiniLineChart({
 
         {/* Active interactive markers */}
         {data.map((_, idx) => {
-          const x = padding.left + (idx / (data.length - 1 || 1)) * chartWidth;
+          const timestampMs = new Date(data[idx].timestamp).getTime();
+          const x = padding.left + ((timestampMs - rangeStartMs) / Math.max(1, rangeEndMs - rangeStartMs)) * chartWidth;
           return (
             <g
               key={idx}
@@ -383,6 +391,7 @@ interface QualityDevice {
 interface TelemetryPoint {
   ext: string;
   timestamp: string;
+  status?: string;
   latency: number;
   jitter: number;
   rtpLoss: number;
@@ -439,7 +448,7 @@ export default function QualityTab({ token }: Props) {
   const [devices, setDevices] = useState<QualityDevice[]>([]);
   const [alerts, setAlerts] = useState<TelemetryAlert[]>([]);
   const [allHistory, setAllHistory] = useState<TelemetryPoint[]>([]);
-  const [selectedExt, setSelectedExt] = useState<string>('101');
+  const [selectedExt, setSelectedExt] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [qualityStatusFilter, setQualityStatusFilter] = useState<QualityStatusFilter>('ALL');
   const [deviceListTab, setDeviceListTab] = useState<'trunks' | 'devices'>('trunks');
@@ -448,6 +457,9 @@ export default function QualityTab({ token }: Props) {
     direction: 'asc'
   });
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
+  const [lastUpdated, setLastUpdated] = useState<string>('');
+  const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
   const [historyPeriod, setHistoryPeriod] = useState<'1h' | '24h' | '7d' | '30d'>('1h');
 
@@ -456,33 +468,64 @@ export default function QualityTab({ token }: Props) {
   const [isRunningDiag, setIsRunningDiag] = useState<boolean>(false);
   const [activeDiagName, setActiveDiagName] = useState<string>('');
 
-  const loadData = async () => {
-    setIsLoading(true);
-    setError('');
+  const loadCachedData = async (signal?: AbortSignal) => {
     try {
-      const headersStr = authHeaders;
-      const [devsRes, alertsRes, histRes] = await Promise.all([
-        fetch('/api/quality/devices', { headers: headersStr }).then(r => r.json()),
-        fetch('/api/quality/alerts', { headers: headersStr }).then(r => r.json()),
-        fetch(`/api/quality/history?ext=${encodeURIComponent(selectedExt || 'all')}&period=${encodeURIComponent(historyPeriod)}`, { headers: headersStr }).then(r => r.json())
-      ]);
-
-      if (devsRes.success) setDevices(devsRes.devices);
-      if (alertsRes.success) setAlerts(alertsRes.alerts);
-      if (histRes.success) setAllHistory(histRes.history);
+      const response = await fetch(`/api/quality/cache?ext=${encodeURIComponent(selectedExt || 'all')}&period=${encodeURIComponent(historyPeriod)}`, { headers: authHeaders, signal });
+      const cached = await response.json();
+      if (!cached.success) throw new Error(cached.error || 'Cache unavailable');
+      if (Array.isArray(cached.devices) && cached.devices.length) {
+        setDevices(cached.devices);
+        setSelectedExt(current => current || cached.devices[0].ext);
+      }
+      if (Array.isArray(cached.alerts)) setAlerts(cached.alerts);
+      if (Array.isArray(cached.history)) setAllHistory(cached.history);
+      if (cached.lastUpdated) setLastUpdated(cached.lastUpdated);
     } catch (err: any) {
-      console.error(err);
-      setError('Не удалось загрузить данные телеметрии качества связи');
+      if (err?.name !== 'AbortError') setError('Не удалось загрузить сохранённые данные телеметрии');
     } finally {
       setIsLoading(false);
     }
   };
 
+  const refreshLiveData = async () => {
+    setIsRefreshing(true);
+    setError('');
+    try {
+      const response = await fetch('/api/quality/devices', { headers: authHeaders });
+      const live = await response.json();
+      if (!live.success) throw new Error(live.error || 'Live refresh failed');
+      if (Array.isArray(live.devices)) {
+        setDevices(live.devices);
+        setSelectedExt(current => current || live.devices[0]?.ext || '');
+      }
+      setLastUpdated(new Date().toISOString());
+    } catch (err: any) {
+      setError('Live-обновление недоступно; показан последний сохранённый срез');
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
   useEffect(() => {
-    loadData();
-    const interval = setInterval(loadData, 12000);
-    return () => clearInterval(interval);
+    const controller = new AbortController();
+    loadCachedData(controller.signal);
+    return () => controller.abort();
   }, [token, selectedExt, historyPeriod]);
+
+  useEffect(() => {
+    refreshLiveData();
+    const interval = setInterval(refreshLiveData, 60000);
+    return () => clearInterval(interval);
+  }, [token]);
+
+  useEffect(() => {
+    if (!isDiagnosticsOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setIsDiagnosticsOpen(false);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [isDiagnosticsOpen]);
 
   // Handle selected device
   const selectedDevice = useMemo(() => {
@@ -495,26 +538,30 @@ export default function QualityTab({ token }: Props) {
     return allHistory.filter(h => h.ext === selectedDevice.ext);
   }, [allHistory, selectedDevice]);
 
+  const chartRange = useMemo(() => {
+    const endMs = Date.now();
+    const periodMs = historyPeriod === '1h' ? 60 * 60 * 1000
+      : historyPeriod === '24h' ? 24 * 60 * 60 * 1000
+        : historyPeriod === '7d' ? 7 * 24 * 60 * 60 * 1000
+          : 30 * 24 * 60 * 60 * 1000;
+    return { startMs: endMs - periodMs, endMs };
+  }, [historyPeriod, allHistory]);
+
   // Filter history based on selected period
   const filteredHistoryData = useMemo(() => {
     if (!deviceHistory.length) return [];
-    const now = Date.now();
-    let periodMs = 3600000; // default 1 hour
-    if (historyPeriod === '24h') periodMs = 24 * 3600000;
-    else if (historyPeriod === '7d') periodMs = 7 * 24 * 3600000;
-    else if (historyPeriod === '30d') periodMs = 30 * 24 * 3600000;
-
-    const limitTime = now - periodMs;
     return deviceHistory
-      .filter(pt => new Date(pt.timestamp).getTime() >= limitTime)
+      .filter(pt => new Date(pt.timestamp).getTime() >= chartRange.startMs && new Date(pt.timestamp).getTime() <= chartRange.endMs)
       .map(pt => ({
         ...pt,
-        formattedTime: new Date(pt.timestamp).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', hour12: false }),
+        formattedTime: historyPeriod === '1h'
+          ? new Date(pt.timestamp).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', hour12: false })
+          : new Date(pt.timestamp).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }),
         formattedDate: new Date(pt.timestamp).toLocaleString('ru-RU', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }),
         onlineValue: pt.status === 'Offline' ? 0 : 1
       }))
       .sort((a,b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-  }, [deviceHistory, historyPeriod]);
+  }, [deviceHistory, historyPeriod, chartRange]);
 
   // Calculate history period summaries
   const historySummaries = useMemo(() => {
@@ -925,6 +972,19 @@ export default function QualityTab({ token }: Props) {
         </div>
       )}
 
+      <div className="flex flex-wrap items-center justify-end gap-3 text-[11px] font-bold text-slate-500">
+        {isLoading && !devices.length && <span className="inline-flex items-center gap-1.5"><RefreshCw className="h-3.5 w-3.5 animate-spin" />Загрузка сохранённого среза…</span>}
+        {isRefreshing && <span className="inline-flex items-center gap-1.5 text-blue-600"><RefreshCw className="h-3.5 w-3.5 animate-spin" />Обновляется…</span>}
+        {lastUpdated && <span>Последнее обновление: {new Date(lastUpdated).toLocaleString('ru-RU')}</span>}
+        <button
+          type="button"
+          onClick={() => setIsDiagnosticsOpen(true)}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-blue-700 transition hover:bg-blue-100 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-300"
+        >
+          <Terminal className="h-3.5 w-3.5" /> Диагностика
+        </button>
+      </div>
+
       {/* ОБЩАЯ СВОДКА (Summary Cards) */}
       <div className="grid grid-cols-2 xl:grid-cols-7 gap-3">
         <div className="bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-[#334155] rounded-xl p-3">
@@ -988,11 +1048,11 @@ export default function QualityTab({ token }: Props) {
         </div>
       </div>
 
-      {/* MAIN TWO-COLUMN LAYOUT */}
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+      {/* MAIN FULL-WIDTH LAYOUT */}
+      <div>
 
         {/* LEFT COLUMN: DEVICES LIST TABLE (Take up 2 shares on XL wide layouts) */}
-        <div className="xl:col-span-2 space-y-6">
+        <div className="space-y-6">
           <div className="bg-white dark:bg-[#1e293b] border border-slate-200 dark:border-[#334155] rounded-xl shadow-xs overflow-hidden">
             <div className="p-4 border-b border-slate-200 dark:border-[#334155] flex flex-col md:flex-row md:items-center md:justify-between gap-3">
               <div>
@@ -1111,7 +1171,7 @@ export default function QualityTab({ token }: Props) {
                       return (
                         <tr
                           key={dev.ext}
-                          onClick={() => setSelectedExt(dev.ext)}
+                          onClick={() => { setSelectedExt(dev.ext); setIsDiagnosticsOpen(true); }}
                           className={`cursor-pointer transition-all ${
                             isSelected 
                               ? 'bg-blue-50/70 dark:bg-blue-950/10 border-l-4 border-blue-600' 
@@ -1181,11 +1241,11 @@ export default function QualityTab({ token }: Props) {
                 </div>
               </div>
 
-              {filteredHistoryData.length === 0 ? (
-                <div className="h-64 flex items-center justify-center text-slate-400 font-semibold text-xs border border-dashed rounded-xl border-slate-200 p-8">
-                  Статистические логи для данного периода отсутствуют. Накапливаем данные...
+              {filteredHistoryData.length === 0 && (
+                <div className="rounded-xl border border-dashed border-slate-200 p-3 text-center text-xs font-semibold text-slate-400">
+                  Для части выбранного периода данных пока нет; ось показывает полный диапазон.
                 </div>
-              ) : (
+              )}
                 <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
                   
                   {/* ONLINE / OFFLINE CHART */}
@@ -1198,6 +1258,8 @@ export default function QualityTab({ token }: Props) {
                         strokeColor="#22c55e"
                         fillColor="#22c55e"
                         yDomain={[0, 1]}
+                        rangeStartMs={chartRange.startMs}
+                        rangeEndMs={chartRange.endMs}
                       />
                     </div>
                     <div className="flex items-center justify-between text-[10px] text-slate-400 font-bold">
@@ -1215,6 +1277,8 @@ export default function QualityTab({ token }: Props) {
                         dataKey="latency" 
                         strokeColor="#3b82f6" 
                         fillColor="#3b82f6" 
+                        rangeStartMs={chartRange.startMs}
+                        rangeEndMs={chartRange.endMs}
                       />
                     </div>
                   </div>
@@ -1228,6 +1292,8 @@ export default function QualityTab({ token }: Props) {
                         keys={['jitter', 'rtpLoss']} 
                         colors={['#f59e0b', '#ef4444']} 
                         labels={['Джиттер (мс)', 'Потери RTP (%)']} 
+                        rangeStartMs={chartRange.startMs}
+                        rangeEndMs={chartRange.endMs}
                       />
                     </div>
                   </div>
@@ -1242,6 +1308,8 @@ export default function QualityTab({ token }: Props) {
                         strokeColor="#10b981" 
                         fillColor="#10b981" 
                         yDomain={[1.0, 4.5]} 
+                        rangeStartMs={chartRange.startMs}
+                        rangeEndMs={chartRange.endMs}
                       />
                     </div>
                   </div>
@@ -1277,13 +1345,25 @@ export default function QualityTab({ token }: Props) {
                   </div>
 
                 </div>
-              )}
             </div>
           )}
         </div>
 
-        {/* RIGHT COLUMN: REASON OF BAD QUALITY, ALERTS log, DEBUGS & NETWORK ANALYSIS (Take 1 share on XL) */}
-        <div className="space-y-6">
+        {/* DIAGNOSTICS DRAWER */}
+        {isDiagnosticsOpen && (
+          <div className="fixed inset-0 z-[80]">
+            <button type="button" aria-label="Закрыть диагностику" onClick={() => setIsDiagnosticsOpen(false)} className="absolute inset-0 bg-slate-950/35 backdrop-blur-[1px]" />
+            <aside className="absolute inset-y-0 right-0 flex w-[min(94vw,520px)] flex-col border-l border-slate-200 bg-slate-50 shadow-2xl dark:border-slate-700 dark:bg-slate-950">
+              <div className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3 dark:border-slate-800 dark:bg-[#1e293b]">
+                <div>
+                  <h3 className="text-sm font-black text-slate-900 dark:text-white">Диагностика качества</h3>
+                  <p className="mt-0.5 text-[10px] font-semibold text-slate-400">{selectedDevice ? `EXT ${selectedDevice.ext} · ${selectedDevice.name}` : 'Выберите устройство'}</p>
+                </div>
+                <button type="button" onClick={() => setIsDiagnosticsOpen(false)} className="rounded-lg border border-slate-200 p-2 text-slate-500 transition hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800" aria-label="Закрыть">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="flex-1 space-y-6 overflow-y-auto p-4">
 
           {/* AUTOMATIC HUMAN DIAGNOSIS AND RECOMMENDATIONS */}
           {humanDiagnosis && selectedDevice && (
@@ -1547,7 +1627,10 @@ export default function QualityTab({ token }: Props) {
             </div>
           </div>
 
-        </div>
+              </div>
+            </aside>
+          </div>
+        )}
 
       </div>
 

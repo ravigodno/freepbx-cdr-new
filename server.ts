@@ -16859,11 +16859,66 @@ const QUALITY_ALERTS_FILE = path.join(DATA_DIR, 'quality-alerts.json');
 
 interface TelemetryPoint {
   ext: string;
+  name?: string;
+  ip?: string;
+  userAgent?: string;
+  status?: string;
+  qualityStatus?: string;
   timestamp: string;
   latency: number;
   jitter: number;
   rtpLoss: number;
   mos: number;
+}
+
+const QUALITY_PERIOD_MS: Record<string, number> = {
+  '1h': 60 * 60 * 1000,
+  '24h': 24 * 60 * 60 * 1000,
+  '7d': 7 * 24 * 60 * 60 * 1000,
+  '30d': 30 * 24 * 60 * 60 * 1000
+};
+
+function readQualityJsonFile(filePath: string): any[] {
+  if (!fs.existsSync(filePath)) return [];
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8') || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function compactQualityHistory(history: any[], nowMs = Date.now()): any[] {
+  const cutoff = nowMs - QUALITY_PERIOD_MS['30d'];
+  const buckets = new Map<string, any>();
+  history.forEach(point => {
+    const timestampMs = Date.parse(String(point?.timestamp || ''));
+    if (!Number.isFinite(timestampMs) || timestampMs < cutoff) return;
+    const ageMs = nowMs - timestampMs;
+    const bucketMs = ageMs <= QUALITY_PERIOD_MS['1h'] ? 60 * 1000 : ageMs <= QUALITY_PERIOD_MS['24h'] ? 5 * 60 * 1000 : 60 * 60 * 1000;
+    const key = `${String(point.ext || '')}:${Math.floor(timestampMs / bucketMs)}`;
+    const previous = buckets.get(key);
+    if (!previous || Date.parse(String(previous.timestamp || '')) < timestampMs) buckets.set(key, point);
+  });
+  return Array.from(buckets.values()).sort((a, b) => Date.parse(String(a.timestamp || '')) - Date.parse(String(b.timestamp || '')));
+}
+
+function filterAndSampleQualityHistory(history: any[], options: { ext?: string; period?: string; fromMs?: number; toMs?: number }): any[] {
+  const ext = String(options.ext || '').trim();
+  const period = String(options.period || '').trim();
+  const toMs = Number.isFinite(options.toMs) && Number(options.toMs) > 0 ? Number(options.toMs) : Date.now();
+  const fromMs = QUALITY_PERIOD_MS[period] ? toMs - QUALITY_PERIOD_MS[period] : Number(options.fromMs || 0);
+  const bucketMs = period === '24h' ? 5 * 60 * 1000 : period === '7d' ? 60 * 60 * 1000 : period === '30d' ? 2 * 60 * 60 * 1000 : 60 * 1000;
+  const buckets = new Map<string, any>();
+  history.forEach(point => {
+    if (ext && ext !== 'all' && String(point?.ext || '') !== ext) return;
+    const timestampMs = Date.parse(String(point?.timestamp || ''));
+    if (!Number.isFinite(timestampMs) || (fromMs > 0 && timestampMs < fromMs) || timestampMs > toMs) return;
+    const key = `${String(point.ext || '')}:${Math.floor(timestampMs / bucketMs)}`;
+    const previous = buckets.get(key);
+    if (!previous || Date.parse(String(previous.timestamp || '')) < timestampMs) buckets.set(key, point);
+  });
+  return Array.from(buckets.values()).sort((a, b) => Date.parse(String(a.timestamp || '')) - Date.parse(String(b.timestamp || '')));
 }
 
 function calculateRtpLossPercent(receivedPackets: unknown, lostPackets: unknown): number {
@@ -17230,8 +17285,8 @@ setInterval(async () => {
     }
 
     // Keep quality history compact while SQL storage is being introduced.
-    const qualityHistoryRetentionDays = Math.max(1, Number(settings.qualityHistoryRetentionDays || 7));
-    const qualityHistoryMaxPoints = Math.max(100, Number(settings.qualityHistoryMaxPoints || 1000));
+    const qualityHistoryRetentionDays = Math.max(30, Number(settings.qualityHistoryRetentionDays || 30));
+    const qualityHistoryMaxPoints = Math.max(50000, Number(settings.qualityHistoryMaxPoints || 50000));
     const qualityHistoryCutoff = Date.now() - qualityHistoryRetentionDays * 24 * 60 * 60 * 1000;
 
     for (let i = history.length - 1; i >= 0; i--) {
@@ -17245,12 +17300,14 @@ setInterval(async () => {
       history.splice(0, history.length - qualityHistoryMaxPoints);
     }
 
+    const compactedHistory = compactQualityHistory(history);
+
     // Cap alerts at 200 items
     if (alerts.length > 200) {
       alerts.splice(200);
     }
 
-    fs.writeFileSync(QUALITY_HISTORY_FILE, JSON.stringify(history, null, 2), 'utf8');
+    fs.writeFileSync(QUALITY_HISTORY_FILE, JSON.stringify(compactedHistory, null, 2), 'utf8');
     fs.writeFileSync(QUALITY_ALERTS_FILE, JSON.stringify(alerts, null, 2), 'utf8');
   } catch (err: any) {
     console.error('[VOIP QUALITY] Simulation background error:', err.message);
@@ -17258,6 +17315,43 @@ setInterval(async () => {
 }, 60000);
 
 // --- VoIP QUALITY ENDPOINTS ---
+app.get('/api/quality/cache', requireAuth(), async (req, res) => {
+  try {
+    const period = String(req.query.period || '1h').trim();
+    const ext = String(req.query.ext || 'all').trim();
+    const history = filterAndSampleQualityHistory(readQualityJsonFile(QUALITY_HISTORY_FILE), { ext, period });
+    const alerts = readQualityJsonFile(QUALITY_ALERTS_FILE);
+    let devices: any[] = [];
+
+    try {
+      const rows = await queryPBXPulsDb(`
+        SELECT ext, name, device_role, type_label, tech, ip, port,
+          status, quality_status, latency_ms, jitter_ms, rtp_loss, mos,
+          pjsip_status, monitor_mode, options_disabled, ping_ok, ping_ms,
+          operational_status, user_agent, manufacturer, model, updated_at
+        FROM quality_current
+        ORDER BY device_role DESC, ext ASC
+      `);
+      devices = rows.map((row: any) => ({
+        ext: String(row.ext || ''), name: String(row.name || ''), deviceRole: row.device_role || 'extension',
+        typeLabel: row.type_label || '', type: row.tech || 'PJSIP', tech: row.tech || 'PJSIP', ip: row.ip || '', port: Number(row.port || 0),
+        deviceStatus: row.status || '', qualityStatus: row.quality_status || '', status: row.quality_status || row.status || 'Offline',
+        latency: Number(row.latency_ms || 0), jitter: Number(row.jitter_ms || 0), rtpLoss: Number(row.rtp_loss || 0), mos: Number(row.mos || 0),
+        pjsipStatus: row.pjsip_status || '', monitorMode: row.monitor_mode || '', optionsDisabled: Boolean(row.options_disabled),
+        pingOk: Boolean(row.ping_ok), pingMs: Number(row.ping_ms || 0), operationalStatus: row.operational_status || '',
+        userAgent: row.user_agent || '', manufacturer: row.manufacturer || '', model: row.model || '', lastCheck: row.updated_at || null,
+        network: { mac: '', vendor: row.manufacturer || '', vlan: '', switch: '', lastIp: row.ip || '', ipHistory: [], uaHistory: [], registerHistory: [], registerCount: 0, registerFrequency: '', subnetChanges: 0 }
+      }));
+    } catch (e: any) {
+      console.warn('[PBXPULS_DB] quality cache read skipped:', e.message);
+    }
+
+    res.json({ success: true, cached: true, devices, history, alerts, lastUpdated: devices[0]?.lastCheck || history[history.length - 1]?.timestamp || null, period, ext });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message || String(e) });
+  }
+});
+
 app.get('/api/quality/devices', requireAuth(), async (req, res) => {
   try {
     const localDb = await readLocalDb();
@@ -17290,19 +17384,7 @@ app.get('/api/quality/devices', requireAuth(), async (req, res) => {
 
 app.get('/api/quality/history', requireAuth(), async (req, res) => {
   try {
-    const localDb = await readLocalDb();
-    const settings = localDb.settings;
-    let history: any[] = [];
-
-    if (fs.existsSync(QUALITY_HISTORY_FILE)) {
-      history = JSON.parse(fs.readFileSync(QUALITY_HISTORY_FILE, 'utf8') || '[]');
-    }
-
-    if (!isDemoMode(settings)) {
-      const realDevices = await getRealVoIPDevices(settings);
-      const realExts = new Set(realDevices.map((d: any) => String(d.ext)));
-      history = history.filter((pt: any) => realExts.has(String(pt.ext)));
-    }
+    let history: any[] = readQualityJsonFile(QUALITY_HISTORY_FILE);
 
     const ext = String(req.query.ext || '').trim();
     if (ext && ext !== 'all') {
@@ -17310,12 +17392,6 @@ app.get('/api/quality/history', requireAuth(), async (req, res) => {
     }
 
     const period = String(req.query.period || req.query.range || '').trim();
-    let periodMs = 0;
-
-    if (period === '1h') periodMs = 60 * 60 * 1000;
-    else if (period === '24h') periodMs = 24 * 60 * 60 * 1000;
-    else if (period === '7d') periodMs = 7 * 24 * 60 * 60 * 1000;
-    else if (period === '30d') periodMs = 30 * 24 * 60 * 60 * 1000;
 
     const from = String(req.query.from || '').trim();
     const to = String(req.query.to || '').trim();
@@ -17323,25 +17399,7 @@ app.get('/api/quality/history', requireAuth(), async (req, res) => {
     let fromMs = from ? Date.parse(from) : 0;
     let toMs = to ? Date.parse(to) : 0;
 
-    if (periodMs > 0) {
-      fromMs = Date.now() - periodMs;
-    }
-
-    if (Number.isFinite(fromMs) && fromMs > 0) {
-      history = history.filter((pt: any) => {
-        const ts = Date.parse(String(pt.timestamp || ''));
-        return Number.isFinite(ts) && ts >= fromMs;
-      });
-    }
-
-    if (Number.isFinite(toMs) && toMs > 0) {
-      history = history.filter((pt: any) => {
-        const ts = Date.parse(String(pt.timestamp || ''));
-        return Number.isFinite(ts) && ts <= toMs;
-      });
-    }
-
-    history.sort((a: any, b: any) => Date.parse(String(a.timestamp || '')) - Date.parse(String(b.timestamp || '')));
+    history = filterAndSampleQualityHistory(history, { ext, period, fromMs, toMs });
 
     res.json({
       success: true,
