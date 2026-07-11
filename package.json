@@ -7,7 +7,9 @@
     "dev": "tsx server.ts",
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --log-override:empty-import-meta=silent --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "pbxpuls:db:check": "tsx scripts/pbxpuls-db.ts --check",
+    "pbxpuls:db:setup": "tsx scripts/pbxpuls-db.ts --setup"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

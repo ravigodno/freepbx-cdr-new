@@ -28,7 +28,8 @@ import { registerAiPbxAdminRoutes } from './server/aiPbxAdmin.js';
 import { runPBXPulsMigrations } from './server/pbxpulsMigrations.js';
 import { registerPBXPulsSqlStatusRoutes } from './server/pbxpulsSqlStatus.js';
 import { authenticatePBXPulsSqlUser, compareLegacyUserWithSql, getAuthStorageMode, getPBXPulsUsers } from './server/pbxpulsAuthDb.js';
-import { isPBXPulsDbAvailable, queryPBXPulsDb, sanitizePBXPulsDbError } from './server/pbxpulsDb.js';
+import { getPBXPulsDbRuntimeStatus, isPBXPulsDbAvailable, queryPBXPulsDb, sanitizePBXPulsDbError } from './server/pbxpulsDb.js';
+import { getPBXPulsDbConfigLogFields } from './server/pbxpulsDbConfig.js';
 import { writePBXPulsSystemEvent } from './server/pbxpulsEvents.js';
 import { upsertPBXPulsSetting } from './server/pbxpulsSettings.js';
 import { buildLegacySettingsSeedRows } from './server/pbxpulsLegacySettings.js';
@@ -4786,36 +4787,6 @@ async function queryFreePBXCDR(
     if (connection) await connection.end();
   }
 }
-async function queryPBXPulsDb(sql: string, params: any[] = []): Promise<any[]> {
-  let connection;
-  try {
-    connection = await mysql.createConnection({
-      host: process.env.PBXPULS_DB_HOST || '127.0.0.1',
-      port: Number(process.env.PBXPULS_DB_PORT || 3306),
-      user: process.env.PBXPULS_DB_USER || 'pbxpuls',
-      password: process.env.PBXPULS_DB_PASS || '',
-      database: process.env.PBXPULS_DB_NAME || 'pbxpuls',
-      connectTimeout: 5000,
-      dateStrings: true
-    });
-
-    const [rows] = await connection.execute(sql, params);
-    return rows as any[];
-  } finally {
-    if (connection) await connection.end();
-  }
-}
-
-async function isPBXPulsDbAvailable(): Promise<boolean> {
-  try {
-    await queryPBXPulsDb('SELECT 1 AS ok', []);
-    return true;
-  } catch (e: any) {
-    console.warn('[PBXPULS_DB] unavailable:', e.message);
-    return false;
-  }
-}
-
 // Highly precise parser for our SQL queries to support SQL filtering in demo mode
 function filterMockCDR(sql: string, params: any[]): any[] {
   // Deep clone so changes do not mutate global mock state
@@ -17280,9 +17251,7 @@ setInterval(async () => {
 
     try {
       await saveQualityCurrentToPBXPulsDb(currentQualityRows);
-    } catch (e: any) {
-      console.warn('[PBXPULS_DB] quality_current background save skipped:', e.message);
-    }
+    } catch {}
 
     // Keep quality history compact while SQL storage is being introduced.
     const qualityHistoryRetentionDays = Math.max(30, Number(settings.qualityHistoryRetentionDays || 30));
@@ -17342,11 +17311,10 @@ app.get('/api/quality/cache', requireAuth(), async (req, res) => {
         userAgent: row.user_agent || '', manufacturer: row.manufacturer || '', model: row.model || '', lastCheck: row.updated_at || null,
         network: { mac: '', vendor: row.manufacturer || '', vlan: '', switch: '', lastIp: row.ip || '', ipHistory: [], uaHistory: [], registerHistory: [], registerCount: 0, registerFrequency: '', subnetChanges: 0 }
       }));
-    } catch (e: any) {
-      console.warn('[PBXPULS_DB] quality cache read skipped:', e.message);
-    }
+    } catch {}
 
-    res.json({ success: true, cached: true, devices, history, alerts, lastUpdated: devices[0]?.lastCheck || history[history.length - 1]?.timestamp || null, period, ext });
+    const dbStatus = getPBXPulsDbRuntimeStatus();
+    res.json({ success: true, cached: true, devices, history, alerts, lastUpdated: devices[0]?.lastCheck || history[history.length - 1]?.timestamp || null, period, ext, ...dbStatus });
   } catch (e: any) {
     res.status(500).json({ success: false, error: e.message || String(e) });
   }
@@ -17367,16 +17335,34 @@ app.get('/api/quality/devices', requireAuth(), async (req, res) => {
         };
       });
     } else {
-      list = await getRealVoIPQualityDevices(settings);
+      const liveResult = await Promise.race([
+        getRealVoIPQualityDevices(settings).then(devices => ({ devices, partial: false, reason: null })),
+        new Promise<{ devices: any[]; partial: boolean; reason: string }>(resolve => setTimeout(
+          () => resolve({ devices: [], partial: true, reason: 'Live scan timed out; cached/partial data returned' }),
+          8_000
+        ))
+      ]);
+      list = liveResult.devices;
+      if (liveResult.partial) {
+        try {
+          const rows = await queryPBXPulsDb('SELECT * FROM quality_current ORDER BY device_role DESC, ext ASC');
+          list = rows.map((row: any) => ({
+            ...row, ext: String(row.ext || ''), deviceRole: row.device_role || 'extension',
+            typeLabel: row.type_label || '', tech: row.tech || 'PJSIP', deviceStatus: row.status || '',
+            qualityStatus: row.quality_status || row.status || 'Offline', status: row.quality_status || row.status || 'Offline',
+            latency: Number(row.latency_ms || 0), jitter: Number(row.jitter_ms || 0), rtpLoss: Number(row.rtp_loss || 0),
+            mos: Number(row.mos || 0), lastCheck: row.updated_at || null
+          }));
+        } catch {}
+        return res.json({ success: true, count: list.length, devices: list, partial: true, reason: liveResult.reason, ...getPBXPulsDbRuntimeStatus() });
+      }
     }
 
     try {
       await saveQualityCurrentToPBXPulsDb(list);
-    } catch (e: any) {
-      console.warn('[PBXPULS_DB] quality_current API save skipped:', e.message);
-    }
+    } catch {}
 
-    res.json({ success: true, count: list.length, devices: list });
+    res.json({ success: true, count: list.length, devices: list, partial: false, ...getPBXPulsDbRuntimeStatus() });
   } catch (e: any) {
     res.status(500).json({ success: false, error: e.message || String(e) });
   }
@@ -18223,12 +18209,7 @@ async function saveQualityCurrentToPBXPulsDb(devices: any[]): Promise<void> {
       status, quality_status, latency_ms, jitter_ms, rtp_loss, mos,
       pjsip_status, monitor_mode, options_disabled, ping_ok, ping_ms, operational_status,
       user_agent, manufacturer, model, updated_at
-    ) VALUES (
-      ?, ?, ?, ?, ?, ?, ?,
-      ?, ?, ?, ?, ?, ?,
-      ?, ?, ?, ?, ?, ?,
-      ?, ?, ?, NOW()
-    )
+    ) VALUES ${devices.map(() => `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`).join(',')}
     ON DUPLICATE KEY UPDATE
       name = VALUES(name),
       device_role = VALUES(device_role),
@@ -18254,9 +18235,7 @@ async function saveQualityCurrentToPBXPulsDb(devices: any[]): Promise<void> {
       updated_at = NOW()
   `;
 
-  for (const dev of devices) {
-    try {
-      await queryPBXPulsDb(sql, [
+  const params = devices.flatMap(dev => [
         String(dev.ext || ''),
         String(dev.name || ''),
         String(dev.deviceRole || dev.device_role || 'extension'),
@@ -18282,11 +18261,8 @@ async function saveQualityCurrentToPBXPulsDb(devices: any[]): Promise<void> {
         String(dev.userAgent || dev.user_agent || ''),
         String(dev.manufacturer || ''),
         String(dev.model || '')
-      ]);
-    } catch (e: any) {
-      console.warn('[PBXPULS_DB] failed to save quality_current ext=' + String(dev.ext || '') + ':', e.message);
-    }
-  }
+  ]);
+  await queryPBXPulsDb(sql, params);
 }
 
 function parsePjsipContacts(output: string): Map<string, any> {
@@ -18435,6 +18411,17 @@ function parseSipPeerDetails(output: string): { userAgent?: string; toHost?: str
     toHost: toHost || undefined,
     fromUser: fromUser || undefined
   };
+}
+
+async function runWithConcurrencyLimit<T>(items: T[], limit: number, worker: (item: T) => Promise<void>): Promise<void> {
+  let cursor = 0;
+  const runners = Array.from({ length: Math.min(Math.max(1, limit), items.length) }, async () => {
+    while (cursor < items.length) {
+      const item = items[cursor++];
+      await worker(item);
+    }
+  });
+  await Promise.all(runners);
 }
 
 function isLikelyVoipTrunkDevice(dev: any): boolean {
@@ -18588,7 +18575,7 @@ async function getRealVoIPDevices(settings: AppSettings): Promise<any[]> {
     }
     if (pjsipRes.success && pjsipRes.message) {
       const pjsipMap = parsePjsipContacts(pjsipRes.message);
-      for (const [ext, dev] of pjsipMap.entries()) {
+      await runWithConcurrencyLimit(Array.from(pjsipMap.entries()), 4, async ([ext, dev]) => {
         const ua = pjsipAgents.get(String(ext));
         if (ua) dev.userAgent = ua;
 
@@ -18623,7 +18610,7 @@ async function getRealVoIPDevices(settings: AppSettings): Promise<any[]> {
         }
 
         amiStatuses.set(ext, dev);
-      }
+      });
     }
   } catch (e) {
     console.error("Failed to query PJSIP contacts:", e);
@@ -18635,7 +18622,7 @@ async function getRealVoIPDevices(settings: AppSettings): Promise<any[]> {
     }
     if (sipRes.success && sipRes.message) {
       const sipMap = parseSipPeers(sipRes.message);
-      for (const [ext, dev] of sipMap.entries()) {
+      await runWithConcurrencyLimit(Array.from(sipMap.entries()), 6, async ([ext, dev]) => {
         if (dev.tech === 'SIP' && dev.ip && dev.status === 'Online') {
           try {
             const peerDetails = await runAsteriskCliCommand('sip show peer ' + ext, 8000);
@@ -18650,7 +18637,7 @@ async function getRealVoIPDevices(settings: AppSettings): Promise<any[]> {
           } catch (e) {}
         }
         amiStatuses.set(ext, dev);
-      }
+      });
     }
   } catch (e) {
     console.error("Failed to query SIP peers via AMI:", e);
@@ -19934,6 +19921,7 @@ async function startServer() {
   }
 
   const startupDb = await readLocalDb();
+  console.log('[PBXPULS_DB] runtime configuration:', getPBXPulsDbConfigLogFields());
   await runPBXPulsMigrations();
   startDtmfAmiListener(startupDb.settings).catch((e: any) => console.error('[DTMF] listener start failed:', e.message));
 

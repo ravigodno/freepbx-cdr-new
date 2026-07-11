@@ -3,6 +3,7 @@ import mysql, { Connection, ResultSetHeader } from 'mysql2/promise';
 import { isPBXPulsDbAvailable, sanitizePBXPulsDbError } from './pbxpulsDb.js';
 import { writePBXPulsSystemEvent } from './pbxpulsEvents.js';
 import { getPBXPulsSetting } from './pbxpulsSettings.js';
+import { getPBXPulsDbConfig, getPBXPulsDbConnectionOptions } from './pbxpulsDbConfig.js';
 
 export type DirectoryWriteMode = 'legacy' | 'sql';
 export type DirectorySqlContactType = 'common' | 'personal';
@@ -335,15 +336,8 @@ export function normalizeDirectoryContactForSql(
 }
 
 async function createPBXPulsConnection(): Promise<Connection> {
-  return mysql.createConnection({
-    host: process.env.PBXPULS_DB_HOST || '127.0.0.1',
-    port: Number(process.env.PBXPULS_DB_PORT || 3306),
-    user: process.env.PBXPULS_DB_USER || 'pbxpuls',
-    password: process.env.PBXPULS_DB_PASS || '',
-    database: process.env.PBXPULS_DB_NAME || 'pbxpuls',
-    connectTimeout: 5000,
-    dateStrings: true
-  });
+  if (!getPBXPulsDbConfig().configured) throw new Error('PBXPuls DB access denied / not configured');
+  return mysql.createConnection(getPBXPulsDbConnectionOptions());
 }
 
 function contactSqlParams(contact: NormalizedDirectorySqlContact): unknown[] {

@@ -461,6 +461,8 @@ export default function QualityTab({ token }: Props) {
   const [lastUpdated, setLastUpdated] = useState<string>('');
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
+  const [cacheWarning, setCacheWarning] = useState<string>('');
+  const [isPartial, setIsPartial] = useState<boolean>(false);
   const [historyPeriod, setHistoryPeriod] = useState<'1h' | '24h' | '7d' | '30d'>('1h');
 
   // Terminal state
@@ -480,6 +482,7 @@ export default function QualityTab({ token }: Props) {
       if (Array.isArray(cached.alerts)) setAlerts(cached.alerts);
       if (Array.isArray(cached.history)) setAllHistory(cached.history);
       if (cached.lastUpdated) setLastUpdated(cached.lastUpdated);
+      setCacheWarning(cached.qualityCacheAvailable === false ? 'Кэш качества связи недоступен: PBXPuls DB не настроена' : '');
     } catch (err: any) {
       if (err?.name !== 'AbortError') setError('Не удалось загрузить сохранённые данные телеметрии');
     } finally {
@@ -498,6 +501,8 @@ export default function QualityTab({ token }: Props) {
         setDevices(live.devices);
         setSelectedExt(current => current || live.devices[0]?.ext || '');
       }
+      setIsPartial(Boolean(live.partial));
+      setCacheWarning(live.qualityCacheAvailable === false ? 'Кэш качества связи недоступен: PBXPuls DB не настроена' : '');
       setLastUpdated(new Date().toISOString());
     } catch (err: any) {
       setError('Live-обновление недоступно; показан последний сохранённый срез');
@@ -969,6 +974,13 @@ export default function QualityTab({ token }: Props) {
       {error && (
         <div className="p-4 rounded-xl bg-red-50 text-red-700 text-xs font-bold border border-red-200">
           {error}
+        </div>
+      )}
+
+      {(cacheWarning || isPartial) && (
+        <div className="p-4 rounded-xl bg-amber-50 text-amber-800 text-xs font-bold border border-amber-200 flex items-center gap-2">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <span>{cacheWarning}{cacheWarning && isPartial ? ' · ' : ''}{isPartial ? 'Показаны частичные или кэшированные данные; live-проверка ещё обновляется.' : ''}</span>
         </div>
       )}
 

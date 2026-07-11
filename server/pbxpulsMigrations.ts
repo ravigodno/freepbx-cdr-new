@@ -4,6 +4,7 @@ import mysql, { Connection } from 'mysql2/promise';
 import { writePBXPulsSystemEvent } from './pbxpulsEvents.js';
 import { buildLegacySettingsSeedRows } from './pbxpulsLegacySettings.js';
 import { DIRECTORY_SQL_SCHEMA_STATEMENTS, seedLegacyDirectory } from './pbxpulsDirectorySeed.js';
+import { getPBXPulsDbConfig, getPBXPulsDbConnectionOptions } from './pbxpulsDbConfig.js';
 
 interface Migration {
   key: string;
@@ -287,19 +288,40 @@ const MIGRATIONS: Migration[] = [
     description: 'Seed Directory SQL sync apply safety flag',
     statements: [],
     seed: seedDirectorySqlSyncApplyEnabled
+  },
+  {
+    key: '20260711_014_quality_cache_tables',
+    description: 'Create PBXPuls quality cache tables',
+    statements: [
+      `CREATE TABLE IF NOT EXISTS quality_current (
+        ext VARCHAR(191) NOT NULL PRIMARY KEY, name VARCHAR(191) NULL,
+        device_role VARCHAR(32) NOT NULL DEFAULT 'extension', type_label VARCHAR(100) NULL,
+        tech VARCHAR(32) NULL, ip VARCHAR(191) NULL, port INT NULL, status VARCHAR(64) NULL,
+        quality_status VARCHAR(64) NULL, latency_ms DECIMAL(10,2) NOT NULL DEFAULT 0,
+        jitter_ms DECIMAL(10,2) NOT NULL DEFAULT 0, rtp_loss DECIMAL(10,4) NOT NULL DEFAULT 0,
+        mos DECIMAL(5,2) NOT NULL DEFAULT 0, pjsip_status VARCHAR(64) NULL,
+        monitor_mode VARCHAR(64) NULL, options_disabled TINYINT(1) NOT NULL DEFAULT 0,
+        ping_ok TINYINT(1) NOT NULL DEFAULT 0, ping_ms DECIMAL(10,2) NOT NULL DEFAULT 0,
+        operational_status VARCHAR(255) NULL, user_agent VARCHAR(255) NULL,
+        manufacturer VARCHAR(100) NULL, model VARCHAR(191) NULL,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_quality_current_role (device_role), INDEX idx_quality_current_updated (updated_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS quality_history (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, ext VARCHAR(191) NOT NULL, name VARCHAR(191) NULL,
+        status VARCHAR(64) NULL, quality_status VARCHAR(64) NULL,
+        latency_ms DECIMAL(10,2) NOT NULL DEFAULT 0, jitter_ms DECIMAL(10,2) NOT NULL DEFAULT 0,
+        rtp_loss DECIMAL(10,4) NOT NULL DEFAULT 0, mos DECIMAL(5,2) NOT NULL DEFAULT 0,
+        sampled_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_quality_history_ext_time (ext, sampled_at), INDEX idx_quality_history_time (sampled_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+    ]
   }
 ];
 
 async function createPBXPulsConnection(): Promise<Connection> {
-  return mysql.createConnection({
-    host: process.env.PBXPULS_DB_HOST || '127.0.0.1',
-    port: Number(process.env.PBXPULS_DB_PORT || 3306),
-    user: process.env.PBXPULS_DB_USER || 'pbxpuls',
-    password: process.env.PBXPULS_DB_PASS || '',
-    database: process.env.PBXPULS_DB_NAME || 'pbxpuls',
-    connectTimeout: 5000,
-    dateStrings: true
-  });
+  if (!getPBXPulsDbConfig().configured) throw new Error('PBXPuls DB access denied / not configured');
+  return mysql.createConnection(getPBXPulsDbConnectionOptions());
 }
 
 export async function runPBXPulsMigrations(): Promise<void> {
