@@ -462,6 +462,7 @@ export default function QualityTab({ token }: Props) {
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
   const [cacheWarning, setCacheWarning] = useState<string>('');
+  const [cliWarning, setCliWarning] = useState<string>('');
   const [isPartial, setIsPartial] = useState<boolean>(false);
   const [historyPeriod, setHistoryPeriod] = useState<'1h' | '24h' | '7d' | '30d'>('1h');
 
@@ -502,6 +503,9 @@ export default function QualityTab({ token }: Props) {
         setSelectedExt(current => current || live.devices[0]?.ext || '');
       }
       setIsPartial(Boolean(live.partial));
+      setCliWarning(live.asteriskCliAvailable === false
+        ? 'Asterisk CLI не найден. Укажите ASTERISK_BIN=/usr/sbin/asterisk или проверьте установку Asterisk.'
+        : '');
       setCacheWarning(live.qualityCacheAvailable === false ? 'Кэш качества связи недоступен: PBXPuls DB не настроена' : '');
       setLastUpdated(new Date().toISOString());
     } catch (err: any) {
@@ -977,10 +981,10 @@ export default function QualityTab({ token }: Props) {
         </div>
       )}
 
-      {(cacheWarning || isPartial) && (
+      {(cacheWarning || cliWarning || isPartial) && (
         <div className="p-4 rounded-xl bg-amber-50 text-amber-800 text-xs font-bold border border-amber-200 flex items-center gap-2">
           <AlertTriangle className="h-4 w-4 shrink-0" />
-          <span>{cacheWarning}{cacheWarning && isPartial ? ' · ' : ''}{isPartial ? 'Показаны частичные или кэшированные данные; live-проверка ещё обновляется.' : ''}</span>
+          <span>{[cacheWarning, cliWarning, isPartial ? 'Показаны частичные или кэшированные данные; live-проверка ещё обновляется.' : ''].filter(Boolean).join(' · ')}</span>
         </div>
       )}
 

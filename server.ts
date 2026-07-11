@@ -25,6 +25,7 @@ import { CallEntry, MissedCallStatus, AppSettings, DashboardStats, UserRole, Web
 import os from 'os';
 import { registerManagementRoutes } from './server-management.js';
 import { registerAiPbxAdminRoutes } from './server/aiPbxAdmin.js';
+import { resolveAsteriskCli, runAsteriskCliCommand } from './server/asteriskCli.js';
 import { runPBXPulsMigrations } from './server/pbxpulsMigrations.js';
 import { registerPBXPulsSqlStatusRoutes } from './server/pbxpulsSqlStatus.js';
 import { authenticatePBXPulsSqlUser, compareLegacyUserWithSql, getAuthStorageMode, getPBXPulsUsers } from './server/pbxpulsAuthDb.js';
@@ -3426,18 +3427,6 @@ const parseDirectoryPayload = (text: string, format: string, settings?: AppSetti
   }
   return parseDirectoryText(text, settings);
 };
-
-function runAsteriskCliCommand(command: string, timeoutMs = 15000): Promise<{ success: boolean; message: string }> {
-  return new Promise((resolve) => {
-    execFile('asterisk', ['-rx', command], { timeout: timeoutMs, maxBuffer: 1024 * 1024 * 5 }, (error, stdout, stderr) => {
-      if (error) {
-        resolve({ success: false, message: stderr || error.message || String(error) });
-        return;
-      }
-      resolve({ success: true, message: stdout || '' });
-    });
-  });
-}
 
 function runAMICommand(settings: AppSettings, command: string): Promise<{ success: boolean; message: string }> {
   return new Promise((resolve) => {
@@ -17000,8 +16989,8 @@ function initQualityFiles() {
   }
 }
 
-async function getRealVoIPQualityDevices(settings: AppSettings): Promise<any[]> {
-  const list = await getRealVoIPDevices(settings);
+async function getRealVoIPQualityDevices(settings: AppSettings, warnings?: string[]): Promise<any[]> {
+  const list = await getRealVoIPDevices(settings, warnings);
   return list.map(dev => {
     let latency = dev.rtt || 0;
     if (dev.status === 'Online' && latency === 0) {
@@ -17322,6 +17311,11 @@ app.get('/api/quality/cache', requireAuth(), async (req, res) => {
 
 app.get('/api/quality/devices', requireAuth(), async (req, res) => {
   try {
+    const cliDiagnostics = resolveAsteriskCli();
+    const cliWarnings: string[] = [];
+    if (!cliDiagnostics.asteriskCliAvailable) {
+      cliWarnings.push('Asterisk CLI не найден. Укажите ASTERISK_BIN=/usr/sbin/asterisk или проверьте установку Asterisk.');
+    }
     const localDb = await readLocalDb();
     const settings = localDb.settings;
     let list = [];
@@ -17336,7 +17330,7 @@ app.get('/api/quality/devices', requireAuth(), async (req, res) => {
       });
     } else {
       const liveResult = await Promise.race([
-        getRealVoIPQualityDevices(settings).then(devices => ({ devices, partial: false, reason: null })),
+        getRealVoIPQualityDevices(settings, cliWarnings).then(devices => ({ devices, partial: false, reason: null })),
         new Promise<{ devices: any[]; partial: boolean; reason: string }>(resolve => setTimeout(
           () => resolve({ devices: [], partial: true, reason: 'Live scan timed out; cached/partial data returned' }),
           8_000
@@ -17354,7 +17348,8 @@ app.get('/api/quality/devices', requireAuth(), async (req, res) => {
             mos: Number(row.mos || 0), lastCheck: row.updated_at || null
           }));
         } catch {}
-        return res.json({ success: true, count: list.length, devices: list, partial: true, reason: liveResult.reason, ...getPBXPulsDbRuntimeStatus() });
+        cliWarnings.push(liveResult.reason);
+        return res.json({ success: true, count: list.length, devices: list, partial: true, reason: liveResult.reason, warnings: cliWarnings, ...cliDiagnostics, ...getPBXPulsDbRuntimeStatus() });
       }
     }
 
@@ -17362,7 +17357,7 @@ app.get('/api/quality/devices', requireAuth(), async (req, res) => {
       await saveQualityCurrentToPBXPulsDb(list);
     } catch {}
 
-    res.json({ success: true, count: list.length, devices: list, partial: false, ...getPBXPulsDbRuntimeStatus() });
+    res.json({ success: true, count: list.length, devices: list, partial: cliWarnings.length > 0, warnings: cliWarnings, ...cliDiagnostics, ...getPBXPulsDbRuntimeStatus() });
   } catch (e: any) {
     res.status(500).json({ success: false, error: e.message || String(e) });
   }
@@ -18518,7 +18513,7 @@ function guessManufacturerAndModel(ua: string) {
   return { manufacturer: 'Generic', model: 'VoIP Terminal' };
 }
 
-async function getRealVoIPDevices(settings: AppSettings): Promise<any[]> {
+async function getRealVoIPDevices(settings: AppSettings, warnings?: string[]): Promise<any[]> {
   const dbExtensions: { ext: string; name: string; tech: string }[] = [];
   try {
     const devRows = await queryFreePBXCDR(settings, false, "SELECT id, tech, description FROM asterisk.devices", []);
@@ -18570,6 +18565,7 @@ async function getRealVoIPDevices(settings: AppSettings): Promise<any[]> {
     } catch (e) {}
 
     let pjsipRes = await runAsteriskCliCommand('pjsip show contacts');
+    if (pjsipRes.timedOut && pjsipRes.warning) warnings?.push(pjsipRes.warning);
     if (!pjsipRes.success || !pjsipRes.message) {
       pjsipRes = await runAMICommand(settings, 'pjsip show contacts');
     }
@@ -18616,7 +18612,13 @@ async function getRealVoIPDevices(settings: AppSettings): Promise<any[]> {
     console.error("Failed to query PJSIP contacts:", e);
   }
 
-  try {    let sipRes = await runAsteriskCliCommand('sip show peers');
+  try {
+    let sipRes = await runAsteriskCliCommand('sip show peers');
+    const sipCliMessage = sipRes.message;
+    if (sipRes.timedOut && sipRes.warning) warnings?.push(sipRes.warning);
+    if (!sipRes.success && /no such command|not found/i.test(sipCliMessage)) {
+      warnings?.push('Команда sip show peers недоступна; используется PJSIP-only режим.');
+    }
     if (!sipRes.success || !sipRes.message) {
       sipRes = await runAMICommand(settings, 'sip show peers');
     }

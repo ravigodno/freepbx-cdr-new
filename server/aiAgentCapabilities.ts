@@ -1,4 +1,5 @@
 import { execFile } from 'child_process';
+import { runAsteriskCliCommand } from './asteriskCli.js';
 
 export type AiAgentCapabilityId =
   | 'diagnose_trunk'
@@ -143,6 +144,16 @@ export async function executeCapability(capability: AiAgentCapabilityId): Promis
 }
 
 export function executeReadOnlyCommand(command: AiCapabilityCommand): Promise<AiCapabilityResult> {
+  if (command.cmd === 'asterisk' && command.args[0] === '-rx' && command.args[1]) {
+    return runAsteriskCliCommand(command.args[1], command.timeoutMs || COMMAND_TIMEOUT_MS).then(result => ({
+      title: command.title,
+      command: formatCommand(command),
+      ok: result.success,
+      stdout: maskSensitiveText(result.success ? result.message : '').slice(0, MAX_STDOUT),
+      stderr: maskSensitiveText(result.success ? '' : result.message).slice(0, MAX_STDERR),
+      error: result.success ? null : maskSensitiveText(result.warning || result.message).slice(0, 1200)
+    }));
+  }
   return new Promise((resolve) => {
     execFile(command.cmd, command.args, {
       timeout: command.timeoutMs || COMMAND_TIMEOUT_MS,
