@@ -9,7 +9,8 @@
     "start": "node dist/server.cjs",
     "lint": "tsc --noEmit",
     "pbxpuls:db:check": "tsx scripts/pbxpuls-db.ts --check",
-    "pbxpuls:db:setup": "tsx scripts/pbxpuls-db.ts --setup"
+    "pbxpuls:db:setup": "tsx scripts/pbxpuls-db.ts --setup",
+    "pbxpuls:monitoring:check": "tsx scripts/pbxpuls-monitoring-check.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

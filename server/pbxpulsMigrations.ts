@@ -5,6 +5,7 @@ import { writePBXPulsSystemEvent } from './pbxpulsEvents.js';
 import { buildLegacySettingsSeedRows } from './pbxpulsLegacySettings.js';
 import { DIRECTORY_SQL_SCHEMA_STATEMENTS, seedLegacyDirectory } from './pbxpulsDirectorySeed.js';
 import { getPBXPulsDbConfig, getPBXPulsDbConnectionOptions } from './pbxpulsDbConfig.js';
+import { importLegacyMonitoringData } from './monitoringSqlStorage.js';
 
 interface Migration {
   key: string;
@@ -110,6 +111,11 @@ const DIRECTORY_SQL_SYNC_APPLY_ENABLED_SETTING = [
   'boolean',
   'directory',
   'Controls guarded apply for PBXPuls Directory SQL sync from legacy'
+] as const;
+
+const MONITORING_STORAGE_MODE_SETTING = [
+  'monitoring.storage_mode', 'dual', 'string', 'monitoring',
+  'Controls monitoring storage: legacy, dual or sql'
 ] as const;
 
 const MIGRATIONS: Migration[] = [
@@ -316,8 +322,77 @@ const MIGRATIONS: Migration[] = [
         INDEX idx_quality_history_ext_time (ext, sampled_at), INDEX idx_quality_history_time (sampled_at)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
     ]
+  },
+  {
+    key: '20260711_015_monitoring_sql_storage',
+    description: 'Create PBXPuls monitoring SQL storage',
+    statements: [
+      `CREATE TABLE IF NOT EXISTS monitoring_health_history (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, sampled_at DATETIME NOT NULL, boot_id VARCHAR(191) NOT NULL DEFAULT '',
+        uptime_seconds DECIMAL(20,2) NULL, load1 DECIMAL(10,3) NULL, load5 DECIMAL(10,3) NULL, load15 DECIMAL(10,3) NULL,
+        cpu_percent DECIMAL(10,2) NULL, memory_percent DECIMAL(10,2) NULL, swap_percent DECIMAL(10,2) NULL,
+        disk_root_percent DECIMAL(10,2) NULL, internet_google_avg_ms DECIMAL(12,3) NULL,
+        internet_google_loss DECIMAL(10,3) NULL, internet_yandex_avg_ms DECIMAL(12,3) NULL,
+        internet_yandex_loss DECIMAL(10,3) NULL, network_iface VARCHAR(191) NULL,
+        network_rx_kbps DECIMAL(20,3) NULL, network_tx_kbps DECIMAL(20,3) NULL,
+        network_rx_bytes BIGINT NULL, network_tx_bytes BIGINT NULL,
+        asterisk_active_channels INT NULL, asterisk_active_calls INT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_monitoring_health_time_boot (sampled_at, boot_id), INDEX idx_monitoring_health_time (sampled_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS monitoring_quality_alerts (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, alert_time DATETIME NOT NULL, ext VARCHAR(191) NOT NULL DEFAULT '',
+        name VARCHAR(191) NULL, type VARCHAR(191) NOT NULL, severity VARCHAR(64) NULL, message TEXT NULL,
+        value DECIMAL(20,4) NULL, threshold_value DECIMAL(20,4) NULL, raw_json LONGTEXT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_monitoring_quality_alert (alert_time, ext, type), INDEX idx_monitoring_quality_alert_time (alert_time),
+        INDEX idx_monitoring_quality_alert_ext (ext)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS monitoring_devices_history (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, device_id VARCHAR(191) NOT NULL, sampled_at DATETIME NOT NULL,
+        status VARCHAR(64) NULL, ip VARCHAR(191) NULL, port INT NULL, tech VARCHAR(32) NULL,
+        user_agent VARCHAR(255) NULL, manufacturer VARCHAR(100) NULL, model VARCHAR(191) NULL, raw_json LONGTEXT NULL,
+        UNIQUE KEY uniq_monitoring_device_history (device_id, sampled_at), INDEX idx_monitoring_device_history_time (sampled_at),
+        INDEX idx_monitoring_device_history_device (device_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS monitoring_devices_alerts (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, alert_time DATETIME NOT NULL, device_id VARCHAR(191) NOT NULL DEFAULT '',
+        type VARCHAR(191) NOT NULL, severity VARCHAR(64) NULL, message TEXT NULL, raw_json LONGTEXT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_monitoring_device_alert (alert_time, device_id, type), INDEX idx_monitoring_device_alert_time (alert_time),
+        INDEX idx_monitoring_device_alert_device (device_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS monitoring_devices_conflicts (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, conflict_key VARCHAR(191) NOT NULL,
+        first_seen_at DATETIME NULL, last_seen_at DATETIME NULL, status VARCHAR(64) NULL, raw_json LONGTEXT NULL,
+        UNIQUE KEY uniq_monitoring_conflict_key (conflict_key), INDEX idx_monitoring_conflict_key (conflict_key)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS monitoring_devices_map (
+        device_id VARCHAR(191) NOT NULL PRIMARY KEY, name VARCHAR(191) NULL, ip VARCHAR(191) NULL, port INT NULL,
+        tech VARCHAR(32) NULL, manufacturer VARCHAR(100) NULL, model VARCHAR(191) NULL, user_agent VARCHAR(255) NULL,
+        raw_json LONGTEXT NULL, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+    ],
+    seed: async connection => {
+      await ensureQualityHistoryUniqueKey(connection);
+      await seedSetting(connection, MONITORING_STORAGE_MODE_SETTING);
+      await importLegacyMonitoringData(connection);
+    }
   }
 ];
+
+async function ensureQualityHistoryUniqueKey(connection: Connection): Promise<void> {
+  const [rows] = await connection.query("SHOW INDEX FROM quality_history WHERE Key_name = 'uniq_quality_history_ext_time'");
+  if (Array.isArray(rows) && rows.length) return;
+  await connection.query(`DELETE q1 FROM quality_history q1 INNER JOIN quality_history q2
+    ON q1.ext = q2.ext AND q1.sampled_at = q2.sampled_at AND q1.id > q2.id`);
+  await connection.query('ALTER TABLE quality_history ADD UNIQUE KEY uniq_quality_history_ext_time (ext, sampled_at)');
+}
+
+async function seedSetting(connection: Connection, row: readonly unknown[]): Promise<void> {
+  await connection.execute(`INSERT IGNORE INTO settings
+    (setting_key, setting_value, value_type, category, description) VALUES (?, ?, ?, ?, ?)`, row as any[]);
+}
 
 async function createPBXPulsConnection(): Promise<Connection> {
   if (!getPBXPulsDbConfig().configured) throw new Error('PBXPuls DB access denied / not configured');

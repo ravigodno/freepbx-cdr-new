@@ -465,6 +465,7 @@ export default function QualityTab({ token }: Props) {
   const [cliWarning, setCliWarning] = useState<string>('');
   const [isPartial, setIsPartial] = useState<boolean>(false);
   const [historyPeriod, setHistoryPeriod] = useState<'1h' | '24h' | '7d' | '30d'>('1h');
+  const [storageInfo, setStorageInfo] = useState<{ source: string; count: number; last: string | null }>({ source: '—', count: 0, last: null });
 
   // Terminal state
   const [terminalOutput, setTerminalOutput] = useState<string>('Выберите устройство и инструмент диагностики для запуска...');
@@ -483,6 +484,7 @@ export default function QualityTab({ token }: Props) {
       if (Array.isArray(cached.alerts)) setAlerts(cached.alerts);
       if (Array.isArray(cached.history)) setAllHistory(cached.history);
       if (cached.lastUpdated) setLastUpdated(cached.lastUpdated);
+      setStorageInfo({ source: String(cached.source || '—'), count: Number(cached.historyCount ?? cached.history?.length ?? 0), last: cached.lastHistoryPoint || null });
       setCacheWarning(cached.qualityCacheAvailable === false ? 'Кэш качества связи недоступен: PBXPuls DB не настроена' : '');
     } catch (err: any) {
       if (err?.name !== 'AbortError') setError('Не удалось загрузить сохранённые данные телеметрии');
@@ -987,6 +989,12 @@ export default function QualityTab({ token }: Props) {
           <span>{[cacheWarning, cliWarning, isPartial ? 'Показаны частичные или кэшированные данные; live-проверка ещё обновляется.' : ''].filter(Boolean).join(' · ')}</span>
         </div>
       )}
+
+      <div className="flex flex-wrap gap-x-5 gap-y-1 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-[11px] font-semibold text-slate-600 dark:border-slate-700 dark:bg-slate-900/30 dark:text-slate-300">
+        <span>Источник данных: {storageInfo.source === 'sql' ? 'SQL / Dual write' : storageInfo.source === 'legacy-fallback' ? 'Legacy fallback' : storageInfo.source}</span>
+        <span>Точек истории: {storageInfo.count}</span>
+        <span>Последняя точка: {storageInfo.last ? new Date(storageInfo.last).toLocaleString('ru-RU') : '—'}</span>
+      </div>
 
       {(isLoading && !devices.length || isRefreshing) && (
         <div className="flex flex-wrap items-center justify-end gap-3 text-[11px] font-bold text-slate-500">

@@ -82,6 +82,13 @@ import { findBlindTransferTargetFromCel, getExplicitBlindTransferTarget } from '
 import { buildReportHourlyTimeline, formatReportHourBucket } from './server/reportDynamicsBuckets.js';
 import { calculateCpuPercent, parseProcStatCpuSample, type ProcStatCpuSample } from './server/healthCpu.js';
 import { classifyMissedCallResolution, type MissedCallResolutionStatus } from './server/missedCallResolution.js';
+import {
+  appendDevicesAlertsToSql, appendDevicesHistoryToSql, appendHealthHistoryToSql, appendQualityAlertsToSql,
+  appendQualityHistoryToSql, getMonitoringStorageMode, getMonitoringStorageStatus, readDevicesAlertsFromSql,
+  readDevicesConflictsFromSql, readDevicesHistoryFromSql, readDevicesMapFromSql, readHealthHistoryFromSql,
+  readLegacyMonitoringFile, readQualityAlertsFromSql, readQualityHistoryFromSql, readWithMonitoringFallback,
+  setMonitoringStorageMode, upsertDevicesConflictsToSql, upsertDevicesMapToSql
+} from './server/monitoringSqlStorage.js';
 
 // Load environment variables
 dotenv.config();
@@ -7405,6 +7412,20 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: '25mb' }));
 
 registerPBXPulsSqlStatusRoutes(app, requireAuth);
+
+app.get('/api/pbxpuls/monitoring-storage-mode', requireAuth(['su', 'admin']), async (_req, res) => {
+  res.json({ success: true, mode: await getMonitoringStorageMode() });
+});
+app.post('/api/pbxpuls/monitoring-storage-mode', requireAuth(['su', 'admin']), async (req, res) => {
+  const mode = String(req.body?.mode || '');
+  if (!['legacy', 'dual', 'sql'].includes(mode)) return res.status(400).json({ success: false, error: 'mode must be legacy, dual or sql' });
+  const saved = await setMonitoringStorageMode(mode as any);
+  res.status(saved ? 200 : 503).json({ success: saved, mode });
+});
+app.get('/api/pbxpuls/monitoring-storage-status', requireAuth(['su', 'admin']), async (_req, res) => {
+  try { res.json({ success: true, ...(await getMonitoringStorageStatus()) }); }
+  catch (e: any) { res.status(503).json({ success: false, error: sanitizePBXPulsDbError(e) }); }
+});
 
 app.get('/api/pbxpuls/settings-migration-preview', requireAuth(['su', 'admin']), async (_req, res) => {
   try {
@@ -15620,6 +15641,11 @@ async function collectHealthHistoryPoint() {
 async function updateHealthHistory() {
   try {
     const point = await collectHealthHistoryPoint();
+    const storageMode = await getMonitoringStorageMode();
+    if (storageMode !== 'legacy') {
+      try { await appendHealthHistoryToSql(point); } catch (e) { console.warn('[HEALTH_HISTORY] SQL write failed, legacy write retained'); }
+    }
+    if (storageMode === 'sql') return;
     const history = readHealthHistory();
 
     history.push(point);
@@ -15646,9 +15672,9 @@ setTimeout(() => {
 
 app.get('/api/health-report/history', requireAuth(['su', 'admin']), async (req, res) => {
   try {
-    let history = readHealthHistory();
-
     const period = String(req.query.period || '24h');
+    const stored = await readWithMonitoringFallback(() => readHealthHistoryFromSql(period), readHealthHistory);
+    let history = stored.data;
     const now = Date.now();
 
     let periodMs = 24 * 60 * 60 * 1000;
@@ -15680,6 +15706,7 @@ app.get('/api/health-report/history', requireAuth(['su', 'admin']), async (req, 
       success: true,
       period,
       count: history.length,
+      source: stored.source,
       reboots,
       history
     });
@@ -17242,6 +17269,13 @@ setInterval(async () => {
       await saveQualityCurrentToPBXPulsDb(currentQualityRows);
     } catch {}
 
+    const storageMode = await getMonitoringStorageMode();
+    if (storageMode !== 'legacy') {
+      try { await appendQualityHistoryToSql(history.slice(-currentQualityRows.length)); await appendQualityAlertsToSql(alerts); }
+      catch { console.warn('[VOIP QUALITY] SQL write failed, legacy write retained'); }
+    }
+    if (storageMode === 'sql') return;
+
     // Keep quality history compact while SQL storage is being introduced.
     const qualityHistoryRetentionDays = Math.max(30, Number(settings.qualityHistoryRetentionDays || 30));
     const qualityHistoryMaxPoints = Math.max(50000, Number(settings.qualityHistoryMaxPoints || 50000));
@@ -17277,8 +17311,10 @@ app.get('/api/quality/cache', requireAuth(), async (req, res) => {
   try {
     const period = String(req.query.period || '1h').trim();
     const ext = String(req.query.ext || 'all').trim();
-    const history = filterAndSampleQualityHistory(readQualityJsonFile(QUALITY_HISTORY_FILE), { ext, period });
-    const alerts = readQualityJsonFile(QUALITY_ALERTS_FILE);
+    const historyStored = await readWithMonitoringFallback(() => readQualityHistoryFromSql(period, ext), () => filterAndSampleQualityHistory(readQualityJsonFile(QUALITY_HISTORY_FILE), { ext, period }));
+    const alertsStored = await readWithMonitoringFallback(readQualityAlertsFromSql, () => readQualityJsonFile(QUALITY_ALERTS_FILE));
+    const history = historyStored.data;
+    const alerts = alertsStored.data;
     let devices: any[] = [];
 
     try {
@@ -17303,7 +17339,7 @@ app.get('/api/quality/cache', requireAuth(), async (req, res) => {
     } catch {}
 
     const dbStatus = getPBXPulsDbRuntimeStatus();
-    res.json({ success: true, cached: true, devices, history, alerts, lastUpdated: devices[0]?.lastCheck || history[history.length - 1]?.timestamp || null, period, ext, ...dbStatus });
+    res.json({ success: true, cached: true, devices, history, alerts, source: historyStored.source, historyCount: history.length, lastHistoryPoint: history[history.length - 1]?.timestamp || null, lastUpdated: devices[0]?.lastCheck || history[history.length - 1]?.timestamp || null, period, ext, ...dbStatus });
   } catch (e: any) {
     res.status(500).json({ success: false, error: e.message || String(e) });
   }
@@ -17365,14 +17401,10 @@ app.get('/api/quality/devices', requireAuth(), async (req, res) => {
 
 app.get('/api/quality/history', requireAuth(), async (req, res) => {
   try {
-    let history: any[] = readQualityJsonFile(QUALITY_HISTORY_FILE);
-
     const ext = String(req.query.ext || '').trim();
-    if (ext && ext !== 'all') {
-      history = history.filter((pt: any) => String(pt.ext) === ext);
-    }
-
     const period = String(req.query.period || req.query.range || '').trim();
+    const stored = await readWithMonitoringFallback(() => readQualityHistoryFromSql(period || '30d', ext || 'all'), () => readQualityJsonFile(QUALITY_HISTORY_FILE));
+    let history: any[] = stored.data;
 
     const from = String(req.query.from || '').trim();
     const to = String(req.query.to || '').trim();
@@ -17385,6 +17417,7 @@ app.get('/api/quality/history', requireAuth(), async (req, res) => {
     res.json({
       success: true,
       count: history.length,
+      source: stored.source,
       filters: {
         ext: ext || 'all',
         period: period || null,
@@ -17402,16 +17435,14 @@ app.get('/api/quality/alerts', requireAuth(), async (req, res) => {
   try {
     const localDb = await readLocalDb();
     const settings = localDb.settings;
-    let alerts = [];
-    if (fs.existsSync(QUALITY_ALERTS_FILE)) {
-      alerts = JSON.parse(fs.readFileSync(QUALITY_ALERTS_FILE, 'utf8') || '[]');
-    }
+    const stored = await readWithMonitoringFallback(readQualityAlertsFromSql, () => readLegacyMonitoringFile('qualityAlerts'));
+    let alerts = stored.data;
     if (!isDemoMode(settings)) {
       const realDevices = await getRealVoIPDevices(settings);
       const realExts = new Set(realDevices.map(d => d.ext));
       alerts = alerts.filter((al: any) => realExts.has(al.ext));
     }
-    res.json({ success: true, count: alerts.length, alerts });
+    res.json({ success: true, count: alerts.length, alerts, source: stored.source });
   } catch (e: any) {
     res.status(500).json({ success: false, error: e.message || String(e) });
   }
@@ -17445,11 +17476,8 @@ app.get('/api/quality/device/:ext', requireAuth(), async (req, res) => {
           mos: dev.mos || 0,
           status: dev.status || "Offline"
         };
-    let history = [];
-    if (fs.existsSync(QUALITY_HISTORY_FILE)) {
-      const allHist = JSON.parse(fs.readFileSync(QUALITY_HISTORY_FILE, 'utf8') || '[]');
-      history = allHist.filter((pt: any) => pt.ext === ext);
-    }
+    const stored = await readWithMonitoringFallback(() => readQualityHistoryFromSql('30d', ext), () => readLegacyMonitoringFile('qualityHistory').filter((pt: any) => pt.ext === ext));
+    const history = stored.data;
     res.json({
       success: true,
       device: {
@@ -18884,12 +18912,22 @@ app.get('/api/devices-map', requireAuth(), async (req, res) => {
         history = history.slice(history.length - 100);
       }
       fs.writeFileSync(DEVICES_HISTORY_FILE, JSON.stringify(history, null, 2), 'utf8');
+
+      const storageMode = await getMonitoringStorageMode();
+      if (storageMode !== 'legacy') {
+        try {
+          await upsertDevicesMapToSql(list);
+          await appendDevicesHistoryToSql(history);
+          await appendDevicesAlertsToSql(alerts);
+          await upsertDevicesConflictsToSql(conflicts);
+        } catch { console.warn('[DEVICES_MAP] SQL write failed, legacy data retained'); }
+      }
     } else {
       initDevicesMapFiles();
     }
 
-    const data = JSON.parse(fs.readFileSync(DEVICES_MAP_FILE, 'utf8') || '[]');
-    res.json({ success: true, count: data.length, devices: data });
+    const stored = await readWithMonitoringFallback(readDevicesMapFromSql, () => readLegacyMonitoringFile('devicesMap'));
+    res.json({ success: true, count: stored.data.length, devices: stored.data, source: stored.source });
   } catch (e: any) {
     res.status(500).json({ success: false, error: e.message || String(e) });
   }
@@ -18901,8 +18939,8 @@ app.get('/api/devices-map/history', requireAuth(), async (req, res) => {
     if (isDemoMode(localDb.settings)) {
       initDevicesMapFiles();
     }
-    const data = JSON.parse(fs.readFileSync(DEVICES_HISTORY_FILE, 'utf8') || '[]');
-    res.json({ success: true, count: data.length, history: data });
+    const stored = await readWithMonitoringFallback(readDevicesHistoryFromSql, () => readLegacyMonitoringFile('devicesHistory'));
+    res.json({ success: true, count: stored.data.length, history: stored.data, source: stored.source });
   } catch (e: any) {
     res.status(500).json({ success: false, error: e.message || String(e) });
   }
@@ -18914,8 +18952,8 @@ app.get('/api/devices-map/conflicts', requireAuth(), async (req, res) => {
     if (isDemoMode(localDb.settings)) {
       initDevicesMapFiles();
     }
-    const data = JSON.parse(fs.readFileSync(DEVICES_CONFLICTS_FILE, 'utf8') || '[]');
-    res.json({ success: true, count: data.length, conflicts: data });
+    const stored = await readWithMonitoringFallback(readDevicesConflictsFromSql, () => readLegacyMonitoringFile('devicesConflicts'));
+    res.json({ success: true, count: stored.data.length, conflicts: stored.data, source: stored.source });
   } catch (e: any) {
     res.status(500).json({ success: false, error: e.message || String(e) });
   }
@@ -18927,24 +18965,24 @@ app.get('/api/devices-map/alerts', requireAuth(), async (req, res) => {
     if (isDemoMode(localDb.settings)) {
       initDevicesMapFiles();
     }
-    const data = JSON.parse(fs.readFileSync(DEVICES_ALERTS_FILE, 'utf8') || '[]');
-    res.json({ success: true, count: data.length, alerts: data });
+    const stored = await readWithMonitoringFallback(readDevicesAlertsFromSql, () => readLegacyMonitoringFile('devicesAlerts'));
+    res.json({ success: true, count: stored.data.length, alerts: stored.data, source: stored.source });
   } catch (e: any) {
     res.status(500).json({ success: false, error: e.message || String(e) });
   }
 });
 
-app.get('/api/devices-map/device/:ext', requireAuth(), (req, res) => {
+app.get('/api/devices-map/device/:ext', requireAuth(), async (req, res) => {
   try {
     initDevicesMapFiles();
     const ext = String(req.params.ext);
-    const devices = JSON.parse(fs.readFileSync(DEVICES_MAP_FILE, 'utf8') || '[]');
+    const devices = (await readWithMonitoringFallback(readDevicesMapFromSql, () => readLegacyMonitoringFile('devicesMap'))).data;
     const dev = devices.find((d: any) => d.ext === ext);
     if (!dev) {
       res.status(404).json({ success: false, error: "Устройство не найдено" });
       return;
     }
-    const histories = JSON.parse(fs.readFileSync(DEVICES_HISTORY_FILE, 'utf8') || '[]');
+    const histories = (await readWithMonitoringFallback(readDevicesHistoryFromSql, () => readLegacyMonitoringFile('devicesHistory'))).data;
     const dHistory = histories.filter((h: any) => h.ext === ext);
     res.json({ success: true, device: dev, history: dHistory });
   } catch (e: any) {

@@ -10,7 +10,9 @@ const setup = process.argv.includes('--setup');
 const requiredTables = [
   'schema_migrations', 'settings', 'users', 'roles', 'permissions', 'user_roles', 'role_permissions',
   'tools', 'audit_log', 'system_events', 'directory_contacts', 'directory_contact_metadata',
-  'directory_custom_fields', 'quality_current', 'quality_history'
+  'directory_custom_fields', 'quality_current', 'quality_history', 'monitoring_health_history',
+  'monitoring_quality_alerts', 'monitoring_devices_history', 'monitoring_devices_alerts',
+  'monitoring_devices_conflicts', 'monitoring_devices_map'
 ];
 
 function parseFreePBXConfig(): Record<string, string> {
