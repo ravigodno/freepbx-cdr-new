@@ -33,6 +33,20 @@ type HealthReport = {
   services?: any[];
   asterisk?: any;
   error?: string;
+  source?: 'cache' | 'live';
+};
+
+type DowntimeInterval = {
+  start: string;
+  end: string;
+  durationMs: number;
+  reason: string;
+};
+
+type RebootEvent = {
+  timestamp: string;
+  detectedAt?: string;
+  uptimeAfterSeconds?: number;
 };
 
 type HealthHistoryPoint = {
@@ -256,18 +270,197 @@ const MiniHealthChart = ({
   );
 };
 
+const formatDuration = (durationMs: number) => {
+  const totalMinutes = Math.max(0, Math.round(durationMs / 60000));
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const minutes = totalMinutes % 60;
+  return [days ? `${days} д` : '', hours ? `${hours} ч` : '', `${minutes} мин`].filter(Boolean).join(' ');
+};
+
+const UptimeChart = ({
+  data,
+  downtimeIntervals,
+  reboots
+}: {
+  data: any[];
+  downtimeIntervals: DowntimeInterval[];
+  reboots: RebootEvent[];
+}) => {
+  const width = 760;
+  const height = 210;
+  const pad = { left: 38, right: 18, top: 16, bottom: 28 };
+  const chartW = width - pad.left - pad.right;
+  const chartH = height - pad.top - pad.bottom;
+
+  if (!data.length) {
+    return (
+      <div className="h-52 flex items-center justify-center text-xs font-bold text-slate-400 bg-slate-50 dark:bg-slate-800/50 rounded-xl">
+        История ещё накапливается. Подождите 2–3 минуты.
+      </div>
+    );
+  }
+
+  const times = data.map(row => new Date(row.timestamp).getTime());
+  const minTime = Math.min(...times);
+  const maxTime = Math.max(...times);
+  const maxUptime = Math.max(...data.map(row => Number(row.uptimeHours || 0)), 1);
+  const xFor = (time: number) => pad.left + ((time - minTime) / Math.max(1, maxTime - minTime)) * chartW;
+  const yFor = (value: number) => pad.top + chartH - (Math.max(0, value) / maxUptime) * chartH;
+  const downtimeStarts = new Set(downtimeIntervals.map(item => `${item.start}|${item.end}`));
+  const rebootTimes = new Set(reboots.map(item => item.timestamp));
+  const segments: string[] = [];
+  let path = '';
+
+  data.forEach((row, index) => {
+    const point = `${xFor(times[index]).toFixed(1)} ${yFor(Number(row.uptimeHours || 0)).toFixed(1)}`;
+    const previous = data[index - 1];
+    const shouldBreak = index > 0 && (
+      downtimeStarts.has(`${previous.timestamp}|${row.timestamp}`) || rebootTimes.has(row.timestamp)
+    );
+    if (!path || shouldBreak) {
+      if (path) segments.push(path);
+      path = `M ${point}`;
+    } else {
+      path += ` L ${point}`;
+    }
+  });
+  if (path) segments.push(path);
+
+  return (
+    <div>
+      <div className="relative h-56 w-full overflow-hidden rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-700">
+        <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full">
+          <line x1={pad.left} y1={pad.top} x2={pad.left} y2={height - pad.bottom} stroke="currentColor" className="text-slate-200 dark:text-slate-700" />
+          <line x1={pad.left} y1={height - pad.bottom} x2={width - pad.right} y2={height - pad.bottom} stroke="currentColor" className="text-slate-200 dark:text-slate-700" />
+          {[0.25, 0.5, 0.75].map(k => (
+            <line key={k} x1={pad.left} x2={width - pad.right} y1={pad.top + chartH * k} y2={pad.top + chartH * k} stroke="currentColor" className="text-slate-100 dark:text-slate-700/70" strokeDasharray="4 4" />
+          ))}
+
+          {downtimeIntervals.map(interval => {
+            const start = Math.max(minTime, new Date(interval.start).getTime());
+            const end = Math.min(maxTime, new Date(interval.end).getTime());
+            if (end <= minTime || start >= maxTime || end <= start) return null;
+            return (
+              <rect key={`${interval.start}-${interval.end}`} x={xFor(start)} y={pad.top} width={Math.max(2, xFor(end) - xFor(start))} height={chartH} className="fill-rose-300/25 dark:fill-rose-700/20">
+                <title>{`АТС не работала / нет данных\nНачало: ${new Date(interval.start).toLocaleString('ru-RU', { hour12: false })}\nКонец: ${new Date(interval.end).toLocaleString('ru-RU', { hour12: false })}\nДлительность: ${formatDuration(interval.durationMs)}`}</title>
+              </rect>
+            );
+          })}
+
+          {segments.map((segment, index) => (
+            <path key={index} d={segment} fill="none" stroke="currentColor" strokeWidth="3" className="text-emerald-500" />
+          ))}
+
+          {reboots.map(reboot => {
+            const time = new Date(reboot.timestamp).getTime();
+            if (time < minTime || time > maxTime) return null;
+            const row = data.find(item => item.timestamp === reboot.timestamp);
+            return (
+              <g key={reboot.timestamp}>
+                <line x1={xFor(time)} x2={xFor(time)} y1={pad.top} y2={height - pad.bottom} stroke="currentColor" strokeWidth="2" strokeDasharray="4 3" className="text-rose-500" />
+                <circle cx={xFor(time)} cy={yFor(Number(row?.uptimeHours || 0))} r="5" className="fill-rose-500">
+                  <title>{`Перезагрузка\nВремя обнаружения: ${new Date(reboot.detectedAt || reboot.timestamp).toLocaleString('ru-RU', { hour12: false })}\nUptime после запуска: ${formatDuration(Number(reboot.uptimeAfterSeconds || 0) * 1000)}`}</title>
+                </circle>
+              </g>
+            );
+          })}
+
+          {data.map((row, index) => {
+            if (index % Math.ceil(Math.max(1, data.length / 6)) !== 0 && index !== data.length - 1) return null;
+            return <text key={row.timestamp} x={xFor(times[index])} y={height - 8} textAnchor="middle" fontSize="10" fill="currentColor" className="text-slate-400">{new Date(row.timestamp).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', hour12: false })}</text>;
+          })}
+        </svg>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-3 text-[11px] font-bold">
+        <span className="text-emerald-600">Uptime: {data[data.length - 1]?.uptimeHours || 0} ч</span>
+        <span className="text-rose-500">Простой / нет данных: {downtimeIntervals.length}</span>
+      </div>
+    </div>
+  );
+};
+
 const HealthReportTab: React.FC<HealthReportTabProps> = ({ token }) => {
   const [data, setData] = useState<HealthReport | null>(null);
   const [history, setHistory] = useState<HealthHistoryPoint[]>([]);
   const [historyPeriod, setHistoryPeriod] = useState<'1h' | '24h' | '7d' | '30d'>('1h');
-  const [reboots, setReboots] = useState<any[]>([]);
+  const [reboots, setReboots] = useState<RebootEvent[]>([]);
+  const [downtimeIntervals, setDowntimeIntervals] = useState<DowntimeInterval[]>([]);
+  const [lastStoredAt, setLastStoredAt] = useState('');
+  const [historySource, setHistorySource] = useState('');
   const [loading, setLoading] = useState(false);
+  const [storedLoading, setStoredLoading] = useState(false);
+  const [liveWarning, setLiveWarning] = useState('');
   const [err, setErr] = useState('');
 
-  const load = async () => {
+  const cachedReportFromPoint = (point: HealthHistoryPoint): HealthReport => {
+    const memoryPercent = Number(point.memoryPercent || 0);
+    const diskPercent = Number(point.diskRootPercent || 0);
+    const internetOk = Number(point.internet?.googleLoss || 0) < 100 || Number(point.internet?.yandexLoss || 0) < 100;
+    let score = 100;
+    if (memoryPercent >= 90) score -= 15;
+    else if (memoryPercent >= 80) score -= 8;
+    if (diskPercent >= 90) score -= 25;
+    else if (diskPercent >= 80) score -= 10;
+    if (!internetOk) score -= 20;
+    score = Math.max(0, score);
+    return {
+      success: true,
+      source: 'cache',
+      generatedAt: point.timestamp,
+      score,
+      status: score >= 90 ? 'Отлично' : score >= 70 ? 'Нормально' : score >= 50 ? 'Требует внимания' : 'Критично',
+      system: {
+        uptime: `Сохранённый uptime: ${formatDuration(Number(point.uptimeSeconds || 0) * 1000)}`,
+        memory: { usedPercent: memoryPercent },
+        swap: { usedPercent: Number(point.swapPercent || 0) }
+      },
+      disks: [{ filesystem: '/', mount: '/', usedPercent: diskPercent, used: '—', size: '—', available: '—' }],
+      internet: {
+        ping: [
+          { target: '8.8.8.8', ok: Number(point.internet?.googleLoss || 0) < 100, avgMs: point.internet?.googleAvgMs, packetLoss: point.internet?.googleLoss },
+          { target: '77.88.8.8', ok: Number(point.internet?.yandexLoss || 0) < 100, avgMs: point.internet?.yandexAvgMs, packetLoss: point.internet?.yandexLoss }
+        ]
+      },
+      services: [],
+      network: {},
+      asterisk: {}
+    };
+  };
+
+  const loadStored = async () => {
+    if (!token) return;
+    setStoredLoading(true);
+    setErr('');
+    try {
+      const historyRes = await fetch(`/api/health-report/history?period=${encodeURIComponent(historyPeriod)}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const historyJson = await historyRes.json();
+      if (!historyRes.ok || !historyJson.success) {
+        throw new Error(historyJson.error || `HTTP ${historyRes.status}`);
+      }
+      const storedHistory = Array.isArray(historyJson.history) ? historyJson.history : [];
+      setHistory(storedHistory);
+      setReboots(Array.isArray(historyJson.reboots) ? historyJson.reboots : []);
+      setDowntimeIntervals(Array.isArray(historyJson.downtimeIntervals) ? historyJson.downtimeIntervals : []);
+      setLastStoredAt(String(historyJson.lastStoredAt || ''));
+      setHistorySource(String(historyJson.cachedSource || historyJson.source || ''));
+      const cachedSnapshot = historyJson.cachedSnapshot || storedHistory[storedHistory.length - 1];
+      if (cachedSnapshot) {
+        setData(current => current || cachedReportFromPoint(cachedSnapshot));
+      }
+    } catch (e: any) {
+      setErr(e.message || String(e));
+    } finally {
+      setStoredLoading(false);
+    }
+  };
+
+  const loadLive = async () => {
     if (!token) return;
     setLoading(true);
-    setErr('');
+    setLiveWarning('');
     try {
       const res = await fetch('/api/health-report', {
         headers: { Authorization: `Bearer ${token}` }
@@ -276,26 +469,22 @@ const HealthReportTab: React.FC<HealthReportTabProps> = ({ token }) => {
       if (!res.ok || !json.success) {
         throw new Error(json.error || `HTTP ${res.status}`);
       }
-      setData(json);
-
-      const historyRes = await fetch(`/api/health-report/history?period=${encodeURIComponent(historyPeriod)}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const historyJson = await historyRes.json();
-      if (historyRes.ok && historyJson.success) {
-        setHistory(Array.isArray(historyJson.history) ? historyJson.history : []);
-        setReboots(Array.isArray(historyJson.reboots) ? historyJson.reboots : []);
-      }
+      setData({ ...json, source: 'live' });
+      await loadStored();
     } catch (e: any) {
-      setErr(e.message || String(e));
+      setLiveWarning('Не удалось получить свежие данные, показаны последние сохранённые');
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    load();
-    const t = setInterval(load, 60000);
+    loadStored();
+    loadLive();
+    const t = setInterval(() => {
+      loadStored();
+      loadLive();
+    }, 60000);
     return () => clearInterval(t);
   }, [token, historyPeriod]);
 
@@ -328,6 +517,7 @@ const HealthReportTab: React.FC<HealthReportTabProps> = ({ token }) => {
         yandexPing: Number(p.internet?.yandexAvgMs || 0),
         rxKbps: Number(p.network?.rxKbps || 0),
         txKbps: Number(p.network?.txKbps || 0),
+        uptimeSeconds: Number(p.uptimeSeconds || 0),
         uptimeHours: Math.round(Number(p.uptimeSeconds || 0) / 360) / 10
       };
     });
@@ -348,7 +538,7 @@ const HealthReportTab: React.FC<HealthReportTabProps> = ({ token }) => {
   const maxCpu = chartRows.reduce((m, r) => Math.max(m, Number(r.cpu || 0)), 0);
   const maxRam = chartRows.reduce((m, r) => Math.max(m, Number(r.ram || 0)), 0);
 
-  const generated = data?.generatedAt ? new Date(data.generatedAt).toLocaleString('ru-RU', { hour12: false }) : '—';
+  const generated = lastStoredAt ? new Date(lastStoredAt).toLocaleString('ru-RU', { hour12: false }) : '—';
 
   return (
     <div className="p-5 bg-slate-50 dark:bg-slate-950 min-h-[720px] space-y-5">
@@ -359,8 +549,15 @@ const HealthReportTab: React.FC<HealthReportTabProps> = ({ token }) => {
             <h2 className="text-lg font-black text-slate-900 dark:text-white">Health Report / Состояние АТС</h2>
           </div>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-            Железо, диски, сеть, интернет, службы, Asterisk и FreePBX. Последнее обновление: {generated}
+            Железо, диски, сеть, интернет, службы, Asterisk и FreePBX.
           </p>
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
+            <span className="font-bold text-slate-500 dark:text-slate-400">
+              Последние сохранённые данные: {generated}
+            </span>
+            {historySource && <span className="rounded-full bg-slate-200/70 dark:bg-slate-800 px-2 py-0.5 text-[10px] font-black uppercase text-slate-500">{historySource}</span>}
+            {loading && <span className="inline-flex items-center gap-1 font-bold text-blue-600"><RefreshCw className="h-3 w-3 animate-spin" /> Идёт обновление…</span>}
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -375,7 +572,7 @@ const HealthReportTab: React.FC<HealthReportTabProps> = ({ token }) => {
           ))}
 
           <button
-            onClick={load}
+            onClick={loadLive}
             disabled={loading}
             className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-black disabled:opacity-60"
           >
@@ -387,13 +584,19 @@ const HealthReportTab: React.FC<HealthReportTabProps> = ({ token }) => {
 
       {err && (
         <div className="p-4 rounded-xl border border-rose-200 bg-rose-50 text-rose-700 text-sm font-bold">
-          Ошибка загрузки Health Report: {err}
+          Ошибка загрузки сохранённых данных Health Report: {err}
+        </div>
+      )}
+
+      {liveWarning && (
+        <div className="p-3 rounded-xl border border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300 text-sm font-bold">
+          {liveWarning}
         </div>
       )}
 
       {!data && !err && (
         <div className="p-8 text-center text-slate-500 font-bold">
-          Загрузка состояния АТС...
+          {storedLoading ? 'Загрузка последних сохранённых данных...' : 'Загрузка состояния АТС...'}
         </div>
       )}
 
@@ -410,6 +613,7 @@ const HealthReportTab: React.FC<HealthReportTabProps> = ({ token }) => {
                 {data.score >= 70 ? <CheckCircle2 className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
                 {data.status}
               </div>
+              {data.source === 'cache' && <div className="mt-2 text-[11px] font-bold text-slate-400">По сохранённым метрикам</div>}
             </div>
 
             <Card title="CPU / Uptime" icon={<Cpu className="h-4 w-4" />}>
@@ -507,11 +711,10 @@ const HealthReportTab: React.FC<HealthReportTabProps> = ({ token }) => {
             </Card>
 
             <Card title="Uptime и перезагрузки" icon={<Activity className="h-4 w-4" />}>
-              <MiniHealthChart
+              <UptimeChart
                 data={chartRows}
-                series={[
-                  { key: 'uptimeHours', label: 'Uptime', suffix: ' ч' }
-                ]}
+                downtimeIntervals={downtimeIntervals}
+                reboots={reboots}
               />
               <div className="mt-3 text-xs font-bold text-slate-500">
                 Найдено перезагрузок за период: <span className={reboots.length ? 'text-rose-600' : 'text-emerald-600'}>{reboots.length}</span>

@@ -85,7 +85,7 @@ import { classifyMissedCallResolution, type MissedCallResolutionStatus } from '.
 import {
   appendDevicesAlertsToSql, appendDevicesHistoryToSql, appendHealthHistoryToSql, appendQualityAlertsToSql,
   appendQualityHistoryToSql, getMonitoringStorageMode, getMonitoringStorageStatus, readDevicesAlertsFromSql,
-  readDevicesConflictsFromSql, readDevicesHistoryFromSql, readDevicesMapFromSql, readHealthHistoryFromSql,
+  readDevicesConflictsFromSql, readDevicesHistoryFromSql, readDevicesMapFromSql, readHealthHistoryFromSql, readLatestHealthHistoryFromSql,
   readLegacyMonitoringFile, readQualityAlertsFromSql, readQualityHistoryFromSql, readWithMonitoringFallback,
   setMonitoringStorageMode, upsertDevicesConflictsToSql, upsertDevicesMapToSql
 } from './server/monitoringSqlStorage.js';
@@ -15398,6 +15398,9 @@ app.get('/api/health-report', requireAuth(['su', 'admin']), async (req, res) => 
 
     res.json({
       success: true,
+      source: 'live',
+      liveRefreshInProgress: false,
+      liveRefreshFailed: false,
       generatedAt,
       score,
       status,
@@ -15461,6 +15464,48 @@ const HEALTH_HISTORY_FILE = path.join(DATA_DIR, 'health-history.json');
 const HEALTH_HISTORY_MAX_POINTS = Math.max(120, Number(process.env.PBXPULS_HEALTH_HISTORY_MAX_POINTS || 2880));
 const HEALTH_HISTORY_INTERVAL_MS = Math.max(30000, Number(process.env.PBXPULS_HEALTH_HISTORY_INTERVAL_MS || 60000));
 const HEALTH_HISTORY_VERBOSE_LOG = String(process.env.PBXPULS_HEALTH_HISTORY_VERBOSE_LOG || '').trim() === '1';
+
+function analyzeHealthHistoryContinuity(history: any[]) {
+  const expectedIntervalMs = HEALTH_HISTORY_INTERVAL_MS;
+  const gapThresholdMs = expectedIntervalMs * 3;
+  const downtimeIntervals: any[] = [];
+  const reboots: any[] = [];
+
+  for (let i = 1; i < history.length; i++) {
+    const previous = history[i - 1];
+    const current = history[i];
+    const previousAt = new Date(previous.timestamp).getTime();
+    const currentAt = new Date(current.timestamp).getTime();
+    if (!Number.isFinite(previousAt) || !Number.isFinite(currentAt)) continue;
+
+    const gapMs = currentAt - previousAt;
+    const bootIdChanged = Boolean(previous.bootId && current.bootId && previous.bootId !== current.bootId);
+    const uptimeDropped = Number(previous.uptimeSeconds || 0) - Number(current.uptimeSeconds || 0) > 300;
+    const rebootDetected = bootIdChanged || uptimeDropped;
+
+    if (gapMs > gapThresholdMs) {
+      downtimeIntervals.push({
+        start: previous.timestamp,
+        end: current.timestamp,
+        durationMs: gapMs,
+        reason: 'no-data'
+      });
+    }
+
+    if (rebootDetected) {
+      reboots.push({
+        timestamp: current.timestamp,
+        detectedAt: current.timestamp,
+        uptimeAfterSeconds: Number(current.uptimeSeconds || 0),
+        previousBootId: previous.bootId || '',
+        bootId: current.bootId || '',
+        reason: bootIdChanged ? 'boot-id-changed' : 'uptime-reset'
+      });
+    }
+  }
+
+  return { expectedIntervalMs, gapThresholdMs, downtimeIntervals, reboots };
+}
 
 let lastHealthNetSample: any = null;
 
@@ -15674,6 +15719,7 @@ app.get('/api/health-report/history', requireAuth(['su', 'admin']), async (req, 
   try {
     const period = String(req.query.period || '24h');
     const stored = await readWithMonitoringFallback(() => readHealthHistoryFromSql(period), readHealthHistory);
+    const latestStored = await readWithMonitoringFallback(readLatestHealthHistoryFromSql, () => readHealthHistory().slice(-1));
     let history = stored.data;
     const now = Date.now();
 
@@ -15691,23 +15737,22 @@ app.get('/api/health-report/history', requireAuth(['su', 'admin']), async (req, 
       })
       .sort((a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
-    const reboots = [];
-    for (let i = 1; i < history.length; i++) {
-      if (history[i].bootId && history[i - 1].bootId && history[i].bootId !== history[i - 1].bootId) {
-        reboots.push({
-          timestamp: history[i].timestamp,
-          previousBootId: history[i - 1].bootId,
-          bootId: history[i].bootId
-        });
-      }
-    }
+    const continuity = analyzeHealthHistoryContinuity(history);
+    const cachedSnapshot = latestStored.data[latestStored.data.length - 1] || null;
+    const lastStoredAt = cachedSnapshot?.timestamp || null;
 
     res.json({
       success: true,
       period,
       count: history.length,
       source: stored.source,
-      reboots,
+      cachedSource: latestStored.source,
+      lastStoredAt,
+      cachedSnapshot,
+      expectedIntervalMs: continuity.expectedIntervalMs,
+      gapThresholdMs: continuity.gapThresholdMs,
+      downtimeIntervals: continuity.downtimeIntervals,
+      reboots: continuity.reboots,
       history
     });
   } catch (e: any) {
