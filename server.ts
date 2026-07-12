@@ -15466,40 +15466,46 @@ const HEALTH_HISTORY_INTERVAL_MS = Math.max(30000, Number(process.env.PBXPULS_HE
 const HEALTH_HISTORY_VERBOSE_LOG = String(process.env.PBXPULS_HEALTH_HISTORY_VERBOSE_LOG || '').trim() === '1';
 
 function analyzeHealthHistoryContinuity(history: any[]) {
-  const expectedIntervalMs = HEALTH_HISTORY_INTERVAL_MS;
-  const gapThresholdMs = expectedIntervalMs * 3;
+  const sortedHistory = [...history].sort((a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  const intervals = [];
+  for (let i = 1; i < sortedHistory.length; i++) {
+    const interval = new Date(sortedHistory[i].timestamp).getTime() - new Date(sortedHistory[i - 1].timestamp).getTime();
+    if (Number.isFinite(interval) && interval > 0) intervals.push(interval);
+  }
+  intervals.sort((a, b) => a - b);
+  const middle = Math.floor(intervals.length / 2);
+  const expectedIntervalMs = intervals.length
+    ? (intervals.length % 2 ? intervals[middle] : Math.round((intervals[middle - 1] + intervals[middle]) / 2))
+    : 60000;
+  const gapThresholdMs = Math.max(expectedIntervalMs * 3, 5 * 60 * 1000);
   const downtimeIntervals: any[] = [];
   const reboots: any[] = [];
 
-  for (let i = 1; i < history.length; i++) {
-    const previous = history[i - 1];
-    const current = history[i];
+  for (let i = 1; i < sortedHistory.length; i++) {
+    const previous = sortedHistory[i - 1];
+    const current = sortedHistory[i];
     const previousAt = new Date(previous.timestamp).getTime();
     const currentAt = new Date(current.timestamp).getTime();
     if (!Number.isFinite(previousAt) || !Number.isFinite(currentAt)) continue;
 
     const gapMs = currentAt - previousAt;
-    const bootIdChanged = Boolean(previous.bootId && current.bootId && previous.bootId !== current.bootId);
     const uptimeDropped = Number(previous.uptimeSeconds || 0) - Number(current.uptimeSeconds || 0) > 300;
-    const rebootDetected = bootIdChanged || uptimeDropped;
 
     if (gapMs > gapThresholdMs) {
       downtimeIntervals.push({
         start: previous.timestamp,
         end: current.timestamp,
-        durationMs: gapMs,
+        durationSeconds: Math.round(gapMs / 1000),
         reason: 'no-data'
       });
     }
 
-    if (rebootDetected) {
+    if (uptimeDropped) {
       reboots.push({
         timestamp: current.timestamp,
         detectedAt: current.timestamp,
         uptimeAfterSeconds: Number(current.uptimeSeconds || 0),
-        previousBootId: previous.bootId || '',
-        bootId: current.bootId || '',
-        reason: bootIdChanged ? 'boot-id-changed' : 'uptime-reset'
+        reason: 'uptime-reset'
       });
     }
   }

@@ -39,7 +39,7 @@ type HealthReport = {
 type DowntimeInterval = {
   start: string;
   end: string;
-  durationMs: number;
+  durationSeconds: number;
   reason: string;
 };
 
@@ -301,20 +301,22 @@ const UptimeChart = ({
     );
   }
 
-  const times = data.map(row => new Date(row.timestamp).getTime());
+  const sortedData = [...data].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  const times = sortedData.map(row => new Date(row.timestamp).getTime());
   const minTime = Math.min(...times);
   const maxTime = Math.max(...times);
-  const maxUptime = Math.max(...data.map(row => Number(row.uptimeHours || 0)), 1);
+  const maxUptime = Math.max(...sortedData.map(row => Number(row.uptimeHours || 0)), 1);
   const xFor = (time: number) => pad.left + ((time - minTime) / Math.max(1, maxTime - minTime)) * chartW;
   const yFor = (value: number) => pad.top + chartH - (Math.max(0, value) / maxUptime) * chartH;
   const downtimeStarts = new Set(downtimeIntervals.map(item => `${item.start}|${item.end}`));
   const rebootTimes = new Set(reboots.map(item => item.timestamp));
+  const totalDowntimeMs = downtimeIntervals.reduce((total, interval) => total + Number(interval.durationSeconds || 0) * 1000, 0);
   const segments: string[] = [];
   let path = '';
 
-  data.forEach((row, index) => {
+  sortedData.forEach((row, index) => {
     const point = `${xFor(times[index]).toFixed(1)} ${yFor(Number(row.uptimeHours || 0)).toFixed(1)}`;
-    const previous = data[index - 1];
+    const previous = sortedData[index - 1];
     const shouldBreak = index > 0 && (
       downtimeStarts.has(`${previous.timestamp}|${row.timestamp}`) || rebootTimes.has(row.timestamp)
     );
@@ -343,38 +345,41 @@ const UptimeChart = ({
             if (end <= minTime || start >= maxTime || end <= start) return null;
             return (
               <rect key={`${interval.start}-${interval.end}`} x={xFor(start)} y={pad.top} width={Math.max(2, xFor(end) - xFor(start))} height={chartH} className="fill-rose-300/25 dark:fill-rose-700/20">
-                <title>{`АТС не работала / нет данных\nНачало: ${new Date(interval.start).toLocaleString('ru-RU', { hour12: false })}\nКонец: ${new Date(interval.end).toLocaleString('ru-RU', { hour12: false })}\nДлительность: ${formatDuration(interval.durationMs)}`}</title>
+                <title>{`АТС не работала / нет данных\nНачало: ${new Date(interval.start).toLocaleString('ru-RU', { hour12: false })}\nКонец: ${new Date(interval.end).toLocaleString('ru-RU', { hour12: false })}\nДлительность: ${formatDuration(interval.durationSeconds * 1000)}`}</title>
               </rect>
             );
           })}
 
           {segments.map((segment, index) => (
-            <path key={index} d={segment} fill="none" stroke="currentColor" strokeWidth="3" className="text-emerald-500" />
+            <path key={index} d={segment} fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="text-emerald-500" />
           ))}
 
           {reboots.map(reboot => {
             const time = new Date(reboot.timestamp).getTime();
             if (time < minTime || time > maxTime) return null;
-            const row = data.find(item => item.timestamp === reboot.timestamp);
+            const row = sortedData.find(item => item.timestamp === reboot.timestamp);
             return (
-              <g key={reboot.timestamp}>
-                <line x1={xFor(time)} x2={xFor(time)} y1={pad.top} y2={height - pad.bottom} stroke="currentColor" strokeWidth="2" strokeDasharray="4 3" className="text-rose-500" />
-                <circle cx={xFor(time)} cy={yFor(Number(row?.uptimeHours || 0))} r="5" className="fill-rose-500">
-                  <title>{`Перезагрузка\nВремя обнаружения: ${new Date(reboot.detectedAt || reboot.timestamp).toLocaleString('ru-RU', { hour12: false })}\nUptime после запуска: ${formatDuration(Number(reboot.uptimeAfterSeconds || 0) * 1000)}`}</title>
-                </circle>
-              </g>
+              <circle key={reboot.timestamp} cx={xFor(time)} cy={yFor(Number(row?.uptimeHours || 0))} r="4.5" className="fill-rose-500 stroke-white dark:stroke-slate-900" strokeWidth="2">
+                <title>{`Перезагрузка обнаружена\nВремя: ${new Date(reboot.detectedAt || reboot.timestamp).toLocaleString('ru-RU', { hour12: false })}\nUptime после запуска: ${formatDuration(Number(reboot.uptimeAfterSeconds || 0) * 1000)}`}</title>
+              </circle>
             );
           })}
 
-          {data.map((row, index) => {
-            if (index % Math.ceil(Math.max(1, data.length / 6)) !== 0 && index !== data.length - 1) return null;
+          {sortedData.map((row, index) => rebootTimes.has(row.timestamp) ? null : (
+            <circle key={`hover-${row.timestamp}`} cx={xFor(times[index])} cy={yFor(Number(row.uptimeHours || 0))} r="6" fill="transparent">
+              <title>{`${new Date(row.timestamp).toLocaleString('ru-RU', { hour12: false })}\nUptime: ${formatDuration(Number(row.uptimeSeconds || 0) * 1000)}`}</title>
+            </circle>
+          ))}
+
+          {sortedData.map((row, index) => {
+            if (index % Math.ceil(Math.max(1, sortedData.length / 6)) !== 0 && index !== sortedData.length - 1) return null;
             return <text key={row.timestamp} x={xFor(times[index])} y={height - 8} textAnchor="middle" fontSize="10" fill="currentColor" className="text-slate-400">{new Date(row.timestamp).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', hour12: false })}</text>;
           })}
         </svg>
       </div>
       <div className="mt-2 flex flex-wrap gap-3 text-[11px] font-bold">
-        <span className="text-emerald-600">Uptime: {data[data.length - 1]?.uptimeHours || 0} ч</span>
-        <span className="text-rose-500">Простой / нет данных: {downtimeIntervals.length}</span>
+        <span className="text-emerald-600">Uptime: {sortedData[sortedData.length - 1]?.uptimeHours || 0} ч</span>
+        <span className="text-rose-500">Простой / нет данных: {formatDuration(totalDowntimeMs)}</span>
       </div>
     </div>
   );
