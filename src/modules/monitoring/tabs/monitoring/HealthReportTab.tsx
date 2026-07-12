@@ -292,6 +292,12 @@ const UptimeChart = ({
   const pad = { left: 38, right: 18, top: 16, bottom: 28 };
   const chartW = width - pad.left - pad.right;
   const chartH = height - pad.top - pad.bottom;
+  const [hover, setHover] = React.useState<{
+    x: number;
+    point: any;
+    downtime: DowntimeInterval | null;
+    reboot: RebootEvent | null;
+  } | null>(null);
 
   if (!data.length) {
     return (
@@ -329,10 +335,27 @@ const UptimeChart = ({
   });
   if (path) segments.push(path);
 
+  const handleMove = (event: React.MouseEvent<SVGSVGElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const svgX = ((event.clientX - rect.left) / Math.max(1, rect.width)) * width;
+    const x = Math.max(pad.left, Math.min(width - pad.right, svgX));
+    const time = minTime + ((x - pad.left) / Math.max(1, chartW)) * (maxTime - minTime);
+    const point = sortedData.reduce((nearest, row) => (
+      Math.abs(new Date(row.timestamp).getTime() - time) < Math.abs(new Date(nearest.timestamp).getTime() - time) ? row : nearest
+    ), sortedData[0]);
+    const downtime = downtimeIntervals.find(interval => {
+      const start = new Date(interval.start).getTime();
+      const end = new Date(interval.end).getTime();
+      return time >= start && time <= end;
+    }) || null;
+    const reboot = reboots.find(item => Math.abs(xFor(new Date(item.timestamp).getTime()) - x) <= 6) || null;
+    setHover({ x, point, downtime: reboot ? null : downtime, reboot });
+  };
+
   return (
     <div>
       <div className="relative h-56 w-full overflow-hidden rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-700">
-        <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full">
+        <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full cursor-crosshair" onMouseMove={handleMove} onMouseLeave={() => setHover(null)}>
           <line x1={pad.left} y1={pad.top} x2={pad.left} y2={height - pad.bottom} stroke="currentColor" className="text-slate-200 dark:text-slate-700" />
           <line x1={pad.left} y1={height - pad.bottom} x2={width - pad.right} y2={height - pad.bottom} stroke="currentColor" className="text-slate-200 dark:text-slate-700" />
           {[0.25, 0.5, 0.75].map(k => (
@@ -345,16 +368,10 @@ const UptimeChart = ({
             if (end <= minTime || start >= maxTime || end <= start) return null;
             const startX = xFor(start);
             const endX = xFor(end);
-            const startLabel = new Date(interval.start).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', hour12: false });
-            const endLabel = new Date(interval.end).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', hour12: false });
             return (
               <g key={`${interval.start}-${interval.end}`}>
-                <rect x={startX} y={height - pad.bottom - 7} width={Math.max(3, endX - startX)} height="7" rx="3.5" className="fill-slate-400/70 dark:fill-slate-500/80">
-                  <title>{`АТС не работала / нет данных\nНачало: ${new Date(interval.start).toLocaleString('ru-RU', { hour12: false })}\nКонец: ${new Date(interval.end).toLocaleString('ru-RU', { hour12: false })}\nДлительность: ${formatDuration(interval.durationSeconds * 1000)}`}</title>
-                </rect>
-                <text x={(startX + endX) / 2} y={height - pad.bottom - 11} textAnchor="middle" fontSize="9" fill="currentColor" className="text-slate-500 dark:text-slate-400">
-                  {`Простой ${startLabel}–${endLabel}`}
-                </text>
+                <rect x={startX} y={pad.top} width={Math.max(3, endX - startX)} height={chartH} className="fill-slate-300/45 dark:fill-slate-600/35" />
+                <line x1={startX} x2={endX} y1={yFor(0)} y2={yFor(0)} stroke="currentColor" strokeWidth="3" strokeLinecap="round" className="text-emerald-500" />
               </g>
             );
           })}
@@ -384,7 +401,46 @@ const UptimeChart = ({
             if (index % Math.ceil(Math.max(1, sortedData.length / 6)) !== 0 && index !== sortedData.length - 1) return null;
             return <text key={row.timestamp} x={xFor(times[index])} y={height - 8} textAnchor="middle" fontSize="10" fill="currentColor" className="text-slate-400">{new Date(row.timestamp).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', hour12: false })}</text>;
           })}
+
+          {hover && (
+            <line x1={hover.x} x2={hover.x} y1={pad.top} y2={height - pad.bottom} stroke="currentColor" strokeWidth="1.5" strokeDasharray="4 4" className="text-slate-500 dark:text-slate-300" />
+          )}
         </svg>
+
+        {hover && (
+          <div
+            className="absolute top-3 z-20 min-w-[190px] rounded-xl border border-slate-200 dark:border-slate-700 bg-white/95 dark:bg-slate-950/95 shadow-lg p-3 text-[11px] pointer-events-none"
+            style={{
+              left: hover.x > width * 0.65 ? 'auto' : Math.max(8, (hover.x / width) * 100) + '%',
+              right: hover.x > width * 0.65 ? Math.max(8, ((width - hover.x) / width) * 100) + '%' : 'auto'
+            }}
+          >
+            {hover.reboot ? (
+              <>
+                <div className="font-black text-rose-600">Перезагрузка обнаружена</div>
+                <div className="mt-1 text-slate-500 dark:text-slate-400">{new Date(hover.reboot.detectedAt || hover.reboot.timestamp).toLocaleString('ru-RU', { hour12: false })}</div>
+                <div className="mt-1 font-bold text-slate-600 dark:text-slate-300">Uptime после запуска: {formatDuration(Number(hover.reboot.uptimeAfterSeconds || 0) * 1000)}</div>
+              </>
+            ) : hover.downtime ? (
+              <>
+                <div className="font-black text-slate-700 dark:text-slate-200">АТС не работала / нет данных</div>
+                <div className="mt-1 text-slate-500 dark:text-slate-400">
+                  Простой с {new Date(hover.downtime.start).toLocaleString('ru-RU', { hour12: false })}
+                  <br />по {new Date(hover.downtime.end).toLocaleString('ru-RU', { hour12: false })}
+                </div>
+                <div className="mt-1 font-bold text-slate-600 dark:text-slate-300">Длительность: {formatDuration(hover.downtime.durationSeconds * 1000)}</div>
+              </>
+            ) : (
+              <>
+                <div className="font-black text-slate-900 dark:text-white">{new Date(hover.point.timestamp).toLocaleString('ru-RU', { hour12: false })}</div>
+                <div className="mt-1 flex items-center justify-between gap-4">
+                  <span className="text-emerald-600">Uptime</span>
+                  <span className="font-black text-slate-800 dark:text-slate-100">{formatDuration(Number(hover.point.uptimeSeconds || 0) * 1000)}</span>
+                </div>
+              </>
+            )}
+          </div>
+        )}
       </div>
       <div className="mt-2 flex flex-wrap gap-3 text-[11px] font-bold">
         <span className="text-emerald-600">Uptime: {sortedData[sortedData.length - 1]?.uptimeHours || 0} ч</span>
