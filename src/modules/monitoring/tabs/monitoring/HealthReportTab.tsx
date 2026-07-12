@@ -343,10 +343,19 @@ const UptimeChart = ({
             const start = Math.max(minTime, new Date(interval.start).getTime());
             const end = Math.min(maxTime, new Date(interval.end).getTime());
             if (end <= minTime || start >= maxTime || end <= start) return null;
+            const startX = xFor(start);
+            const endX = xFor(end);
+            const startLabel = new Date(interval.start).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', hour12: false });
+            const endLabel = new Date(interval.end).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', hour12: false });
             return (
-              <rect key={`${interval.start}-${interval.end}`} x={xFor(start)} y={pad.top} width={Math.max(2, xFor(end) - xFor(start))} height={chartH} className="fill-rose-300/25 dark:fill-rose-700/20">
-                <title>{`АТС не работала / нет данных\nНачало: ${new Date(interval.start).toLocaleString('ru-RU', { hour12: false })}\nКонец: ${new Date(interval.end).toLocaleString('ru-RU', { hour12: false })}\nДлительность: ${formatDuration(interval.durationSeconds * 1000)}`}</title>
-              </rect>
+              <g key={`${interval.start}-${interval.end}`}>
+                <rect x={startX} y={height - pad.bottom - 7} width={Math.max(3, endX - startX)} height="7" rx="3.5" className="fill-slate-400/70 dark:fill-slate-500/80">
+                  <title>{`АТС не работала / нет данных\nНачало: ${new Date(interval.start).toLocaleString('ru-RU', { hour12: false })}\nКонец: ${new Date(interval.end).toLocaleString('ru-RU', { hour12: false })}\nДлительность: ${formatDuration(interval.durationSeconds * 1000)}`}</title>
+                </rect>
+                <text x={(startX + endX) / 2} y={height - pad.bottom - 11} textAnchor="middle" fontSize="9" fill="currentColor" className="text-slate-500 dark:text-slate-400">
+                  {`Простой ${startLabel}–${endLabel}`}
+                </text>
+              </g>
             );
           })}
 
@@ -556,16 +565,16 @@ const HealthReportTab: React.FC<HealthReportTabProps> = ({ token }) => {
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
             Железо, диски, сеть, интернет, службы, Asterisk и FreePBX.
           </p>
-          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="mr-1 flex flex-wrap items-center gap-2 text-xs">
             <span className="font-bold text-slate-500 dark:text-slate-400">
               Последние сохранённые данные: {generated}
             </span>
             {historySource && <span className="rounded-full bg-slate-200/70 dark:bg-slate-800 px-2 py-0.5 text-[10px] font-black uppercase text-slate-500">{historySource}</span>}
             {loading && <span className="inline-flex items-center gap-1 font-bold text-blue-600"><RefreshCw className="h-3 w-3 animate-spin" /> Идёт обновление…</span>}
           </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
           {(['1h', '24h', '7d', '30d'] as const).map(p => (
             <button
               key={p}
