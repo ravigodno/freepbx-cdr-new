@@ -80,6 +80,79 @@ export async function upsertDevicesConflictsToSql(items:any[]):Promise<void>{for
 export async function readWithMonitoringFallback<T>(sqlRead:()=>Promise<T[]>, legacyRead:()=>T[]):Promise<{data:T[];source:MonitoringSource;error?:string}>{const mode=await getMonitoringStorageMode();if(mode==='legacy')return{data:legacyRead(),source:'legacy'};try{const data=await sqlRead();if(data.length||mode==='sql')return{data,source:'sql'};fallbackUsed=true;return{data:legacyRead(),source:'legacy-fallback'};}catch(e:any){fallbackUsed=true;return{data:legacyRead(),source:'legacy-fallback',error:sanitizePBXPulsDbError(e)};}}
 
 export interface ImportResult { file:string; found:number; imported:number; skipped:number; error?:string }
+
+export async function syncLegacyDevicesMonitoringData(connection: Connection): Promise<ImportResult[]> {
+  const results: ImportResult[] = [];
+  const run = async (name: keyof typeof FILES, sync: (item: any) => Promise<boolean>) => {
+    const items = readLegacyMonitoringFile(name);
+    let imported = 0;
+    for (const item of items) {
+      if (await sync(item)) imported += 1;
+    }
+    results.push({ file: FILES[name], found: items.length, imported, skipped: items.length - imported });
+  };
+  const changed = (result: any) => Number(result?.affectedRows || 0) > 0;
+  const execute = async (sql: string, params: any[]) => {
+    const [result] = await connection.execute(sql, params);
+    return result;
+  };
+
+  await run('devicesHistory', async item => {
+    const sampledAt = dateValue(item.timestamp || item.sampled_at);
+    if (!sampledAt) return false;
+    return changed(await execute(
+      `INSERT IGNORE INTO monitoring_devices_history
+        (device_id,sampled_at,status,ip,port,tech,user_agent,manufacturer,model,raw_json)
+       VALUES (?,?,?,?,?,?,?,?,?,?)`,
+      [text(item.ext || item.deviceId, 'unknown'), sampledAt, text(item.status), text(item.ip), num(item.port),
+        text(item.tech), text(item.userAgent), text(item.manufacturer), text(item.model), raw(item)]
+    ));
+  });
+  await run('devicesAlerts', async item => {
+    const alertTime = dateValue(item.time || item.timestamp || item.alert_time);
+    if (!alertTime) return false;
+    return changed(await execute(
+      `INSERT IGNORE INTO monitoring_devices_alerts
+        (alert_time,device_id,type,severity,message,raw_json) VALUES (?,?,?,?,?,?)`,
+      [alertTime, text(item.ext || item.deviceId), text(item.type, 'unknown'), text(item.severity),
+        text(item.message || item.description), raw(item)]
+    ));
+  });
+  await run('devicesConflicts', async item => {
+    const conflictKey = text(item.id || item.conflictKey || [item.type, item.ip, item.ext, Array.isArray(item.devices) ? item.devices.join(',') : ''].join(':')) || 'unknown';
+    const lastSeenAt = dateValue(item.detectedAt || item.timestamp || item.lastSeenAt);
+    if (!lastSeenAt) return false;
+    const firstSeenAt = dateValue(item.firstSeenAt) || lastSeenAt;
+    const [rows] = await connection.execute(
+      'SELECT last_seen_at FROM monitoring_devices_conflicts WHERE conflict_key = ? LIMIT 1',
+      [conflictKey]
+    );
+    const existing = Array.isArray(rows) ? (rows as any[])[0] : null;
+    const existingLastSeenAt = String(existing?.last_seen_at || '').replace('T', ' ').slice(0, 19);
+    if (existing && existingLastSeenAt >= lastSeenAt) return false;
+    if (existing) {
+      return changed(await execute(
+        `UPDATE monitoring_devices_conflicts
+         SET first_seen_at=LEAST(COALESCE(first_seen_at,?),?),last_seen_at=?,status=?,raw_json=?
+         WHERE conflict_key=?`,
+        [firstSeenAt, firstSeenAt, lastSeenAt, text(item.status), raw(item), conflictKey]
+      ));
+    }
+    return changed(await execute(
+      `INSERT INTO monitoring_devices_conflicts
+        (conflict_key,first_seen_at,last_seen_at,status,raw_json) VALUES (?,?,?,?,?)`,
+      [conflictKey, firstSeenAt, lastSeenAt, text(item.status), raw(item)]
+    ));
+  });
+  await run('devicesMap', async item => changed(await execute(
+    `INSERT IGNORE INTO monitoring_devices_map
+      (device_id,name,ip,port,tech,manufacturer,model,user_agent,raw_json) VALUES (?,?,?,?,?,?,?,?,?)`,
+    [text(item.ext || item.deviceId, 'unknown'), text(item.name), text(item.ip), num(item.port), text(item.tech),
+      text(item.manufacturer), text(item.model), text(item.userAgent), raw(item)]
+  )));
+
+  return results;
+}
 export async function importLegacyMonitoringData(connection?:Connection):Promise<ImportResult[]>{
   if (connection) return importLegacyMonitoringDataBulk(connection);
   const exec=async(sql:string,params:any[])=>connection?(await connection.execute(sql,params))[0] as any:timedQuery(sql,params);

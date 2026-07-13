@@ -8,9 +8,12 @@ Run:
 
 ```bash
 npm run pbxpuls:db:check
+npm run pbxpuls:monitoring:sync
 npm run pbxpuls:monitoring:check
 npm run build
 ```
+
+`pbxpuls:monitoring:sync` performs a transactional, idempotent catch-up of legacy devices history, alerts, conflicts and map data. It does not change `monitoring.storage_mode` and does not modify or delete the JSON source files. A repeated run must report all unchanged rows as `skipped`.
 
 `pbxpuls:monitoring:check` must report:
 
