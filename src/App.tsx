@@ -76,6 +76,7 @@ import ReportsTab from './components/reports/ReportsTab';
 import MarketingTab from './components/marketing/MarketingTab';
 import { AboutSystemTab } from './components/AboutSystemTab';
 import ActiveCallsTab from './modules/monitoring/tabs/monitoring/ActiveCallsTab';
+import { normalizeLiveCallBannerPayload } from './utils/liveCallBanner';
 import CommandCenterTab from './modules/monitoring/tabs/monitoring/CommandCenterTab';
 const DbExplorerTab = lazy(() => import('./modules/monitoring/tabs/monitoring/DbExplorerTab'));
 import QualityTab from './modules/monitoring/tabs/monitoring/QualityTab';
@@ -517,6 +518,8 @@ interface LiveCallBanner {
   direction?: 'incoming' | 'outgoing' | 'internal';
   operatorExt?: string;
   number?: string;
+  callerNumber?: string;
+  externalCallerNumber?: string;
   displayName?: string;
   contactType?: 'internal' | 'client';
   contactComment?: string;
@@ -1978,7 +1981,7 @@ export default function App() {
       }
       if (!resp.ok) return;
       const data = await resp.json();
-      setLiveCallBanner(data && data.active ? data : null);
+      setLiveCallBanner(normalizeLiveCallBannerPayload(data));
     } catch (e) {
       // Live popup is auxiliary; ignore network errors here.
     }

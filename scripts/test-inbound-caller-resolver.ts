@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
-import { resolveInboundExternalCaller } from '../server/inboundCallerResolver.js';
+import {
+  normalizeInboundLiveSessionCallers,
+  resolveInboundExternalCaller,
+  resolveInboundLiveCaller
+} from '../server/inboundCallerResolver.js';
 import { buildCallRouteView } from '../src/modules/cdr/utils/buildCallRouteView.js';
 import { buildCdrRowViewModel } from '../src/modules/cdr/utils/CDRRowHelpers.js';
+import { isLiveCallPopupVisible, normalizeLiveCallBannerPayload } from '../src/utils/liveCallBanner.js';
 
 const did = '74951234567';
 const externalCaller = '79787902449';
@@ -84,5 +89,56 @@ assert.equal(outboundRow.displayedDst, externalCaller);
 const internalRow = buildCdrRowViewModel({ src: '201', cnum: '201', dst: '200', dcontext: 'from-internal', disposition: 'ANSWERED' }, []);
 assert.equal(internalRow.displayedSrc, '201');
 assert.equal(internalRow.displayedDst, '200');
+
+const liveIncomingSessions = normalizeInboundLiveSessionCallers([
+  {
+    channel: 'PJSIP/MTS-in-00001', context: 'from-trunk', exten: did, state: 'Ring',
+    callerId: did, uniqueid: 'live-1.1', linkedid: 'live-1'
+  },
+  {
+    channel: 'Local/9000@ext-queues-00002;1', context: 'ext-queues', exten: '9000', state: 'Ring',
+    callerId: externalCaller, uniqueid: 'live-1.2', linkedid: 'live-1'
+  },
+  {
+    channel: 'PJSIP/201-00003', context: 'ext-local', exten: '201', state: 'Ringing',
+    callerId: externalCaller, uniqueid: 'live-1.3', linkedid: 'live-1'
+  }
+]);
+assert.equal(liveIncomingSessions.length, 3);
+assert.ok(liveIncomingSessions.some(session => String(session.state).toLowerCase().includes('ring')));
+assert.ok(liveIncomingSessions.every(session => session.callerNumber === externalCaller));
+assert.ok(liveIncomingSessions.every(session => session.callerId === externalCaller));
+assert.ok(liveIncomingSessions.every(session => session.callerNumber !== did));
+
+const legacyLiveCaller = resolveInboundLiveCaller([
+  { caller: externalCaller, cid_num: '', src: '', did, dcontext: 'ext-queues', dst: '9000' }
+], [did], [did]);
+assert.equal(legacyLiveCaller.externalCallerNumber, '');
+assert.equal(legacyLiveCaller.callerNumber, externalCaller);
+assert.equal(legacyLiveCaller.fallbackSourceField, 'live.caller');
+
+const enrichedBanner = normalizeLiveCallBannerPayload({
+  active: true,
+  direction: 'incoming',
+  externalCallerNumber: externalCaller,
+  callerNumber: did,
+  number: did,
+  did,
+  externalCallerConfidence: 'high'
+});
+assert.equal(enrichedBanner?.callerNumber, externalCaller);
+assert.equal(enrichedBanner?.number, externalCaller);
+assert.equal(isLiveCallPopupVisible(enrichedBanner), true);
+
+const unresolvedInboundBanner = normalizeLiveCallBannerPayload({
+  active: true,
+  direction: 'incoming',
+  number: '',
+  externalCallerNumber: '',
+  externalCallerConfidence: 'none'
+});
+assert.equal(unresolvedInboundBanner?.number, '');
+assert.equal(isLiveCallPopupVisible(unresolvedInboundBanner), true);
+assert.equal(isLiveCallPopupVisible({ active: false, direction: 'incoming', number: externalCaller }), false);
 
 console.log('Inbound caller resolver fixtures passed');

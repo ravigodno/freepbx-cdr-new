@@ -82,7 +82,11 @@ import { findBlindTransferTargetFromCel, getExplicitBlindTransferTarget } from '
 import { buildReportHourlyTimeline, formatReportHourBucket } from './server/reportDynamicsBuckets.js';
 import { calculateCpuPercent, parseProcStatCpuSample, type ProcStatCpuSample } from './server/healthCpu.js';
 import { classifyMissedCallResolution, type MissedCallResolutionStatus } from './server/missedCallResolution.js';
-import { resolveInboundExternalCaller } from './server/inboundCallerResolver.js';
+import {
+  normalizeInboundLiveSessionCallers,
+  resolveInboundExternalCaller,
+  resolveInboundLiveCaller
+} from './server/inboundCallerResolver.js';
 import {
   appendDevicesAlertsToSql, appendDevicesHistoryToSql, appendHealthHistoryToSql, appendQualityAlertsToSql,
   appendQualityHistoryToSql, getMonitoringStorageMode, getMonitoringStorageStatus, readDevicesAlertsFromSql,
@@ -12107,6 +12111,8 @@ interface LiveCallBanner {
   direction?: 'incoming' | 'outgoing' | 'internal';
   operatorExt?: string;
   number?: string;
+  callerNumber?: string;
+  externalCallerNumber?: string;
   displayName?: string;
   contactType?: string;
   contactComment?: string;
@@ -12660,19 +12666,29 @@ function buildLiveCallBannerFromAmiChannels(channels: AmiBlock[], operatorExt: s
     const externalCandidates = allCandidates.filter(num => isExternalNumber(num) && !isInternalExt(num));
     const internalCandidates = Array.from(new Set(allCandidates.filter(num => isInternalExt(num))));
 
+    const inboundRouteChannels = group.filter(ch => {
+      const context = String(ch.Context || '').toLowerCase();
+      const channel = String(ch.Channel || '').toLowerCase();
+      return channel.includes('-in-') || context.includes('from-trunk') || context.includes('from-pstn') || context.includes('from-did');
+    });
     const did = hasInboundSignal
-      ? (group.map(ch => onlyDigits(ch.Exten)).find(num => isExternalNumber(num)) || '')
+      ? (inboundRouteChannels.map(ch => onlyDigits(ch.Exten)).find(num => isExternalNumber(num)) || '')
       : '';
-    const inboundCallerResolution = resolveInboundExternalCaller(group.map(ch => ({
+    const inboundRows = group.map(ch => ({
       cid_num: ch.CallerIDNum,
+      callerId: ch.CallerIDNum,
+      caller: ch.CallerIDNum,
+      cid: ch.CallerIDNum,
+      src: ch.CallerIDNum,
       callerid: ch.ConnectedLineNum,
       clid: ch.CallerIDName,
       dst: ch.Exten,
       did,
       dcontext: ch.Context,
       channel: ch.Channel
-    })));
-    const inboundCaller = inboundCallerResolution.externalCallerNumber;
+    }));
+    const inboundCallerResolution = resolveInboundLiveCaller(inboundRows, externalCandidates, [did]);
+    const inboundCaller = inboundCallerResolution.callerNumber;
 
     let direction: 'incoming' | 'outgoing' | 'internal' = hasInboundSignal ? 'incoming' : 'outgoing';
     let number = '';
@@ -12691,7 +12707,7 @@ function buildLiveCallBannerFromAmiChannels(channels: AmiBlock[], operatorExt: s
       }
     }
 
-    if (!number) continue;
+    if (!number && !hasInboundSignal) continue;
 
     const contact = resolveLiveContact(number, directory, settings);
     const first = group[0];
@@ -12702,6 +12718,8 @@ function buildLiveCallBannerFromAmiChannels(channels: AmiBlock[], operatorExt: s
       direction,
       operatorExt: ext,
       number,
+      callerNumber: number,
+      externalCallerNumber: inboundCallerResolution.externalCallerNumber,
       displayName: contact.name,
       contactType: contact.type,
       contactComment: contact.comment,
@@ -15838,53 +15856,6 @@ function parseCoreShowChannelsConcise(raw: string): any[] {
         raw: cleanLine
       };
     });
-}
-
-function normalizeInboundLiveSessionCallers(sessions: any[]): any[] {
-  const grouped = new Map<string, any[]>();
-  sessions.forEach(session => {
-    const key = String(session.linkedid || session.uniqueid || session.channel || '');
-    if (!grouped.has(key)) grouped.set(key, []);
-    grouped.get(key)!.push(session);
-  });
-
-  const resolutionByGroup = new Map<string, { externalCallerNumber: string; sourceField: string | null; confidence: string; did: string }>();
-  grouped.forEach((group, key) => {
-    const inbound = group.some(session => {
-      const context = String(session.context || '').toLowerCase();
-      const channel = String(session.channel || '').toLowerCase();
-      return channel.includes('-in-') || context.includes('from-trunk') || context.includes('from-pstn') ||
-        context.includes('ext-queues') || context.includes('ext-group') || context.startsWith('ivr-');
-    });
-    if (!inbound) return;
-
-    const did = group.map(session => onlyDigits(session.exten)).find(value => isExternalNumber(value)) || '';
-    const resolution = resolveInboundExternalCaller(group.map(session => ({
-      cid_num: session.callerId,
-      src: session.callerId,
-      dst: session.exten,
-      did,
-      dcontext: session.context,
-      channel: session.channel
-    })));
-    resolutionByGroup.set(key, { ...resolution, did });
-  });
-
-  return sessions.map(session => {
-    const key = String(session.linkedid || session.uniqueid || session.channel || '');
-    const resolution = resolutionByGroup.get(key);
-    if (!resolution?.externalCallerNumber) return session;
-    return {
-      ...session,
-      callerId: resolution.externalCallerNumber,
-      externalCallerNumber: resolution.externalCallerNumber,
-      externalCallerSourceField: resolution.sourceField,
-      externalCallerConfidence: resolution.confidence,
-      did: resolution.did,
-      inboundDid: resolution.did,
-      trunkNumber: resolution.did
-    };
-  });
 }
 
 app.get('/api/live-sessions', requireAuth(), async (req, res) => {

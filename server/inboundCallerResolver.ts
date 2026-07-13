@@ -13,6 +13,11 @@ export interface InboundCallerResolution {
   rejectedCandidates: RejectedInboundCallerCandidate[];
 }
 
+export interface InboundLiveCallerResolution extends InboundCallerResolution {
+  callerNumber: string;
+  fallbackSourceField: string | null;
+}
+
 const UNKNOWN_CALLER_PATTERN = /^(?:anonymous|unknown|unavailable|restricted|private|none|null|n\/a)$/i;
 const TECHNICAL_CHANNEL_PATTERN = /^(?:local|sip|pjsip|iax2)\//i;
 
@@ -39,6 +44,10 @@ function extractNumberCandidates(value: unknown): string[] {
   const matches = raw.match(/\+?\d{2,15}/g) || [];
   const ordered = angleNumber ? [angleNumber[1], ...matches] : matches;
   return Array.from(new Set(ordered.map(normalizeNumber).filter(Boolean)));
+}
+
+function isExternalCandidate(value: string): boolean {
+  return value.length >= 7 && value.length <= 15;
 }
 
 function isInboundContext(row: any): boolean {
@@ -141,4 +150,130 @@ export function resolveInboundExternalCaller(
     confidence: 'none',
     rejectedCandidates
   };
+}
+
+const LIVE_CALLER_FALLBACK_FIELDS = [
+  'externalCallerNumber',
+  'callerNumber',
+  'caller',
+  'cid',
+  'src',
+  'callerId',
+  'CallerIDNum',
+  'cid_num',
+  'cnum',
+  'callerid',
+  'ConnectedLineNum',
+  'clid'
+];
+
+export function resolveInboundLiveCaller(
+  callChain: any | any[],
+  legacyCandidates: unknown[] = [],
+  technicalCandidates: unknown[] = []
+): InboundLiveCallerResolution {
+  const rows = asRows(callChain);
+  const resolution = resolveInboundExternalCaller(rows);
+  if (resolution.externalCallerNumber) {
+    return {
+      ...resolution,
+      callerNumber: resolution.externalCallerNumber,
+      fallbackSourceField: null
+    };
+  }
+
+  const technicalNumbers = new Set(
+    [
+      ...technicalCandidates,
+      ...rows.flatMap(row => [row?.did, row?.inboundDid, row?.trunkNumber])
+    ]
+      .flatMap(extractNumberCandidates)
+      .filter(isExternalCandidate)
+  );
+
+  for (const field of LIVE_CALLER_FALLBACK_FIELDS) {
+    for (const row of rows) {
+      const candidate = extractNumberCandidates(row?.[field])
+        .find(number => isExternalCandidate(number) && !technicalNumbers.has(number));
+      if (candidate) {
+        return {
+          ...resolution,
+          callerNumber: candidate,
+          fallbackSourceField: `live.${field}`
+        };
+      }
+    }
+  }
+
+  const legacyCandidate = legacyCandidates
+    .flatMap(extractNumberCandidates)
+    .find(number => isExternalCandidate(number) && !technicalNumbers.has(number));
+
+  return {
+    ...resolution,
+    callerNumber: legacyCandidate || '',
+    fallbackSourceField: legacyCandidate ? 'live.legacyCandidate' : null
+  };
+}
+
+function isInboundLiveSession(session: any): boolean {
+  const context = String(session?.context || session?.dcontext || '').toLowerCase();
+  const channel = String(session?.channel || '').toLowerCase();
+  return channel.includes('-in-') || context.includes('from-trunk') || context.includes('from-pstn') ||
+    context.includes('from-did') || context.includes('ext-queues') || context.includes('ext-group') ||
+    context.startsWith('ivr-');
+}
+
+function getInboundLiveDid(group: any[]): string {
+  const routeLegs = group.filter(session => {
+    const context = String(session?.context || session?.dcontext || '').toLowerCase();
+    const channel = String(session?.channel || '').toLowerCase();
+    return channel.includes('-in-') || context.includes('from-trunk') || context.includes('from-pstn') ||
+      context.includes('from-did');
+  });
+  return routeLegs
+    .flatMap(session => extractNumberCandidates(session?.exten ?? session?.dst))
+    .find(isExternalCandidate) || '';
+}
+
+export function normalizeInboundLiveSessionCallers(sessions: any[]): any[] {
+  const grouped = new Map<string, any[]>();
+  sessions.forEach(session => {
+    const key = String(session?.linkedid || session?.uniqueid || session?.channel || '');
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key)!.push(session);
+  });
+
+  const resolutionByGroup = new Map<string, InboundLiveCallerResolution & { did: string }>();
+  grouped.forEach((group, key) => {
+    if (!group.some(isInboundLiveSession)) return;
+    const did = getInboundLiveDid(group);
+    const rows = group.map(session => ({
+      ...session,
+      cid_num: session?.cid_num ?? session?.callerId ?? session?.CallerIDNum,
+      src: session?.src ?? session?.caller ?? session?.callerId ?? session?.CallerIDNum,
+      dst: session?.dst ?? session?.exten,
+      did,
+      dcontext: session?.dcontext ?? session?.context
+    }));
+    resolutionByGroup.set(key, { ...resolveInboundLiveCaller(rows, [], [did]), did });
+  });
+
+  return sessions.map(session => {
+    const key = String(session?.linkedid || session?.uniqueid || session?.channel || '');
+    const resolution = resolutionByGroup.get(key);
+    if (!resolution) return session;
+    const callerNumber = resolution.callerNumber || String(session?.callerId || session?.caller || session?.cid || session?.src || '');
+    return {
+      ...session,
+      callerId: callerNumber,
+      callerNumber,
+      externalCallerNumber: resolution.externalCallerNumber,
+      externalCallerSourceField: resolution.sourceField || resolution.fallbackSourceField,
+      externalCallerConfidence: resolution.confidence,
+      did: resolution.did,
+      inboundDid: resolution.did,
+      trunkNumber: resolution.did
+    };
+  });
 }
