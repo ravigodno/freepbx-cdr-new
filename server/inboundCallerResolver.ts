@@ -318,3 +318,28 @@ export function normalizeLiveSessionCallers(sessions: any[]): any[] {
 }
 
 export const normalizeInboundLiveSessionCallers = normalizeLiveSessionCallers;
+
+export function mergeLiveSessionAmiEvidence(sessions: any[], amiChannels: any[]): any[] {
+  const byUniqueid = new Map<string, any>();
+  (amiChannels || []).forEach(channel => {
+    const uniqueid = String(channel?.Uniqueid || channel?.uniqueid || '').trim();
+    if (uniqueid) byUniqueid.set(uniqueid, channel);
+  });
+
+  return (sessions || []).map(session => {
+    const ami = byUniqueid.get(String(session?.uniqueid || '').trim());
+    if (!ami) return session;
+    return {
+      ...session,
+      linkedid: ami.Linkedid || ami.linkedid || session.linkedid || '',
+      callerId: ami.CallerIDNum || ami.callerId || session.callerId || '',
+      callerIdName: ami.CallerIDName || ami.callerIdName || '',
+      connectedLineNum: ami.ConnectedLineNum || ami.connectedLineNum || '',
+      context: ami.Context || ami.context || session.context || '',
+      exten: ami.Exten || ami.exten || session.exten || '',
+      state: ami.ChannelStateDesc || ami.state || session.state || '',
+      application: ami.Application || ami.application || session.application || '',
+      appData: ami.ApplicationData || ami.appData || session.appData || ''
+    };
+  });
+}

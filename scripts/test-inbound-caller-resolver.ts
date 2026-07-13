@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {
+  mergeLiveSessionAmiEvidence,
   normalizeLiveSessionCallers,
   resolveInboundExternalCaller,
   resolveInboundLiveCaller
@@ -282,6 +283,74 @@ assert.equal(
   outboundDestination
 );
 
+// Реальный active payload, снятый 2026-07-13 во время UID 1783947281.101.
+// На PJSIP leg CallerIDNum уже заменён outbound CID транка, поэтому источник
+// доказывается каналом PJSIP/200 + outbound context, а не operatorExt из UI.
+const capturedOutgoingAmi = [
+  {
+    Channel: 'SIP/841282-in-00000025', Context: 'func-apply-sipheaders', Exten: 's',
+    ChannelStateDesc: 'Down', CallerIDNum: outboundDestination, ConnectedLineNum: '',
+    Application: 'Return', ApplicationData: '', Uniqueid: '1783947283.102', Linkedid: '1783947281.101'
+  },
+  {
+    Channel: 'PJSIP/200-00000026', Context: 'macro-dialout-trunk', Exten: 's',
+    ChannelStateDesc: 'Ring', CallerIDNum: '841282', ConnectedLineNum: outboundDestination,
+    Application: 'Dial',
+    ApplicationData: `SIP/841282-in/${outboundDestination},300,Tb(func-apply-sipheaders^s^1,(1))`,
+    Uniqueid: '1783947281.101', Linkedid: '1783947281.101'
+  }
+];
+assert.deepEqual(detectLiveCallDirection(capturedOutgoingAmi, '200'), {
+  direction: 'outgoing', internalCaller: '200', destinationNumber: outboundDestination, trunkNumber: '841282'
+});
+
+// Реальный active payload, снятый 2026-07-13 во время UID 1783947336.103.
+// FreePBX уже перевёл trunk leg в macro-dial-one, но SIP/<trunk>-in-* остаётся
+// фактическим признаком входящего звонка.
+const capturedIncomingAmi = [
+  {
+    Channel: 'SIP/841282-in-00000026', Context: 'macro-dial-one', Exten: 's',
+    ChannelStateDesc: 'Up', CallerIDNum: '74993017671', ConnectedLineNum: '',
+    Application: 'Dial', ApplicationData: 'PJSIP/200/sip:200@192.168.1.222:5060,,HhtrI',
+    Uniqueid: '1783947336.103', Linkedid: '1783947336.103'
+  },
+  {
+    Channel: 'PJSIP/200-00000027', Context: 'from-internal', Exten: '',
+    ChannelStateDesc: 'Up', CallerIDNum: '200', ConnectedLineNum: '74993017671',
+    Application: 'AppDial', ApplicationData: '(Outgoing Line)',
+    Uniqueid: '1783947336.104', Linkedid: '1783947336.103'
+  }
+];
+assert.deepEqual(detectLiveCallDirection(capturedIncomingAmi, '200'), {
+  direction: 'incoming', internalCaller: '', destinationNumber: '200', trunkNumber: '841282'
+});
+const capturedIncomingSessions = normalizeLiveSessionCallers(mergeLiveSessionAmiEvidence([
+  {
+    channel: 'SIP/841282-in-00000026', context: 'macro-dial-one', exten: 's', state: 'Up',
+    application: 'Dial', appData: 'PJSIP/200/sip:200@192.168.1.222:5060,,HhtrI',
+    callerId: '74993017671', uniqueid: '1783947336.103', linkedid: ''
+  },
+  {
+    channel: 'PJSIP/200-00000027', context: 'from-internal', exten: '', state: 'Up',
+    application: 'AppDial', appData: '(Outgoing Line)', callerId: '200',
+    uniqueid: '1783947336.104', linkedid: ''
+  }
+], capturedIncomingAmi));
+assert.equal(capturedIncomingSessions.length, 2);
+assert.ok(capturedIncomingSessions.every(session => session.linkedid === '1783947336.103'));
+assert.ok(capturedIncomingSessions.every(session => session.direction === 'incoming'));
+assert.ok(capturedIncomingSessions.every(session => session.callerNumber === '74993017671'));
+
+// Реальный CEL CHAN_START UID 1783942893.55 (200 -> 100).
+const capturedInternalCel = [{
+  eventtype: 'CHAN_START', cid_name: '200', cid_num: '200', exten: '100',
+  context: 'from-internal', appname: '', channame: 'PJSIP/200-00000011',
+  uniqueid: '1783942893.55', linkedid: '1783942893.55'
+}];
+assert.deepEqual(detectLiveCallDirection(capturedInternalCel, '999'), {
+  direction: 'internal', internalCaller: '200', destinationNumber: '100', trunkNumber: ''
+});
+
 const guardedOutgoingBanner = normalizeLiveCallBannerPayload({
   active: true,
   direction: 'outgoing',
@@ -338,6 +407,15 @@ const incomingDisplay = buildLiveCallBannerDisplay({
 assert.equal(incomingDisplay.displayNumber, externalCaller);
 assert.equal(incomingDisplay.subtitle, 'На мой SIP 201');
 
+const capturedIncomingDisplay = buildLiveCallBannerDisplay({
+  direction: 'incoming', operatorExt: '200', externalCallerNumber: '74993017671',
+  sourceNumber: '74993017671', callerNumber: '74993017671', destinationNumber: '200',
+  internalNumber: '200', did: '841282', trunkNumber: '841282'
+});
+assert.equal(capturedIncomingDisplay.displayNumber, '74993017671');
+assert.equal(capturedIncomingDisplay.callerNumber, '74993017671');
+assert.equal(capturedIncomingDisplay.subtitle, 'На мой SIP 200');
+
 const outgoingDisplay = buildLiveCallBannerDisplay({
   direction: 'outgoing',
   callerNumber: '200',
@@ -349,6 +427,14 @@ const outgoingDisplay = buildLiveCallBannerDisplay({
 assert.equal(outgoingDisplay.displayNumber, outboundDestination);
 assert.equal(outgoingDisplay.subtitle, 'От внутреннего 200');
 
+const unprovenOutgoingSource = buildLiveCallBannerDisplay({
+  direction: 'outgoing', operatorExt: '200', dialedNumber: outboundDestination,
+  destinationNumber: outboundDestination, trunkNumber: '841282'
+});
+assert.equal(unprovenOutgoingSource.displayNumber, outboundDestination);
+assert.equal(unprovenOutgoingSource.callerNumber, '');
+assert.equal(unprovenOutgoingSource.subtitle, 'Исходящий звонок');
+
 const internalDisplay = buildLiveCallBannerDisplay({
   direction: 'internal',
   callerNumber: '200',
@@ -359,6 +445,13 @@ const internalDisplay = buildLiveCallBannerDisplay({
 assert.equal(internalDisplay.displayNumber, '100');
 assert.notEqual(internalDisplay.displayNumber, '');
 assert.equal(internalDisplay.subtitle, 'От внутреннего 200');
+
+const unprovenInternalSource = buildLiveCallBannerDisplay({
+  direction: 'internal', operatorExt: '200', destinationNumber: '100'
+});
+assert.equal(unprovenInternalSource.displayNumber, '100');
+assert.equal(unprovenInternalSource.callerNumber, '');
+assert.equal(unprovenInternalSource.subtitle, 'Внутренний звонок');
 
 const namedInternalDisplay = buildLiveCallBannerDisplay({
   direction: 'internal',

@@ -96,6 +96,16 @@ function isInboundContext(context: string): boolean {
     context.includes('sip-external') || context.includes('from-digital') || context.includes('from-outside');
 }
 
+function isInboundTrunkChannel(row: any): boolean {
+  return /(?:SIP|PJSIP)\/[^/\s]*-in-[0-9a-f]+/i.test(rowChannel(row));
+}
+
+function inboundTrunkNumber(row: any): string {
+  const raw = rowChannel(row).match(/(?:SIP|PJSIP)\/([^/\s]+?)-in-[0-9a-f]+/i)?.[1] || '';
+  const number = normalizeNumber(raw);
+  return isTrunkCandidate(number) ? number : '';
+}
+
 function isInboundRouteContext(context: string): boolean {
   return context === 'ext-queues' || context === 'ext-group' || context === 'ext-local' || context.startsWith('ivr-');
 }
@@ -126,7 +136,11 @@ export function detectLiveCallDirection(group: any[], operatorExt = ''): LiveCal
     }
   }
 
-  const hasExplicitInboundContext = rows.some(row => isInboundContext(rowContext(row)));
+  // During a real inbound call FreePBX may already move the trunk leg to
+  // macro-dial-one. The original SIP/<trunk>-in-* channel remains the reliable
+  // inbound evidence. Outgoing is checked above first, because this PBX also
+  // uses a trunk name ending in "-in" for outbound calls.
+  const hasExplicitInboundContext = rows.some(row => isInboundContext(rowContext(row)) || isInboundTrunkChannel(row));
   const hasInboundRouteWithExternalCaller = rows.some(row => {
     const context = rowContext(row);
     const caller = numberCandidates(read(row, 'CallerIDNum', 'callerId', 'caller', 'cid', 'cid_num', 'src', 'cnum')).find(isExternal);
@@ -134,14 +148,15 @@ export function detectLiveCallDirection(group: any[], operatorExt = ''): LiveCal
   });
 
   if (hasExplicitInboundContext || hasInboundRouteWithExternalCaller) {
-    const destinationNumber = rows.flatMap(directDestinationCandidates).find(isInternal) || operator;
-    return { direction: 'incoming', internalCaller: '', destinationNumber, trunkNumber: '' };
+    const destinationNumber = rows.flatMap(directDestinationCandidates).find(isInternal) || '';
+    const trunkNumber = rows.map(inboundTrunkNumber).find(Boolean) || '';
+    return { direction: 'incoming', internalCaller: '', destinationNumber, trunkNumber };
   }
 
   for (const row of rows) {
     const explicitCaller = explicitCallerExtension(row);
     const endpoint = endpointExtension(row);
-    const internalCaller = explicitCaller || endpoint || operator;
+    const internalCaller = explicitCaller || endpoint;
     const destination = directDestinationCandidates(row).find(number => isInternal(number) && number !== internalCaller) || '';
     if (internalCaller && destination) {
       return { direction: 'internal', internalCaller, destinationNumber: destination, trunkNumber: '' };
@@ -150,12 +165,12 @@ export function detectLiveCallDirection(group: any[], operatorExt = ''): LiveCal
 
   const externalDestination = rows.flatMap(directDestinationCandidates).find(isExternal) || '';
   if (externalDestination) {
-    const internalCaller = rows.map(row => explicitCallerExtension(row) || endpointExtension(row)).find(Boolean) || operator;
+    const internalCaller = rows.map(row => explicitCallerExtension(row) || endpointExtension(row)).find(Boolean) || '';
     const trunkNumber = allGroupNumbers(rows).find(number => isTrunkCandidate(number) && number !== externalDestination) || '';
     return { direction: 'outgoing', internalCaller, destinationNumber: externalDestination, trunkNumber };
   }
 
-  const internalCaller = rows.map(row => explicitCallerExtension(row) || endpointExtension(row)).find(Boolean) || operator;
+  const internalCaller = rows.map(row => explicitCallerExtension(row) || endpointExtension(row)).find(Boolean) || '';
   const destinationNumber = allGroupNumbers(rows).find(number => isInternal(number) && number !== internalCaller) || '';
   return { direction: 'internal', internalCaller, destinationNumber, trunkNumber: '' };
 }

@@ -23,24 +23,17 @@ export function buildLiveCallBannerDisplay(call: Record<string, any>) {
 
   const internalCaller = firstLiveValue([
     call.internalCaller,
-    call.internalNumber,
+    call.sourceNumber,
     call.callerNumber,
     call.callerId,
-    call.caller,
-    call.sourceNumber,
-    call.source,
-    call.src,
-    call.operatorExt
+    call.caller
   ], isInternalLiveNumber);
 
   const incomingCaller = firstLiveValue([
     call.externalCallerNumber,
+    call.sourceNumber,
     call.callerNumber,
     call.callerId,
-    call.caller,
-    call.sourceNumber,
-    call.source,
-    call.src,
     call.number,
     call.displayNumber
   ], value => isExternalLiveNumber(value) && !technicalNumbers.has(liveDigits(value)));
@@ -49,20 +42,14 @@ export function buildLiveCallBannerDisplay(call: Record<string, any>) {
     call.dialedNumber,
     call.destinationNumber,
     call.targetNumber,
-    call.dst,
     call.number,
-    call.extension,
     call.displayNumber
   ], value => isExternalLiveNumber(value) && liveDigits(value) !== liveDigits(internalCaller) && !technicalNumbers.has(liveDigits(value)));
 
   const internalDestination = firstLiveValue([
     call.destinationNumber,
     call.targetNumber,
-    call.dst,
     call.number,
-    call.extension,
-    call.connectedLineNumber,
-    call.internalNumber,
     call.displayNumber
   ], value => isInternalLiveNumber(value) && liveDigits(value) !== liveDigits(internalCaller));
 
@@ -73,7 +60,7 @@ export function buildLiveCallBannerDisplay(call: Record<string, any>) {
       : internalDestination;
   const callerNumber = direction === 'incoming' ? incomingCaller : internalCaller;
   const destinationNumber = direction === 'incoming'
-    ? firstLiveValue([call.destinationNumber, call.targetNumber, call.extension, call.internalNumber, call.operatorExt])
+    ? firstLiveValue([call.destinationNumber, call.targetNumber, call.internalNumber], isInternalLiveNumber)
     : displayNumber;
   const rawDisplayName = firstLiveValue([call.displayName, call.contactName, call.name]);
   const displayName = /^неизвестный номер$/i.test(rawDisplayName) ? '' : rawDisplayName;

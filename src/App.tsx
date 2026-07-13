@@ -5281,7 +5281,9 @@ export default function App() {
         const routeNumberLabel = isIncomingLive ? 'DID' : isOutgoingLive ? 'Транк' : 'Кому';
         const routeNumber = isIncomingLive ? liveCallBanner.did : isOutgoingLive ? liveCallBanner.trunkNumber : liveCallBanner.destinationNumber;
         const endpointLabel = isIncomingLive ? 'На мой SIP' : 'От внутреннего';
-        const endpointNumber = isIncomingLive ? (liveCallBanner.operatorExt || myExt) : (liveCallBanner.internalCaller || liveCallBanner.callerNumber || myExt);
+        const endpointNumber = isIncomingLive
+          ? (liveCallBanner.destinationNumber || liveCallBanner.internalNumber)
+          : (liveCallBanner.internalCaller || liveCallBanner.sourceNumber || liveCallBanner.callerNumber);
 
         return (
           <div
