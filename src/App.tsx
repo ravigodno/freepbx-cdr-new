@@ -76,7 +76,7 @@ import ReportsTab from './components/reports/ReportsTab';
 import MarketingTab from './components/marketing/MarketingTab';
 import { AboutSystemTab } from './components/AboutSystemTab';
 import ActiveCallsTab from './modules/monitoring/tabs/monitoring/ActiveCallsTab';
-import { normalizeLiveCallBannerPayload } from './utils/liveCallBanner';
+import { getLiveCallPopupTitle, normalizeLiveCallBannerPayload } from './utils/liveCallBanner';
 import CommandCenterTab from './modules/monitoring/tabs/monitoring/CommandCenterTab';
 const DbExplorerTab = lazy(() => import('./modules/monitoring/tabs/monitoring/DbExplorerTab'));
 import QualityTab from './modules/monitoring/tabs/monitoring/QualityTab';
@@ -520,6 +520,9 @@ interface LiveCallBanner {
   number?: string;
   callerNumber?: string;
   externalCallerNumber?: string;
+  internalCaller?: string;
+  destinationNumber?: string;
+  trunkNumber?: string;
   displayName?: string;
   contactType?: 'internal' | 'client';
   contactComment?: string;
@@ -5254,7 +5257,7 @@ export default function App() {
         const isIncomingLive = liveCallBanner.direction === 'incoming';
         const isOutgoingLive = liveCallBanner.direction === 'outgoing';
         const isInternalLive = liveCallBanner.direction === 'internal';
-        const title = isIncomingLive ? 'Входящий звонок' : isOutgoingLive ? 'Исходящий звонок' : 'Внутренний звонок';
+        const title = getLiveCallPopupTitle(liveCallBanner.direction);
         const iconClass = isIncomingLive ? 'text-blue-600 bg-blue-50' : isOutgoingLive ? 'text-indigo-600 bg-indigo-50' : 'text-purple-600 bg-purple-50';
         const contactTypeLabel = liveCallBanner.contactType === 'internal' ? 'Внутренний' : 'Клиент';
         const contactTypeClass = liveCallBanner.contactType === 'internal' ? 'bg-gradient-to-br from-slate-50 via-blue-50/40 to-sky-50/50 text-slate-600 border-slate-200' : 'bg-blue-50 text-blue-600 border-blue-100';
@@ -5269,6 +5272,10 @@ export default function App() {
           : buildLiveCallTransferTargets(directoryLookup.length ? directoryLookup : directory, liveCallBanner.operatorExt || myExt);
         const canUseLiveMonitorActions = session?.role === 'su' || session?.role === 'admin' || session?.role === 'manager';
         const liveActionButtonClass = 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60';
+        const routeNumberLabel = isIncomingLive ? 'DID' : isOutgoingLive ? 'Транк' : 'Кому';
+        const routeNumber = isIncomingLive ? liveCallBanner.did : isOutgoingLive ? liveCallBanner.trunkNumber : liveCallBanner.destinationNumber;
+        const endpointLabel = isIncomingLive ? 'На мой SIP' : 'От внутреннего';
+        const endpointNumber = isIncomingLive ? (liveCallBanner.operatorExt || myExt) : (liveCallBanner.internalCaller || liveCallBanner.callerNumber || myExt);
 
         return (
           <div
@@ -5368,11 +5375,11 @@ export default function App() {
                     <span className="text-[11px] uppercase tracking-wider font-bold text-slate-500">Должность / комментарий</span>
                     <span className="mt-2 text-sm font-bold text-slate-900 truncate" title={position}>{position || '—'}</span></div>
                   <div className="px-6 py-4 flex flex-col justify-center">
-                    <span className="text-[11px] uppercase tracking-wider font-bold text-slate-500">DID</span>
-                    <span className="mt-2 text-base font-black text-slate-950">{liveCallBanner.did || '—'}</span></div>
+                    <span className="text-[11px] uppercase tracking-wider font-bold text-slate-500">{routeNumberLabel}</span>
+                    <span className="mt-2 text-base font-black text-slate-950">{routeNumber || '—'}</span></div>
                   <div className="px-6 py-4 flex flex-col justify-center">
-                    <span className="text-[11px] uppercase tracking-wider font-bold text-slate-500">На мой SIP</span>
-                    <span className="mt-2 text-base font-black text-slate-950">{liveCallBanner.operatorExt || myExt || '—'}</span></div>
+                    <span className="text-[11px] uppercase tracking-wider font-bold text-slate-500">{endpointLabel}</span>
+                    <span className="mt-2 text-base font-black text-slate-950">{endpointNumber || '—'}</span></div>
                   <div className="px-6 py-4 flex flex-col justify-center items-start xl:items-end">
                     <span className="text-sm font-black text-slate-900">{liveCallBanner.startedAt || ''}</span>
                     <span className="mt-2 text-[11px] uppercase tracking-wider font-bold text-slate-500">Длительность</span>

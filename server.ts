@@ -83,10 +83,11 @@ import { buildReportHourlyTimeline, formatReportHourBucket } from './server/repo
 import { calculateCpuPercent, parseProcStatCpuSample, type ProcStatCpuSample } from './server/healthCpu.js';
 import { classifyMissedCallResolution, type MissedCallResolutionStatus } from './server/missedCallResolution.js';
 import {
-  normalizeInboundLiveSessionCallers,
+  normalizeLiveSessionCallers,
   resolveInboundExternalCaller,
   resolveInboundLiveCaller
 } from './server/inboundCallerResolver.js';
+import { detectLiveCallDirection } from './server/liveCallDirection.js';
 import {
   appendDevicesAlertsToSql, appendDevicesHistoryToSql, appendHealthHistoryToSql, appendQualityAlertsToSql,
   appendQualityHistoryToSql, getMonitoringStorageMode, getMonitoringStorageStatus, readDevicesAlertsFromSql,
@@ -12113,6 +12114,9 @@ interface LiveCallBanner {
   number?: string;
   callerNumber?: string;
   externalCallerNumber?: string;
+  internalCaller?: string;
+  destinationNumber?: string;
+  trunkNumber?: string;
   displayName?: string;
   contactType?: string;
   contactComment?: string;
@@ -12641,16 +12645,8 @@ function buildLiveCallBannerFromAmiChannels(channels: AmiBlock[], operatorExt: s
   for (const group of grouped.values()) {
     if (!groupHasOperator(group)) continue;
 
-    const joinedContext = group.map(ch => String(ch.Context || '').toLowerCase()).join(' ');
-    const joinedChannels = group.map(ch => String(ch.Channel || '').toLowerCase()).join(' ');
-
-    const hasInboundSignal =
-      joinedChannels.includes('-in-') ||
-      joinedContext.includes('from-trunk') ||
-      joinedContext.includes('from-pstn') ||
-      joinedContext.includes('ext-group') ||
-      joinedContext.includes('ext-queues') ||
-      joinedContext.includes('ivr-');
+    const directionResolution = detectLiveCallDirection(group, ext);
+    const hasInboundSignal = directionResolution.direction === 'incoming';
 
     // ВАЖНО: не берём произвольные цифры из Channel, иначе суффикс�� каналов
     // вроде SIP/100-00000004 могут отображаться как номер 00000004.
@@ -12687,27 +12683,26 @@ function buildLiveCallBannerFromAmiChannels(channels: AmiBlock[], operatorExt: s
       dcontext: ch.Context,
       channel: ch.Channel
     }));
-    const inboundCallerResolution = resolveInboundLiveCaller(inboundRows, externalCandidates, [did]);
-    const inboundCaller = inboundCallerResolution.callerNumber;
+    const inboundCallerResolution = hasInboundSignal
+      ? resolveInboundLiveCaller(inboundRows, externalCandidates, [did])
+      : null;
+    const inboundCaller = inboundCallerResolution?.callerNumber || '';
 
-    let direction: 'incoming' | 'outgoing' | 'internal' = hasInboundSignal ? 'incoming' : 'outgoing';
+    const direction = directionResolution.direction;
     let number = '';
 
     if (hasInboundSignal) {
       number = inboundCaller || externalCandidates.find(num => num !== did) || '';
+    } else if (direction === 'outgoing') {
+      number = directionResolution.destinationNumber ||
+        externalCandidates.find(num => num !== directionResolution.trunkNumber) || '';
     } else {
-      number = externalCandidates.find(num => num !== inboundCaller) || '';
-      if (!number) {
-        direction = 'internal';
-        number =
-          internalCandidates.find(num => num !== ext) ||
-          group.map(ch => onlyDigits(ch.ConnectedLineNum)).find(num => isInternalExt(num) && num !== ext) ||
-          group.map(ch => onlyDigits(ch.Exten)).find(num => isInternalExt(num) && num !== ext) ||
-          '';
-      }
+      number = directionResolution.destinationNumber ||
+        internalCandidates.find(num => num !== directionResolution.internalCaller) ||
+        group.map(ch => onlyDigits(ch.ConnectedLineNum)).find(num => isInternalExt(num) && num !== ext) ||
+        group.map(ch => onlyDigits(ch.Exten)).find(num => isInternalExt(num) && num !== ext) ||
+        '';
     }
-
-    if (!number && !hasInboundSignal) continue;
 
     const contact = resolveLiveContact(number, directory, settings);
     const first = group[0];
@@ -12718,8 +12713,11 @@ function buildLiveCallBannerFromAmiChannels(channels: AmiBlock[], operatorExt: s
       direction,
       operatorExt: ext,
       number,
-      callerNumber: number,
-      externalCallerNumber: inboundCallerResolution.externalCallerNumber,
+      callerNumber: hasInboundSignal ? number : (directionResolution.internalCaller || ext),
+      externalCallerNumber: inboundCallerResolution?.externalCallerNumber || '',
+      internalCaller: hasInboundSignal ? '' : (directionResolution.internalCaller || ext),
+      destinationNumber: hasInboundSignal ? (directionResolution.destinationNumber || ext) : number,
+      trunkNumber: hasInboundSignal ? did : directionResolution.trunkNumber,
       displayName: contact.name,
       contactType: contact.type,
       contactComment: contact.comment,
@@ -15882,7 +15880,7 @@ app.get('/api/live-sessions', requireAuth(), async (req, res) => {
       runAsteriskCliCommand('pjsip show channels', 5000),
     ]);
 
-    const sessions = channels.success ? normalizeInboundLiveSessionCallers(parseCoreShowChannelsConcise(channels.message)) : [];
+    const sessions = channels.success ? normalizeLiveSessionCallers(parseCoreShowChannelsConcise(channels.message)) : [];
 
     const summary = {
       total: sessions.length,
@@ -16011,7 +16009,7 @@ app.get('/api/live-sessions-test', requireAuth(), async (req, res) => {
     const sipChannels = await runAMICommand(settings, 'sip show channels');
     const pjsipChannels = await runAMICommand(settings, 'pjsip show channels');
 
-    const sessions = concise.success ? normalizeInboundLiveSessionCallers(parseLiveConciseOutput(concise.message)) : [];
+    const sessions = concise.success ? normalizeLiveSessionCallers(parseLiveConciseOutput(concise.message)) : [];
 
     res.json({
       success: true,

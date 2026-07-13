@@ -1,3 +1,5 @@
+import { detectLiveCallDirection } from './liveCallDirection.js';
+
 export type InboundCallerConfidence = 'high' | 'medium' | 'low' | 'none';
 
 export interface RejectedInboundCallerCandidate {
@@ -236,7 +238,7 @@ function getInboundLiveDid(group: any[]): string {
     .find(isExternalCandidate) || '';
 }
 
-export function normalizeInboundLiveSessionCallers(sessions: any[]): any[] {
+export function normalizeLiveSessionCallers(sessions: any[]): any[] {
   const grouped = new Map<string, any[]>();
   sessions.forEach(session => {
     const key = String(session?.linkedid || session?.uniqueid || session?.channel || '');
@@ -244,8 +246,32 @@ export function normalizeInboundLiveSessionCallers(sessions: any[]): any[] {
     grouped.get(key)!.push(session);
   });
 
-  const resolutionByGroup = new Map<string, InboundLiveCallerResolution & { did: string }>();
+  const resolutionByGroup = new Map<string, {
+    direction: 'incoming' | 'outgoing' | 'internal';
+    callerNumber: string;
+    destinationNumber: string;
+    externalCallerNumber: string;
+    sourceField: string | null;
+    confidence: InboundCallerConfidence;
+    did: string;
+    trunkNumber: string;
+  }>();
   grouped.forEach((group, key) => {
+    const direction = detectLiveCallDirection(group);
+    if (direction.direction !== 'incoming') {
+      resolutionByGroup.set(key, {
+        direction: direction.direction,
+        callerNumber: direction.internalCaller,
+        destinationNumber: direction.destinationNumber,
+        externalCallerNumber: '',
+        sourceField: null,
+        confidence: 'none',
+        did: '',
+        trunkNumber: direction.trunkNumber
+      });
+      return;
+    }
+
     if (!group.some(isInboundLiveSession)) return;
     const did = getInboundLiveDid(group);
     const rows = group.map(session => ({
@@ -256,7 +282,17 @@ export function normalizeInboundLiveSessionCallers(sessions: any[]): any[] {
       did,
       dcontext: session?.dcontext ?? session?.context
     }));
-    resolutionByGroup.set(key, { ...resolveInboundLiveCaller(rows, [], [did]), did });
+    const caller = resolveInboundLiveCaller(rows, [], [did]);
+    resolutionByGroup.set(key, {
+      direction: 'incoming',
+      callerNumber: caller.callerNumber,
+      destinationNumber: direction.destinationNumber,
+      externalCallerNumber: caller.externalCallerNumber,
+      sourceField: caller.sourceField || caller.fallbackSourceField,
+      confidence: caller.confidence,
+      did,
+      trunkNumber: did
+    });
   });
 
   return sessions.map(session => {
@@ -268,12 +304,17 @@ export function normalizeInboundLiveSessionCallers(sessions: any[]): any[] {
       ...session,
       callerId: callerNumber,
       callerNumber,
+      direction: resolution.direction,
+      internalCaller: resolution.direction === 'incoming' ? '' : callerNumber,
+      destinationNumber: resolution.destinationNumber,
       externalCallerNumber: resolution.externalCallerNumber,
-      externalCallerSourceField: resolution.sourceField || resolution.fallbackSourceField,
+      externalCallerSourceField: resolution.sourceField,
       externalCallerConfidence: resolution.confidence,
       did: resolution.did,
       inboundDid: resolution.did,
-      trunkNumber: resolution.did
+      trunkNumber: resolution.trunkNumber
     };
   });
 }
+
+export const normalizeInboundLiveSessionCallers = normalizeLiveSessionCallers;
