@@ -57,6 +57,7 @@ type DirectorySqlMetadataRow = {
   value: string | null;
   field_key?: string | null;
   show_in_search?: number | boolean | null;
+  is_visible?: number | boolean | null;
 };
 
 const DIRECTORY_SQL_READ_AUDIT_COOLDOWN_MS = 5 * 60 * 1000;
@@ -131,6 +132,13 @@ export async function searchDirectoryInternalExtensions(
     .toLocaleLowerCase('ru-RU')
     .replace(/ё/g, 'е');
   const queryDigits = query.replace(/\D/g, '');
+  const normalizedQueryDigits = normalizePhoneForLookup(queryDigits);
+  const queryPhoneVariants = Array.from(new Set([
+    queryDigits,
+    normalizedQueryDigits,
+    queryDigits.length === 11 && queryDigits.startsWith('7') ? `8${queryDigits.slice(1)}` : '',
+    queryDigits.length === 11 && queryDigits.startsWith('8') ? `7${queryDigits.slice(1)}` : ''
+  ].filter(Boolean)));
   const excludeExtension = safeText(rawExcludeExtension, 20).replace(/\D/g, '');
   const limit = Math.max(1, Math.min(50, Number(rawLimit) || 50));
   const configuredMode = await getDirectoryStorageMode();
@@ -145,27 +153,34 @@ export async function searchDirectoryInternalExtensions(
 
       if (query) {
         const like = `%${query}%`;
-        const digitsLike = `%${queryDigits}%`;
+        const contactPhoneDigitsSql = `REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(CONCAT_WS(' ', c.phone_normalized, c.phone, c.phone2), '+', ''), ' ', ''), '-', ''), '(', ''), ')', ''), '.', ''), '/', '')`;
+        const metadataPhoneDigitsSql = `REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(sm.metadata_value, sm.value, sm.metadata_json, ''), '+', ''), ' ', ''), '-', ''), '(', ''), ')', ''), '.', ''), '/', '')`;
+        const contactPhoneSql = queryPhoneVariants.map(() => `${contactPhoneDigitsSql} LIKE ?`).join(' OR ');
+        const metadataPhoneSql = queryPhoneVariants.map(() => `${metadataPhoneDigitsSql} LIKE ?`).join(' OR ');
         searchSql = `
           AND (
             REPLACE(LOWER(CONCAT_WS(' ', c.name, c.company, c.phone, c.phone2, c.comment)), 'ё', 'е') LIKE ?
-            ${queryDigits ? 'OR c.phone_normalized LIKE ?' : ''}
+            ${contactPhoneSql ? `OR ${contactPhoneSql}` : ''}
             OR EXISTS (
               SELECT 1
               FROM directory_contact_metadata sm
               LEFT JOIN directory_custom_fields sf ON sf.id = sm.field_id
               WHERE sm.contact_id = c.id
                 AND (
-                  sm.metadata_key IN ('phones','position','department','group','internalExtension','tags','sipStatus','deviceStatus','deviceType','source')
-                  OR sf.show_in_search = 1
+                  sm.metadata_key IN ('phones','position','department','group','internalExtension','tags','sipStatus','deviceStatus','deviceType','source','firstName','lastName','surname')
+                  OR (sf.show_in_search = 1 AND COALESCE(sf.is_visible, 1) = 1)
                 )
                 AND COALESCE(sm.metadata_key, sf.field_key, '') NOT REGEXP 'password|passwd|token|secret|credential|private[_-]?key|api[_-]?key'
-                AND REPLACE(LOWER(COALESCE(sm.metadata_value, sm.value, sm.metadata_json, '')), 'ё', 'е') LIKE ?
+                AND (
+                  REPLACE(LOWER(COALESCE(sm.metadata_value, sm.value, sm.metadata_json, '')), 'ё', 'е') LIKE ?
+                  ${metadataPhoneSql ? `OR ${metadataPhoneSql}` : ''}
+                )
             )
           )`;
         params.push(like);
-        if (queryDigits) params.push(digitsLike);
+        params.push(...queryPhoneVariants.map(value => `%${value}%`));
         params.push(like);
+        params.push(...queryPhoneVariants.map(value => `%${value}%`));
       }
 
       const candidateLimit = Math.min(200, Math.max(limit * 4, 50));
@@ -174,8 +189,7 @@ export async function searchDirectoryInternalExtensions(
                 c.contact_type, c.owner_user_id, c.visibility, c.type, c.is_spam, c.is_blacklisted,
                 c.created_at, c.updated_at
          FROM directory_contacts c
-         WHERE c.type = 'internal'
-           AND COALESCE(c.is_spam, 0) = 0
+         WHERE COALESCE(c.is_spam, 0) = 0
            AND COALESCE(c.is_blacklisted, 0) = 0
            AND (COALESCE(c.contact_type, 'common') <> 'personal' OR ? = 1 OR c.owner_user_id = ?)
            AND NOT EXISTS (
@@ -194,7 +208,7 @@ export async function searchDirectoryInternalExtensions(
            END,
            c.phone_normalized ASC, c.name ASC, c.id ASC
          LIMIT ${candidateLimit}`,
-        [...params, queryDigits, queryDigits, queryDigits, queryDigits, query, query]
+        [...params, normalizedQueryDigits, normalizedQueryDigits, normalizedQueryDigits, normalizedQueryDigits, query, query]
       ) as DirectorySqlContactRow[];
 
       const contactIds = rows.map(row => String(row.id || '')).filter(Boolean);
@@ -205,7 +219,10 @@ export async function searchDirectoryInternalExtensions(
         entry.searchMetadata = metadataRows
           .filter(metadata => {
             const key = String(metadata.metadata_key || metadata.field_key || '');
-            const isSearchable = metadata.show_in_search === true || Number(metadata.show_in_search || 0) === 1 || [
+            const isSearchable = (
+              (metadata.show_in_search === true || Number(metadata.show_in_search || 0) === 1)
+              && Number(metadata.is_visible ?? 1) === 1
+            ) || [
               'phones',
               'position',
               'department',
@@ -215,7 +232,10 @@ export async function searchDirectoryInternalExtensions(
               'sipStatus',
               'deviceStatus',
               'deviceType',
-              'source'
+              'source',
+              'firstName',
+              'lastName',
+              'surname'
             ].includes(key);
             return isSearchable && !/(password|passwd|token|secret|credential|private[_-]?key|api[_-]?key)/i.test(key);
           })
@@ -302,7 +322,7 @@ async function selectDirectorySearchMetadataRows(contactIds: string[]): Promise<
   const placeholders = contactIds.map(() => '?').join(', ');
   const rows = await queryPBXPulsDb(
     `SELECT m.contact_id, m.metadata_key, m.metadata_value, m.metadata_json, m.value,
-            f.field_key, f.show_in_search
+            f.field_key, f.show_in_search, f.is_visible
      FROM directory_contact_metadata m
      LEFT JOIN directory_custom_fields f ON f.id = m.field_id
      WHERE m.contact_id IN (${placeholders})

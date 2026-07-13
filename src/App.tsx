@@ -1956,8 +1956,11 @@ export default function App() {
     if (!session || !liveCallBanner?.active || isLiveTransferLoading) {
       return { success: false, error: 'Активный звонок уже завершён или перевод выполняется' };
     }
-    const cleanedTarget = String(target.extension || '').replace(/\D/g, '');
-    if (!cleanedTarget) return { success: false, error: 'Укажите внутренний номер' };
+    const rawTarget = String(target.extension || '').trim();
+    const cleanedTarget = rawTarget.replace(/\D/g, '');
+    if (!target.canTransfer || !/^\d{2,5}$/.test(rawTarget) || cleanedTarget !== rawTarget) {
+      return { success: false, error: target.transferDisabledReason || 'Перевод разрешён только на внутренний номер' };
+    }
 
     setIsLiveTransferLoading(true);
     setLiveTransferStatus(`Переводим на ${cleanedTarget}...`);

@@ -7,9 +7,15 @@ export interface LiveTransferSearchTarget {
   id: string;
   extension: string;
   name: string;
+  company: string;
+  phone: string;
+  extraPhone: string;
   department: string;
   position: string;
   comment: string;
+  metadataMatches: string[];
+  canTransfer: boolean;
+  transferDisabledReason: string;
   sipStatus: LiveTransferPresence;
   deviceStatus: LiveTransferPresence;
   deviceType: string;
@@ -77,6 +83,10 @@ export function LiveTransferSearch({
   const current = digits(currentExtension);
   const manualExtension = digits(query);
   const canUseManual = isInternalExtension(query) && manualExtension !== current && !targets.some(target => target.extension === manualExtension);
+  const selectableIndexes = useMemo(() => [
+    ...targets.map((target, index) => target.canTransfer ? index : -1).filter(index => index >= 0),
+    ...(canUseManual ? [targets.length] : [])
+  ], [targets, canUseManual]);
 
   useEffect(() => {
     onUnauthorizedRef.current = onUnauthorized;
@@ -119,9 +129,11 @@ export function LiveTransferSearch({
         }
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.error || 'Поиск временно недоступен');
-        setTargets(Array.isArray(data.items) ? data.items.slice(0, 50) : []);
         setDirectoryAvailable(data.directoryAvailable !== false);
-        setActiveIndex(0);
+        const receivedTargets = Array.isArray(data.items) ? data.items.slice(0, 50) : [];
+        setTargets(receivedTargets);
+        const firstTransferableIndex = receivedTargets.findIndex((target: LiveTransferSearchTarget) => target.canTransfer === true);
+        setActiveIndex(firstTransferableIndex >= 0 ? firstTransferableIndex : 0);
       } catch (error: any) {
         if (error?.name === 'AbortError') return;
         setTargets([]);
@@ -138,7 +150,7 @@ export function LiveTransferSearch({
     };
   }, [open, query, selected, successMessage, current, token]);
 
-  const selectableCount = targets.length + (canUseManual ? 1 : 0);
+  const selectableCount = selectableIndexes.length;
   const selectedStatus = useMemo(() => {
     if (!selected) return 'unknown' as LiveTransferPresence;
     return selected.sipStatus !== 'unknown' ? selected.sipStatus : selected.deviceStatus;
@@ -163,6 +175,12 @@ export function LiveTransferSearch({
       department: '',
       position: '',
       comment: '',
+      company: '',
+      phone: '',
+      extraPhone: '',
+      metadataMatches: [],
+      canTransfer: true,
+      transferDisabledReason: '',
       sipStatus: 'unknown',
       deviceStatus: 'unknown',
       deviceType: '',
@@ -179,17 +197,23 @@ export function LiveTransferSearch({
     }
     if (event.key === 'ArrowDown' && selectableCount) {
       event.preventDefault();
-      setActiveIndex(index => (index + 1) % selectableCount);
+      setActiveIndex(index => {
+        const currentPosition = selectableIndexes.indexOf(index);
+        return selectableIndexes[(currentPosition + 1 + selectableCount) % selectableCount];
+      });
       return;
     }
     if (event.key === 'ArrowUp' && selectableCount) {
       event.preventDefault();
-      setActiveIndex(index => (index - 1 + selectableCount) % selectableCount);
+      setActiveIndex(index => {
+        const currentPosition = selectableIndexes.indexOf(index);
+        return selectableIndexes[(currentPosition - 1 + selectableCount) % selectableCount];
+      });
       return;
     }
     if (event.key === 'Enter') {
       event.preventDefault();
-      if (activeIndex < targets.length && targets[activeIndex]) {
+      if (activeIndex < targets.length && targets[activeIndex]?.canTransfer) {
         setSelected(targets[activeIndex]);
         setTransferError('');
       } else {
@@ -199,7 +223,7 @@ export function LiveTransferSearch({
   };
 
   const confirmTransfer = async () => {
-    if (!selected || transferring) return;
+    if (!selected || !selected.canTransfer || !isInternalExtension(selected.extension) || transferring) return;
     setTransferring(true);
     setTransferError('');
     const result = await onTransfer(selected);
@@ -237,7 +261,7 @@ export function LiveTransferSearch({
           <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2">
             <div>
               <div className="text-xs font-black text-slate-900">Переадресовать звонок</div>
-              <div className="text-[10px] font-semibold text-slate-400">Поиск по номеру, ФИО, отделу или должности</div>
+              <div className="text-[10px] font-semibold text-slate-400">Поиск по всем данным справочника</div>
             </div>
             <button type="button" onClick={resetAndClose} className="rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700" title="Закрыть">
               <X className="h-4 w-4" />
@@ -286,7 +310,7 @@ export function LiveTransferSearch({
                       setActiveIndex(0);
                     }}
                     onKeyDown={handleKeyDown}
-                    placeholder="Номер, ФИО, отдел, должность…"
+                    placeholder="ФИО, компания, телефон, отдел…"
                     className="w-full rounded-lg border border-slate-200 py-2 pl-9 pr-9 text-sm font-semibold text-slate-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
                     role="combobox"
                     aria-expanded="true"
@@ -308,15 +332,19 @@ export function LiveTransferSearch({
                           key={`${target.id}-${target.extension}`}
                           type="button"
                           role="option"
+                          disabled={!target.canTransfer}
+                          aria-disabled={!target.canTransfer}
                           aria-selected={index === activeIndex}
-                          onMouseEnter={() => setActiveIndex(index)}
-                          onClick={() => { setSelected(target); setTransferError(''); }}
-                          className={`mb-1 flex w-full items-start gap-3 rounded-lg px-3 py-2 text-left transition last:mb-0 ${index === activeIndex ? 'bg-blue-50 ring-1 ring-blue-100' : 'hover:bg-slate-50'}`}
+                          onMouseEnter={() => { if (target.canTransfer) setActiveIndex(index); }}
+                          onClick={() => { if (target.canTransfer) { setSelected(target); setTransferError(''); } }}
+                          className={`mb-1 flex w-full items-start gap-3 rounded-lg px-3 py-2 text-left transition last:mb-0 ${!target.canTransfer ? 'cursor-not-allowed bg-slate-50 opacity-70' : index === activeIndex ? 'bg-blue-50 ring-1 ring-blue-100' : 'hover:bg-slate-50'}`}
                         >
-                          <span className="w-16 shrink-0 font-mono text-base font-black text-blue-700">{target.extension}</span>
+                          <span className={`w-16 shrink-0 font-mono text-base font-black ${target.canTransfer ? 'text-blue-700' : 'text-slate-400'}`}>{target.extension || '—'}</span>
                           <span className="min-w-0 flex-1">
                             <span className="block truncate text-xs font-black text-slate-900">{target.name}</span>
-                            <span className="mt-0.5 block truncate text-[10px] font-semibold text-slate-500">{[target.department, target.position].filter(Boolean).join(' · ') || target.comment || 'Внутренний сотрудник'}</span>
+                            {target.phone && <span className="mt-0.5 block truncate font-mono text-[10px] font-semibold text-slate-600">{[target.phone, target.extraPhone].filter(Boolean).join(' · ')}</span>}
+                            <span className="mt-0.5 block truncate text-[10px] font-semibold text-slate-500">{[target.company, target.department, target.position].filter(Boolean).join(' · ') || target.comment || 'Контакт справочника'}</span>
+                            {!target.canTransfer && <span className="mt-1 block text-[10px] font-bold text-amber-700">{target.transferDisabledReason || 'Нет внутреннего номера для переадресации'}</span>}
                             {target.deviceType && <span className="mt-0.5 block truncate text-[10px] text-slate-400">{target.deviceType}</span>}
                           </span>
                           <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-bold ${presenceClasses[status]}`}>{presenceLabels[status]}</span>

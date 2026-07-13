@@ -98,6 +98,7 @@ import {
   selectLiveOutgoingDestination,
   stripLiveTechnicalAddresses
 } from './server/liveCallDirection.js';
+import { getLiveTransferInternalExtension } from './server/liveTransferSearch.js';
 import { buildLiveCallBannerDisplay } from './src/utils/liveCallBanner.js';
 import {
   appendDevicesAlertsToSql, appendDevicesHistoryToSql, appendHealthHistoryToSql, appendQualityAlertsToSql,
@@ -12588,18 +12589,7 @@ function liveFormatSeconds(value: number): string {
 
 function getDirectoryInternalTransferExtension(entry: any): string {
   const normalized = normalizeDirectoryEntry(entry);
-  const candidates = [
-    normalized.internalExtension,
-    normalized.number,
-    ...(Array.isArray(normalized.phones) ? normalized.phones : [])
-  ];
-
-  for (const value of candidates) {
-    const digits = onlyDigits(value);
-    if (digits && isInternalExt(digits)) return digits;
-  }
-
-  return '';
+  return getLiveTransferInternalExtension(normalized);
 }
 
 function buildLiveTransferTargets(directory: any[], req: Request, localDb: any, operatorExt: string): LiveTransferTarget[] {
@@ -12609,7 +12599,7 @@ function buildLiveTransferTargets(directory: any[], req: Request, localDb: any, 
   return (directory || [])
     .map((entry: any) => normalizeDirectoryEntry(entry, localDb.settings))
     .filter((entry: any) => canReadDirectoryEntry(entry, (req as any).user, getAuthenticatedDbUser(localDb, req), localDb.settings))
-    .filter((entry: any) => entry.type === 'internal' && entry.isSpam !== true && entry.isBlacklisted !== true && entry.disabled !== true && entry.hidden !== true)
+    .filter((entry: any) => entry.isSpam !== true && entry.isBlacklisted !== true && entry.disabled !== true && entry.hidden !== true)
     .map((entry: any) => {
       const extension = getDirectoryInternalTransferExtension(entry);
       if (!extension || extension === currentExt || seen.has(extension)) return null;
