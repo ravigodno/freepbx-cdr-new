@@ -3,7 +3,6 @@ import {
   Phone,
   PhoneIncoming,
   PhoneOutgoing,
-  PhoneForwarded,
   PhoneMissed,
   PhoneCall,
   Headphones,
@@ -75,6 +74,7 @@ import TcpdumpTab from './modules/monitoring/tabs/monitoring/TcpdumpTab';
 import ReportsTab from './components/reports/ReportsTab';
 import MarketingTab from './components/marketing/MarketingTab';
 import { AboutSystemTab } from './components/AboutSystemTab';
+import { LiveTransferSearch, type LiveTransferResult, type LiveTransferSearchTarget } from './components/LiveTransferSearch';
 import ActiveCallsTab from './modules/monitoring/tabs/monitoring/ActiveCallsTab';
 import { getLiveCallPopupTitle, normalizeLiveCallBannerPayload } from './utils/liveCallBanner';
 import CommandCenterTab from './modules/monitoring/tabs/monitoring/CommandCenterTab';
@@ -88,7 +88,7 @@ import CDRPage from './modules/cdr/pages/CDRPage';
 import LegacyCDRTable from './modules/cdr/components/LegacyCDRTable';
 import CDRProcessModal from './modules/cdr/components/CDRProcessModal';
 import CDRChronologyModal from './modules/cdr/components/CDRChronologyModal';
-import { buildCdrRowViewModel, isInternalExt } from './modules/cdr/utils/CDRRowHelpers';
+import { buildCdrRowViewModel } from './modules/cdr/utils/CDRRowHelpers';
 import { buildCdrQueryParams } from './modules/cdr/utils/buildCdrQueryParams';
 import { hasUserPermission, PermissionKey } from './modules/access/permissions';
 import PermissionsMatrixTab from './modules/access/components/PermissionsMatrixTab';
@@ -541,50 +541,6 @@ interface LiveCallBanner {
   durationSec?: number;
   durationText?: string;
   startedAt?: string;
-  transferTargets?: LiveCallTransferTarget[];
-}
-
-interface LiveCallTransferTarget {
-  id: string;
-  extension: string;
-  label: string;
-}
-
-const getLiveTransferExtension = (entry: DirectoryEntry): string => {
-  const candidates = [
-    entry.internalExtension,
-    entry.number,
-    ...(Array.isArray(entry.phones) ? entry.phones : [])
-  ];
-
-  for (const value of candidates) {
-    const digits = String(value || '').replace(/\D/g, '');
-    if (digits && isInternalExt(digits)) return digits;
-  }
-
-  return '';
-};
-
-const buildLiveCallTransferTargets = (entries: DirectoryEntry[], currentExt?: string): LiveCallTransferTarget[] => {
-  const current = String(currentExt || '').replace(/\D/g, '');
-  const seen = new Set<string>();
-
-  return (entries || [])
-    .filter(entry => entry.type === 'internal' && entry.isSpam !== true && entry.isBlacklisted !== true)
-    .map(entry => {
-      const extension = getLiveTransferExtension(entry);
-      if (!extension || extension === current || seen.has(extension)) return null;
-      seen.add(extension);
-      const name = entry.name || entry.company || 'Внутренний номер';
-      const detail = entry.position || entry.department || entry.group || '';
-      return {
-        id: entry.id || extension,
-        extension,
-        label: detail ? `${name} · ${detail}` : name
-      };
-    })
-    .filter((item): item is LiveCallTransferTarget => Boolean(item))
-    .sort((a, b) => a.extension.localeCompare(b.extension, 'ru', { numeric: true }));
 };
 
 export default function App() {
@@ -1996,10 +1952,12 @@ export default function App() {
     }
   };
 
-  const handleLiveCallTransfer = async (targetExtension: string) => {
-    if (!session || !liveCallBanner?.active || isLiveTransferLoading) return;
-    const cleanedTarget = String(targetExtension || '').replace(/\D/g, '');
-    if (!cleanedTarget) return;
+  const handleLiveCallTransfer = async (target: LiveTransferSearchTarget): Promise<LiveTransferResult> => {
+    if (!session || !liveCallBanner?.active || isLiveTransferLoading) {
+      return { success: false, error: 'Активный звонок уже завершён или перевод выполняется' };
+    }
+    const cleanedTarget = String(target.extension || '').replace(/\D/g, '');
+    if (!cleanedTarget) return { success: false, error: 'Укажите внутренний номер' };
 
     setIsLiveTransferLoading(true);
     setLiveTransferStatus(`Переводим на ${cleanedTarget}...`);
@@ -2019,20 +1977,24 @@ export default function App() {
 
       if (resp.status === 401) {
         handleAuthError(resp);
-        return;
+        return { success: false, error: 'Сессия истекла' };
       }
 
       const data = await resp.json().catch(() => ({}));
       if (resp.ok && data.success) {
-        setLiveTransferStatus(`Звонок переведён на ${cleanedTarget}`);
+        const targetLabel = String(data.targetLabel || target.name || '').trim();
+        setLiveTransferStatus(`Переадресовано на ${cleanedTarget}${targetLabel ? ` ${targetLabel}` : ''}`);
         setTimeout(() => setLiveTransferStatus(''), 4000);
         loadLiveCallBanner();
-        return;
+        return { success: true, targetLabel };
       }
 
-      setLiveTransferStatus(data.error || 'Не удалось перевести звонок');
+      const error = data.error || 'Не удалось выполнить переадресацию';
+      setLiveTransferStatus(error);
+      return { success: false, error };
     } catch (_error) {
       setLiveTransferStatus('Ошибка сети при переводе звонка');
+      return { success: false, error: 'Ошибка сети при переводе звонка' };
     } finally {
       setIsLiveTransferLoading(false);
     }
@@ -5273,9 +5235,6 @@ export default function App() {
         const positionMatch = display.match(/\(([^)]*)\)\s*$/);
         const position = positionMatch?.[1] || liveCallBanner.contactComment || '';
         const durationText = liveCallBanner.durationText || `${Math.floor((liveCallBanner.durationSec || 0) / 60)}:${String((liveCallBanner.durationSec || 0) % 60).padStart(2, '0')}`;
-        const transferTargets = Array.isArray(liveCallBanner.transferTargets) && liveCallBanner.transferTargets.length
-          ? liveCallBanner.transferTargets
-          : buildLiveCallTransferTargets(directoryLookup.length ? directoryLookup : directory, liveCallBanner.operatorExt || myExt);
         const canUseLiveMonitorActions = session?.role === 'su' || session?.role === 'admin' || session?.role === 'manager';
         const liveActionButtonClass = 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60';
         const routeNumberLabel = isIncomingLive ? 'DID' : isOutgoingLive ? 'Транк' : 'Кому';
@@ -5303,28 +5262,14 @@ export default function App() {
               <div className="flex items-stretch min-h-[104px]">
                 <div className="relative flex items-center gap-4 py-4 pl-20 pr-6 min-w-[420px] max-w-[520px] border-r border-slate-200">
                   <div className="absolute left-4 top-3 bottom-3 z-10 flex flex-col justify-center gap-1">
-                    <details className="group relative">
-                      <summary className={liveActionButtonClass} title="Переадресовать звонок">
-                        <PhoneForwarded className="h-4 w-4" />
-                      </summary>
-                      <div className="absolute left-10 top-0 z-20 max-h-64 w-72 overflow-y-auto rounded-xl border border-slate-200 bg-white p-2 text-left shadow-xl">
-                        {transferTargets.length ? transferTargets.map(target => (
-                          <button
-                            key={target.id + target.extension}
-                            type="button"
-                            disabled={isLiveTransferLoading}
-                            onClick={() => handleLiveCallTransfer(target.extension)}
-                            className="flex w-full min-w-0 items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-xs font-bold text-slate-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60"
-                            title={`${target.label} · ${target.extension}`}
-                          >
-                            <span className="min-w-0 truncate">{target.label}</span>
-                            <span className="shrink-0 font-mono text-sm font-black text-blue-700">{target.extension}</span>
-                          </button>
-                        )) : (
-                          <div className="px-3 py-2 text-xs font-bold text-slate-400">Нет внутренних номеров в справочнике</div>
-                        )}
-                      </div>
-                    </details>
+                    <LiveTransferSearch
+                      token={session?.token || ''}
+                      currentExtension={liveCallBanner.operatorExt || myExt}
+                      disabled={isLiveTransferLoading}
+                      buttonClassName={liveActionButtonClass}
+                      onUnauthorized={handleAuthError}
+                      onTransfer={handleLiveCallTransfer}
+                    />
                     {canUseLiveMonitorActions && (
                       <>
                         <button

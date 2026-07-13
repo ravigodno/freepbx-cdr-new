@@ -37,7 +37,12 @@ import { buildLegacySettingsSeedRows } from './server/pbxpulsLegacySettings.js';
 import { buildHybridSettingsSnapshot, getPBXPulsRuntimeSettingsSnapshot, getSettingsStorageMode, isSettingsApiRuntimeSwitchEnabled } from './server/pbxpulsSettingsRuntime.js';
 import { buildDirectoryMigrationPreview } from './server/pbxpulsDirectoryMigrationPreview.js';
 import { buildDirectoryReadiness, buildDirectorySeedPreview } from './server/pbxpulsDirectorySeed.js';
-import { getDirectoryRuntimeSnapshot, getDirectoryStorageMode, type DirectoryStorageMode } from './server/pbxpulsDirectoryRuntime.js';
+import {
+  getDirectoryRuntimeSnapshot,
+  getDirectoryStorageMode,
+  searchDirectoryInternalExtensions,
+  type DirectoryStorageMode
+} from './server/pbxpulsDirectoryRuntime.js';
 import {
   createDirectoryContactSql,
   deleteDirectoryContactSql,
@@ -3083,6 +3088,11 @@ const normalizeDirectoryEntry = (entry: any, settings?: AppSettings): any => {
     tags,
     isSpam: boolValue(entry?.isSpam ?? entry?.is_spam) || tags.some((t: string) => t.toLowerCase() === 'спам' || t.toLowerCase() === 'spam'),
     isBlacklisted: boolValue(entry?.isBlacklisted ?? entry?.is_blacklisted),
+    disabled: boolValue(entry?.disabled ?? entry?.isDisabled),
+    hidden: boolValue(entry?.hidden ?? entry?.isHidden),
+    sipStatus: String(entry?.sipStatus || '').trim(),
+    deviceStatus: String(entry?.deviceStatus || '').trim(),
+    deviceType: String(entry?.deviceType || entry?.sipType || entry?.technology || '').trim(),
     comment: String(entry?.comment || entry?.notes || '').trim(),
     createdAt: entry?.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString()
@@ -11040,6 +11050,46 @@ app.get('/api/directory', requireAuth(), async (req, res) => {
   }
 });
 
+app.get('/api/directory/extensions/search', requireAuth(), async (req, res) => {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.make_calls !== true) {
+    res.status(403).json({ error: 'Нет прав на переадресацию звонков' });
+    return;
+  }
+
+  try {
+    const localDb = await readLocalDb();
+    const result = await searchDirectoryInternalExtensions(
+      req.query.q,
+      req.query.limit,
+      req.query.excludeExtension,
+      {
+        legacyDirectory: localDb.directory || [],
+        settings: localDb.settings,
+        authUser,
+        dbUser: getAuthenticatedDbUser(localDb, req)
+      }
+    );
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      items: result.items,
+      total: result.items.length,
+      limit: Math.max(1, Math.min(50, Number(req.query.limit) || 50)),
+      source: result.source,
+      directoryAvailable: result.directoryAvailable,
+      fallbackReason: result.fallbackReason || null
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      items: [],
+      total: 0,
+      source: 'unavailable',
+      directoryAvailable: false,
+      error: error.message || 'Не удалось выполнить поиск внутренних номеров'
+    });
+  }
+});
+
 app.get('/api/directory/sync/accounts', requireAuth(), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_directory'))) {
     return res.status(403).json({ error: 'Access denied: view_directory permission required' });
@@ -12559,7 +12609,7 @@ function buildLiveTransferTargets(directory: any[], req: Request, localDb: any, 
   return (directory || [])
     .map((entry: any) => normalizeDirectoryEntry(entry, localDb.settings))
     .filter((entry: any) => canReadDirectoryEntry(entry, (req as any).user, getAuthenticatedDbUser(localDb, req), localDb.settings))
-    .filter((entry: any) => entry.type === 'internal' && entry.isSpam !== true && entry.isBlacklisted !== true)
+    .filter((entry: any) => entry.type === 'internal' && entry.isSpam !== true && entry.isBlacklisted !== true && entry.disabled !== true && entry.hidden !== true)
     .map((entry: any) => {
       const extension = getDirectoryInternalTransferExtension(entry);
       if (!extension || extension === currentExt || seen.has(extension)) return null;
@@ -12907,10 +12957,7 @@ app.get('/api/live/call-banner', requireAuth(), async (req, res) => {
       directoryRuntime.contacts,
       localDb.settings
     );
-    res.json({
-      ...banner,
-      transferTargets: banner.active ? buildLiveTransferTargets(directoryRuntime.contacts, req, localDb, effectiveOperatorExt) : []
-    });
+    res.json(banner);
   } catch (error: any) {
     res.json({ active: false, error: error.message });
   }

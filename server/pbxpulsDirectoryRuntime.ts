@@ -2,6 +2,7 @@ import type { AppSettings, DirectoryEntry } from '../src/types.js';
 import { queryPBXPulsDb, sanitizePBXPulsDbError } from './pbxpulsDb.js';
 import { writePBXPulsSystemEvent } from './pbxpulsEvents.js';
 import { getPBXPulsSetting } from './pbxpulsSettings.js';
+import { rankLiveTransferTargets, type LiveTransferSearchTarget } from './liveTransferSearch.js';
 
 export type DirectoryStorageMode = 'legacy' | 'sql';
 export type DirectoryEffectiveSource = 'data/db.json' | 'pbxpuls_sql';
@@ -19,6 +20,13 @@ export interface DirectoryRuntimeSnapshot {
   sqlAvailable: boolean;
   contacts: DirectoryEntry[];
   writeMode: 'legacy';
+  fallbackReason?: string;
+}
+
+export interface DirectoryExtensionSearchResult {
+  items: LiveTransferSearchTarget[];
+  source: DirectoryEffectiveSource;
+  directoryAvailable: boolean;
   fallbackReason?: string;
 }
 
@@ -47,6 +55,8 @@ type DirectorySqlMetadataRow = {
   metadata_value: string | null;
   metadata_json: string | null;
   value: string | null;
+  field_key?: string | null;
+  show_in_search?: number | boolean | null;
 };
 
 const DIRECTORY_SQL_READ_AUDIT_COOLDOWN_MS = 5 * 60 * 1000;
@@ -110,6 +120,136 @@ export async function searchDirectoryContacts(context: DirectoryRuntimeContext =
   return visibleRows.map(row => buildDirectoryEntryFromSql(row, metadataByContactId.get(String(row.id || '')) || []));
 }
 
+export async function searchDirectoryInternalExtensions(
+  rawQuery: unknown,
+  rawLimit: unknown,
+  rawExcludeExtension: unknown,
+  context: DirectoryRuntimeContext = {}
+): Promise<DirectoryExtensionSearchResult> {
+  const query = safeText(rawQuery, 120)
+    .normalize('NFKC')
+    .toLocaleLowerCase('ru-RU')
+    .replace(/ё/g, 'е');
+  const queryDigits = query.replace(/\D/g, '');
+  const excludeExtension = safeText(rawExcludeExtension, 20).replace(/\D/g, '');
+  const limit = Math.max(1, Math.min(50, Number(rawLimit) || 50));
+  const configuredMode = await getDirectoryStorageMode();
+
+  if (configuredMode === 'sql') {
+    try {
+      const authUser = context.authUser || {};
+      const dbUser = context.dbUser || {};
+      const ownerUserId = getDirectoryRuntimeUserId(dbUser, authUser);
+      const params: any[] = [authUser?.role === 'su' ? 1 : 0, ownerUserId];
+      let searchSql = '';
+
+      if (query) {
+        const like = `%${query}%`;
+        const digitsLike = `%${queryDigits}%`;
+        searchSql = `
+          AND (
+            REPLACE(LOWER(CONCAT_WS(' ', c.name, c.company, c.phone, c.phone2, c.comment)), 'ё', 'е') LIKE ?
+            ${queryDigits ? 'OR c.phone_normalized LIKE ?' : ''}
+            OR EXISTS (
+              SELECT 1
+              FROM directory_contact_metadata sm
+              LEFT JOIN directory_custom_fields sf ON sf.id = sm.field_id
+              WHERE sm.contact_id = c.id
+                AND (
+                  sm.metadata_key IN ('phones','position','department','group','internalExtension','tags','sipStatus','deviceStatus','deviceType','source')
+                  OR sf.show_in_search = 1
+                )
+                AND COALESCE(sm.metadata_key, sf.field_key, '') NOT REGEXP 'password|passwd|token|secret|credential|private[_-]?key|api[_-]?key'
+                AND REPLACE(LOWER(COALESCE(sm.metadata_value, sm.value, sm.metadata_json, '')), 'ё', 'е') LIKE ?
+            )
+          )`;
+        params.push(like);
+        if (queryDigits) params.push(digitsLike);
+        params.push(like);
+      }
+
+      const candidateLimit = Math.min(200, Math.max(limit * 4, 50));
+      const rows = await queryPBXPulsDb(
+        `SELECT c.id, c.name, c.company, c.phone, c.phone_normalized, c.phone2, c.email, c.comment,
+                c.contact_type, c.owner_user_id, c.visibility, c.type, c.is_spam, c.is_blacklisted,
+                c.created_at, c.updated_at
+         FROM directory_contacts c
+         WHERE c.type = 'internal'
+           AND COALESCE(c.is_spam, 0) = 0
+           AND COALESCE(c.is_blacklisted, 0) = 0
+           AND (COALESCE(c.contact_type, 'common') <> 'personal' OR ? = 1 OR c.owner_user_id = ?)
+           AND NOT EXISTS (
+             SELECT 1 FROM directory_contact_metadata hm
+             WHERE hm.contact_id = c.id
+               AND hm.metadata_key IN ('hidden','disabled','isDisabled')
+               AND LOWER(COALESCE(hm.metadata_value, hm.value, '')) IN ('1','true','yes','да','y')
+           )
+           ${searchSql}
+         ORDER BY
+           CASE
+             WHEN ? <> '' AND c.phone_normalized = ? THEN 0
+             WHEN ? <> '' AND c.phone_normalized LIKE CONCAT(?, '%') THEN 1
+             WHEN ? <> '' AND REPLACE(LOWER(c.name), 'ё', 'е') LIKE CONCAT(?, '%') THEN 2
+             ELSE 3
+           END,
+           c.phone_normalized ASC, c.name ASC, c.id ASC
+         LIMIT ${candidateLimit}`,
+        [...params, queryDigits, queryDigits, queryDigits, queryDigits, query, query]
+      ) as DirectorySqlContactRow[];
+
+      const contactIds = rows.map(row => String(row.id || '')).filter(Boolean);
+      const metadataByContactId = await selectDirectorySearchMetadataRows(contactIds);
+      const contacts = rows.map(row => {
+        const metadataRows = metadataByContactId.get(String(row.id || '')) || [];
+        const entry = buildDirectoryEntryFromSql(row, metadataRows) as DirectoryEntry & Record<string, any>;
+        entry.searchMetadata = metadataRows
+          .filter(metadata => {
+            const key = String(metadata.metadata_key || metadata.field_key || '');
+            const isSearchable = metadata.show_in_search === true || Number(metadata.show_in_search || 0) === 1 || [
+              'phones',
+              'position',
+              'department',
+              'group',
+              'internalExtension',
+              'tags',
+              'sipStatus',
+              'deviceStatus',
+              'deviceType',
+              'source'
+            ].includes(key);
+            return isSearchable && !/(password|passwd|token|secret|credential|private[_-]?key|api[_-]?key)/i.test(key);
+          })
+          .map(parseDirectoryMetadataValue)
+          .flatMap(value => Array.isArray(value) ? value : [value])
+          .map(value => safeText(value, 500))
+          .filter(Boolean);
+        entry.source = 'pbxpuls_sql';
+        return entry;
+      });
+
+      return {
+        items: rankLiveTransferTargets(contacts, query, excludeExtension, limit, 'pbxpuls_sql'),
+        source: 'pbxpuls_sql',
+        directoryAvailable: true
+      };
+    } catch (error: any) {
+      const fallback = rankLiveTransferTargets(context.legacyDirectory || [], query, excludeExtension, limit, 'data/db.json');
+      return {
+        items: fallback,
+        source: 'data/db.json',
+        directoryAvailable: Array.isArray(context.legacyDirectory) && context.legacyDirectory.length > 0,
+        fallbackReason: sanitizePBXPulsDbError(error)
+      };
+    }
+  }
+
+  return {
+    items: rankLiveTransferTargets(context.legacyDirectory || [], query, excludeExtension, limit, 'data/db.json'),
+    source: 'data/db.json',
+    directoryAvailable: true
+  };
+}
+
 async function selectVisibleDirectoryContactRows(context: DirectoryRuntimeContext): Promise<DirectorySqlContactRow[]> {
   const authUser = context.authUser || {};
   const dbUser = context.dbUser || {};
@@ -142,6 +282,31 @@ async function selectDirectoryMetadataRows(contactIds: string[]): Promise<Map<st
      FROM directory_contact_metadata
      WHERE contact_id IN (${placeholders})
      ORDER BY contact_id, metadata_key`,
+    contactIds
+  ) as DirectorySqlMetadataRow[];
+
+  for (const row of rows) {
+    const contactId = String(row.contact_id || '');
+    if (!contactId) continue;
+    if (!result.has(contactId)) result.set(contactId, []);
+    result.get(contactId)!.push(row);
+  }
+
+  return result;
+}
+
+async function selectDirectorySearchMetadataRows(contactIds: string[]): Promise<Map<string, DirectorySqlMetadataRow[]>> {
+  const result = new Map<string, DirectorySqlMetadataRow[]>();
+  if (!contactIds.length) return result;
+
+  const placeholders = contactIds.map(() => '?').join(', ');
+  const rows = await queryPBXPulsDb(
+    `SELECT m.contact_id, m.metadata_key, m.metadata_value, m.metadata_json, m.value,
+            f.field_key, f.show_in_search
+     FROM directory_contact_metadata m
+     LEFT JOIN directory_custom_fields f ON f.id = m.field_id
+     WHERE m.contact_id IN (${placeholders})
+     ORDER BY m.contact_id, m.metadata_key`,
     contactIds
   ) as DirectorySqlMetadataRow[];
 
@@ -289,7 +454,15 @@ function isKnownDirectoryMetadataKey(key: string): boolean {
     'address',
     'internalExtension',
     'linkedExternalNumber',
-    'responsibleUserId'
+    'responsibleUserId',
+    'sipStatus',
+    'deviceStatus',
+    'deviceType',
+    'sipType',
+    'technology',
+    'source',
+    'disabled',
+    'hidden'
   ].includes(key);
 }
 

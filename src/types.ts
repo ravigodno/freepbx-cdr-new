@@ -214,6 +214,11 @@ export interface DirectoryEntry {
   tags?: string[];
   isSpam?: boolean;
   isBlacklisted?: boolean;
+  disabled?: boolean;
+  hidden?: boolean;
+  sipStatus?: string;
+  deviceStatus?: string;
+  deviceType?: string;
   comment?: string;
   createdAt?: string;
   updatedAt?: string;
