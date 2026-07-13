@@ -193,6 +193,15 @@ export function buildCdrRowViewModel(call: any, directory: any[], relatedLegs: a
 
   const getCallerNumber = () => {
     if (isIncoming) {
+      if (call.externalCallerNumber && String(call.externalCallerNumber).trim()) {
+        return String(call.externalCallerNumber).trim();
+      }
+
+      const relatedExternalCaller = relatedLegs
+        .map(leg => String(leg?.externalCallerNumber || '').trim())
+        .find(Boolean);
+      if (relatedExternalCaller) return relatedExternalCaller;
+
       if (srcVal && !isInternalExt(srcVal)) return srcVal;
 
       if (call.clid) {
@@ -286,8 +295,10 @@ export function buildCdrRowViewModel(call: any, directory: any[], relatedLegs: a
     isFound = true;
   } else if (isIncoming) {
     const clidName = renderClidName(call.clid, displayedSrc);
+    const clidNumber = String(call.clid || '').match(/<([^>]+)>/)?.[1] || '';
+    const clidMatchesExternalCaller = normalizePhoneForCompare(clidNumber) === normalizePhoneForCompare(displayedSrc);
 
-    if (clidName && clidName.trim() !== '' && clidName !== displayedSrc) {
+    if (clidMatchesExternalCaller && clidName && clidName.trim() !== '' && clidName !== displayedSrc) {
       callerName = clidName;
     } else {
       callerName = isSrcInternal ? `Внутренний ${displayedSrc}` : 'Внешний клиент';

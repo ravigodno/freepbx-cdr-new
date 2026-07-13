@@ -22,10 +22,10 @@ export function buildCallRouteView(chronologyData: any) {
 
   const anyAnswered = Boolean(answeredLeg);
 
-  const externalNumber = first.src || first.cnum || '—';
+  const externalNumber = chronologyData?.externalCallerNumber || first.externalCallerNumber || first.src || first.cnum || '—';
   const dialedNumber = first.dst || steps?.[0]?.destination || '—';
   const callerExt = steps?.[0]?.number || getExtFromChannel(first.channel) || first.src || '—';
-  const trunkNumber = first.did || routeAnalysis.did || getTrunkFromChannel(first.channel) || '—';
+  const trunkNumber = chronologyData?.trunkNumber || chronologyData?.inboundDid || first.did || routeAnalysis.did || getTrunkFromChannel(first.channel) || '—';
 
   const ringGroupStep = steps.find((s: any) => s.type === 'ring_group');
   const inboundRouteStep = steps.find((s: any) => s.type === 'inbound_route');

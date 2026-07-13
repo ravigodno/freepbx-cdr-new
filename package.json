@@ -12,7 +12,8 @@
     "pbxpuls:db:setup": "tsx scripts/pbxpuls-db.ts --setup",
     "pbxpuls:monitoring:check": "tsx scripts/pbxpuls-monitoring-check.ts",
     "pbxpuls:monitoring:sync": "tsx scripts/pbxpuls-monitoring-sync.ts",
-    "pbxpuls:monitoring:retention": "tsx scripts/pbxpuls-monitoring-retention.ts"
+    "pbxpuls:monitoring:retention": "tsx scripts/pbxpuls-monitoring-retention.ts",
+    "test:inbound-caller": "tsx scripts/test-inbound-caller-resolver.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

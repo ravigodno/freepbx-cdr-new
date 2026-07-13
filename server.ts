@@ -82,6 +82,7 @@ import { findBlindTransferTargetFromCel, getExplicitBlindTransferTarget } from '
 import { buildReportHourlyTimeline, formatReportHourBucket } from './server/reportDynamicsBuckets.js';
 import { calculateCpuPercent, parseProcStatCpuSample, type ProcStatCpuSample } from './server/healthCpu.js';
 import { classifyMissedCallResolution, type MissedCallResolutionStatus } from './server/missedCallResolution.js';
+import { resolveInboundExternalCaller } from './server/inboundCallerResolver.js';
 import {
   appendDevicesAlertsToSql, appendDevicesHistoryToSql, appendHealthHistoryToSql, appendQualityAlertsToSql,
   appendQualityHistoryToSql, getMonitoringStorageMode, getMonitoringStorageStatus, readDevicesAlertsFromSql,
@@ -1899,30 +1900,6 @@ const callHasExactNumber = (c: any, number: string): boolean => {
   return tokens.some(token => token === n);
 };
 
-const getExternalCallerNumber = (group: any[]): string => {
-  const candidates: string[] = [];
-
-  for (const c of group) {
-    const fields = [c.clid, c.src, c.cnum, c.dst, c.did, c.lastdata];
-    for (const field of fields) {
-      const matches = String(field || '').match(/\+?\d{10,15}/g) || [];
-      for (const raw of matches) {
-        let digits = raw.replace(/\D/g, '');
-        if (digits.length === 11 && digits.startsWith('8')) {
-          digits = '7' + digits.substring(1);
-        }
-        if (digits.length >= 10 && !isInternalExt(digits)) {
-          candidates.push(digits);
-        }
-      }
-    }
-  }
-
-  // Для входящих через группу/очередь реальный клиент почти всегда есть в CLID.
-  // Если FreePBX в src положил транк/CallerID, берём первый полноценный внешний номер.
-  return candidates[0] || '';
-};
-
 const hasInboundTrunkSignal = (c: any): boolean => {
   const dctx = String(c.dcontext || '').toLowerCase();
   const channel = String(c.channel || '').toLowerCase();
@@ -1955,20 +1932,19 @@ const isIncomingRouteContext = (c: any): boolean => {
 };
 
 const normalizeInboundCallerForDisplay = (c: any): any => {
-  const externalCallerNumber = getExternalCallerNumber([c]);
-  const currentSrc = onlyDigits(c.src);
+  const resolution = resolveInboundExternalCaller(c);
+  const externalCallerNumber = resolution.externalCallerNumber;
 
-  if (
-    externalCallerNumber &&
-    externalCallerNumber !== currentSrc &&
-    !getCallerInternalExt(c) &&
-    isExternalNumber(c.src) &&
-    (hasInboundTrunkSignal(c) || isIncomingRouteContext(c))
-  ) {
+  if (externalCallerNumber && (hasInboundTrunkSignal(c) || isIncomingRouteContext(c))) {
     return {
       ...c,
       src: externalCallerNumber,
-      cnum: externalCallerNumber,
+      externalCallerNumber,
+      externalCallerSourceField: resolution.sourceField,
+      externalCallerConfidence: resolution.confidence,
+      inboundDid: String(c.did || '').split('→')[0].trim(),
+      trunkNumber: String(c.did || '').split('→')[0].trim(),
+      routeDestination: c.dst || ''
     };
   }
 
@@ -2050,6 +2026,31 @@ const loadCelBlindTransferEvents = async (
   }
 
   return evidenceByLinkedId;
+};
+
+const loadCelCallerChain = async (
+  settings: AppSettings,
+  isDemo: boolean,
+  linkedId: string
+): Promise<any[]> => {
+  const safeLinkedId = String(linkedId || '').trim();
+  if (isDemo || !safeLinkedId) return [];
+
+  try {
+    return await queryFreePBXCDR(
+      settings,
+      false,
+      `SELECT id, eventtime, uniqueid, linkedid, eventtype, cid_num, exten, context, channame
+       FROM cel
+       WHERE linkedid = ?
+       ORDER BY eventtime ASC, id ASC
+       LIMIT 2000`,
+      [safeLinkedId]
+    );
+  } catch (error: any) {
+    console.warn('[CDR] CEL caller evidence unavailable:', error?.code || 'query_failed');
+    return [];
+  }
 };
 
 const buildDidWithAnsweredAndMissed = (baseDid: any, answeredExts: string[], missedExts: string[]): string => {
@@ -5195,6 +5196,7 @@ function buildCalltrackingMatch(event: any, site: any, cdrRow: any | null, statu
   const callStatus = getCalltrackingCallStatus(cdrRow);
   const leadStatus: CalltrackingLeadStatus = status === 'ambiguous' ? 'ambiguous' : status === 'unmatched' ? 'unmatched' : callStatus === 'answered' ? 'answered' : 'lost';
   const matchedAt = new Date().toISOString();
+  const inboundCaller = cdrRow ? resolveInboundExternalCaller(cdrRow).externalCallerNumber : '';
   return {
     eventId: event.id,
     id: event.id,
@@ -5220,7 +5222,7 @@ function buildCalltrackingMatch(event: any, site: any, cdrRow: any | null, statu
     matchedLinkedid: cdrRow?.linkedid || null,
     matchedLinkedId: cdrRow?.linkedid || null,
     matchedCallDate: cdrRow?.calldate || null,
-    matchedExternalNumber: cdrRow ? (normalizeCalltrackingPhoneNumber(cdrRow.src) || normalizeCalltrackingPhoneNumber(cdrRow.cnum) || cdrRow.src || null) : null,
+    matchedExternalNumber: cdrRow ? (normalizeCalltrackingPhoneNumber(inboundCaller) || normalizeCalltrackingPhoneNumber(cdrRow.src) || normalizeCalltrackingPhoneNumber(cdrRow.cnum) || cdrRow.src || null) : null,
     matchedDestinationNumber: cdrRow ? (normalizeCalltrackingPhoneNumber(cdrRow.did || cdrRow.dst) || cdrRow.did || cdrRow.dst || null) : null,
     matchedDisposition: cdrRow?.disposition || null,
     matchedDuration: cdrRow ? Number(cdrRow.duration || 0) : null,
@@ -12658,15 +12660,25 @@ function buildLiveCallBannerFromAmiChannels(channels: AmiBlock[], operatorExt: s
     const externalCandidates = allCandidates.filter(num => isExternalNumber(num) && !isInternalExt(num));
     const internalCandidates = Array.from(new Set(allCandidates.filter(num => isInternalExt(num))));
 
-    const inboundCaller = group
-      .map(ch => onlyDigits(ch.CallerIDNum))
-      .find(num => isExternalNumber(num) && !isInternalExt(num));
+    const did = hasInboundSignal
+      ? (group.map(ch => onlyDigits(ch.Exten)).find(num => isExternalNumber(num)) || '')
+      : '';
+    const inboundCallerResolution = resolveInboundExternalCaller(group.map(ch => ({
+      cid_num: ch.CallerIDNum,
+      callerid: ch.ConnectedLineNum,
+      clid: ch.CallerIDName,
+      dst: ch.Exten,
+      did,
+      dcontext: ch.Context,
+      channel: ch.Channel
+    })));
+    const inboundCaller = inboundCallerResolution.externalCallerNumber;
 
     let direction: 'incoming' | 'outgoing' | 'internal' = hasInboundSignal ? 'incoming' : 'outgoing';
     let number = '';
 
     if (hasInboundSignal) {
-      number = inboundCaller || externalCandidates[0] || '';
+      number = inboundCaller || externalCandidates.find(num => num !== did) || '';
     } else {
       number = externalCandidates.find(num => num !== inboundCaller) || '';
       if (!number) {
@@ -12680,10 +12692,6 @@ function buildLiveCallBannerFromAmiChannels(channels: AmiBlock[], operatorExt: s
     }
 
     if (!number) continue;
-
-    const did = hasInboundSignal
-      ? (group.map(ch => onlyDigits(ch.Exten)).find(num => isExternalNumber(num) && num !== number) || '')
-      : '';
 
     const contact = resolveLiveContact(number, directory, settings);
     const first = group[0];
@@ -13052,8 +13060,7 @@ async function enrichFreePBXRoute(settings: any, legs: any[]) {
   const did = String(
     first.did ||
     legs.find((l: any) => l.did)?.did ||
-    legs.find((l: any) => /^\\d{3,15}$/.test(String(l.dst || '')))?.dst ||
-    legs.find((l: any) => /^\\d{3,15}$/.test(String(l.cnum || '')))?.cnum ||
+    legs.find((l: any) => hasInboundTrunkSignal(l) && isExternalNumber(l.dst))?.dst ||
     ''
   ).trim();
   const ringGroupIds = extractRingGroupIdsFromLegs(legs);
@@ -13322,6 +13329,8 @@ app.get('/api/calls/:uniqueid/chronology', requireAuth(), async (req, res) => {
 
     // Sort legs by calldate ASC to ensure proper chronological order
     legs.sort((a, b) => new Date(a.calldate).getTime() - new Date(b.calldate).getTime());
+    const celCallerChain = await loadCelCallerChain(settings, isDemo, targetLinkedId);
+    const externalCallerResolution = resolveInboundExternalCaller(legs, celCallerChain);
 
     // Format the timeline steps into beautiful human-readable explanations
     const timeline = legs.map((leg, idx) => {
@@ -13395,6 +13404,7 @@ app.get('/api/calls/:uniqueid/chronology', requireAuth(), async (req, res) => {
         disposition: leg.disposition,
         recordingfile: leg.recordingfile,
         did: leg.did,
+        externalCallerNumber: externalCallerResolution.externalCallerNumber,
         actionType,
         title,
         description
@@ -13429,7 +13439,6 @@ app.get('/api/calls/:uniqueid/chronology', requireAuth(), async (req, res) => {
     }
 
     const routeAnalysis = isDemo ? null : await enrichFreePBXRoute(settings, legs);
-    console.log('ROUTE_ANALYSIS_DEBUG', JSON.stringify(routeAnalysis));
 
     res.json({
       success: true,
@@ -13438,6 +13447,11 @@ app.get('/api/calls/:uniqueid/chronology', requireAuth(), async (req, res) => {
       legsCount: legs.length,
       blindTransfer: Boolean(chronologyTransferTarget),
       blindTransferTargetExt: chronologyTransferTarget,
+      externalCallerNumber: externalCallerResolution.externalCallerNumber,
+      externalCallerResolution,
+      inboundDid: String(routeAnalysis?.did || legs.find((leg: any) => leg.did)?.did || '').split('→')[0].trim(),
+      trunkNumber: String(routeAnalysis?.steps?.find((step: any) => step.type === 'inbound_trunk')?.number || routeAnalysis?.did || '').trim(),
+      routeDestination: routeAnalysis?.steps?.find((step: any) => step.type === 'inbound_route')?.destination || '',
       timeline,
       routeAnalysis
     });
@@ -13656,7 +13670,8 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
       const first = sorted[0];
       const main = answered || first;
 
-      const externalCallerNumber = getExternalCallerNumber(sorted);
+      const callerResolution = resolveInboundExternalCaller(sorted);
+      const externalCallerNumber = callerResolution.externalCallerNumber;
       const external = sorted.find(c => (c.src || "").replace(/\D/g, "").length >= 7) || first;
       const queueLeg = sorted.find(c => c.dcontext === "ext-queues" || c.lastapp === "Queue");
       const groupLeg = sorted.find(c => c.dcontext === "ext-group");
@@ -13689,6 +13704,12 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
         linkedid: first.linkedid || first.uniqueid,
         calldate: first.calldate,
         src: (queueLeg || groupLeg || hasInboundTrunkSignal(routeLeg) || isIncomingRouteContext(routeLeg)) ? (externalCallerNumber || external.src || first.src) : (external.src || first.src),
+        externalCallerNumber,
+        externalCallerSourceField: callerResolution.sourceField,
+        externalCallerConfidence: callerResolution.confidence,
+        inboundDid: String(queueLeg?.did || groupLeg?.did || sorted.find(c => c.did)?.did || '').split('→')[0].trim(),
+        trunkNumber: String(queueLeg?.did || groupLeg?.did || sorted.find(c => c.did)?.did || '').split('→')[0].trim(),
+        routeDestination: queueLeg?.dst || groupLeg?.dst || routeLeg.dst || '',
         dst: answeredExts.length ? answeredExts.join(', ') : missedExts.length ? missedExts.join(', ') : queueLeg ? `Очередь ${queueLeg.dst}` : groupLeg ? `Группа ${groupLeg.dst}` : (routeLeg.dst || first.dst),
         dstchannel: "",
         disposition: answered ? "ANSWERED" : "NO ANSWER",
@@ -13721,7 +13742,8 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
       const queueLeg = sorted.find(c => c.dcontext === "ext-queues" || c.lastapp === "Queue");
       const groupLeg = sorted.find(c => c.dcontext === "ext-group");
       const routeLeg = queueLeg || groupLeg || sorted[0];
-      const externalCallerNumber = getExternalCallerNumber(sorted);
+      const callerResolution = resolveInboundExternalCaller(sorted);
+      const externalCallerNumber = callerResolution.externalCallerNumber;
       const external = sorted.find(c => (c.src || "").replace(/\D/g, "").length >= 7) || routeLeg;
       const extLegs = sorted.filter(c => c.dcontext === "ext-local" && /^[0-9]{2,5}$/.test(String(c.dst || "")));
       let missedExts = uniqueExts(extLegs
@@ -13753,6 +13775,12 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
         linkedid: routeLeg.linkedid || routeLeg.uniqueid,
         calldate: sorted[0].calldate,
         src: (queueLeg || groupLeg || hasInboundTrunkSignal(routeLeg) || isIncomingRouteContext(routeLeg)) ? (externalCallerNumber || external.src || routeLeg.src) : (external.src || routeLeg.src),
+        externalCallerNumber,
+        externalCallerSourceField: callerResolution.sourceField,
+        externalCallerConfidence: callerResolution.confidence,
+        inboundDid: String(did || '').split('→')[0].trim(),
+        trunkNumber: String(did || '').split('→')[0].trim(),
+        routeDestination: queueLeg?.dst || groupLeg?.dst || routeLeg.dst || '',
         dst: (String(routeLeg.dcontext || "").toLowerCase() === "from-internal" && isExternalNumber(routeLeg.dst))
           ? routeLeg.dst
           : answeredExts.length
@@ -14116,7 +14144,8 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
       const queueLeg = sorted.find(c => c.dcontext === "ext-queues" || c.lastapp === "Queue");
       const groupLeg = sorted.find(c => c.dcontext === "ext-group");
       const routeLeg = queueLeg || groupLeg || sorted[0];
-      const externalCallerNumber = getExternalCallerNumber(sorted);
+      const callerResolution = resolveInboundExternalCaller(sorted);
+      const externalCallerNumber = callerResolution.externalCallerNumber;
       const external = sorted.find(c => (c.src || "").replace(/\D/g, "").length >= 7) || routeLeg;
       const extLegs = sorted.filter(c => c.dcontext === "ext-local" && /^[0-9]{2,5}$/.test(String(c.dst || "")));
       let missedExts = uniqueExts(extLegs
@@ -14149,6 +14178,12 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
         linkedid: routeLeg.linkedid || routeLeg.uniqueid,
         calldate: sorted[0].calldate,
         src: (queueLeg || groupLeg || hasInboundTrunkSignal(routeLeg) || isIncomingRouteContext(routeLeg)) ? (externalCallerNumber || external.src || routeLeg.src) : (external.src || routeLeg.src),
+        externalCallerNumber,
+        externalCallerSourceField: callerResolution.sourceField,
+        externalCallerConfidence: callerResolution.confidence,
+        inboundDid: String(did || '').split('→')[0].trim(),
+        trunkNumber: String(did || '').split('→')[0].trim(),
+        routeDestination: queueLeg?.dst || groupLeg?.dst || routeLeg.dst || '',
         dst: (String(routeLeg.dcontext || "").toLowerCase() === "from-internal" && isExternalNumber(routeLeg.dst))
           ? routeLeg.dst
           : answeredExts.length
@@ -14434,7 +14469,8 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
       const queueLeg = sorted.find(c => c.dcontext === "ext-queues" || c.lastapp === "Queue");
       const groupLeg = sorted.find(c => c.dcontext === "ext-group");
       const routeLeg = queueLeg || groupLeg || sorted[0];
-      const externalCallerNumber = getExternalCallerNumber(sorted);
+      const callerResolution = resolveInboundExternalCaller(sorted);
+      const externalCallerNumber = callerResolution.externalCallerNumber;
       const external = sorted.find(c => (c.src || "").replace(/\D/g, "").length >= 7) || routeLeg;
       const extLegs = sorted.filter(c => c.dcontext === "ext-local" && /^[0-9]{2,5}$/.test(String(c.dst || "")));
       let missedExts = uniqueExts(extLegs
@@ -14467,6 +14503,12 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
         linkedid: routeLeg.linkedid || routeLeg.uniqueid,
         calldate: sorted[0].calldate,
         src: (queueLeg || groupLeg || hasInboundTrunkSignal(routeLeg) || isIncomingRouteContext(routeLeg)) ? (externalCallerNumber || external.src || routeLeg.src) : (external.src || routeLeg.src),
+        externalCallerNumber,
+        externalCallerSourceField: callerResolution.sourceField,
+        externalCallerConfidence: callerResolution.confidence,
+        inboundDid: String(did || '').split('→')[0].trim(),
+        trunkNumber: String(did || '').split('→')[0].trim(),
+        routeDestination: queueLeg?.dst || groupLeg?.dst || routeLeg.dst || '',
         dst: (String(routeLeg.dcontext || "").toLowerCase() === "from-internal" && isExternalNumber(routeLeg.dst))
           ? routeLeg.dst
           : answeredExts.length
@@ -15798,6 +15840,53 @@ function parseCoreShowChannelsConcise(raw: string): any[] {
     });
 }
 
+function normalizeInboundLiveSessionCallers(sessions: any[]): any[] {
+  const grouped = new Map<string, any[]>();
+  sessions.forEach(session => {
+    const key = String(session.linkedid || session.uniqueid || session.channel || '');
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key)!.push(session);
+  });
+
+  const resolutionByGroup = new Map<string, { externalCallerNumber: string; sourceField: string | null; confidence: string; did: string }>();
+  grouped.forEach((group, key) => {
+    const inbound = group.some(session => {
+      const context = String(session.context || '').toLowerCase();
+      const channel = String(session.channel || '').toLowerCase();
+      return channel.includes('-in-') || context.includes('from-trunk') || context.includes('from-pstn') ||
+        context.includes('ext-queues') || context.includes('ext-group') || context.startsWith('ivr-');
+    });
+    if (!inbound) return;
+
+    const did = group.map(session => onlyDigits(session.exten)).find(value => isExternalNumber(value)) || '';
+    const resolution = resolveInboundExternalCaller(group.map(session => ({
+      cid_num: session.callerId,
+      src: session.callerId,
+      dst: session.exten,
+      did,
+      dcontext: session.context,
+      channel: session.channel
+    })));
+    resolutionByGroup.set(key, { ...resolution, did });
+  });
+
+  return sessions.map(session => {
+    const key = String(session.linkedid || session.uniqueid || session.channel || '');
+    const resolution = resolutionByGroup.get(key);
+    if (!resolution?.externalCallerNumber) return session;
+    return {
+      ...session,
+      callerId: resolution.externalCallerNumber,
+      externalCallerNumber: resolution.externalCallerNumber,
+      externalCallerSourceField: resolution.sourceField,
+      externalCallerConfidence: resolution.confidence,
+      did: resolution.did,
+      inboundDid: resolution.did,
+      trunkNumber: resolution.did
+    };
+  });
+}
+
 app.get('/api/live-sessions', requireAuth(), async (req, res) => {
   try {
   const authUser = (req as any).user;
@@ -15822,7 +15911,7 @@ app.get('/api/live-sessions', requireAuth(), async (req, res) => {
       runAsteriskCliCommand('pjsip show channels', 5000),
     ]);
 
-    const sessions = channels.success ? parseCoreShowChannelsConcise(channels.message) : [];
+    const sessions = channels.success ? normalizeInboundLiveSessionCallers(parseCoreShowChannelsConcise(channels.message)) : [];
 
     const summary = {
       total: sessions.length,
@@ -15951,7 +16040,7 @@ app.get('/api/live-sessions-test', requireAuth(), async (req, res) => {
     const sipChannels = await runAMICommand(settings, 'sip show channels');
     const pjsipChannels = await runAMICommand(settings, 'pjsip show channels');
 
-    const sessions = concise.success ? parseLiveConciseOutput(concise.message) : [];
+    const sessions = concise.success ? normalizeInboundLiveSessionCallers(parseLiveConciseOutput(concise.message)) : [];
 
     res.json({
       success: true,

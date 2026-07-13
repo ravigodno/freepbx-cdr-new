@@ -34,6 +34,12 @@ export interface CallEntry {
   
   // FreePBX additions
   cnum?: string;
+  externalCallerNumber?: string;
+  externalCallerSourceField?: string | null;
+  externalCallerConfidence?: 'high' | 'medium' | 'low' | 'none';
+  inboundDid?: string;
+  trunkNumber?: string;
+  routeDestination?: string;
   cnam?: string;
   outbound_cnum?: string;
   linkedid?: string;
