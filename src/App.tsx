@@ -5329,19 +5329,19 @@ export default function App() {
                       <>
                         <button
                           type="button"
-                          disabled={isLiveMonitorLoading}
+                          disabled
                           onClick={() => handleLiveCallMonitor('listen')}
                           className={liveActionButtonClass}
-                          title="Прослушать активный звонок: система позвонит на ваш SIP"
+                          title="Прослушивание временно недоступно"
                         >
                           <Headphones className="h-4 w-4" />
                         </button>
                         <button
                           type="button"
-                          disabled={isLiveMonitorLoading}
+                          disabled
                           onClick={() => handleLiveCallMonitor('whisper')}
                           className={liveActionButtonClass}
-                          title="Суфлёр: система позвонит на ваш SIP, клиент не должен слышать подсказку"
+                          title="Режим суфлёра временно недоступен"
                         >
                           <Mic2 className="h-4 w-4" />
                         </button>
