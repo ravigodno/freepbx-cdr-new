@@ -89,6 +89,7 @@ import {
   readLegacyMonitoringFile, readQualityAlertsFromSql, readQualityHistoryFromSql, readWithMonitoringFallback,
   setMonitoringStorageMode, upsertDevicesConflictsToSql, upsertDevicesMapToSql
 } from './server/monitoringSqlStorage.js';
+import { startMonitoringRetentionRunner } from './server/monitoringRetention.js';
 
 // Load environment variables
 dotenv.config();
@@ -20026,6 +20027,7 @@ async function startServer() {
   const startupDb = await readLocalDb();
   console.log('[PBXPULS_DB] runtime configuration:', getPBXPulsDbConfigLogFields());
   await runPBXPulsMigrations();
+  startMonitoringRetentionRunner();
   startDtmfAmiListener(startupDb.settings).catch((e: any) => console.error('[DTMF] listener start failed:', e.message));
 
   app.listen(parseInt(PORT, 10), '0.0.0.0', () => {

@@ -102,6 +102,9 @@ async function main() {
   }
   await connection.end();
 
+  const { getMonitoringRetentionStatus } = await import('../server/monitoringRetention.js');
+  const retention = await getMonitoringRetentionStatus();
+
   if (!sqlAvailable) blockers.push('monitoring_sql_unavailable');
   if (mode !== 'dual' && mode !== 'sql') blockers.push(`monitoring_storage_mode_not_cutover_candidate:${mode || 'unset'}`);
   blockers.push(...directLegacyReadsRemaining.map(item => `direct_legacy_read:${item}`));
@@ -128,9 +131,16 @@ async function main() {
     legacyFiles,
     sqlTables,
     monitoringSqlCutoverReady,
-    blockers
+    blockers,
+    retentionDays: retention.retentionDays,
+    retentionTables: retention.tables,
+    rowsOlderThanRetention: retention.rowsOlderThanRetention,
+    totalRowsOlderThanRetention: retention.totalRowsOlderThanRetention,
+    lastRetentionRun: retention.lastRetentionRun,
+    retentionReady: retention.retentionReady,
+    retentionBlockers: retention.retentionBlockers
   }, null, 2));
-  process.exitCode = sqlAvailable ? 0 : 1;
+  process.exitCode = sqlAvailable && retention.retentionReady ? 0 : 1;
 }
 
 main().catch(error => {

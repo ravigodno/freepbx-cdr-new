@@ -11,7 +11,8 @@
     "pbxpuls:db:check": "tsx scripts/pbxpuls-db.ts --check",
     "pbxpuls:db:setup": "tsx scripts/pbxpuls-db.ts --setup",
     "pbxpuls:monitoring:check": "tsx scripts/pbxpuls-monitoring-check.ts",
-    "pbxpuls:monitoring:sync": "tsx scripts/pbxpuls-monitoring-sync.ts"
+    "pbxpuls:monitoring:sync": "tsx scripts/pbxpuls-monitoring-sync.ts",
+    "pbxpuls:monitoring:retention": "tsx scripts/pbxpuls-monitoring-retention.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

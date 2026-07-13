@@ -3,6 +3,7 @@ import path from 'path';
 import type { Connection } from 'mysql2/promise';
 import { queryPBXPulsDb, sanitizePBXPulsDbError } from './pbxpulsDb.js';
 import { getPBXPulsSetting, upsertPBXPulsSetting } from './pbxpulsSettings.js';
+import { getMonitoringRetentionStatus } from './monitoringRetention.js';
 
 export type MonitoringStorageMode = 'legacy' | 'dual' | 'sql';
 export type MonitoringSource = 'sql' | 'legacy' | 'legacy-fallback';
@@ -277,6 +278,7 @@ export async function getMonitoringStorageStatus() {
   if (lastWriteStatus?.ok === false) blockers.push(`last_sql_write_failed:${lastWriteStatus.domain || 'unknown'}`);
 
   const cutoverReady = blockers.length === 0;
+  const retention = await getMonitoringRetentionStatus();
   return {
     mode,
     sqlAvailable,
@@ -288,6 +290,11 @@ export async function getMonitoringStorageStatus() {
     blockers,
     legacyFiles,
     tables,
-    lastWriteStatus
+    lastWriteStatus,
+    retentionDays: retention.retentionDays,
+    rowsOlderThanRetention: retention.rowsOlderThanRetention,
+    lastRetentionRun: retention.lastRetentionRun,
+    retentionReady: retention.retentionReady,
+    retention
   };
 }

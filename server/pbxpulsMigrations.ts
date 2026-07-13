@@ -118,6 +118,11 @@ const MONITORING_STORAGE_MODE_SETTING = [
   'Controls monitoring storage: legacy, dual or sql'
 ] as const;
 
+const MONITORING_RETENTION_DAYS_SETTING = [
+  'monitoring.retention_days', '30', 'number', 'monitoring',
+  'Monitoring SQL history retention period in days'
+] as const;
+
 const MIGRATIONS: Migration[] = [
   {
     key: '20260707_001_core_internal_tables',
@@ -377,6 +382,14 @@ const MIGRATIONS: Migration[] = [
       await ensureQualityHistoryUniqueKey(connection);
       await seedSetting(connection, MONITORING_STORAGE_MODE_SETTING);
       await importLegacyMonitoringData(connection);
+    }
+  },
+  {
+    key: '20260713_016_monitoring_retention_policy',
+    description: 'Seed Monitoring SQL retention policy',
+    statements: [],
+    seed: async connection => {
+      await seedSetting(connection, MONITORING_RETENTION_DAYS_SETTING);
     }
   }
 ];
