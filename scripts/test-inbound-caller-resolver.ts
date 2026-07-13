@@ -405,16 +405,16 @@ const incomingDisplay = buildLiveCallBannerDisplay({
   did
 });
 assert.equal(incomingDisplay.displayNumber, externalCaller);
-assert.equal(incomingDisplay.subtitle, 'На мой SIP 201');
+assert.equal(incomingDisplay.subtitle, '');
 
 const capturedIncomingDisplay = buildLiveCallBannerDisplay({
   direction: 'incoming', operatorExt: '200', externalCallerNumber: '74993017671',
   sourceNumber: '74993017671', callerNumber: '74993017671', destinationNumber: '200',
-  internalNumber: '200', did: '841282', trunkNumber: '841282'
+  internalNumber: '200', did: '841282', trunkNumber: '841282', displayName: 'РА Выгодно'
 });
 assert.equal(capturedIncomingDisplay.displayNumber, '74993017671');
 assert.equal(capturedIncomingDisplay.callerNumber, '74993017671');
-assert.equal(capturedIncomingDisplay.subtitle, 'На мой SIP 200');
+assert.equal(capturedIncomingDisplay.subtitle, '74993017671');
 
 const outgoingDisplay = buildLiveCallBannerDisplay({
   direction: 'outgoing',
@@ -425,7 +425,15 @@ const outgoingDisplay = buildLiveCallBannerDisplay({
   trunkNumber: '841282'
 });
 assert.equal(outgoingDisplay.displayNumber, outboundDestination);
-assert.equal(outgoingDisplay.subtitle, 'От внутреннего 200');
+assert.equal(outgoingDisplay.subtitle, '');
+
+const namedOutgoingDisplay = buildLiveCallBannerDisplay({
+  direction: 'outgoing', callerNumber: '200', internalCaller: '200',
+  dialedNumber: outboundDestination, destinationNumber: outboundDestination,
+  trunkNumber: '841282', displayName: 'Грунин К.В.'
+});
+assert.equal(namedOutgoingDisplay.displayName, 'Грунин К.В.');
+assert.equal(namedOutgoingDisplay.subtitle, outboundDestination);
 
 const unprovenOutgoingSource = buildLiveCallBannerDisplay({
   direction: 'outgoing', operatorExt: '200', dialedNumber: outboundDestination,
@@ -433,7 +441,7 @@ const unprovenOutgoingSource = buildLiveCallBannerDisplay({
 });
 assert.equal(unprovenOutgoingSource.displayNumber, outboundDestination);
 assert.equal(unprovenOutgoingSource.callerNumber, '');
-assert.equal(unprovenOutgoingSource.subtitle, 'Исходящий звонок');
+assert.equal(unprovenOutgoingSource.subtitle, '');
 
 const internalDisplay = buildLiveCallBannerDisplay({
   direction: 'internal',

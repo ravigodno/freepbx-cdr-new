@@ -64,10 +64,10 @@ export function buildLiveCallBannerDisplay(call: Record<string, any>) {
     : displayNumber;
   const rawDisplayName = firstLiveValue([call.displayName, call.contactName, call.name]);
   const displayName = /^неизвестный номер$/i.test(rawDisplayName) ? '' : rawDisplayName;
-  const subtitleBase = direction === 'incoming'
-    ? (destinationNumber ? `На мой SIP ${destinationNumber}` : 'Входящий звонок')
-    : (callerNumber ? `От внутреннего ${callerNumber}` : direction === 'outgoing' ? 'Исходящий звонок' : 'Внутренний звонок');
-  const subtitle = displayName && displayNumber ? `${displayNumber} · ${subtitleBase}` : subtitleBase;
+  const internalSubtitle = callerNumber ? `От внутреннего ${callerNumber}` : 'Внутренний звонок';
+  const subtitle = direction === 'internal'
+    ? (displayName && displayNumber ? `${displayNumber} · ${internalSubtitle}` : internalSubtitle)
+    : (displayName && displayNumber ? displayNumber : '');
 
   return {
     direction,

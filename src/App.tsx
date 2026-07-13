@@ -5366,10 +5366,12 @@ export default function App() {
                         </span>
                       )}
                     </div>
-                    <div className="mt-1 flex items-center gap-2 text-sm font-bold text-slate-800">
-                      <Phone className="h-4 w-4 text-cyan-500" />
-                      <span>{liveCallBanner.subtitle || liveCallBanner.displayNumber || '—'}</span>
-                    </div>
+                    {liveCallBanner.subtitle && (
+                      <div className="mt-1 flex items-center gap-2 text-sm font-bold text-slate-800">
+                        <Phone className="h-4 w-4 text-cyan-500" />
+                        <span>{liveCallBanner.subtitle}</span>
+                      </div>
+                    )}
                   </div></div>
 
                 <div className="grid grid-cols-2 xl:grid-cols-6 flex-1 divide-x divide-slate-200">
