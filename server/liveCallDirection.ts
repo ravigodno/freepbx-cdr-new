@@ -7,6 +7,21 @@ export interface LiveCallDirectionResolution {
   trunkNumber: string;
 }
 
+export function stripLiveTechnicalAddresses(value: unknown): string {
+  return String(value ?? '').replace(/\b(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?\b/g, ' ');
+}
+
+export function selectLiveOutgoingDestination(
+  resolution: LiveCallDirectionResolution,
+  candidates: unknown[]
+): string {
+  const internalCaller = normalizeNumber(resolution.internalCaller);
+  const trunkNumber = normalizeNumber(resolution.trunkNumber);
+  return [resolution.destinationNumber, ...candidates]
+    .flatMap(value => numberCandidates(value))
+    .find(number => isExternal(number) && number !== internalCaller && number !== trunkNumber) || '';
+}
+
 function normalizeNumber(value: string): string {
   let digits = String(value || '').replace(/\D/g, '');
   if (digits.length === 11 && digits.startsWith('8')) digits = `7${digits.slice(1)}`;
@@ -17,7 +32,7 @@ function normalizeNumber(value: string): string {
 function numberCandidates(...values: unknown[]): string[] {
   const result: string[] = [];
   values.forEach(value => {
-    const matches = String(value ?? '').match(/\+?\d{2,15}/g) || [];
+    const matches = stripLiveTechnicalAddresses(value).match(/\+?\d{2,15}/g) || [];
     matches.map(normalizeNumber).filter(Boolean).forEach(number => {
       if (!result.includes(number)) result.push(number);
     });
@@ -31,6 +46,10 @@ function isInternal(number: string): boolean {
 
 function isExternal(number: string): boolean {
   return number.length >= 7 && number.length <= 15;
+}
+
+function isTrunkCandidate(number: string): boolean {
+  return number.length >= 6 && number.length <= 15;
 }
 
 function read(row: any, ...fields: string[]): unknown {
@@ -56,7 +75,7 @@ function endpointExtension(row: any): string {
 }
 
 function explicitCallerExtension(row: any): string {
-  return numberCandidates(read(row, 'CallerIDNum', 'callerId', 'caller', 'cid', 'src', 'cnum'))
+  return numberCandidates(read(row, 'CallerIDNum', 'callerId', 'caller', 'cid', 'cid_num', 'src', 'cnum'))
     .find(isInternal) || '';
 }
 
@@ -102,7 +121,7 @@ export function detectLiveCallDirection(group: any[], operatorExt = ''): LiveCal
     const internalCaller = explicitCaller || (isOutboundContext(context) ? endpoint : '');
 
     if (internalCaller && destination && (isOutboundContext(context) || internalCaller === operator)) {
-      const trunkNumber = allGroupNumbers(rows).find(number => isExternal(number) && number !== destination) || '';
+      const trunkNumber = allGroupNumbers(rows).find(number => isTrunkCandidate(number) && number !== destination) || '';
       return { direction: 'outgoing', internalCaller, destinationNumber: destination, trunkNumber };
     }
   }
@@ -110,7 +129,7 @@ export function detectLiveCallDirection(group: any[], operatorExt = ''): LiveCal
   const hasExplicitInboundContext = rows.some(row => isInboundContext(rowContext(row)));
   const hasInboundRouteWithExternalCaller = rows.some(row => {
     const context = rowContext(row);
-    const caller = numberCandidates(read(row, 'CallerIDNum', 'callerId', 'caller', 'cid', 'src', 'cnum')).find(isExternal);
+    const caller = numberCandidates(read(row, 'CallerIDNum', 'callerId', 'caller', 'cid', 'cid_num', 'src', 'cnum')).find(isExternal);
     return isInboundRouteContext(context) && Boolean(caller);
   });
 
@@ -132,7 +151,7 @@ export function detectLiveCallDirection(group: any[], operatorExt = ''): LiveCal
   const externalDestination = rows.flatMap(directDestinationCandidates).find(isExternal) || '';
   if (externalDestination) {
     const internalCaller = rows.map(row => explicitCallerExtension(row) || endpointExtension(row)).find(Boolean) || operator;
-    const trunkNumber = allGroupNumbers(rows).find(number => isExternal(number) && number !== externalDestination) || '';
+    const trunkNumber = allGroupNumbers(rows).find(number => isTrunkCandidate(number) && number !== externalDestination) || '';
     return { direction: 'outgoing', internalCaller, destinationNumber: externalDestination, trunkNumber };
   }
 

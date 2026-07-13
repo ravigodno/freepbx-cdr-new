@@ -521,9 +521,15 @@ interface LiveCallBanner {
   callerNumber?: string;
   externalCallerNumber?: string;
   internalCaller?: string;
+  sourceNumber?: string;
   destinationNumber?: string;
+  dialedNumber?: string;
+  targetNumber?: string;
+  internalNumber?: string;
   trunkNumber?: string;
+  displayNumber?: string;
   displayName?: string;
+  subtitle?: string;
   contactType?: 'internal' | 'client';
   contactComment?: string;
   isSpam?: boolean;
@@ -5261,7 +5267,7 @@ export default function App() {
         const iconClass = isIncomingLive ? 'text-blue-600 bg-blue-50' : isOutgoingLive ? 'text-indigo-600 bg-indigo-50' : 'text-purple-600 bg-purple-50';
         const contactTypeLabel = liveCallBanner.contactType === 'internal' ? 'Внутренний' : 'Клиент';
         const contactTypeClass = liveCallBanner.contactType === 'internal' ? 'bg-gradient-to-br from-slate-50 via-blue-50/40 to-sky-50/50 text-slate-600 border-slate-200' : 'bg-blue-50 text-blue-600 border-blue-100';
-        const display = liveCallBanner.displayName || liveCallBanner.number || 'Неизвестный номер';
+        const display = liveCallBanner.displayName || liveCallBanner.displayNumber || 'Неизвестный номер';
         const isSpamOrBlacklisted = liveCallBanner.isSpam === true || liveCallBanner.isBlacklisted === true;
         const cleanName = display.replace(/\s*\(([^)]*)\)\s*$/, '');
         const positionMatch = display.match(/\(([^)]*)\)\s*$/);
@@ -5360,7 +5366,7 @@ export default function App() {
                     </div>
                     <div className="mt-1 flex items-center gap-2 text-sm font-bold text-slate-800">
                       <Phone className="h-4 w-4 text-cyan-500" />
-                      <span className="font-mono">{liveCallBanner.number || '—'}</span>
+                      <span>{liveCallBanner.subtitle || liveCallBanner.displayNumber || '—'}</span>
                     </div>
                   </div></div>
 

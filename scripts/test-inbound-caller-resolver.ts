@@ -4,10 +4,19 @@ import {
   resolveInboundExternalCaller,
   resolveInboundLiveCaller
 } from '../server/inboundCallerResolver.js';
-import { detectLiveCallDirection } from '../server/liveCallDirection.js';
+import {
+  detectLiveCallDirection,
+  selectLiveOutgoingDestination,
+  stripLiveTechnicalAddresses
+} from '../server/liveCallDirection.js';
 import { buildCallRouteView } from '../src/modules/cdr/utils/buildCallRouteView.js';
 import { buildCdrRowViewModel } from '../src/modules/cdr/utils/CDRRowHelpers.js';
-import { getLiveCallPopupTitle, isLiveCallPopupVisible, normalizeLiveCallBannerPayload } from '../src/utils/liveCallBanner.js';
+import {
+  buildLiveCallBannerDisplay,
+  getLiveCallPopupTitle,
+  isLiveCallPopupVisible,
+  normalizeLiveCallBannerPayload
+} from '../src/utils/liveCallBanner.js';
 
 const did = '74951234567';
 const externalCaller = '79787902449';
@@ -248,5 +257,133 @@ const outboundRouteView = buildCallRouteView({
 });
 assert.deepEqual(outboundRouteView.routeSteps.map(step => step.label), ['EXTENSION', 'OUTBOUND ROUTE', 'TRUNK']);
 assert.match(outboundRouteView.resultText, /ответил/i);
+
+// Реальная форма UID 1783942903.61: исходящий транк содержит `-in` и
+// context `from-trunk-*`, но origin PJSIP/200 + from-internal остаётся приоритетным.
+const realOutboundDirection = detectLiveCallDirection([
+  {
+    Channel: 'PJSIP/200-00000012', Context: 'from-internal', Exten: outboundDestination,
+    CallerIDNum: '200', ConnectedLineNum: outboundDestination,
+    ApplicationData: `SIP/841282-in/${outboundDestination},300`
+  },
+  {
+    Channel: 'SIP/841282-in-00000011', Context: 'from-trunk-sip-841282-in', Exten: outboundDestination,
+    CallerIDNum: '841282', ConnectedLineNum: outboundDestination
+  }
+], '200');
+assert.deepEqual(realOutboundDirection, {
+  direction: 'outgoing',
+  internalCaller: '200',
+  destinationNumber: outboundDestination,
+  trunkNumber: '841282'
+});
+assert.equal(
+  selectLiveOutgoingDestination({ ...realOutboundDirection, destinationNumber: '200' }, ['200', '841282', outboundDestination]),
+  outboundDestination
+);
+
+const guardedOutgoingBanner = normalizeLiveCallBannerPayload({
+  active: true,
+  direction: 'outgoing',
+  internalCaller: '200',
+  callerNumber: '200',
+  dialedNumber: outboundDestination,
+  destinationNumber: '200',
+  number: '200',
+  trunkNumber: '841282'
+});
+assert.equal(guardedOutgoingBanner?.callerNumber, '200');
+assert.equal(guardedOutgoingBanner?.destinationNumber, outboundDestination);
+assert.equal(guardedOutgoingBanner?.number, outboundDestination);
+
+const inboundWithSipContact = [
+  {
+    Channel: 'SIP/841282-in-00000015', Context: 'from-trunk-sip-841282-in', Exten: '841282',
+    CallerIDNum: '74994907209', ConnectedLineNum: '200'
+  },
+  {
+    Channel: 'PJSIP/200-00000016', Context: 'ext-local', Exten: '200',
+    CallerIDNum: '74994907209', ConnectedLineNum: '200',
+    ApplicationData: 'PJSIP/200/sip:200@192.168.1.222:5060,,HhtrI'
+  }
+];
+const sanitizedSipContact = stripLiveTechnicalAddresses(inboundWithSipContact[1].ApplicationData);
+assert.doesNotMatch(sanitizedSipContact, /192|168|222|5060/);
+const inboundSipContactDirection = detectLiveCallDirection(inboundWithSipContact, '200');
+assert.equal(inboundSipContactDirection.direction, 'incoming');
+assert.equal(inboundSipContactDirection.destinationNumber, '200');
+
+const liveCelOnlyFallback = resolveInboundExternalCaller([], [
+  {
+    eventtype: 'CHAN_START', cid_name: 'РА Выгодно', cid_num: '74994907209',
+    exten: '841282', context: 'from-trunk-sip-841282-in', channame: 'SIP/841282-in-0000001a'
+  },
+  {
+    eventtype: 'CHAN_START', cid_name: '200', cid_num: '200',
+    exten: 's', context: 'from-internal', channame: 'PJSIP/200-0000001b'
+  }
+]);
+assert.equal(liveCelOnlyFallback.externalCallerNumber, '74994907209');
+assert.equal(liveCelOnlyFallback.sourceField, 'cel.cid_num');
+assert.notEqual(liveCelOnlyFallback.externalCallerNumber, '841282');
+
+const incomingDisplay = buildLiveCallBannerDisplay({
+  direction: 'incoming',
+  externalCallerNumber: externalCaller,
+  callerNumber: externalCaller,
+  destinationNumber: '201',
+  operatorExt: '201',
+  did
+});
+assert.equal(incomingDisplay.displayNumber, externalCaller);
+assert.equal(incomingDisplay.subtitle, 'На мой SIP 201');
+
+const outgoingDisplay = buildLiveCallBannerDisplay({
+  direction: 'outgoing',
+  callerNumber: '200',
+  internalCaller: '200',
+  dialedNumber: outboundDestination,
+  destinationNumber: outboundDestination,
+  trunkNumber: '841282'
+});
+assert.equal(outgoingDisplay.displayNumber, outboundDestination);
+assert.equal(outgoingDisplay.subtitle, 'От внутреннего 200');
+
+const internalDisplay = buildLiveCallBannerDisplay({
+  direction: 'internal',
+  callerNumber: '200',
+  internalCaller: '200',
+  targetNumber: '100',
+  extension: '100'
+});
+assert.equal(internalDisplay.displayNumber, '100');
+assert.notEqual(internalDisplay.displayNumber, '');
+assert.equal(internalDisplay.subtitle, 'От внутреннего 200');
+
+const namedInternalDisplay = buildLiveCallBannerDisplay({
+  direction: 'internal',
+  callerId: '200',
+  destinationNumber: '100',
+  displayName: 'Приёмная'
+});
+assert.equal(namedInternalDisplay.displayName, 'Приёмная');
+assert.equal(namedInternalDisplay.displayNumber, '100');
+assert.equal(namedInternalDisplay.subtitle, '100 · От внутреннего 200');
+
+const internalCelDirection = detectLiveCallDirection([
+  { cid_num: '200', exten: '100', context: 'from-internal', channame: 'PJSIP/200-00000100' },
+  { cid_num: '200', exten: '100', context: 'from-internal', channame: 'PJSIP/100-00000101' }
+], '200');
+assert.equal(internalCelDirection.direction, 'internal');
+assert.equal(internalCelDirection.internalCaller, '200');
+assert.equal(internalCelDirection.destinationNumber, '100');
+
+const outgoingCelDirection = detectLiveCallDirection([
+  { cid_num: '200', exten: outboundDestination, context: 'from-internal', channame: 'PJSIP/200-00000102' },
+  { cid_num: '841282', exten: outboundDestination, context: 'from-trunk-sip-841282-in', channame: 'SIP/841282-in-00000103' }
+], '200');
+assert.equal(outgoingCelDirection.direction, 'outgoing');
+assert.equal(outgoingCelDirection.internalCaller, '200');
+assert.equal(outgoingCelDirection.destinationNumber, outboundDestination);
 
 console.log('Inbound caller resolver fixtures passed');

@@ -87,7 +87,11 @@ import {
   resolveInboundExternalCaller,
   resolveInboundLiveCaller
 } from './server/inboundCallerResolver.js';
-import { detectLiveCallDirection } from './server/liveCallDirection.js';
+import {
+  detectLiveCallDirection,
+  selectLiveOutgoingDestination,
+  stripLiveTechnicalAddresses
+} from './server/liveCallDirection.js';
 import {
   appendDevicesAlertsToSql, appendDevicesHistoryToSql, appendHealthHistoryToSql, appendQualityAlertsToSql,
   appendQualityHistoryToSql, getMonitoringStorageMode, getMonitoringStorageStatus, readDevicesAlertsFromSql,
@@ -12115,8 +12119,13 @@ interface LiveCallBanner {
   callerNumber?: string;
   externalCallerNumber?: string;
   internalCaller?: string;
+  sourceNumber?: string;
   destinationNumber?: string;
+  dialedNumber?: string;
+  targetNumber?: string;
+  internalNumber?: string;
   trunkNumber?: string;
+  displayNumber?: string;
   displayName?: string;
   contactType?: string;
   contactComment?: string;
@@ -12502,7 +12511,7 @@ function getLiveChannelEndpointExt(value: any): string {
 }
 
 function getLiveAppDataNumberCandidates(value: any): string[] {
-  const text = String(value || '')
+  const text = stripLiveTechnicalAddresses(value)
     // Убираем технические суффиксы каналов, чтобы 00000004 не определялся как номер.
     .replace(/(?:SIP|PJSIP)\/([0-9]{2,5})-[0-9a-f]+/gi, '$1')
     .replace(/Local\/([0-9]{2,5})@[^,\s)]*/gi, '$1');
@@ -12694,8 +12703,7 @@ function buildLiveCallBannerFromAmiChannels(channels: AmiBlock[], operatorExt: s
     if (hasInboundSignal) {
       number = inboundCaller || externalCandidates.find(num => num !== did) || '';
     } else if (direction === 'outgoing') {
-      number = directionResolution.destinationNumber ||
-        externalCandidates.find(num => num !== directionResolution.trunkNumber) || '';
+      number = selectLiveOutgoingDestination(directionResolution, externalCandidates);
     } else {
       number = directionResolution.destinationNumber ||
         internalCandidates.find(num => num !== directionResolution.internalCaller) ||
@@ -12708,16 +12716,23 @@ function buildLiveCallBannerFromAmiChannels(channels: AmiBlock[], operatorExt: s
     const first = group[0];
     const durationSec = Math.max(...group.map(ch => liveDurationToSeconds(ch.Duration)), 0);
 
+    const callerNumber = hasInboundSignal ? number : (directionResolution.internalCaller || ext);
+    const destinationNumber = hasInboundSignal ? (directionResolution.destinationNumber || ext) : number;
     return {
       active: true,
       direction,
       operatorExt: ext,
       number,
-      callerNumber: hasInboundSignal ? number : (directionResolution.internalCaller || ext),
+      callerNumber,
       externalCallerNumber: inboundCallerResolution?.externalCallerNumber || '',
       internalCaller: hasInboundSignal ? '' : (directionResolution.internalCaller || ext),
-      destinationNumber: hasInboundSignal ? (directionResolution.destinationNumber || ext) : number,
+      sourceNumber: callerNumber,
+      destinationNumber,
+      dialedNumber: direction === 'outgoing' ? number : '',
+      targetNumber: destinationNumber,
+      internalNumber: direction === 'internal' ? destinationNumber : (direction === 'incoming' ? destinationNumber : callerNumber),
       trunkNumber: hasInboundSignal ? did : directionResolution.trunkNumber,
+      displayNumber: number,
       displayName: contact.name,
       contactType: contact.type,
       contactComment: contact.comment,
@@ -12734,6 +12749,26 @@ function buildLiveCallBannerFromAmiChannels(channels: AmiBlock[], operatorExt: s
   }
 
   return { active: false };
+}
+
+const liveCelEvidenceCache = new Map<string, { expiresAt: number; rows: any[] }>();
+
+async function loadLiveCallEvidenceFromCel(settings: AppSettings, linkedid: string) {
+  const key = String(linkedid || '').trim();
+  if (!key) return null;
+
+  const cached = liveCelEvidenceCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.rows;
+
+  const celRows = await loadCelCallerChain(settings, false, key);
+  liveCelEvidenceCache.set(key, { expiresAt: Date.now() + 5000, rows: celRows });
+  if (liveCelEvidenceCache.size > 500) {
+    const now = Date.now();
+    liveCelEvidenceCache.forEach((entry, cacheKey) => {
+      if (entry.expiresAt <= now) liveCelEvidenceCache.delete(cacheKey);
+    });
+  }
+  return celRows;
 }
 
 app.get('/api/live/call-banner', requireAuth(), async (req, res) => {
@@ -12753,7 +12788,49 @@ app.get('/api/live/call-banner', requireAuth(), async (req, res) => {
     }
     const directoryRuntime = await getDirectoryRuntimeSnapshotForRequest(localDb, req);
     const channels = await runAmiCoreShowChannels(localDb.settings);
-    const banner = buildLiveCallBannerFromAmiChannels(channels, effectiveOperatorExt, directoryRuntime.contacts, localDb.settings);
+    let banner = buildLiveCallBannerFromAmiChannels(channels, effectiveOperatorExt, directoryRuntime.contacts, localDb.settings);
+    const bannerNeedsCelEvidence = banner.active && banner.linkedid && (
+      (banner.direction === 'incoming' && !isExternalNumber(banner.number)) ||
+      (banner.direction === 'outgoing' && !isExternalNumber(banner.number)) ||
+      (banner.direction === 'internal' && (!isInternalExt(banner.number) || onlyDigits(banner.number) === onlyDigits(banner.callerNumber)))
+    );
+    if (bannerNeedsCelEvidence && banner.linkedid) {
+      const celRows = await loadLiveCallEvidenceFromCel(localDb.settings, banner.linkedid);
+      const celDirection = detectLiveCallDirection(celRows || [], effectiveOperatorExt);
+      const celCaller = resolveInboundExternalCaller([], celRows || []);
+      const evidenceNumber = banner.direction === 'incoming'
+        ? celCaller.externalCallerNumber
+        : celDirection.destinationNumber;
+      const validEvidenceNumber = banner.direction === 'incoming' || banner.direction === 'outgoing'
+        ? isExternalNumber(evidenceNumber)
+        : isInternalExt(evidenceNumber) && onlyDigits(evidenceNumber) !== onlyDigits(celDirection.internalCaller);
+      if (validEvidenceNumber) {
+        const callerNumber = banner.direction === 'incoming'
+          ? evidenceNumber
+          : (celDirection.internalCaller || banner.callerNumber || effectiveOperatorExt);
+        const contact = resolveLiveContact(evidenceNumber, directoryRuntime.contacts, localDb.settings);
+        banner = {
+          ...banner,
+          number: evidenceNumber,
+          callerNumber,
+          externalCallerNumber: banner.direction === 'incoming' ? evidenceNumber : '',
+          internalCaller: banner.direction === 'incoming' ? '' : callerNumber,
+          sourceNumber: callerNumber,
+          destinationNumber: banner.direction === 'incoming' ? (banner.destinationNumber || effectiveOperatorExt) : evidenceNumber,
+          dialedNumber: banner.direction === 'outgoing' ? evidenceNumber : '',
+          targetNumber: banner.direction === 'incoming' ? (banner.destinationNumber || effectiveOperatorExt) : evidenceNumber,
+          internalNumber: banner.direction === 'internal' ? evidenceNumber : (banner.internalNumber || ''),
+          displayNumber: evidenceNumber,
+          displayName: contact.name,
+          contactType: contact.type,
+          contactComment: contact.comment,
+          isSpam: contact.isSpam,
+          isBlacklisted: contact.isBlacklisted,
+          company: contact.company,
+          position: contact.position
+        };
+      }
+    }
     res.json({
       ...banner,
       transferTargets: banner.active ? buildLiveTransferTargets(directoryRuntime.contacts, req, localDb, effectiveOperatorExt) : []
