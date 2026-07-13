@@ -17142,8 +17142,6 @@ async function getRealVoIPQualityDevices(settings: AppSettings, warnings?: strin
   });
 }
 
-initQualityFiles();
-
 // In-Memory state of device metrics
 const devicesMetrics: { [ext: string]: { latency: number; jitter: number; rtpLoss: number; mos: number; status: string } } = {};
 for (const dev of INITIAL_DEVICES) {
@@ -17176,9 +17174,8 @@ for (const dev of INITIAL_DEVICES) {
 // Background simulator: runs every 15 seconds to drift metric slightly and create historical points + alerts
 setInterval(async () => {
   try {
-    if (!fs.existsSync(QUALITY_HISTORY_FILE) || !fs.existsSync(QUALITY_ALERTS_FILE)) {
-      return;
-    }
+    const storageMode = await getMonitoringStorageMode();
+    if (storageMode !== 'sql') initQualityFiles();
     let localDb: any = {};
     try {
       localDb = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'db.json'), 'utf8') || '{}');
@@ -17196,8 +17193,14 @@ setInterval(async () => {
       }
     }
 
-    const history: TelemetryPoint[] = JSON.parse(fs.readFileSync(QUALITY_HISTORY_FILE, 'utf8') || '[]');
-    const alerts: TelemetryAlert[] = JSON.parse(fs.readFileSync(QUALITY_ALERTS_FILE, 'utf8') || '[]');
+    const history = (await readWithMonitoringFallback(
+      () => readQualityHistoryFromSql('30d', 'all'),
+      () => readLegacyMonitoringFile('qualityHistory')
+    )).data as TelemetryPoint[];
+    const alerts = (await readWithMonitoringFallback(
+      readQualityAlertsFromSql,
+      () => readLegacyMonitoringFile('qualityAlerts')
+    )).data as TelemetryAlert[];
     const now = new Date().toISOString();
     const currentQualityRows: any[] = [];
 
@@ -17320,7 +17323,6 @@ setInterval(async () => {
       await saveQualityCurrentToPBXPulsDb(currentQualityRows);
     } catch {}
 
-    const storageMode = await getMonitoringStorageMode();
     if (storageMode !== 'legacy') {
       try { await appendQualityHistoryToSql(history.slice(-currentQualityRows.length)); await appendQualityAlertsToSql(alerts); }
       catch { console.warn('[VOIP QUALITY] SQL write failed, legacy write retained'); }
@@ -18872,16 +18874,14 @@ async function getRealVoIPDevices(settings: AppSettings, warnings?: string[]): P
   return list;
 }
 
-initDevicesMapFiles();
-
 // --- REST API ENDPOINTS FOR DEVICES MAP ---
 app.get('/api/devices-map', requireAuth(), async (req, res) => {
   try {
     const localDb = await readLocalDb();
     const settings = localDb.settings;
+    const storageMode = await getMonitoringStorageMode();
     if (!isDemoMode(settings)) {
       const list = await getRealVoIPDevices(settings);
-      fs.writeFileSync(DEVICES_MAP_FILE, JSON.stringify(list, null, 2), 'utf8');
 
       const ipToExtsMap = new Map<string, string[]>();
       for (const dev of list) {
@@ -18908,8 +18908,6 @@ app.get('/api/devices-map', requireAuth(), async (req, res) => {
           });
         }
       }
-      fs.writeFileSync(DEVICES_CONFLICTS_FILE, JSON.stringify(conflicts, null, 2), 'utf8');
-
       const alerts = [];
       for (const dev of list) {
         if (dev.status === 'Conflict') {
@@ -18934,12 +18932,10 @@ app.get('/api/devices-map', requireAuth(), async (req, res) => {
           });
         }
       }
-      fs.writeFileSync(DEVICES_ALERTS_FILE, JSON.stringify(alerts, null, 2), 'utf8');
-
-      let history = [];
-      try {
-        history = JSON.parse(fs.readFileSync(DEVICES_HISTORY_FILE, 'utf8') || '[]');
-      } catch (e) {}
+      let history = (await readWithMonitoringFallback(
+        readDevicesHistoryFromSql,
+        () => readLegacyMonitoringFile('devicesHistory')
+      )).data;
 
       const nowStr = new Date().toISOString();
       for (const dev of list) {
@@ -18962,9 +18958,13 @@ app.get('/api/devices-map', requireAuth(), async (req, res) => {
       if (history.length > 100) {
         history = history.slice(history.length - 100);
       }
-      fs.writeFileSync(DEVICES_HISTORY_FILE, JSON.stringify(history, null, 2), 'utf8');
+      if (storageMode !== 'sql') {
+        fs.writeFileSync(DEVICES_MAP_FILE, JSON.stringify(list, null, 2), 'utf8');
+        fs.writeFileSync(DEVICES_CONFLICTS_FILE, JSON.stringify(conflicts, null, 2), 'utf8');
+        fs.writeFileSync(DEVICES_ALERTS_FILE, JSON.stringify(alerts, null, 2), 'utf8');
+        fs.writeFileSync(DEVICES_HISTORY_FILE, JSON.stringify(history, null, 2), 'utf8');
+      }
 
-      const storageMode = await getMonitoringStorageMode();
       if (storageMode !== 'legacy') {
         try {
           await upsertDevicesMapToSql(list);
@@ -18973,7 +18973,7 @@ app.get('/api/devices-map', requireAuth(), async (req, res) => {
           await upsertDevicesConflictsToSql(conflicts);
         } catch { console.warn('[DEVICES_MAP] SQL write failed, legacy data retained'); }
       }
-    } else {
+    } else if (storageMode !== 'sql') {
       initDevicesMapFiles();
     }
 
@@ -18987,7 +18987,7 @@ app.get('/api/devices-map', requireAuth(), async (req, res) => {
 app.get('/api/devices-map/history', requireAuth(), async (req, res) => {
   try {
     const localDb = await readLocalDb();
-    if (isDemoMode(localDb.settings)) {
+    if (isDemoMode(localDb.settings) && await getMonitoringStorageMode() !== 'sql') {
       initDevicesMapFiles();
     }
     const stored = await readWithMonitoringFallback(readDevicesHistoryFromSql, () => readLegacyMonitoringFile('devicesHistory'));
@@ -19000,7 +19000,7 @@ app.get('/api/devices-map/history', requireAuth(), async (req, res) => {
 app.get('/api/devices-map/conflicts', requireAuth(), async (req, res) => {
   try {
     const localDb = await readLocalDb();
-    if (isDemoMode(localDb.settings)) {
+    if (isDemoMode(localDb.settings) && await getMonitoringStorageMode() !== 'sql') {
       initDevicesMapFiles();
     }
     const stored = await readWithMonitoringFallback(readDevicesConflictsFromSql, () => readLegacyMonitoringFile('devicesConflicts'));
@@ -19013,7 +19013,7 @@ app.get('/api/devices-map/conflicts', requireAuth(), async (req, res) => {
 app.get('/api/devices-map/alerts', requireAuth(), async (req, res) => {
   try {
     const localDb = await readLocalDb();
-    if (isDemoMode(localDb.settings)) {
+    if (isDemoMode(localDb.settings) && await getMonitoringStorageMode() !== 'sql') {
       initDevicesMapFiles();
     }
     const stored = await readWithMonitoringFallback(readDevicesAlertsFromSql, () => readLegacyMonitoringFile('devicesAlerts'));
@@ -19025,7 +19025,7 @@ app.get('/api/devices-map/alerts', requireAuth(), async (req, res) => {
 
 app.get('/api/devices-map/device/:ext', requireAuth(), async (req, res) => {
   try {
-    initDevicesMapFiles();
+    if (await getMonitoringStorageMode() !== 'sql') initDevicesMapFiles();
     const ext = String(req.params.ext);
     const devices = (await readWithMonitoringFallback(readDevicesMapFromSql, () => readLegacyMonitoringFile('devicesMap'))).data;
     const dev = devices.find((d: any) => d.ext === ext);
@@ -19041,10 +19041,14 @@ app.get('/api/devices-map/device/:ext', requireAuth(), async (req, res) => {
   }
 });
 
-app.post('/api/devices-map/ping/:ext', requireAuth(), (req, res) => {
+app.post('/api/devices-map/ping/:ext', requireAuth(), async (req, res) => {
   try {
     const ext = String(req.params.ext);
-    const devices = JSON.parse(fs.readFileSync(DEVICES_MAP_FILE, 'utf8') || '[]');
+    if (await getMonitoringStorageMode() !== 'sql') initDevicesMapFiles();
+    const devices = (await readWithMonitoringFallback(
+      readDevicesMapFromSql,
+      () => readLegacyMonitoringFile('devicesMap')
+    )).data;
     const dev = devices.find((d: any) => d.ext === ext);
     if (!dev) {
        res.status(404).json({ success: false, error: "Устройство не найдено" });
@@ -19075,10 +19079,14 @@ app.post('/api/devices-map/ping/:ext', requireAuth(), (req, res) => {
   }
 });
 
-app.post('/api/devices-map/traceroute/:ext', requireAuth(), (req, res) => {
+app.post('/api/devices-map/traceroute/:ext', requireAuth(), async (req, res) => {
   try {
     const ext = String(req.params.ext);
-    const devices = JSON.parse(fs.readFileSync(DEVICES_MAP_FILE, 'utf8') || '[]');
+    if (await getMonitoringStorageMode() !== 'sql') initDevicesMapFiles();
+    const devices = (await readWithMonitoringFallback(
+      readDevicesMapFromSql,
+      () => readLegacyMonitoringFile('devicesMap')
+    )).data;
     const dev = devices.find((d: any) => d.ext === ext);
     if (!dev) {
        res.status(404).json({ success: false, error: "Устройство не найдено" });
@@ -19101,13 +19109,17 @@ app.post('/api/devices-map/traceroute/:ext', requireAuth(), (req, res) => {
   }
 });
 
-app.post('/api/devices-map/snapshot', requireAuth(), (req, res) => {
+app.post('/api/devices-map/snapshot', requireAuth(), async (req, res) => {
   try {
-    initDevicesMapFiles();
-    const mapData = fs.readFileSync(DEVICES_MAP_FILE, 'utf8');
+    if (await getMonitoringStorageMode() !== 'sql') initDevicesMapFiles();
+    const stored = await readWithMonitoringFallback(
+      readDevicesMapFromSql,
+      () => readLegacyMonitoringFile('devicesMap')
+    );
+    const mapData = JSON.stringify(stored.data, null, 2);
     const snapshotPath = path.join(DATA_DIR, `devices-map-snapshot-${Date.now()}.json`);
     fs.writeFileSync(snapshotPath, mapData, 'utf8');
-    res.json({ success: true, snapshotFile: path.basename(snapshotPath), message: "Снимок сетевой карты устройств успешно сохранен на сервере." });
+    res.json({ success: true, source: stored.source, snapshotFile: path.basename(snapshotPath), message: "Снимок сетевой карты устройств успешно сохранен на сервере." });
   } catch (e: any) {
     res.status(500).json({ success: false, error: e.message || String(e) });
   }

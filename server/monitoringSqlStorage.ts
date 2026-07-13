@@ -14,6 +14,7 @@ const FILES = {
 } as const;
 const TABLES = ['quality_current', 'quality_history', 'monitoring_health_history', 'monitoring_quality_alerts',
   'monitoring_devices_history', 'monitoring_devices_alerts', 'monitoring_devices_conflicts', 'monitoring_devices_map'] as const;
+export const MONITORING_DIRECT_LEGACY_READS_REMAINING: string[] = [];
 const SQL_TIMEOUT_MS = 8000;
 const MAX_READ_ROWS = 10000;
 let lastWriteStatus: any = null;
@@ -127,4 +128,93 @@ async function importLegacyMonitoringDataBulk(connection: Connection): Promise<I
   return results;
 }
 
-export async function getMonitoringStorageStatus(){const mode=await getMonitoringStorageMode();const tables:any={};let sqlAvailable=true;for(const table of TABLES){try{const timeColumn=table==='quality_history'?'sampled_at':table==='monitoring_health_history'||table==='monitoring_devices_history'?'sampled_at':table.includes('alerts')?'alert_time':table==='monitoring_devices_conflicts'?'last_seen_at':'updated_at';const rows=await timedQuery(`SELECT COUNT(*) count, MIN(${timeColumn}) minTimestamp, MAX(${timeColumn}) maxTimestamp FROM ${table}`);tables[table]=rows[0];}catch(e:any){sqlAvailable=false;tables[table]={error:sanitizePBXPulsDbError(e)};}}return{mode,sqlAvailable,legacyFilesFound:Object.fromEntries(Object.entries(FILES).map(([k,f])=>[f,fs.existsSync(filePath(k as keyof typeof FILES))])),tables,lastWriteStatus,fallbackUsed};}
+function legacyTimestampRange(items: any[]): { minTimestamp: string | null; maxTimestamp: string | null } {
+  const timestamps = items
+    .map(item => item?.timestamp || item?.time || item?.detectedAt || item?.lastSeenAt || item?.lastContact || item?.regTime)
+    .map(value => new Date(String(value || '')).getTime())
+    .filter(value => Number.isFinite(value))
+    .sort((a, b) => a - b);
+  return {
+    minTimestamp: timestamps.length ? new Date(timestamps[0]).toISOString() : null,
+    maxTimestamp: timestamps.length ? new Date(timestamps[timestamps.length - 1]).toISOString() : null
+  };
+}
+
+function storedTimestampMs(value: unknown): number | null {
+  const parsed = new Date(String(value || '').replace(' ', 'T')).getTime();
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function sqlTimestampMs(table: string, value: unknown): number | null {
+  const normalized = String(value || '').replace(' ', 'T');
+  const parsed = new Date(table === 'monitoring_devices_map' ? normalized : `${normalized}Z`).getTime();
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+export async function getMonitoringStorageStatus() {
+  const mode = await getMonitoringStorageMode();
+  const tables: Record<string, any> = {};
+  let sqlAvailable = true;
+
+  for (const table of TABLES) {
+    try {
+      const timeColumn = table === 'quality_history' ? 'sampled_at'
+        : table === 'monitoring_health_history' || table === 'monitoring_devices_history' ? 'sampled_at'
+          : table.includes('alerts') ? 'alert_time'
+            : table === 'monitoring_devices_conflicts' ? 'last_seen_at' : 'updated_at';
+      const rows = await timedQuery(`SELECT COUNT(*) count, MIN(${timeColumn}) minTimestamp, MAX(${timeColumn}) maxTimestamp FROM ${table}`);
+      tables[table] = rows[0];
+    } catch (e: any) {
+      sqlAvailable = false;
+      tables[table] = { error: sanitizePBXPulsDbError(e) };
+    }
+  }
+
+  const legacyFiles = Object.fromEntries(Object.entries(FILES).map(([key, file]) => {
+    const items = readLegacyMonitoringFile(key as keyof typeof FILES);
+    return [file, { found: fs.existsSync(filePath(key as keyof typeof FILES)), count: items.length, ...legacyTimestampRange(items) }];
+  }));
+  const coverage = [
+    ['quality-history.json', 'quality_history'],
+    ['quality-alerts.json', 'monitoring_quality_alerts'],
+    ['health-history.json', 'monitoring_health_history'],
+    ['devices-history.json', 'monitoring_devices_history'],
+    ['devices-alerts.json', 'monitoring_devices_alerts'],
+    ['devices-conflicts.json', 'monitoring_devices_conflicts'],
+    ['devices-map.json', 'monitoring_devices_map']
+  ] as const;
+  const blockers: string[] = [];
+
+  if (!sqlAvailable) blockers.push('monitoring_sql_unavailable');
+  if (mode === 'legacy') blockers.push('monitoring_storage_mode_is_legacy');
+  blockers.push(...MONITORING_DIRECT_LEGACY_READS_REMAINING.map(item => `direct_legacy_read:${item}`));
+  for (const [file, table] of coverage) {
+    const legacyCount = Number((legacyFiles as any)[file]?.count || 0);
+    const sqlCount = Number(tables[table]?.count || 0);
+    if (legacyCount > sqlCount) blockers.push(`sql_count_below_legacy:${table}`);
+    const legacyMax = storedTimestampMs((legacyFiles as any)[file]?.maxTimestamp);
+    const sqlMax = sqlTimestampMs(table, tables[table]?.maxTimestamp);
+    if (legacyMax !== null && (sqlMax === null || sqlMax + 10 * 60 * 1000 < legacyMax)) {
+      blockers.push(`sql_timestamp_behind_legacy:${table}`);
+    }
+  }
+  if (Number((legacyFiles as any)['devices-map.json']?.count || 0) > 0 && Number(tables.quality_current?.count || 0) === 0) {
+    blockers.push('quality_current_is_empty');
+  }
+  if (lastWriteStatus?.ok === false) blockers.push(`last_sql_write_failed:${lastWriteStatus.domain || 'unknown'}`);
+
+  const cutoverReady = blockers.length === 0;
+  return {
+    mode,
+    sqlAvailable,
+    fallbackUsed,
+    directLegacyReadsRemaining: MONITORING_DIRECT_LEGACY_READS_REMAINING,
+    directLegacyReadCount: MONITORING_DIRECT_LEGACY_READS_REMAINING.length,
+    cutoverReady,
+    monitoringSqlCutoverReady: cutoverReady,
+    blockers,
+    legacyFiles,
+    tables,
+    lastWriteStatus
+  };
+}
