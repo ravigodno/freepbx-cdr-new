@@ -27,6 +27,12 @@ import { registerManagementRoutes } from './server-management.js';
 import { registerAiPbxAdminRoutes } from './server/aiPbxAdmin.js';
 import { resolveAsteriskCli, runAsteriskCliCommand } from './server/asteriskCli.js';
 import { getConferenceBackendStatus } from './server/conferenceService.js';
+import {
+  buildConsultTransferCapabilities,
+  unavailableConsultOperation,
+  validateConsultTransferTarget,
+  type ConsultTransferCapabilities
+} from './server/consultTransferService.js';
 import { runPBXPulsMigrations } from './server/pbxpulsMigrations.js';
 import { registerPBXPulsSqlStatusRoutes } from './server/pbxpulsSqlStatus.js';
 import { authenticatePBXPulsSqlUser, compareLegacyUserWithSql, getAuthStorageMode, getPBXPulsUsers } from './server/pbxpulsAuthDb.js';
@@ -12665,6 +12671,27 @@ function findLiveTransferChannelForOperator(channels: AmiBlock[], operatorExt: s
   return null;
 }
 
+function findConsultCallChannels(channels: AmiBlock[], operatorExt: string, requestedCallId = '') {
+  const operator = findLiveTransferChannelForOperator(channels, operatorExt);
+  if (!operator) return { operatorChannel: '', customerChannel: '', bridgeId: '', linkedid: '' };
+  const linkedid = operator.linkedid;
+  const group = channels.filter(channel => {
+    const channelCallId = channel.Linkedid || channel.Uniqueid || '';
+    return channelCallId === linkedid && (!requestedCallId || requestedCallId === linkedid || requestedCallId === channel.Uniqueid);
+  });
+  const operatorRow = group.find(channel => channel.Channel === operator.channel);
+  const bridgeId = String(operatorRow?.BridgeId || '').trim();
+  const customer = group.find(channel => channel.Channel !== operator.channel
+    && (!bridgeId || channel.BridgeId === bridgeId)
+    && String(channel.Channel || '').trim());
+  return {
+    operatorChannel: operator.channel,
+    customerChannel: String(customer?.Channel || ''),
+    bridgeId,
+    linkedid
+  };
+}
+
 function getChanSpyTargetFromChannel(channel: string, operatorExt: string): string {
   const raw = String(channel || '').trim();
   const endpointPrefix = raw.match(/^((?:SIP|PJSIP)\/[0-9]{2,5})-/i);
@@ -13019,6 +13046,85 @@ app.get('/api/live-calls/conference/status', requireAuth(), async (req, res) => 
     });
   }
 });
+
+async function getConsultTransferStatusForRequest(req: Request, callId = ''): Promise<ConsultTransferCapabilities> {
+  const localDb = await readLocalDb();
+  const operatorExt = getEffectiveOperatorExt(localDb, req, String(req.query.operatorExt || req.body?.operatorExt || '').trim());
+  const channels = await runAmiCoreShowChannels(localDb.settings);
+  const callChannels = findConsultCallChannels(channels, operatorExt, callId);
+  const atxfer = await runAsteriskCliCommand('manager show command Atxfer', 3000);
+  return buildConsultTransferCapabilities({
+    amiConfigured: Boolean(localDb.settings?.amiHost && localDb.settings?.amiUser && localDb.settings?.amiPass),
+    activeChannelsVisible: channels.length > 0,
+    operatorChannelFound: Boolean(callChannels.operatorChannel),
+    customerChannelFound: Boolean(callChannels.customerChannel),
+    bridgeFound: Boolean(callChannels.bridgeId),
+    atxferActionAvailable: atxfer.success && /Action:\s*Atxfer/i.test(atxfer.message)
+  });
+}
+
+function canUseConsultTransfer(req: Request) {
+  const authUser = (req as any).user;
+  return authUser?.role === 'su' || authUser?.role === 'admin' || authUser?.permissions?.make_calls === true;
+}
+
+app.get('/api/live-calls/consult-transfer/status', requireAuth(), async (req, res) => {
+  if (!canUseConsultTransfer(req)) return res.status(403).json({ error: 'Нет прав на консультационную переадресацию' });
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(await getConsultTransferStatusForRequest(req));
+  } catch (error: any) {
+    res.status(503).json(buildConsultTransferCapabilities({
+      amiConfigured: false,
+      activeChannelsVisible: false,
+      operatorChannelFound: false,
+      customerChannelFound: false,
+      bridgeFound: false,
+      atxferActionAvailable: false
+    }));
+  }
+});
+
+app.get('/api/live-calls/:id/consult-transfer/status', requireAuth(), async (req, res) => {
+  if (!canUseConsultTransfer(req)) return res.status(403).json({ error: 'Нет прав на консультационную переадресацию' });
+  const capabilities = await getConsultTransferStatusForRequest(req, String(req.params.id || ''));
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ ...capabilities, state: 'idle', callId: String(req.params.id || '') });
+});
+
+app.post('/api/live-calls/:id/consult-transfer/start', requireAuth(), async (req, res) => {
+  if (!canUseConsultTransfer(req)) return res.status(403).json({ error: 'Нет прав на консультационную переадресацию' });
+  const capabilities = await getConsultTransferStatusForRequest(req, String(req.params.id || ''));
+  const requestedTarget = req.body?.target;
+  const operatorExt = String(req.body?.operatorExt || '').trim();
+  if (!requestedTarget?.targetNumber) return res.status(400).json({ success: false, state: 'failed', error: 'Не выбрана цель консультации' });
+  const localDb = await readLocalDb();
+  const directoryResult = await searchDirectoryInternalExtensions(
+    requestedTarget.targetNumber,
+    50,
+    operatorExt,
+    {
+      legacyDirectory: localDb.directory || [],
+      settings: localDb.settings,
+      authUser: (req as any).user,
+      dbUser: getAuthenticatedDbUser(localDb, req)
+    }
+  );
+  const validation = validateConsultTransferTarget({
+    ...requestedTarget,
+    id: requestedTarget.directoryContactId || requestedTarget.id
+  }, directoryResult.items, operatorExt, req.body?.customerNumber);
+  if (!validation.valid) return res.status(400).json({ success: false, state: 'failed', error: validation.error });
+  res.status(503).json(unavailableConsultOperation(capabilities));
+});
+
+for (const action of ['complete', 'cancel'] as const) {
+  app.post(`/api/live-calls/:id/consult-transfer/${action}`, requireAuth(), async (req, res) => {
+    if (!canUseConsultTransfer(req)) return res.status(403).json({ error: 'Нет прав на консультационную переадресацию' });
+    const capabilities = await getConsultTransferStatusForRequest(req, String(req.params.id || ''));
+    res.status(503).json(unavailableConsultOperation(capabilities));
+  });
+}
 
 app.post('/api/live/call-transfer', requireAuth(), async (req, res) => {
   try {

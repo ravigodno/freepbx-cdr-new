@@ -3,6 +3,12 @@ import { rankLiveTransferTargets } from '../server/liveTransferSearch.js';
 import { getLiveTransferPresenceLabel } from '../src/components/liveTransferPresence.js';
 import { addCallTarget } from '../src/components/callTargetSelection.js';
 import { createConferenceFromActiveCall, validateConferenceParticipants } from '../server/conferenceService.js';
+import {
+  buildConsultTransferCapabilities,
+  transitionConsultTransferState,
+  unavailableConsultOperation,
+  validateConsultTransferTarget
+} from '../server/consultTransferService.js';
 
 const directory = Array.from({ length: 300 }, (_, index) => {
   const extension = String(100 + index);
@@ -172,5 +178,35 @@ const unavailableConference = await createConferenceFromActiveCall({
   checked: []
 });
 assert.equal(unavailableConference.success, false, 'unavailable backend must never report fake conference success');
+
+const consultSelection = addCallTarget('consult', [], internal201, '100');
+assert.deepEqual(consultSelection.selected.map(item => item.targetNumber), ['201'], 'consult mode must select one target');
+assert.equal(addCallTarget('consult', [], internal201, '201').error, 'Текущий оператор уже участвует в звонке');
+assert.equal(validateConsultTransferTarget(null, [internal201], '100', '74990000000').valid, false, 'consult must reject empty target');
+assert.equal(validateConsultTransferTarget(internal201, [internal201], '201', '74990000000').valid, false, 'consult must reject current operator');
+assert.equal(validateConsultTransferTarget(internal201, [internal201], '100', '74990000000').valid, true, 'consult must accept authoritative internal extension');
+const hiddenTarget = { ...internal201, id: 'hidden', targetNumber: '299', extension: '299' };
+assert.equal(validateConsultTransferTarget(hiddenTarget, [internal201], '100', '74990000000').valid, false, 'consult must reject hidden/spam targets absent from authoritative results');
+
+const unavailableConsult = buildConsultTransferCapabilities({
+  amiConfigured: true,
+  activeChannelsVisible: true,
+  operatorChannelFound: true,
+  customerChannelFound: true,
+  bridgeFound: true,
+  atxferActionAvailable: true
+});
+assert.equal(unavailableConsult.mechanism, 'ami-atxfer');
+assert.equal(unavailableConsult.available, false, 'Atxfer presence alone must not enable unsafe consult workflow');
+assert.equal(unavailableConsultOperation(unavailableConsult).success, false, 'consult foundation must never report fake success');
+
+let consultState = transitionConsultTransferState('idle', 'holding_customer');
+assert.equal(consultState.valid, true);
+consultState = transitionConsultTransferState(consultState.state, 'dialing_target');
+consultState = transitionConsultTransferState(consultState.state, 'talking_to_target');
+consultState = transitionConsultTransferState(consultState.state, 'ready_to_complete');
+assert.equal(transitionConsultTransferState(consultState.state, 'completed').state, 'completed');
+assert.equal(transitionConsultTransferState('talking_to_target', 'cancelled').state, 'cancelled');
+assert.equal(transitionConsultTransferState('idle', 'completed').valid, false, 'invalid consult state transition must be rejected');
 
 console.log('Live transfer search ranking tests passed');

@@ -75,7 +75,7 @@ import ReportsTab from './components/reports/ReportsTab';
 import MarketingTab from './components/marketing/MarketingTab';
 import { AboutSystemTab } from './components/AboutSystemTab';
 import { type LiveTransferResult, type LiveTransferSearchTarget } from './components/LiveTransferSearch';
-import { CallTargetSelector, type ConferenceBackendStatus } from './components/CallTargetSelector';
+import { CallTargetSelector, type ConferenceBackendStatus, type ConsultTransferCapabilities } from './components/CallTargetSelector';
 import ActiveCallsTab from './modules/monitoring/tabs/monitoring/ActiveCallsTab';
 import { getLiveCallPopupTitle, normalizeLiveCallBannerPayload } from './utils/liveCallBanner';
 import CommandCenterTab from './modules/monitoring/tabs/monitoring/CommandCenterTab';
@@ -804,6 +804,7 @@ export default function App() {
   const [directoryLookup, setDirectoryLookup] = useState<DirectoryEntry[]>([]);
   const [selectedMeetingContactIds, setSelectedMeetingContactIds] = useState<string[]>([]);
   const [conferenceBackendStatus, setConferenceBackendStatus] = useState<ConferenceBackendStatus | null>(null);
+  const [consultTransferStatus, setConsultTransferStatus] = useState<ConsultTransferCapabilities | null>(null);
   const selectedMeetingTargets = useMemo(() => selectedMeetingContactIds
     .map(id => directory.find(entry => entry.id === id) || directoryLookup.find(entry => entry.id === id))
     .filter((entry): entry is DirectoryEntry => Boolean(entry))
@@ -2037,6 +2038,32 @@ export default function App() {
     }
   };
 
+  const handleConsultTransferStart = async (targets: LiveTransferSearchTarget[]) => {
+    const target = targets[0];
+    if (!session || !liveCallBanner?.active || !liveCallBanner.linkedid || !target) return;
+    setLiveTransferStatus('Проверяем возможность консультационной переадресации…');
+    try {
+      const response = await fetch(`/api/live-calls/${encodeURIComponent(liveCallBanner.linkedid)}/consult-transfer/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.token}` },
+        body: JSON.stringify({
+          operatorExt: liveCallBanner.operatorExt || myExt,
+          customerNumber: liveCallBanner.externalCallerNumber || liveCallBanner.callerNumber || liveCallBanner.number,
+          target: {
+            targetType: target.targetType,
+            targetNumber: target.targetNumber,
+            directoryContactId: target.id
+          }
+        })
+      });
+      if (response.status === 401) handleAuthError(response);
+      const data = await response.json().catch(() => ({}));
+      setLiveTransferStatus(data.error || 'Консультационная переадресация недоступна');
+    } catch {
+      setLiveTransferStatus('Не удалось проверить консультационную переадресацию');
+    }
+  };
+
   const handleLiveCallMonitor = async (mode: 'listen' | 'whisper') => {
     if (!session || !liveCallBanner?.active || isLiveMonitorLoading) return;
     const supervisorExt = ((session.role === 'operator' || session.permissions?.own_calls_only === true) ? (session.extension || myExt) : myExt).trim();
@@ -3060,6 +3087,25 @@ export default function App() {
     }).catch(() => undefined);
     return () => controller.abort();
   }, [session]);
+
+  useEffect(() => {
+    if (!session || !myExt.trim()) {
+      setConsultTransferStatus(null);
+      return;
+    }
+    const controller = new AbortController();
+    const params = new URLSearchParams({ operatorExt: myExt.trim() });
+    fetch(`/api/live-calls/consult-transfer/status?${params}`, {
+      headers: { Authorization: `Bearer ${session.token}` },
+      cache: 'no-store',
+      signal: controller.signal
+    }).then(async response => {
+      if (response.status === 401) handleAuthError(response);
+      const data = await response.json().catch(() => ({}));
+      if (response.ok) setConsultTransferStatus(data as ConsultTransferCapabilities);
+    }).catch(() => undefined);
+    return () => controller.abort();
+  }, [session, myExt, liveCallBanner?.linkedid]);
 
   // Trigger main loads on mount or settings pivot
   useEffect(() => {
@@ -5326,6 +5372,16 @@ export default function App() {
                       buttonClassName={liveActionButtonClass}
                       onUnauthorized={handleAuthError}
                       onTransfer={handleLiveCallTransfer}
+                    />
+                    <CallTargetSelector
+                      mode="consult"
+                      token={session?.token || ''}
+                      currentExtension={liveCallBanner.operatorExt || myExt}
+                      disabled={isLiveTransferLoading}
+                      buttonClassName={liveActionButtonClass}
+                      consultStatus={consultTransferStatus}
+                      onUnauthorized={handleAuthError}
+                      onConfirm={handleConsultTransferStart}
                     />
                     <CallTargetSelector
                       mode="conference"
