@@ -13,6 +13,19 @@ function firstLiveValue(values: unknown[], predicate: (value: string) => boolean
 }
 
 export function buildLiveCallBannerDisplay(call: Record<string, any>) {
+  if (call.phoneMeeting === true) {
+    const participants = Array.isArray(call.phoneMeetingParticipants) ? call.phoneMeetingParticipants.map(cleanLiveValue).filter(Boolean) : [];
+    const initiator = cleanLiveValue(call.phoneMeetingInitiator);
+    return {
+      direction: 'internal' as const,
+      callerNumber: initiator,
+      destinationNumber: participants.join(', '),
+      displayNumber: participants.join(', '),
+      displayName: 'Телефонное совещание',
+      subtitle: `Инициатор: внутренний ${initiator || 'не определён'} · Приглашены: ${participants.join(', ') || '—'}`,
+      number: participants.join(', ')
+    };
+  }
   const direction: LiveBannerDirection = call.direction === 'incoming' || call.direction === 'outgoing' || call.direction === 'internal'
     ? call.direction
     : 'internal';
@@ -89,7 +102,8 @@ export function isLiveCallPopupVisible(payload: Record<string, any> | null | und
   return normalizeLiveCallBannerPayload(payload) !== null;
 }
 
-export function getLiveCallPopupTitle(direction: unknown): string {
+export function getLiveCallPopupTitle(direction: unknown, phoneMeeting = false): string {
+  if (phoneMeeting) return 'Телефонное совещание';
   if (direction === 'incoming') return 'Входящий звонок';
   if (direction === 'outgoing') return 'Исходящий звонок';
   return 'Внутренний звонок';

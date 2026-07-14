@@ -82,6 +82,10 @@ export interface CallEntry {
   wasTransferred?: boolean;
   transferTargetExt?: string;
   transferTargetLabel?: string;
+  phoneMeeting?: boolean;
+  phoneMeetingId?: string;
+  phoneMeetingInitiator?: string;
+  phoneMeetingParticipants?: string[];
 }
 
 export interface MissedCallStatus {

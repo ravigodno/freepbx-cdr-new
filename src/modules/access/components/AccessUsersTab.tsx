@@ -199,7 +199,7 @@ export default function AccessUsersTab({
         )}
 
         <label className="text-xs font-bold text-slate-600 block">
-          SIP номер
+          SIP номер / «Мой SIP»
           <input
             type="text"
             value={userForm.extension}
@@ -207,6 +207,7 @@ export default function AccessUsersTab({
             className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs font-mono"
             placeholder="200"
           />
+          <span className="mt-1 block text-[10px] font-normal text-slate-500">Используется как внутренний номер пользователя для звонков, live-действий и телефонных совещаний.</span>
         </label>
 
         <label className="flex items-center gap-2 text-xs text-slate-700 font-bold">

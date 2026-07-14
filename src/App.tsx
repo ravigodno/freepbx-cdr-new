@@ -150,9 +150,12 @@ type ContactSyncProvider = 'google' | 'yandex' | 'mailru' | 'file';
 
 const directoryEntryToMeetingTarget = (entry: DirectoryEntry): LiveTransferSearchTarget | null => {
   if (entry.isSpam || entry.isBlacklisted || (entry as any).hidden || (entry as any).disabled) return null;
-  const extension = String(entry.internalExtension || '').replace(/\D/g, '');
   const rawPhone = String(entry.number || entry.phones?.[0] || '').trim();
   const phone = rawPhone.replace(/\D/g, '').replace(/^8(?=\d{10}$)/, '7');
+  const explicitExtension = String(entry.internalExtension || '').replace(/\D/g, '');
+  const extension = /^\d{2,5}$/.test(explicitExtension)
+    ? explicitExtension
+    : entry.type === 'internal' && /^\d{2,5}$/.test(phone) ? phone : '';
   const targetType = /^\d{2,5}$/.test(extension) ? 'internal' : 'directory_phone';
   const targetNumber = targetType === 'internal' ? extension : phone;
   if (!(targetType === 'internal' ? /^\d{2,5}$/.test(targetNumber) : /^\d{6,15}$/.test(targetNumber))) return null;
@@ -561,6 +564,11 @@ interface LiveCallBanner {
   durationSec?: number;
   durationText?: string;
   startedAt?: string;
+  phoneMeeting?: boolean;
+  phoneMeetingId?: string;
+  phoneMeetingInitiator?: string;
+  phoneMeetingParticipants?: string[];
+  phoneMeetingParticipantStatuses?: Array<{ number: string; connected: boolean; initiator: boolean }>;
 };
 
 export default function App() {
@@ -1823,6 +1831,7 @@ export default function App() {
   const [myExt, setMyExt] = useState(() => {
     return localStorage.getItem('operator_asterisk_ext') || '101';
   });
+  const effectiveMySip = String(session?.extension || myExt).trim();
   const [liveCallBanner, setLiveCallBanner] = useState<LiveCallBanner | null>(null);
   const [isLiveTransferLoading, setIsLiveTransferLoading] = useState(false);
   const [isLiveMonitorLoading, setIsLiveMonitorLoading] = useState(false);
@@ -1845,10 +1854,10 @@ export default function App() {
   const [isC2CLoading, setIsC2CLoading] = useState(false);
 
   useEffect(() => {
-    if (session?.role === 'operator') {
+    if (session?.extension) {
       const fixedExt = session.extension || '';
       setMyExt(fixedExt);
-      setOnlyMyCalls(true);
+      if (session.role === 'operator') setOnlyMyCalls(true);
       localStorage.setItem('operator_asterisk_ext', fixedExt);
       return;
     }
@@ -2061,6 +2070,37 @@ export default function App() {
       setLiveTransferStatus(data.error || 'Консультационная переадресация недоступна');
     } catch {
       setLiveTransferStatus('Не удалось проверить консультационную переадресацию');
+    }
+  };
+
+  const handlePhoneMeetingStart = async (targets: LiveTransferSearchTarget[]) => {
+    if (!session || !effectiveMySip || !targets.length) return;
+    setDirNotice('Создаём телефонное совещание…');
+    try {
+      const response = await fetch('/api/live-calls/conference/meeting/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.token}` },
+        body: JSON.stringify({
+          initiatorExt: effectiveMySip,
+          targets: targets.map(target => ({
+            id: target.id,
+            directoryContactId: target.id,
+            targetType: target.targetType,
+            targetNumber: target.targetNumber
+          }))
+        })
+      });
+      if (response.status === 401) handleAuthError(response);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) throw new Error(data.error || 'Не удалось создать совещание');
+      const invited = Array.isArray(data.invited) ? data.invited.filter((number: string) => number !== effectiveMySip) : [];
+      const successMessage = `Телефонное совещание создано. Инициатор: внутренний ${effectiveMySip}. Участники: ${invited.join(', ') || 'не указаны'}.`;
+      setDirNotice(successMessage);
+      setSelectedMeetingContactIds([]);
+      return successMessage;
+    } catch (error: any) {
+      setDirNotice(error?.message || 'Не удалось создать телефонное совещание');
+      throw error;
     }
   };
 
@@ -5210,13 +5250,13 @@ export default function App() {
                 </span>
                 <input
                   type="text"
-                  value={(session.role === 'operator' || session.permissions?.own_calls_only === true) ? (session.extension || '') : myExt}
+                  value={effectiveMySip}
                   onChange={(e) => setMyExt(e.target.value.replace(/[^\d]/g, ''))}
                   placeholder="101"
                   maxLength={6}
-                  disabled={session.role === 'operator'}
+                  disabled={Boolean(session.extension)}
                   className="w-12 bg-white dark:bg-slate-900 border border-slate-250 dark:border-slate-700 rounded py-0.5 px-1.5 text-xs text-slate-900 dark:text-slate-100 font-bold font-mono focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 text-center disabled:bg-gradient-to-br from-slate-50 via-blue-50/40 to-sky-50/50 dark:disabled:bg-slate-800 disabled:text-slate-550 dark:disabled:text-slate-500 disabled:cursor-not-allowed"
-                  title={session.role === 'operator' ? 'SIP-номер закреплён администратором' : 'Введите ваш внутренний добавочный номер. С этого телефона Asterisk начнет дозвон.'}
+                  title={session.extension ? 'SIP-номер закреплён администратором' : 'Введите ваш внутренний добавочный номер. С этого телефона Asterisk начнет дозвон.'}
                 /></div>
 
               <label className="flex items-center gap-1.5 cursor-pointer select-none">
@@ -5326,7 +5366,7 @@ export default function App() {
         const isIncomingLive = liveCallBanner.direction === 'incoming';
         const isOutgoingLive = liveCallBanner.direction === 'outgoing';
         const isInternalLive = liveCallBanner.direction === 'internal';
-        const title = getLiveCallPopupTitle(liveCallBanner.direction);
+        const title = getLiveCallPopupTitle(liveCallBanner.direction, liveCallBanner.phoneMeeting === true);
         const iconClass = isIncomingLive ? 'text-blue-600 bg-blue-50' : isOutgoingLive ? 'text-indigo-600 bg-indigo-50' : 'text-purple-600 bg-purple-50';
         const contactTypeLabel = liveCallBanner.contactType === 'internal' ? 'Внутренний' : 'Клиент';
         const contactTypeClass = liveCallBanner.contactType === 'internal' ? 'bg-gradient-to-br from-slate-50 via-blue-50/40 to-sky-50/50 text-slate-600 border-slate-200' : 'bg-blue-50 text-blue-600 border-blue-100';
@@ -5419,10 +5459,12 @@ export default function App() {
                     {isIncomingLive ? <PhoneIncoming className="h-7 w-7" /> : isOutgoingLive ? <PhoneOutgoing className="h-7 w-7" /> : <PhoneCall className="h-7 w-7" />}
                   </div>
                   <div className="min-w-0">
-                    <div className="flex items-center gap-2 text-[12px] uppercase tracking-[0.12em] font-black text-slate-900">
-                      {title}
-                      {isIncomingLive && <span className="h-2.5 w-2.5 rounded-full bg-blue-500 animate-pulse" />}
-                    </div>
+                    {!liveCallBanner.phoneMeeting && (
+                      <div className="flex items-center gap-2 text-[12px] uppercase tracking-[0.12em] font-black text-slate-900">
+                        {title}
+                        {isIncomingLive && <span className="h-2.5 w-2.5 rounded-full bg-blue-500 animate-pulse" />}
+                      </div>
+                    )}
                     <div className="mt-1 flex items-center gap-2 min-w-0" title={display}>
                       <span className="text-xl font-black text-slate-950 truncate">
                         {cleanName || display}
@@ -5466,7 +5508,26 @@ export default function App() {
                     )}
                   </div>
                 </div></div>
-            </div></div>
+            </div>
+            {liveCallBanner.phoneMeeting && (
+              <div className="pointer-events-auto mt-2 rounded-2xl border border-slate-200 bg-white p-3 shadow-xl">
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <div className="text-xs font-black text-slate-900">Участники телефонного совещания</div>
+                  <div className="text-[10px] font-semibold text-slate-400">Зелёный — подключён</div>
+                </div>
+                <div className="flex max-h-36 flex-wrap gap-2 overflow-y-auto">
+                  {(liveCallBanner.phoneMeetingParticipantStatuses || []).map(participant => (
+                    <div key={participant.number} className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
+                      <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${participant.connected ? 'bg-emerald-500 shadow-sm shadow-emerald-300' : 'bg-slate-300'}`} />
+                      <span className="font-mono font-black text-slate-800">{participant.number}</span>
+                      {participant.initiator && <span className="rounded bg-blue-50 px-1.5 py-0.5 text-[9px] font-black uppercase text-blue-700">Инициатор</span>}
+                      <span className={`text-[10px] font-semibold ${participant.connected ? 'text-emerald-700' : 'text-slate-400'}`}>{participant.connected ? 'Подключён' : 'Не подключён'}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         );
       })()}
 
@@ -5667,13 +5728,13 @@ export default function App() {
                 </span>
                 <input
                   type="text"
-                  value={(session.role === 'operator' || session.permissions?.own_calls_only === true) ? (session.extension || '') : myExt}
+                  value={effectiveMySip}
                   onChange={(e) => setMyExt(e.target.value.replace(/[^\d]/g, ''))}
                   placeholder="101"
                   maxLength={6}
-                  disabled={session.role === 'operator'}
+                  disabled={Boolean(session.extension)}
                   className="w-12 bg-white dark:bg-slate-900 border border-slate-250 dark:border-slate-700 rounded py-0.5 px-1 text-xs text-slate-900 dark:text-slate-100 font-bold font-mono focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 text-center disabled:bg-gradient-to-br from-slate-50 via-blue-50/40 to-sky-50/50 dark:disabled:bg-slate-800 disabled:text-slate-500"
-                  title={session.role === 'operator' ? 'SIP-номер закреплён администратором' : 'Введите ваш добавочный номер.'}
+                  title={session.extension ? 'SIP-номер закреплён администратором' : 'Введите ваш добавочный номер.'}
                 />
                 <div className="h-4 w-[1px] bg-slate-200 dark:bg-slate-700 mx-1" />
                 <label className="flex items-center gap-1.5 cursor-pointer">
@@ -6347,13 +6408,14 @@ export default function App() {
             <CallTargetSelector
               mode="meeting"
               token={session?.token || ''}
-              currentExtension={myExt}
+              currentExtension={effectiveMySip}
               disabled={selectedMeetingContactIds.length === 0}
               buttonClassName="flex shrink-0 items-center justify-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-xs font-semibold text-blue-700 shadow-sm transition-all hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
               triggerLabel={`Совещание${selectedMeetingContactIds.length ? ` (${selectedMeetingContactIds.length})` : ''}`}
               backendStatus={conferenceBackendStatus}
               initialTargets={selectedMeetingTargets}
               onUnauthorized={handleAuthError}
+              onConfirm={handlePhoneMeetingStart}
             />
 
             <button
@@ -7090,6 +7152,21 @@ export default function App() {
                       <p className="text-xs text-slate-500">
                         Настройте внешний вид панели управления звонками. Параметры сохраняются локально.
                       </p>
+
+                      <label className="block rounded-xl border border-slate-200 bg-white p-4">
+                        <span className="block text-xs font-bold text-slate-800">Мой SIP</span>
+                        <span className="mt-0.5 block text-[11px] text-slate-500">Ваш внутренний номер для исходящих звонков, совещаний и live-действий. Сохраняется в этом браузере.</span>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          value={effectiveMySip}
+                          disabled={Boolean(session?.extension)}
+                          onChange={event => setMyExt(event.target.value.replace(/\D/g, '').slice(0, 5))}
+                          placeholder="Например, 100"
+                          className="mt-3 w-full max-w-xs rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-bold text-slate-900 outline-none focus:border-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
+                        />
+                        {session?.extension && <span className="mt-2 block text-[10px] font-semibold text-blue-600">Назначено администратором в разделе «Доступ и пользователи».</span>}
+                      </label>
                       
                       <div className="bg-white border border-slate-200 rounded-xl p-4 flex items-center justify-between">
                         <div>

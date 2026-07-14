@@ -5,8 +5,11 @@ import { addCallTarget, callTargetKey, removeCallTarget, type CallTargetSelector
 
 export interface ConferenceBackendStatus {
   conferenceAvailable: boolean;
+  meetingAvailable: boolean;
+  conferenceFromCallAvailable: boolean;
   mechanism: 'confbridge' | 'meetme' | 'ami-originate' | 'unavailable';
   reason: string;
+  meetingReason: string;
   checked: Array<{ name: string; available: boolean; detail: string }>;
 }
 
@@ -29,7 +32,7 @@ interface Props {
   initialTargets?: LiveTransferSearchTarget[];
   onUnauthorized?: (response: Response) => void;
   onTransfer?: (target: LiveTransferSearchTarget) => Promise<LiveTransferResult>;
-  onConfirm?: (targets: LiveTransferSearchTarget[]) => void;
+  onConfirm?: (targets: LiveTransferSearchTarget[]) => void | string | Promise<void | string>;
 }
 
 export function CallTargetSelector(props: Props) {
@@ -60,11 +63,14 @@ function MultiCallTargetSelector({
   const [selected, setSelected] = useState<LiveTransferSearchTarget[]>(initialTargets);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [actionMessage, setActionMessage] = useState('');
+  const [actionLoading, setActionLoading] = useState(false);
   const [panelStyle, setPanelStyle] = useState<React.CSSProperties>({});
 
   useEffect(() => setSelected(initialTargets), [initialTargets]);
   useEffect(() => {
     if (!open) return;
+    let frame = 0;
     const update = () => {
       const popup = rootRef.current?.closest('[data-live-call-popup]') as HTMLElement | null;
       const anchor = popup || rootRef.current;
@@ -72,11 +78,22 @@ function MultiCallTargetSelector({
       const rect = anchor.getBoundingClientRect();
       const left = Math.max(12, Math.min(rect.left, window.innerWidth - 332));
       const width = popup ? Math.min(rect.width, window.innerWidth - left - 12) : Math.min(520, window.innerWidth - left - 12);
-      setPanelStyle({ left, top: rect.bottom + 10, width, maxHeight: Math.max(120, window.innerHeight - rect.bottom - 22) });
+      const top = rect.bottom + 10;
+      const maxHeight = Math.max(120, window.innerHeight - rect.bottom - 22);
+      setPanelStyle(previous => previous.left === left
+        && previous.top === top
+        && previous.width === width
+        && previous.maxHeight === maxHeight
+        ? previous
+        : { left, top, width, maxHeight });
+      if (popup) frame = window.requestAnimationFrame(update);
     };
     update();
     window.addEventListener('resize', update);
-    return () => window.removeEventListener('resize', update);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener('resize', update);
+    };
   }, [open]);
 
   useEffect(() => {
@@ -111,9 +128,26 @@ function MultiCallTargetSelector({
   const isConsult = mode === 'consult';
   const title = isConsult
     ? 'Спросить перед переадресацией'
-    : mode === 'conference' ? 'Добавить участников в конференцию' : 'Новое телефонное совещание';
-  const operationAvailable = isConsult ? consultStatus?.available === true : backendStatus?.conferenceAvailable === true;
-  const unavailableReason = isConsult ? consultStatus?.reason : backendStatus?.reason;
+    : mode === 'conference' ? 'Добавить участников в конференцию' : 'Телефонное совещание';
+  const operationAvailable = isConsult
+    ? consultStatus?.available === true
+    : mode === 'meeting' ? backendStatus?.meetingAvailable === true : backendStatus?.conferenceAvailable === true;
+  const unavailableReason = isConsult
+    ? consultStatus?.reason
+    : mode === 'meeting' ? backendStatus?.meetingReason : backendStatus?.reason;
+  const confirm = async () => {
+    if (!onConfirm || actionLoading) return;
+    setActionLoading(true);
+    setError('');
+    try {
+      const message = await onConfirm(selected);
+      if (message) setActionMessage(message);
+    } catch (actionError: any) {
+      setError(actionError?.message || 'Не удалось выполнить действие');
+    } finally {
+      setActionLoading(false);
+    }
+  };
 
   return (
     <div ref={rootRef} className="relative" onMouseDown={event => event.stopPropagation()}>
@@ -123,9 +157,18 @@ function MultiCallTargetSelector({
       {open && (
         <div style={panelStyle} className="fixed z-[80] flex min-w-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white text-left shadow-2xl">
           <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2">
-            <div><div className="text-xs font-black text-slate-900">{title}</div><div className="text-[10px] text-slate-400">{isConsult ? 'Выберите одного сотрудника или номер справочника' : 'Выберите несколько целей из общего справочника'}</div></div>
+            <div>
+              <div className="text-xs font-black text-slate-900">{title}</div>
+              <div className="text-[10px] text-slate-400">{isConsult ? 'Выберите одного сотрудника или номер справочника' : mode === 'meeting' ? `Инициатор: Мой SIP / внутренний ${currentExtension || 'не настроен'}` : 'Выберите несколько целей из общего справочника'}</div>
+            </div>
             <button type="button" onClick={() => setOpen(false)} className="rounded p-1 text-slate-400 hover:bg-slate-100"><X className="h-4 w-4" /></button>
           </div>
+          {actionMessage ? (
+            <div className="space-y-3 p-4">
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs font-bold leading-relaxed text-emerald-800">{actionMessage}</div>
+              <div className="flex justify-end"><button type="button" onClick={() => setOpen(false)} className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white">Закрыть</button></div>
+            </div>
+          ) : <>
           {selected.length > 0 && <div className="flex flex-wrap gap-1.5 border-b border-slate-100 p-3">{selected.map(target => (
             <span key={callTargetKey(target)} className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-1 text-[11px] font-bold text-blue-700">
               {target.displayName} · {target.targetNumber}
@@ -149,8 +192,9 @@ function MultiCallTargetSelector({
           {isConsult && selected[0] && <div className="border-t border-slate-100 px-3 pt-3 text-xs font-bold text-slate-800">Спросить у <span className="font-mono text-blue-700">{selected[0].targetNumber}</span> — {selected[0].displayName}?</div>}
           <div className="flex justify-end gap-2 border-t border-slate-100 p-3">
             <button type="button" onClick={() => setOpen(false)} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600">Отмена</button>
-            <button type="button" disabled={!selected.length || !operationAvailable} onClick={() => onConfirm?.(selected)} title={!operationAvailable ? unavailableReason : ''} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"><PhoneForwarded className="h-3.5 w-3.5" />{isConsult ? 'Позвонить и поставить клиента на удержание' : mode === 'conference' ? 'Создать конференцию' : 'Создать совещание'}</button>
+            <button type="button" disabled={!selected.length || !operationAvailable || actionLoading} onClick={confirm} title={!operationAvailable ? unavailableReason : ''} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:opacity-50">{actionLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PhoneForwarded className="h-3.5 w-3.5" />}{isConsult ? 'Позвонить и поставить клиента на удержание' : mode === 'conference' ? 'Создать конференцию' : 'Создать совещание'}</button>
           </div>
+          </>}
         </div>
       )}
     </div>

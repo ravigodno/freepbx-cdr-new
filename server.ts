@@ -26,7 +26,7 @@ import os from 'os';
 import { registerManagementRoutes } from './server-management.js';
 import { registerAiPbxAdminRoutes } from './server/aiPbxAdmin.js';
 import { resolveAsteriskCli, runAsteriskCliCommand } from './server/asteriskCli.js';
-import { getConferenceBackendStatus } from './server/conferenceService.js';
+import { createNewPhoneMeeting, getConferenceBackendStatus, startPhoneMeetingRecording, validateConferenceParticipants } from './server/conferenceService.js';
 import {
   buildConsultTransferCapabilities,
   unavailableConsultOperation,
@@ -1923,7 +1923,9 @@ const callHasExactNumber = (c: any, number: string): boolean => {
     c.lastdata,
     c.clid,
     c.cnum,
-    c.outbound_cnum
+    c.outbound_cnum,
+    c.phoneMeetingInitiator,
+    ...(Array.isArray(c.phoneMeetingParticipants) ? c.phoneMeetingParticipants : [])
   );
 
   return tokens.some(token => token === n);
@@ -3836,6 +3838,7 @@ function normalizeLocalDbSchema(db: any): any {
     },
     missedCallStatuses: Array.isArray(db?.missedCallStatuses) ? db.missedCallStatuses : [],
     liveCallTransfers: Array.isArray(db?.liveCallTransfers) ? db.liveCallTransfers : [],
+    phoneMeetings: Array.isArray(db?.phoneMeetings) ? db.phoneMeetings : [],
     directory: Array.isArray(db?.directory) ? db.directory : [],
     blacklist: Array.isArray(db?.blacklist) ? db.blacklist : [],
     calltrackingSites: Array.isArray(db?.calltrackingSites) && db.calltrackingSites.length ? db.calltrackingSites : [createDefaultCalltrackingSite()],
@@ -4133,6 +4136,7 @@ function getDefaultLocalDb(): any {
     ],
     missedCallStatuses: [],
     liveCallTransfers: [],
+    phoneMeetings: [],
     directory: [],
     blacklist: [],
     calltrackingSites: [createDefaultCalltrackingSite()],
@@ -4913,7 +4917,7 @@ async function checkUserPermission(req: Request, perm: string): Promise<boolean>
 
 function getEffectiveOperatorExt(localDb: any, req: Request, requestedExt: string): string {
   const dbUser = getAuthenticatedDbUser(localDb, req);
-  if (dbUser?.role === 'operator') {
+  if (String(dbUser?.extension || '').trim()) {
     return String(dbUser.extension || '').trim();
   }
   return String(requestedExt || '').trim();
@@ -12207,6 +12211,11 @@ interface LiveCallBanner {
   durationText?: string;
   startedAt?: string;
   transferTargets?: LiveTransferTarget[];
+  phoneMeeting?: boolean;
+  phoneMeetingId?: string;
+  phoneMeetingInitiator?: string;
+  phoneMeetingParticipants?: string[];
+  phoneMeetingParticipantStatuses?: Array<{ number: string; connected: boolean; initiator: boolean }>;
 }
 
 type AmiBlock = Record<string, string>;
@@ -12858,12 +12867,45 @@ async function buildLiveCallBannerPayload(
   channels: AmiBlock[],
   operatorExt: string,
   directory: any[],
-  settings: AppSettings
+  settings: AppSettings,
+  phoneMeetings: any[] = []
 ): Promise<LiveCallBanner> {
   const finalize = (value: LiveCallBanner): LiveCallBanner => value.active
     ? { ...value, ...buildLiveCallBannerDisplay(value as Record<string, any>) }
     : value;
   let banner = buildLiveCallBannerFromAmiChannels(channels, operatorExt, directory, settings);
+  if (banner.active) {
+    const operator = findLiveTransferChannelForOperator(channels, operatorExt);
+    const callIds = new Set([
+      String(banner.linkedid || ''),
+      String(operator?.linkedid || ''),
+      ...channels
+        .filter(channel => getLiveChannelEndpointExt(channel.Channel) === onlyDigits(operatorExt))
+        .flatMap(channel => [String(channel.Uniqueid || ''), String(channel.Linkedid || '')])
+    ].filter(Boolean));
+    const meeting = (phoneMeetings || []).find(item => (item?.channelIds || []).some((id: unknown) => callIds.has(String(id))));
+    if (meeting) {
+      return finalize({
+        ...banner,
+        phoneMeeting: true,
+        phoneMeetingId: String(meeting.id || ''),
+        phoneMeetingInitiator: String(meeting.initiatorExt || ''),
+        phoneMeetingParticipants: Array.isArray(meeting.participants) ? meeting.participants.map(String) : [],
+        phoneMeetingParticipantStatuses: (Array.isArray(meeting.invitations)
+          ? meeting.invitations
+          : (meeting.channelIds || []).map((channelId: string, index: number) => ({ channelId, targetNumber: meeting.invited?.[index] || '' })))
+          .map((invitation: any) => {
+            const channel = channels.find(item => String(item.Uniqueid || '') === String(invitation.channelId)
+              || String(item.Linkedid || '') === String(invitation.channelId));
+            const connected = Boolean(channel && (String(channel.Application || '').toLowerCase() === 'confbridge'
+              || String(channel.ChannelStateDesc || '').toLowerCase() === 'up'));
+            const number = String(invitation.targetNumber || '');
+            return { number, connected, initiator: number === String(meeting.initiatorExt || '') };
+          }),
+        displayName: 'Телефонное совещание'
+      });
+    }
+  }
   const bannerNeedsCelEvidence = banner.active && banner.linkedid && (
     (banner.direction === 'incoming' && !isExternalNumber(banner.number)) ||
     (banner.direction === 'outgoing' && !isExternalNumber(banner.number)) ||
@@ -12985,7 +13027,8 @@ app.get('/api/live/call-banner', requireAuth(), async (req, res) => {
       channels,
       effectiveOperatorExt,
       directoryRuntime.contacts,
-      localDb.settings
+      localDb.settings,
+      localDb.phoneMeetings || []
     );
     res.json(banner);
   } catch (error: any) {
@@ -13012,7 +13055,7 @@ app.get('/api/debug/live-call-payload', requireAuth(), async (req, res) => {
     const directoryRuntime = await getDirectoryRuntimeSnapshotForRequest(localDb, req);
     const channels = await runAmiCoreShowChannels(localDb.settings);
     const popup = effectiveOperatorExt
-      ? await buildLiveCallBannerPayload(channels, effectiveOperatorExt, directoryRuntime.contacts, localDb.settings)
+      ? await buildLiveCallBannerPayload(channels, effectiveOperatorExt, directoryRuntime.contacts, localDb.settings, localDb.phoneMeetings || [])
       : { active: false };
 
     res.json({
@@ -13035,15 +13078,99 @@ app.get('/api/live-calls/conference/status', requireAuth(), async (req, res) => 
     return;
   }
   try {
+    const localDb = await readLocalDb();
+    const originate = await runAsteriskCliCommand('manager show command Originate', 3000);
     res.setHeader('Cache-Control', 'no-store');
-    res.json(await getConferenceBackendStatus());
+    res.json(await getConferenceBackendStatus({
+      amiConfigured: Boolean(localDb.settings?.amiHost && localDb.settings?.amiUser && localDb.settings?.amiPass),
+      originateAvailable: originate.success && /Action:\s*Originate/i.test(originate.message)
+    }));
   } catch (error: any) {
     res.status(503).json({
       conferenceAvailable: false,
+      meetingAvailable: false,
+      conferenceFromCallAvailable: false,
       mechanism: 'unavailable',
       reason: error?.message || 'Не удалось проверить backend конференций',
+      meetingReason: error?.message || 'Не удалось проверить backend совещаний',
       checked: []
     });
+  }
+});
+
+app.post('/api/live-calls/conference/meeting/start', requireAuth(), async (req, res) => {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.make_calls !== true) {
+    return res.status(403).json({ success: false, error: 'Нет прав на создание телефонного совещания' });
+  }
+  try {
+    const dbUser = getAuthenticatedDbUser(await readLocalDb(), req);
+    const initiatorExt = onlyDigits(dbUser?.extension || req.body?.initiatorExt);
+    const requestedTargets = Array.isArray(req.body?.targets) ? req.body.targets : [];
+    if (!isInternalExt(initiatorExt)) return res.status(400).json({ success: false, error: 'Настройте корректный внутренний номер «Мой SIP»' });
+    if (!requestedTargets.length) return res.status(400).json({ success: false, error: 'Выберите участников совещания' });
+
+    const localDb = await readLocalDb();
+    const directoryContext = {
+      legacyDirectory: localDb.directory || [],
+      settings: localDb.settings,
+      authUser,
+      dbUser: getAuthenticatedDbUser(localDb, req)
+    };
+    const authoritativeTargets = (await Promise.all(requestedTargets.map((target: any) =>
+      searchDirectoryInternalExtensions(target?.targetNumber, 50, initiatorExt, directoryContext)
+    ))).flatMap(result => result.items);
+    const requested = requestedTargets.map((target: any) => ({
+      ...target,
+      id: String(target?.id || target?.directoryContactId || '')
+    }));
+    const validation = validateConferenceParticipants(requested, authoritativeTargets, initiatorExt);
+    if (!validation.valid) return res.status(400).json({ success: false, error: validation.errors.join('; ') });
+
+    const originate = await runAsteriskCliCommand('manager show command Originate', 3000);
+    const status = await getConferenceBackendStatus({
+      amiConfigured: Boolean(localDb.settings?.amiHost && localDb.settings?.amiUser && localDb.settings?.amiPass),
+      originateAvailable: originate.success && /Action:\s*Originate/i.test(originate.message)
+    });
+    if (!status.meetingAvailable) return res.status(503).json({ success: false, error: status.meetingReason });
+    const internalNumbers = Array.from(new Set([initiatorExt, ...validation.participants
+      .filter(target => target.targetType === 'internal')
+      .map(target => target.targetNumber)]));
+    const technologyEntries = await Promise.all(internalNumbers.map(async extension => {
+      const pjsip = await runAsteriskCliCommand(`pjsip show endpoint ${extension}`, 3000);
+      if (pjsip.success && new RegExp(`Endpoint:\\s+${extension}(?:/|\\s)`).test(pjsip.message)) return [extension, 'PJSIP'] as const;
+      const sip = await runAsteriskCliCommand(`sip show peer ${extension}`, 3000);
+      return [extension, sip.success && new RegExp(`\\* Name\\s+:\\s*${extension}`).test(sip.message) ? 'SIP' : null] as const;
+    }));
+    const internalTechnology = Object.fromEntries(technologyEntries.filter((entry): entry is [string, 'SIP' | 'PJSIP'] => entry[1] !== null));
+    if (!internalTechnology[initiatorExt]) {
+      return res.status(400).json({ success: false, error: 'Внутренний номер «Мой SIP» не найден среди SIP/PJSIP endpoints Asterisk' });
+    }
+    const result = await createNewPhoneMeeting(localDb.settings, initiatorExt, validation.participants, internalTechnology);
+    if (result.success) {
+      localDb.phoneMeetings = Array.isArray(localDb.phoneMeetings) ? localDb.phoneMeetings : [];
+      localDb.phoneMeetings.push({
+        id: result.roomId,
+        createdAt: new Date().toISOString(),
+        createdBy: String(authUser?.username || ''),
+        initiatorExt,
+        participants: validation.participants.map(target => target.targetNumber),
+        invited: result.invited,
+        recordingFile: result.recordingFile,
+        channelIds: result.channelIds
+        ,invitations: result.invitations
+      });
+      localDb.phoneMeetings = localDb.phoneMeetings.slice(-500);
+      await writeLocalDb(localDb);
+      void startPhoneMeetingRecording(localDb.settings, result.roomId, result.recordingFile)
+        .then(recording => {
+          if (!recording.success) console.warn(`[PHONE MEETING] Не удалось запустить запись ${result.roomId}: ${recording.message}`);
+        })
+        .catch(error => console.warn(`[PHONE MEETING] Ошибка запуска записи ${result.roomId}: ${error?.message || 'unknown error'}`));
+    }
+    res.status(result.success ? 200 : 502).json(result);
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error?.message || 'Не удалось создать телефонное совещание' });
   }
 });
 
@@ -13309,7 +13436,7 @@ app.post('/api/click-to-call', requireAuth(), async (req, res) => {
 
     const localDb = await readLocalDb();
     const dbUser = getAuthenticatedDbUser(localDb, req);
-    const effectiveFromExtension = dbUser?.role === 'operator' ? String(dbUser.extension || '').trim() : fromExtension.trim();
+    const effectiveFromExtension = String(dbUser?.extension || '').trim() || fromExtension.trim();
     if (!effectiveFromExtension) {
       res.status(400).json({ error: 'Для пользователя не назначен SIP-номер. Обратитесь к администратору.' });
       return;
@@ -14066,15 +14193,45 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
       calls = calls.filter(c => matchedLinkedIds.has(String(c.linkedid || c.uniqueid || '')));
     }
 
-    // Collapse queue/ring-group CDR legs into one logical call by linkedid
+    // Collapse PBXPuls meeting legs by assigned ChannelId, then ordinary calls by linkedid.
+    const meetingByChannelId = new Map<string, any>();
+    for (const meeting of (Array.isArray(localDb.phoneMeetings) ? localDb.phoneMeetings : [])) {
+      for (const channelId of (Array.isArray(meeting?.channelIds) ? meeting.channelIds : [])) {
+        if (channelId) meetingByChannelId.set(String(channelId), meeting);
+      }
+    }
     const linkedGroups = new Map<string, CallEntry[]>();
     calls.forEach(c => {
-      const key = c.linkedid || c.uniqueid;
+      const meeting = meetingByChannelId.get(String(c.uniqueid || '')) || meetingByChannelId.get(String(c.linkedid || ''));
+      const key = meeting ? `meeting:${meeting.id}` : c.linkedid || c.uniqueid;
       if (!linkedGroups.has(key)) linkedGroups.set(key, []);
       linkedGroups.get(key)!.push(c);
     });
 
     calls = Array.from(linkedGroups.values()).map(group => {
+      const meeting = group.map(c => meetingByChannelId.get(String(c.uniqueid || '')) || meetingByChannelId.get(String(c.linkedid || ''))).find(Boolean);
+      if (meeting) {
+        const sorted = [...group].sort((a, b) => new Date(a.calldate).getTime() - new Date(b.calldate).getTime());
+        const answered = sorted.some(c => String(c.disposition).toUpperCase() === 'ANSWERED' && Number(c.billsec || 0) > 0);
+        const participants = Array.isArray(meeting.participants) ? meeting.participants.map(String) : [];
+        return {
+          ...sorted[0],
+          uniqueid: String(meeting.id),
+          linkedid: String(meeting.id),
+          src: String(meeting.initiatorExt || ''),
+          dst: `Совещание: ${participants.join(', ')}`,
+          clid: 'Телефонное совещание',
+          disposition: answered ? 'ANSWERED' : 'NO ANSWER',
+          duration: Math.max(...sorted.map(c => Number(c.duration || 0)), 0),
+          billsec: Math.max(...sorted.map(c => Number(c.billsec || 0)), 0),
+          recordingfile: String(meeting.recordingFile || sorted.find(c => c.recordingfile)?.recordingfile || ''),
+          dstchannel: '',
+          phoneMeeting: true,
+          phoneMeetingId: String(meeting.id),
+          phoneMeetingInitiator: String(meeting.initiatorExt || ''),
+          phoneMeetingParticipants: participants
+        } as CallEntry;
+      }
       if (group.length === 1) return normalizeClickToCallForDisplay(normalizeInboundCallerForDisplay(group[0]));
 
       const sorted = [...group].map(c => normalizeClickToCallForDisplay(c)).sort((a, b) => new Date(a.calldate).getTime() - new Date(b.calldate).getTime());
@@ -15634,6 +15791,30 @@ app.get('/api/recordings/:filename', (req, _res, next) => {
   let filePath = directPath.startsWith(recordingsRoot + path.sep) && fs.existsSync(directPath) ? directPath : '';
   if (!filePath && fs.existsSync(recordingsRoot)) {
     filePath = findRecordingFile(recordingsRoot, safeFilename) || '';
+  }
+
+  // ConfBridge appends its recording start timestamp to RecordFile, for example
+  // "pbxpuls-room.wav" becomes "pbxpuls-room-1784017900.wav".
+  if (!filePath && /^pbxpuls-[a-z0-9_.-]+\.wav$/i.test(safeFilename) && fs.existsSync(recordingsRoot)) {
+    const extension = path.extname(safeFilename);
+    const stem = path.basename(safeFilename, extension);
+    const findConfBridgeRecording = (dir: string): string | null => {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const entryPath = path.join(dir, entry.name);
+        const resolvedEntryPath = path.resolve(entryPath);
+        if (!resolvedEntryPath.startsWith(recordingsRoot + path.sep)) continue;
+        if (entry.isFile()
+          && entry.name.startsWith(`${stem}-`)
+          && path.extname(entry.name).toLowerCase() === extension.toLowerCase()) return entryPath;
+        if (entry.isDirectory()) {
+          const found = findConfBridgeRecording(entryPath);
+          if (found) return found;
+        }
+      }
+      return null;
+    };
+    filePath = findConfBridgeRecording(recordingsRoot) || '';
   }
 
   // Fallback: CDR recordingfile may differ from the real Asterisk filename.

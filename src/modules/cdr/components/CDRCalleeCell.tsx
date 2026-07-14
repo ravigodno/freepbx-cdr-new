@@ -95,6 +95,12 @@ export default function CDRCalleeCell({
               )}
             </div>
           )}
+          {call?.phoneMeeting && (
+            <div className="inline-flex w-fit items-center gap-1.5 rounded-md border border-violet-200 bg-violet-50 px-2 py-1 text-[10px] font-black uppercase tracking-wide text-violet-700">
+              <span>Телефонное совещание</span>
+              {call.phoneMeetingInitiator && <span className="font-mono normal-case tracking-normal">Инициатор: {call.phoneMeetingInitiator}</span>}
+            </div>
+          )}
         </div>
       </div>
     </td>
