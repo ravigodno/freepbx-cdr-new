@@ -30,6 +30,7 @@ export interface LiveTransferSearchTarget {
   deviceStatus: LiveTransferPresence;
   deviceType: string;
   source: string;
+  isFavorite?: boolean;
 }
 
 type DirectoryPhoneCandidate = {
@@ -284,11 +285,13 @@ export function rankLiveTransferTargets(
   rawExcludeExtension: unknown,
   rawLimit = 50,
   source = 'directory',
-  allowExternalDirectoryNumbers = true
+  allowExternalDirectoryNumbers = true,
+  favoriteContactIds: string[] = []
 ): LiveTransferSearchTarget[] {
   const query = normalizeText(rawQuery);
   const limit = Math.max(1, Math.min(50, Number(rawLimit) || 50));
   const seen = new Set<string>();
+  const favorites = new Set(favoriteContactIds.map(String));
 
   return (entries || [])
     .flatMap(entry => {
@@ -296,7 +299,7 @@ export function rankLiveTransferTargets(
       const rank = rankEntry(entry, rawQuery, extension);
       if (!Number.isFinite(rank)) return [];
       return buildLiveTransferTargetOptions(entry, rawExcludeExtension, allowExternalDirectoryNumbers, source)
-        .map(target => ({ entry, target, rank: rankTargetOption(target, rawQuery, rank) }));
+        .map(target => ({ entry, target, rank: rankTargetOption(target, rawQuery, rank), favorite: favorites.has(String(entry.id || '')) }));
     })
     .filter(({ target }) => {
       const key = `${target.id}:${target.targetType}:${target.targetNumber}`;
@@ -304,7 +307,8 @@ export function rankLiveTransferTargets(
       seen.add(key);
       return true;
     })
-    .sort((a, b) => a.rank - b.rank
+    .sort((a, b) => Number(b.favorite) - Number(a.favorite)
+      || a.rank - b.rank
       || (a.target.targetType === b.target.targetType ? 0 : a.target.targetType === 'internal' ? -1 : 1)
       || Number(b.target.canTransfer) - Number(a.target.canTransfer)
       || numberLabelRank(a.target.numberLabel) - numberLabelRank(b.target.numberLabel)
@@ -313,6 +317,7 @@ export function rankLiveTransferTargets(
     .slice(0, limit)
     .map(({ entry, target }) => ({
       ...target,
+      isFavorite: favorites.has(String(entry.id || '')),
       metadataMatches: getMetadataMatches(entry, query, rawQuery)
     }));
 }

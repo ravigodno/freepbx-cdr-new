@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { HelpCircle, Loader2, PhoneForwarded, Search, Users, X } from 'lucide-react';
+import { HelpCircle, Loader2, PhoneForwarded, Search, Star, Users, X } from 'lucide-react';
 import { LiveTransferSearch, type LiveTransferResult, type LiveTransferSearchTarget } from './LiveTransferSearch';
 import { addCallTarget, callTargetKey, removeCallTarget, type CallTargetSelectorMode } from './callTargetSelection';
 
@@ -35,6 +35,8 @@ interface Props {
   onConfirm?: (targets: LiveTransferSearchTarget[]) => void | string | Promise<void | string>;
 }
 
+const EMPTY_CALL_TARGETS: LiveTransferSearchTarget[] = [];
+
 export function CallTargetSelector(props: Props) {
   if (props.mode === 'transfer') {
     if (!props.onTransfer) return null;
@@ -52,7 +54,7 @@ function MultiCallTargetSelector({
   triggerLabel,
   backendStatus,
   consultStatus,
-  initialTargets = [],
+  initialTargets = EMPTY_CALL_TARGETS,
   onUnauthorized,
   onConfirm
 }: Props) {
@@ -182,7 +184,7 @@ function MultiCallTargetSelector({
               const unavailable = (isConsult ? !target.canTransfer : !target.canConference)
                 || (mode !== 'meeting' && target.targetType === 'internal' && target.targetNumber === currentExtension);
               return <button key={`${target.id}:${target.targetType}:${target.targetNumber}`} type="button" disabled={unavailable} onClick={() => choose(target)} className="mb-1 flex w-full items-start justify-between gap-3 rounded-lg px-3 py-2 text-left hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">
-                <span><span className="block text-xs font-bold text-slate-900">{target.displayName}</span><span className="text-[11px] text-slate-500">{target.numberLabel} · {target.displayNumber || 'без номера'}{target.company ? ` · ${target.company}` : ''}</span></span>
+                <span><span className="flex items-center gap-1 text-xs font-bold text-slate-900">{target.isFavorite && <Star className="h-3 w-3 fill-amber-400 text-amber-500" />}{target.displayName}</span><span className="text-[11px] text-slate-500">{target.numberLabel} · {target.displayNumber || 'без номера'}{target.company ? ` · ${target.company}` : ''}</span></span>
                 <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600">{target.targetType === 'internal' ? 'Внутренний' : 'Справочник'}</span>
               </button>;
             })}

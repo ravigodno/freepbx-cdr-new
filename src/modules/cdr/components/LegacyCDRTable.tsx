@@ -26,6 +26,7 @@ interface LegacyCDRTableProps {
   fetchChronology?: (uniqueid: string) => void;
   setActiveDropdownCallId?: (id: string | null) => void;
   formatSeconds?: (sec: number) => string;
+  showProcessingEvent?: (call: any) => void;
 }
 
 export default function LegacyCDRTable({
@@ -44,6 +45,7 @@ export default function LegacyCDRTable({
   toggleRowDropdown = () => {},
   fetchChronology = () => {},
   setActiveDropdownCallId = () => {},
+  showProcessingEvent = () => {},
   formatSeconds = (sec: number) => {
     const n = Number(sec || 0);
     const m = Math.floor(n / 60);
@@ -58,10 +60,10 @@ export default function LegacyCDRTable({
           <th className="py-4 px-4">ВРЕМЯ ВЫЗОВА / ID</th>
           <th className="py-4 px-4 font-bold">КТО ЗВОНИЛ</th>
           <th className="py-4 px-4 font-bold">КУДА ЗВОНИЛ</th>
-          <th className="py-4 px-4 font-bold">РЕШЕНИЕ (СТАТУС)</th>
+          <th className="py-4 px-4 font-bold">СТАТУС</th>
           <th className="py-4 px-4 font-bold">ЗАПИСЬ</th>
           <th className="py-4 px-4 font-bold">ДЛИТЕЛЬНОСТЬ</th>
-          <th className="py-4 px-4 font-bold">КОММЕНТАРИЙ ОПЕРАТОРА</th>
+          <th className="py-4 px-4 font-bold">КОММЕНТАРИЙ</th>
           <th className="py-4 px-4 font-bold text-right pr-6">УПРАВЛЕНИЕ</th>
         </tr>
       </thead>
@@ -141,6 +143,7 @@ export default function LegacyCDRTable({
                 wasKpiResolved={call.wasKpiResolved}
                 callbackTime={call.callbackTime}
                 callbackStatus={call.callbackStatus}
+                onShowProcessingEvent={() => showProcessingEvent(call)}
               />
 
               {/* Column 5: ЗАПИСЬ */}

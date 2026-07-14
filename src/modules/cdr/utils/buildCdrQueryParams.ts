@@ -11,6 +11,7 @@ type BuildCdrQueryParamsInput = {
   isDemoModeActive: boolean;
   myExt: string;
   onlyMyCalls: boolean;
+  relatedMissedCallId?: string;
 };
 
 function parseExactCdrNumberSearch(value: unknown): string {
@@ -34,6 +35,10 @@ export function buildCdrQueryParams(input: BuildCdrQueryParamsInput) {
     operatorExt: input.myExt,
     onlyMyCalls: input.onlyMyCalls ? 'true' : 'false'
   };
+
+  if (input.relatedMissedCallId) {
+    params.relatedMissedCallId = input.relatedMissedCallId;
+  }
 
   if (input.page !== undefined) {
     params.page = String(input.page);

@@ -622,6 +622,12 @@ const getCurrentDirectoryUserId = (localDb: any, req: Request): string => {
   return getDirectoryUserId(getAuthenticatedDbUser(localDb, req), (req as any).user);
 };
 
+const getDirectoryFavoriteContactIds = (localDb: any, req: Request): string[] => {
+  const userId = getCurrentDirectoryUserId(localDb, req);
+  const stored = localDb?.directoryFavoritesByUser?.[userId];
+  return Array.isArray(stored) ? Array.from(new Set(stored.map(String).filter(Boolean))) : [];
+};
+
 const sanitizeContactSyncAccount = (account: any, provider: ContactProvider, settings?: any) => ({
   id: account?.id || null,
   provider,
@@ -3186,6 +3192,13 @@ const compareDirectoryEntries = (a: any, b: any): number => {
   return String(a?.id || '').localeCompare(String(b?.id || ''));
 };
 
+const sortDirectoryEntriesForRequest = (entries: any[], req: Request, localDb: any): any[] => {
+  const favorites = new Set(getDirectoryFavoriteContactIds(localDb, req));
+  return entries
+    .map(entry => ({ ...entry, isFavorite: favorites.has(String(entry?.id || '')) }))
+    .sort((a, b) => Number(b.isFavorite) - Number(a.isFavorite) || compareDirectoryEntries(a, b));
+};
+
 const applyDirectoryAccessAndFilters = (entries: any[], req: Request, localDb: any): any[] => {
   const authUser = (req as any).user;
   const dbUser = getAuthenticatedDbUser(localDb, req);
@@ -3237,7 +3250,7 @@ const applyDirectoryAccessAndFilters = (entries: any[], req: Request, localDb: a
 const buildDirectoryPaginatedResponse = (entries: any[], req: Request, localDb: any) => {
   const pageSize = parseDirectoryPaginationNumber(req.query.pageSize, 20, 100);
   const requestedPage = parseDirectoryPaginationNumber(req.query.page, 1, 1000000);
-  const filtered = applyDirectoryAccessAndFilters(entries, req, localDb).sort(compareDirectoryEntries);
+  const filtered = sortDirectoryEntriesForRequest(applyDirectoryAccessAndFilters(entries, req, localDb), req, localDb);
   const total = filtered.length;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const page = Math.min(requestedPage, totalPages);
@@ -3854,6 +3867,7 @@ function normalizeLocalDbSchema(db: any): any {
     contactSyncAccounts: Array.isArray(db?.contactSyncAccounts) ? db.contactSyncAccounts : [],
     contactSyncMappings: Array.isArray(db?.contactSyncMappings) ? db.contactSyncMappings : [],
     directoryColumnSettings: db?.directoryColumnSettings && typeof db.directoryColumnSettings === 'object' ? db.directoryColumnSettings : {},
+    directoryFavoritesByUser: db?.directoryFavoritesByUser && typeof db.directoryFavoritesByUser === 'object' ? db.directoryFavoritesByUser : {},
     callScripts: Array.isArray(db?.callScripts) && db.callScripts.length ? db.callScripts : [
       {
         id: "s1",
@@ -4152,6 +4166,7 @@ function getDefaultLocalDb(): any {
     contactSyncAccounts: [],
     contactSyncMappings: [],
     directoryColumnSettings: {},
+    directoryFavoritesByUser: {},
     roles: getDefaultAccessRoles(),
     settings: {
       dbHost: process.env.DB_HOST || 'localhost',
@@ -11050,6 +11065,36 @@ app.delete('/api/directory/column-settings/global', requireAuth(), async (req, r
   }
 });
 
+app.put('/api/directory/:id/favorite', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_directory'))) {
+    return res.status(403).json({ error: 'Access denied: view_directory permission required' });
+  }
+
+  try {
+    const localDb = await readLocalDb();
+    const directoryRuntime = await getDirectoryRuntimeSnapshotForRequest(localDb, req);
+    const contactId = String(req.params.id || '').trim();
+    const visibleContact = applyDirectoryAccessAndFilters(directoryRuntime.contacts, req, localDb)
+      .find(entry => String(entry.id || '') === contactId);
+    if (!visibleContact) return res.status(404).json({ error: 'Контакт не найден или недоступен' });
+
+    const userId = getCurrentDirectoryUserId(localDb, req);
+    if (!userId) return res.status(400).json({ error: 'Не удалось определить пользователя' });
+    if (!localDb.directoryFavoritesByUser || typeof localDb.directoryFavoritesByUser !== 'object') {
+      localDb.directoryFavoritesByUser = {};
+    }
+    const favorites = new Set(getDirectoryFavoriteContactIds(localDb, req));
+    const favorite = req.body?.favorite === true;
+    if (favorite) favorites.add(contactId);
+    else favorites.delete(contactId);
+    localDb.directoryFavoritesByUser[userId] = Array.from(favorites).slice(0, 500);
+    await writeLocalDb(localDb);
+    res.json({ success: true, contactId, favorite });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Не удалось изменить избранное' });
+  }
+});
+
 app.get('/api/directory', requireAuth(), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_directory'))) {
     return res.status(403).json({ error: 'Access denied: view_directory permission required' });
@@ -11060,7 +11105,7 @@ app.get('/api/directory', requireAuth(), async (req, res) => {
     const directoryRuntime = await getDirectoryRuntimeSnapshotForRequest(localDb, req);
     const all = ['1', 'true', 'yes'].includes(String(req.query.all || '').trim().toLowerCase());
     if (all) {
-      return res.json(applyDirectoryAccessAndFilters(directoryRuntime.contacts, req, localDb).sort(compareDirectoryEntries));
+      return res.json(sortDirectoryEntriesForRequest(applyDirectoryAccessAndFilters(directoryRuntime.contacts, req, localDb), req, localDb));
     }
     res.json(buildDirectoryPaginatedResponse(directoryRuntime.contacts, req, localDb));
   } catch (error: any) {
@@ -11085,7 +11130,8 @@ app.get('/api/directory/extensions/search', requireAuth(), async (req, res) => {
         legacyDirectory: localDb.directory || [],
         settings: localDb.settings,
         authUser,
-        dbUser: getAuthenticatedDbUser(localDb, req)
+        dbUser: getAuthenticatedDbUser(localDb, req),
+        favoriteContactIds: getDirectoryFavoriteContactIds(localDb, req)
       }
     );
     res.setHeader('Cache-Control', 'no-store');
@@ -12062,10 +12108,28 @@ app.delete('/api/directory/:id', requireAuth(), async (req, res) => {
 
 // --- ASTERISK AMI CLICK TO CALL SERVICES ---
 
-function runAMICallSimulate(log: string[], fromExtension: string, toPhoneNumber: string, context: string, resolve: Function) {
+type ClickToCallChannelTechnology = 'PJSIP' | 'SIP';
+
+async function resolveClickToCallChannelTechnology(extension: string): Promise<ClickToCallChannelTechnology | null> {
+  const safeExtension = String(extension || '').replace(/\D/g, '');
+  if (!safeExtension) return null;
+
+  const pjsip = await runAsteriskCliCommand(`pjsip show endpoint ${safeExtension}`, 3000);
+  if (pjsip.success && new RegExp(`Endpoint:\\s+${safeExtension}(?:/|\\s)`).test(pjsip.message)) {
+    return 'PJSIP';
+  }
+
+  const sip = await runAsteriskCliCommand(`sip show peer ${safeExtension}`, 3000);
+  if (sip.success && new RegExp(`\\* Name\\s+:\\s*${safeExtension}(?:\\s|$)`).test(sip.message)) {
+    return 'SIP';
+  }
+
+  return null;
+}
+
+function runAMICallSimulate(log: string[], fromExtension: string, toPhoneNumber: string, context: string, channelTechnology: ClickToCallChannelTechnology, resolve: Function) {
   const clickToCallContext = process.env.CLICK2CALL_CONTEXT || 'cdr-panel-click2call';
-  const channelPrefix = process.env.CLICK2CALL_CHANNEL_PREFIX || 'SIP';
-  const origChannel = `${channelPrefix}/${fromExtension}`;
+  const origChannel = `${channelTechnology}/${fromExtension}`;
 
   log.push(`[AMI-SIMULATOR] Начат имитационный вызов из внутреннего номера [${fromExtension}] на номер [${toPhoneNumber}]...`);
   log.push(`[AMI-SIMULATOR] Имитируем: подключение к Asterisk AMI...`);
@@ -12079,7 +12143,7 @@ function runAMICallSimulate(log: string[], fromExtension: string, toPhoneNumber:
   resolve({ success: true, log, simulated: true });
 }
 
-function triggerAMICall(settings: AppSettings, fromExtension: string, toPhoneNumber: string): Promise<{ success: boolean; log: string[]; simulated?: boolean; error?: string }> {
+function triggerAMICall(settings: AppSettings, fromExtension: string, toPhoneNumber: string, channelTechnology: ClickToCallChannelTechnology): Promise<{ success: boolean; log: string[]; simulated?: boolean; error?: string }> {
   return new Promise((resolve) => {
     const log: string[] = [];
     const host = settings.amiHost || 'localhost';
@@ -12088,7 +12152,6 @@ function triggerAMICall(settings: AppSettings, fromExtension: string, toPhoneNum
     const pass = settings.amiPass || '';
     const context = settings.amiContext || 'from-internal';
     const clickToCallContext = process.env.CLICK2CALL_CONTEXT || 'cdr-panel-click2call';
-    const channelPrefix = process.env.CLICK2CALL_CHANNEL_PREFIX || 'SIP';
     const safeFromExtension = fromExtension.replace(/[^0-9]/g, '');
     const safeToPhoneNumber = toPhoneNumber.replace(/[^0-9+#*]/g, '');
     
@@ -12097,7 +12160,7 @@ function triggerAMICall(settings: AppSettings, fromExtension: string, toPhoneNum
     // Fall back to simulation if credentials or host aren't supplied logically (e.g. default localhost)
     if (!host || host === 'localhost' || !pass || !user) {
       log.push(`[AMI] Сведения о подключении отсутствуют или установлен localhost без пароля. Переключение в режим симуляции.`);
-      runAMICallSimulate(log, fromExtension, toPhoneNumber, context, resolve);
+      runAMICallSimulate(log, fromExtension, toPhoneNumber, context, channelTechnology, resolve);
       return;
     }
     
@@ -12132,7 +12195,7 @@ function triggerAMICall(settings: AppSettings, fromExtension: string, toPhoneNum
             log.push(`[AMI] Авторизация успешно подтверждена.`);
             buffer = '';
             
-            const origChannel = `${channelPrefix}/${safeFromExtension}`;
+            const origChannel = `${channelTechnology}/${safeFromExtension}`;
             log.push(`[AMI] Отправляем Originate: [${origChannel}] -> [${safeToPhoneNumber}] по контексту [${clickToCallContext}]...`);
             
             socket.write(
@@ -12158,10 +12221,13 @@ function triggerAMICall(settings: AppSettings, fromExtension: string, toPhoneNum
         if (buffer.includes('\r\n\r\n') || buffer.includes('\n\n')) {
           log.push(`[AMI] Команда Originate отправлена. Ответ от сервера:`);
           log.push(buffer.trim().split('\n').map(l => `      ${l.trim()}`).join('\n'));
-          
+
+          const originateFailed = /Response:\s*Error/i.test(buffer);
           socket.write(`Action: Logoff\r\n\r\n`);
           socket.end();
-          resolve({ success: true, log });
+          resolve(originateFailed
+            ? { success: false, log, error: 'Asterisk отклонил команду Originate' }
+            : { success: true, log });
         }
       }
     });
@@ -12169,14 +12235,14 @@ function triggerAMICall(settings: AppSettings, fromExtension: string, toPhoneNum
     socket.on('error', (err) => {
       log.push(`[AMI] Ошибка подключения: ${err.message}`);
       log.push(`[AMI] Не удалось провести настоящее AMI подключение. Автоматическая симуляция звонка для теста.`);
-      runAMICallSimulate(log, fromExtension, toPhoneNumber, context, resolve);
+      runAMICallSimulate(log, fromExtension, toPhoneNumber, context, channelTechnology, resolve);
     });
     
     socket.on('timeout', () => {
       log.push(`[AMI] Превышено время ожидания соединения (6.5 сек).`);
       socket.destroy();
       log.push(`[AMI] Переход в режим симуляции.`);
-      runAMICallSimulate(log, fromExtension, toPhoneNumber, context, resolve);
+      runAMICallSimulate(log, fromExtension, toPhoneNumber, context, channelTechnology, resolve);
     });
   });
 }
@@ -13441,7 +13507,14 @@ app.post('/api/click-to-call', requireAuth(), async (req, res) => {
       res.status(400).json({ error: 'Для пользователя не назначен SIP-номер. Обратитесь к администратору.' });
       return;
     }
-    const result = await triggerAMICall(localDb.settings, effectiveFromExtension, toPhoneNumber.trim());
+    const channelTechnology = await resolveClickToCallChannelTechnology(effectiveFromExtension);
+    if (!channelTechnology) {
+      res.status(400).json({
+        error: `Внутренний номер ${effectiveFromExtension} не найден среди SIP/PJSIP-абонентов Asterisk`
+      });
+      return;
+    }
+    const result = await triggerAMICall(localDb.settings, effectiveFromExtension, toPhoneNumber.trim(), channelTechnology);
     res.json(result);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -13842,6 +13915,70 @@ app.get('/api/calls/:uniqueid/chronology', requireAuth(), async (req, res) => {
     const settings = localDb.settings;
     const isDemo = isDemoMode(settings);
 
+    const phoneMeeting = (Array.isArray(localDb.phoneMeetings) ? localDb.phoneMeetings : [])
+      .find((meeting: any) => String(meeting?.id || '') === String(uniqueid));
+    if (phoneMeeting) {
+      const invitations = (Array.isArray(phoneMeeting.invitations)
+        ? phoneMeeting.invitations
+        : (phoneMeeting.channelIds || []).map((channelId: string, index: number) => ({
+            channelId,
+            targetNumber: phoneMeeting.invited?.[index] || ''
+          })))
+        .filter((invitation: any) => invitation.channelId && invitation.targetNumber);
+      const channelIds = invitations.map((invitation: any) => String(invitation.channelId));
+      let meetingLegs: CallEntry[] = [];
+      if (!isDemo && channelIds.length) {
+        const placeholders = channelIds.map(() => '?').join(', ');
+        meetingLegs = await queryFreePBXCDR(
+          settings,
+          false,
+          `SELECT uniqueid, linkedid, calldate, clid, src, dst, dcontext, channel, dstchannel, lastapp, lastdata, duration, billsec, disposition, recordingfile, did, cnum, cnam, outbound_cnum FROM cdr WHERE uniqueid IN (${placeholders}) OR linkedid IN (${placeholders}) ORDER BY calldate ASC`,
+          [...channelIds, ...channelIds]
+        );
+      }
+      const participantStatuses = invitations.map((invitation: any) => {
+        const participantNumber = String(invitation.targetNumber || '').replace(/\D/g, '');
+        const internalChannelPattern = /^\d{2,5}$/.test(participantNumber)
+          ? new RegExp(`(?:^|/)(?:SIP|PJSIP)/?${participantNumber}-`, 'i')
+          : null;
+        const participantLegs = meetingLegs.filter(leg => {
+          const assignedChannel = String(leg.uniqueid || '') === String(invitation.channelId)
+            || String(leg.linkedid || '') === String(invitation.channelId);
+          const endpointChannel = Boolean(internalChannelPattern && (
+            internalChannelPattern.test(String(leg.channel || ''))
+            || internalChannelPattern.test(String(leg.dstchannel || ''))
+          ));
+          return assignedChannel || endpointChannel;
+        });
+        const connected = participantLegs.some(leg => String(leg.disposition || '').toUpperCase() === 'ANSWERED' && Number(leg.billsec || 0) > 0);
+        const dispositions = participantLegs.map(leg => String(leg.disposition || '').toUpperCase());
+        const status = connected ? 'connected' : dispositions.includes('BUSY') ? 'busy' : dispositions.includes('FAILED') ? 'failed' : 'missed';
+        return {
+          number: participantNumber,
+          initiator: String(invitation.targetNumber) === String(phoneMeeting.initiatorExt || ''),
+          status,
+          durationSec: Math.max(0, ...participantLegs.map(leg => Number(leg.billsec || 0)))
+        };
+      });
+      const durationSec = Math.max(0, ...participantStatuses.map((participant: any) => participant.durationSec));
+      return res.json({
+        success: true,
+        uniqueid,
+        linkedid: uniqueid,
+        phoneMeeting: true,
+        meeting: {
+          id: String(phoneMeeting.id),
+          createdAt: String(phoneMeeting.createdAt || ''),
+          initiatorExt: String(phoneMeeting.initiatorExt || ''),
+          participants: participantStatuses,
+          recordingFile: String(phoneMeeting.recordingFile || ''),
+          durationSec
+        },
+        timeline: meetingLegs,
+        legsCount: meetingLegs.length
+      });
+    }
+
     let legs: CallEntry[] = [];
     let targetLinkedId = uniqueid;
 
@@ -14075,6 +14212,7 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
     let toExtFilter = String(req.query.toExt || '').replace(/\D/g, '');
     const statusFilter = req.query.status as string; // 'ALL', 'ANSWERED', 'MISSED', 'ONLY_UNPROCESSED', 'ONLY_CALLBACKED'
     const searchFilter = req.query.search as string; // general search
+    const relatedMissedCallId = String(req.query.relatedMissedCallId || '').trim();
     const exactDirectionSearch = String(searchFilter || '').trim();
     const exactFromSearchMatch = exactDirectionSearch.match(/^from:(\d{2,8})$/i);
     const exactToSearchMatch = exactDirectionSearch.match(/^to:(\d{2,8})$/i);
@@ -14614,6 +14752,20 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
           const item = callsLostByUniqueId.get(c.uniqueid);
           return item?.isLost === true;
         });
+      }
+    }
+
+    // Focus the registry on a processed missed call and the call that resolved it.
+    // Search/status filters are intentionally replaced in this explicit drill-down mode.
+    if (relatedMissedCallId) {
+      const missedCall = calls.find(c => String(c.uniqueid || '') === relatedMissedCallId);
+      const relatedIds = new Set([
+        relatedMissedCallId,
+        String(missedCall?.callbackCallId || '')
+      ].filter(Boolean));
+      filteredCalls = calls.filter(c => relatedIds.has(String(c.uniqueid || '')));
+      if (onlyMyCalls && operatorExt) {
+        filteredCalls = filteredCalls.filter(c => callHasExactNumber(c, operatorExt));
       }
     }
 

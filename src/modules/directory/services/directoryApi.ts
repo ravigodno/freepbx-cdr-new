@@ -94,6 +94,26 @@ export async function fetchDirectoryAll(token: string, filters: DirectoryFetchFi
   return Array.isArray(data) ? data : [];
 }
 
+export async function setDirectoryFavorite(token: string, contactId: string, favorite: boolean) {
+  const resp = await fetch(`/api/directory/${encodeURIComponent(contactId)}/favorite`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify({ favorite })
+  });
+
+  if (resp.status === 401) {
+    handleAuthExpiredResponse(resp);
+    throw new Error('UNAUTHORIZED');
+  }
+
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.error || 'Не удалось изменить избранное');
+  return data;
+}
+
 export async function saveDirectoryEntry(token: string, payload: any, id?: string) {
   const resp = await fetch(id ? `/api/directory/${id}` : '/api/directory', {
     method: id ? 'PUT' : 'POST',

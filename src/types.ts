@@ -226,6 +226,7 @@ export interface DirectoryEntry {
   comment?: string;
   createdAt?: string;
   updatedAt?: string;
+  isFavorite?: boolean;
 }
 
 export type ContactSyncDirection = 'import_only' | 'export_only' | 'two_way';

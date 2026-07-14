@@ -20,6 +20,9 @@ export function CDRTimeCell({
   isOutgoing,
   fetchChronology,
 }: CDRTimeCellProps) {
+  const meetingUid = uniqueid.match(/^pbxpuls-\d+-([a-f0-9]+)$/i)?.[1];
+  const displayedId = meetingUid || uniqueid;
+
   return (
     <td className="py-4 px-4 font-normal text-slate-705 dark:text-slate-350">
       <div className="flex items-center gap-3">
@@ -43,9 +46,9 @@ export function CDRTimeCell({
             <button
               onClick={() => fetchChronology(uniqueid)}
               className="text-slate-400 hover:text-red-705 hover:underline cursor-pointer font-medium"
-              title="Посмотреть хронологию прохождения звонка"
+              title={meetingUid ? `Полный ID: ${uniqueid}` : 'Посмотреть хронологию прохождения звонка'}
             >
-              {uniqueid}
+              {displayedId}
             </button>
           </span>
         </div>

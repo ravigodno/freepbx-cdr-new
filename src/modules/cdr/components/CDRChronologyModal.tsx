@@ -1,6 +1,7 @@
 import React from 'react';
 import { buildCallRouteView } from '../utils/buildCallRouteView';
 import CallRouteViewer from './route/CallRouteViewer';
+import MeetingTimelineViewer from './route/MeetingTimelineViewer';
 import { AlertCircle, Loader2, Route } from 'lucide-react';
 
 interface Props {
@@ -35,7 +36,7 @@ export default function CDRChronologyModal({
           <div className="flex items-center gap-3 flex-wrap min-w-0">
             <h3 className="text-base font-bold text-slate-800 flex items-center gap-2">
               <Route className="h-5 w-5 text-red-600" />
-              Таймлайн прохождения звонка
+              {chronologyData?.phoneMeeting ? 'Таймлайн совещания' : 'Таймлайн прохождения звонка'}
             </h3>
             <span className="text-xs text-slate-500 font-medium font-mono">ID: {chronologyCallId}</span>
           </div>
@@ -63,7 +64,9 @@ export default function CDRChronologyModal({
             </div>
           )}
 
-          {chronologyData && (
+          {chronologyData?.phoneMeeting ? (
+            <MeetingTimelineViewer meeting={chronologyData.meeting} />
+          ) : chronologyData && (
             <CallRouteViewer
               routeSteps={routeSteps}
               anyAnswered={anyAnswered}

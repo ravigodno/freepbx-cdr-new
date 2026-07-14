@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, ChevronDown, Loader2, PhoneForwarded, Search, X } from 'lucide-react';
+import { Check, ChevronDown, Loader2, PhoneForwarded, Search, Star, X } from 'lucide-react';
 import { getLiveTransferPresenceLabel, type LiveTransferPresence } from './liveTransferPresence';
 
 export type LiveTransferTargetType = 'internal' | 'directory_phone';
@@ -31,6 +31,7 @@ export interface LiveTransferSearchTarget {
   deviceStatus: LiveTransferPresence;
   deviceType: string;
   source: string;
+  isFavorite?: boolean;
 }
 
 export interface LiveTransferResult {
@@ -396,7 +397,10 @@ export function LiveTransferSearch({
                         >
                           <span className={`w-32 shrink-0 font-mono text-sm font-black ${target.canTransfer ? 'text-blue-700' : 'text-slate-400'}`}>{target.displayNumber || '—'}</span>
                           <span className="min-w-0 flex-1">
-                            <span className="block truncate text-xs font-black text-slate-900">{target.displayName}</span>
+                            <span className="flex items-center gap-1 truncate text-xs font-black text-slate-900">
+                              {target.isFavorite && <Star className="h-3 w-3 shrink-0 fill-amber-400 text-amber-500" />}
+                              <span className="truncate">{target.displayName}</span>
+                            </span>
                             <span className="mt-0.5 block truncate text-[10px] font-bold text-blue-600">
                               {target.targetType === 'internal' ? 'Внутренний' : 'Номер из справочника'} · {target.numberLabel}
                             </span>

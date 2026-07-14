@@ -13,6 +13,7 @@ interface CDRStatusCellProps {
   wasKpiResolved?: boolean;
   callbackTime?: string;
   callbackStatus?: 'processed_in_sla' | 'processed_late' | 'pending_callback' | 'not_called_back' | 'processed' | 'called_back' | 'repeated_inbound';
+  onShowProcessingEvent?: () => void;
 }
 
 export function CDRStatusCell({
@@ -23,6 +24,7 @@ export function CDRStatusCell({
   wasKpiResolved,
   callbackTime,
   callbackStatus,
+  onShowProcessingEvent,
 }: CDRStatusCellProps) {
   const isAwaitingBadge = isMissed && callbackStatus === 'pending_callback';
   const isLostBadge = isMissed && callbackStatus === 'not_called_back';
@@ -63,8 +65,10 @@ export function CDRStatusCell({
         )}
 
         {showProcessedBadge && (
-          <span
-            className="inline-flex items-center gap-1.5 mt-1 px-2 py-0.5 rounded-lg border border-slate-200 bg-white text-[10px] font-bold text-slate-700 shadow-xs"
+          <button
+            type="button"
+            onClick={onShowProcessingEvent}
+            className="inline-flex items-center gap-1.5 mt-1 px-2 py-0.5 rounded-lg border border-slate-200 bg-white text-[10px] font-bold text-slate-700 shadow-xs hover:border-blue-300 hover:text-blue-700 hover:bg-blue-50 transition-colors cursor-pointer"
             title={wasCallbacked ? `Клиенту успешно перезвонили в ${callbackTime}. Лимит времени по KPI: ${wasKpiResolved ? 'соблюден' : 'превышен!'}` : 'Звонок обработан вручную или автоматически.'}
           >
             <span
@@ -75,7 +79,7 @@ export function CDRStatusCell({
               }`}
             />
             <span>Обработано</span>
-          </span>
+          </button>
         )}
       </div>
     </td>

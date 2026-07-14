@@ -13,6 +13,7 @@ export interface DirectoryRuntimeContext {
   settings?: AppSettings;
   authUser?: any;
   dbUser?: any;
+  favoriteContactIds?: string[];
 }
 
 export interface DirectoryRuntimeSnapshot {
@@ -146,6 +147,7 @@ export async function searchDirectoryInternalExtensions(
   const limit = Math.max(1, Math.min(50, Number(rawLimit) || 50));
   const configuredMode = await getDirectoryStorageMode();
   const allowExternalDirectoryNumbers = await isExternalDirectoryTransferAllowed();
+  const favoriteContactIds = Array.isArray(context.favoriteContactIds) ? context.favoriteContactIds.map(String) : [];
 
   if (configuredMode === 'sql') {
     try {
@@ -268,14 +270,18 @@ export async function searchDirectoryInternalExtensions(
         return entry;
       });
 
+      const favoriteContacts = favoriteContactIds.length
+        ? (await searchDirectoryContacts(context)).filter(contact => favoriteContactIds.includes(String(contact.id)))
+        : [];
+      const rankedContacts = Array.from(new Map([...favoriteContacts, ...contacts].map(contact => [String(contact.id), contact])).values());
       return {
-        items: rankLiveTransferTargets(contacts, query, excludeExtension, limit, 'pbxpuls_sql', allowExternalDirectoryNumbers),
+        items: rankLiveTransferTargets(rankedContacts, query, excludeExtension, limit, 'pbxpuls_sql', allowExternalDirectoryNumbers, favoriteContactIds),
         source: 'pbxpuls_sql',
         directoryAvailable: true,
         allowExternalDirectoryNumbers
       };
     } catch (error: any) {
-      const fallback = rankLiveTransferTargets(context.legacyDirectory || [], query, excludeExtension, limit, 'data/db.json', allowExternalDirectoryNumbers);
+      const fallback = rankLiveTransferTargets(context.legacyDirectory || [], query, excludeExtension, limit, 'data/db.json', allowExternalDirectoryNumbers, favoriteContactIds);
       return {
         items: fallback,
         source: 'data/db.json',
@@ -287,7 +293,7 @@ export async function searchDirectoryInternalExtensions(
   }
 
   return {
-    items: rankLiveTransferTargets(context.legacyDirectory || [], query, excludeExtension, limit, 'data/db.json', allowExternalDirectoryNumbers),
+    items: rankLiveTransferTargets(context.legacyDirectory || [], query, excludeExtension, limit, 'data/db.json', allowExternalDirectoryNumbers, favoriteContactIds),
     source: 'data/db.json',
     directoryAvailable: true,
     allowExternalDirectoryNumbers

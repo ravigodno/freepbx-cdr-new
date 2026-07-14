@@ -36,7 +36,7 @@ export function CDRRecordingCell({
           ) : (
             <>
               <Play className="h-3.5 w-3.5 fill-current" />
-              <span>Воспроизвести</span>
+              <span>Слушать</span>
             </>
           )}
         </button>

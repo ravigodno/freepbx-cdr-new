@@ -62,7 +62,8 @@ import {
   ShieldCheck,
   Palette,
   Scroll,
-  Bot
+  Bot,
+  Star
 } from 'lucide-react';
 import { CallEntry, DashboardStats, AppSettings, UserRole, DirectoryEntry } from './types';
 import ScriptsTab from './components/ScriptsTab';
@@ -84,7 +85,7 @@ import QualityTab from './modules/monitoring/tabs/monitoring/QualityTab';
 import DevicesMapTab from './modules/monitoring/tabs/monitoring/DevicesMapTab';
 import HealthReportTab from './modules/monitoring/tabs/monitoring/HealthReportTab';
 import { DirectoryStatusIcon } from './modules/directory/components/DirectoryStatusIcon';
-import { fetchDirectory, fetchDirectoryAll, saveDirectoryEntry, deleteDirectoryEntry, toggleDirectoryBlacklist, toggleDirectorySpam, previewDirectoryImport, fetchDirectoryColumnSettings, saveMyDirectoryColumnSettings, resetMyDirectoryColumnSettings, saveGlobalDirectoryColumnSettings, resetGlobalDirectoryColumnSettings } from './modules/directory/services/directoryApi';
+import { fetchDirectory, fetchDirectoryAll, saveDirectoryEntry, deleteDirectoryEntry, toggleDirectoryBlacklist, toggleDirectorySpam, previewDirectoryImport, fetchDirectoryColumnSettings, saveMyDirectoryColumnSettings, resetMyDirectoryColumnSettings, saveGlobalDirectoryColumnSettings, resetGlobalDirectoryColumnSettings, setDirectoryFavorite } from './modules/directory/services/directoryApi';
 import CDRPage from './modules/cdr/pages/CDRPage';
 import LegacyCDRTable from './modules/cdr/components/LegacyCDRTable';
 import CDRProcessModal from './modules/cdr/components/CDRProcessModal';
@@ -147,28 +148,6 @@ type DirectoryOptionalColumnKey =
 type DirectoryColumnKey = DirectoryRequiredColumnKey | DirectoryOptionalColumnKey | DirectorySystemColumnKey;
 
 type ContactSyncProvider = 'google' | 'yandex' | 'mailru' | 'file';
-
-const directoryEntryToMeetingTarget = (entry: DirectoryEntry): LiveTransferSearchTarget | null => {
-  if (entry.isSpam || entry.isBlacklisted || (entry as any).hidden || (entry as any).disabled) return null;
-  const rawPhone = String(entry.number || entry.phones?.[0] || '').trim();
-  const phone = rawPhone.replace(/\D/g, '').replace(/^8(?=\d{10}$)/, '7');
-  const explicitExtension = String(entry.internalExtension || '').replace(/\D/g, '');
-  const extension = /^\d{2,5}$/.test(explicitExtension)
-    ? explicitExtension
-    : entry.type === 'internal' && /^\d{2,5}$/.test(phone) ? phone : '';
-  const targetType = /^\d{2,5}$/.test(extension) ? 'internal' : 'directory_phone';
-  const targetNumber = targetType === 'internal' ? extension : phone;
-  if (!(targetType === 'internal' ? /^\d{2,5}$/.test(targetNumber) : /^\d{6,15}$/.test(targetNumber))) return null;
-  const displayName = String(entry.name || entry.company || 'Контакт').trim();
-  return {
-    id: String(entry.id), label: displayName, displayName, displayNumber: targetNumber, targetNumber, targetType,
-    numberLabel: targetType === 'internal' ? 'Внутренний номер' : 'Основной телефон', extension,
-    name: displayName, company: String(entry.company || ''), phone: rawPhone, phone2: '', extraPhone: '',
-    department: String(entry.department || ''), position: String(entry.position || ''), comment: String(entry.comment || ''),
-    metadataMatches: [], canCall: true, canTransfer: true, canConference: true, disabledReason: '', transferDisabledReason: '',
-    sipStatus: 'unknown', deviceStatus: 'unknown', deviceType: '', source: 'directory'
-  };
-};
 type ContactFileSourceFormat = 'google_csv' | 'mailru_csv' | 'generic_csv' | 'yandex_vcf' | 'generic_vcf';
 type DirectoryPageMode = 'list' | 'import' | 'personal_import' | 'contact_new' | 'contact_edit';
 type OnlineContactSyncProvider = Exclude<ContactSyncProvider, 'file'>;
@@ -604,6 +583,7 @@ export default function App() {
   const [statusFilter, setStatusFilter] = useState('ALL'); // Default focus on full log
   const [searchQuery, setSearchQuery] = useState('');
   const [numberFilter, setNumberFilter] = useState('');
+  const [relatedMissedCallId, setRelatedMissedCallId] = useState('');
 
   // Dashboard Stats
   const [stats, setStats] = useState<DashboardStats | null>(null);
@@ -769,12 +749,12 @@ export default function App() {
   // --- TELEPHONE DIRECTORY STATE & HANDLERS ---
   const [activeView, setActiveView] = useState<'calls' | 'directory' | 'reports' | 'marketing' | 'monitoring' | 'management' | 'balance' | 'settings' | 'about' | 'scripts' | 'ai-assistant' | 'ai-pbx-admin'>(() => {
     const params = new URLSearchParams(window.location.search);
+    const saved = localStorage.getItem('asterisk_cdr_active_view') as 'calls' | 'directory' | 'reports' | 'marketing' | 'monitoring' | 'management' | 'balance' | 'about' | 'scripts' | 'ai-assistant' | 'ai-pbx-admin' | null;
     if (window.location.pathname === '/management/directory/import') return 'directory';
     if (window.location.pathname === '/directory/import-contacts') return 'directory';
-    if (/^\/management\/directory\/contact\/new$/.test(window.location.pathname)) return 'directory';
+    if (/^\/management\/directory\/contact\/new$/.test(window.location.pathname)) return saved && saved !== 'directory' ? saved : 'directory';
     if (/^\/management\/directory\/contact\/[^/]+\/edit$/.test(window.location.pathname)) return 'directory';
     if (params.get('tab') === 'marketing' || params.get('yandexOAuth')) return 'marketing';
-    const saved = localStorage.getItem('asterisk_cdr_active_view') as 'calls' | 'directory' | 'reports' | 'marketing' | 'monitoring' | 'management' | 'balance' | 'about' | 'scripts' | 'ai-assistant' | 'ai-pbx-admin' | null;
     return saved || 'calls';
   });
   const [liveSessionsData, setLiveSessionsData] = useState<any>(null);
@@ -802,6 +782,9 @@ export default function App() {
 
   useEffect(() => {
     localStorage.setItem('asterisk_cdr_active_view', activeView);
+    if (activeView !== 'directory' && /^\/(?:management\/directory|directory\/import-contacts)/.test(window.location.pathname)) {
+      window.history.replaceState({}, '', '/');
+    }
   }, [activeView]);
 
   useEffect(() => {
@@ -810,14 +793,8 @@ export default function App() {
 
   const [directory, setDirectory] = useState<DirectoryEntry[]>([]);
   const [directoryLookup, setDirectoryLookup] = useState<DirectoryEntry[]>([]);
-  const [selectedMeetingContactIds, setSelectedMeetingContactIds] = useState<string[]>([]);
   const [conferenceBackendStatus, setConferenceBackendStatus] = useState<ConferenceBackendStatus | null>(null);
   const [consultTransferStatus, setConsultTransferStatus] = useState<ConsultTransferCapabilities | null>(null);
-  const selectedMeetingTargets = useMemo(() => selectedMeetingContactIds
-    .map(id => directory.find(entry => entry.id === id) || directoryLookup.find(entry => entry.id === id))
-    .filter((entry): entry is DirectoryEntry => Boolean(entry))
-    .map(directoryEntryToMeetingTarget)
-    .filter((target): target is LiveTransferSearchTarget => Boolean(target)), [selectedMeetingContactIds, directory, directoryLookup]);
   const [isLoadingDirectory, setIsLoadingDirectory] = useState(false);
   const [editingDirEntry, setEditingDirEntry] = useState<DirectoryEntry | null>(null);
   const [dirName, setDirName] = useState('');
@@ -2096,7 +2073,6 @@ export default function App() {
       const invited = Array.isArray(data.invited) ? data.invited.filter((number: string) => number !== effectiveMySip) : [];
       const successMessage = `Телефонное совещание создано. Инициатор: внутренний ${effectiveMySip}. Участники: ${invited.join(', ') || 'не указаны'}.`;
       setDirNotice(successMessage);
-      setSelectedMeetingContactIds([]);
       return successMessage;
     } catch (error: any) {
       setDirNotice(error?.message || 'Не удалось создать телефонное совещание');
@@ -2359,6 +2335,21 @@ export default function App() {
     }
   };
 
+  const handleToggleDirectoryFavorite = async (entry: DirectoryEntry) => {
+    if (!session?.token) return;
+    try {
+      await setDirectoryFavorite(session.token, entry.id, !entry.isFavorite);
+      setDirPage(1);
+      await Promise.all([loadDirectory(1), loadDirectoryLookup()]);
+    } catch (error: any) {
+      if (error?.message === 'UNAUTHORIZED') {
+        handleAuthError();
+        return;
+      }
+      alert(error?.message || 'Не удалось изменить избранное.');
+    }
+  };
+
   const handleToggleBlacklist = async (entry: DirectoryEntry, enabled: boolean, syncAsterisk = true) => {
     if (!session) return;
 
@@ -2473,7 +2464,7 @@ export default function App() {
   };
 
   // Fetch CDR Calls List
-  const loadCalls = async (targetPage: number = page) => {
+  const loadCalls = async (targetPage: number = page, targetRelatedMissedCallId: string = relatedMissedCallId) => {
     if (!session) return;
     setIsLoadingCalls(true);
     try {
@@ -2489,7 +2480,8 @@ export default function App() {
         searchQuery,
         numberFilter,
         myExt,
-        onlyMyCalls
+        onlyMyCalls,
+        relatedMissedCallId: targetRelatedMissedCallId
       });
 
       const data = await fetchCdrCalls(qParams, session.token);
@@ -2517,6 +2509,18 @@ export default function App() {
     } finally {
       setIsLoadingCalls(false);
     }
+  };
+
+  const showProcessingEvent = (call: CallEntry) => {
+    const missedCallId = String(call.uniqueid || '');
+    if (!missedCallId) return;
+    setRelatedMissedCallId(missedCallId);
+    loadCalls(1, missedCallId);
+  };
+
+  const clearProcessingEventFilter = () => {
+    setRelatedMissedCallId('');
+    loadCalls(1, '');
   };
 
   // Trigger combined data reload
@@ -3270,7 +3274,7 @@ export default function App() {
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [session, page, autoRefreshInterval, startDate, endDate, startTime, endTime, statusFilter, isDemoModeActive, searchQuery, numberFilter, onlyMyCalls, myExt]);
+  }, [session, page, autoRefreshInterval, startDate, endDate, startTime, endTime, statusFilter, isDemoModeActive, searchQuery, numberFilter, onlyMyCalls, myExt, relatedMissedCallId]);
 
   // Open Comment Sidebar
   const openProcessModal = (call: CallEntry) => {
@@ -5913,11 +5917,12 @@ export default function App() {
               >
                 Обновить
               </button>
-              {(searchQuery || numberFilter || statusFilter !== 'ALL' || startDate !== getDefaultStartDate() || endDate !== toLocalDateInputValue(new Date()) || startTime !== '00:00' || endTime !== '23:59') && (
+              {(searchQuery || numberFilter || relatedMissedCallId || statusFilter !== 'ALL' || startDate !== getDefaultStartDate() || endDate !== toLocalDateInputValue(new Date()) || startTime !== '00:00' || endTime !== '23:59') && (
                 <button
                   onClick={() => {
                     setSearchQuery('');
                     setNumberFilter('');
+                    setRelatedMissedCallId('');
                     setStatusFilter('ALL');
                     applyThisMonthPreset();
                   }}
@@ -5932,6 +5937,18 @@ export default function App() {
 
         {/* CDR LOG LIST */}
         <section id="cdr-log" className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm flex flex-col">
+          {relatedMissedCallId && (
+            <div className="flex items-center justify-between gap-3 border-b border-blue-200 bg-blue-50 px-4 py-2.5 text-xs text-blue-800">
+              <span className="font-semibold">Показаны пропущенный звонок и событие, которым он был обработан</span>
+              <button
+                type="button"
+                onClick={clearProcessingEventFilter}
+                className="shrink-0 rounded-md border border-blue-200 bg-white px-3 py-1.5 font-semibold text-blue-700 hover:bg-blue-100 transition-colors cursor-pointer"
+              >
+                Показать все
+              </button>
+            </div>
+          )}
           <div className="overflow-x-auto min-h-[400px]">
             {isLoadingCalls ? (
               <div className="flex flex-col items-center justify-center p-20 space-y-3">
@@ -5977,6 +5994,7 @@ export default function App() {
                   openProcessModal={openProcessModal}
                   toggleRowDropdown={toggleRowDropdown}
                   fetchChronology={fetchChronology}
+                  showProcessingEvent={showProcessingEvent}
                   setActiveDropdownCallId={setActiveDropdownCallId}
                   formatSeconds={formatSeconds}
                 />
@@ -6409,11 +6427,9 @@ export default function App() {
               mode="meeting"
               token={session?.token || ''}
               currentExtension={effectiveMySip}
-              disabled={selectedMeetingContactIds.length === 0}
               buttonClassName="flex shrink-0 items-center justify-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-xs font-semibold text-blue-700 shadow-sm transition-all hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
-              triggerLabel={`Совещание${selectedMeetingContactIds.length ? ` (${selectedMeetingContactIds.length})` : ''}`}
+              triggerLabel="Совещание"
               backendStatus={conferenceBackendStatus}
-              initialTargets={selectedMeetingTargets}
               onUnauthorized={handleAuthError}
               onConfirm={handlePhoneMeetingStart}
             />
@@ -6584,15 +6600,7 @@ export default function App() {
               <thead className="border-b border-slate-200 bg-slate-50 text-[10px] font-bold uppercase tracking-wider text-slate-700">
                 <tr>
                   <th scope="col" className="w-10 py-2 px-3">
-                    <input
-                      type="checkbox"
-                      aria-label="Выбрать контакты на странице"
-                      checked={directory.length > 0 && directory.every(entry => selectedMeetingContactIds.includes(entry.id))}
-                      onChange={event => setSelectedMeetingContactIds(current => event.target.checked
-                        ? Array.from(new Set([...current, ...directory.map(entry => entry.id)]))
-                        : current.filter(id => !directory.some(entry => entry.id === id)))}
-                      className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                    />
+                    <Star className="h-3.5 w-3.5 text-slate-400" aria-label="Избранное" />
                   </th>
                   {effectiveDirectoryColumnConfigs.map(column => (
                     <th key={column.key} scope="col" className={`py-2 px-3 ${column.className || ''}`}>
@@ -6639,15 +6647,15 @@ export default function App() {
                   return list.map((entry) => (
                     <tr key={entry.id} className="transition-colors hover:bg-slate-50/80">
                       <td className="w-10 py-3.5 px-3 align-top">
-                        <input
-                          type="checkbox"
-                          aria-label={`Выбрать ${entry.name || entry.company || entry.number || 'контакт'}`}
-                          checked={selectedMeetingContactIds.includes(entry.id)}
-                          onChange={() => setSelectedMeetingContactIds(current => current.includes(entry.id)
-                            ? current.filter(id => id !== entry.id)
-                            : [...current, entry.id])}
-                          className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                        />
+                        <button
+                          type="button"
+                          onClick={() => handleToggleDirectoryFavorite(entry)}
+                          className={`rounded-md p-0.5 transition-colors ${entry.isFavorite ? 'text-amber-500 hover:text-amber-600' : 'text-slate-300 hover:text-amber-500'}`}
+                          title={entry.isFavorite ? 'Убрать из избранного' : 'Добавить в избранное'}
+                          aria-label={entry.isFavorite ? 'Убрать контакт из избранного' : 'Добавить контакт в избранное'}
+                        >
+                          <Star className={`h-4 w-4 ${entry.isFavorite ? 'fill-current' : ''}`} />
+                        </button>
                       </td>
                       {effectiveDirectoryColumnConfigs.map(column => (
                         <td key={column.key} className={`py-3.5 px-3 align-top ${column.key === 'actions' ? 'text-right' : 'text-slate-700'}`}>
