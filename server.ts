@@ -98,7 +98,12 @@ import {
   selectLiveOutgoingDestination,
   stripLiveTechnicalAddresses
 } from './server/liveCallDirection.js';
-import { getLiveTransferInternalExtension } from './server/liveTransferSearch.js';
+import {
+  buildLiveTransferTargetOptions,
+  normalizeLiveTransferDirectoryNumber,
+  type LiveTransferTargetType
+} from './server/liveTransferSearch.js';
+import { isExternalDirectoryTransferAllowed } from './server/liveTransferSettings.js';
 import { buildLiveCallBannerDisplay } from './src/utils/liveCallBanner.js';
 import {
   appendDevicesAlertsToSql, appendDevicesHistoryToSql, appendHealthHistoryToSql, appendQualityAlertsToSql,
@@ -3094,6 +3099,7 @@ const normalizeDirectoryEntry = (entry: any, settings?: AppSettings): any => {
     sipStatus: String(entry?.sipStatus || '').trim(),
     deviceStatus: String(entry?.deviceStatus || '').trim(),
     deviceType: String(entry?.deviceType || entry?.sipType || entry?.technology || '').trim(),
+    transferPhoneNumbers: Array.isArray(entry?.transferPhoneNumbers) ? entry.transferPhoneNumbers : [],
     comment: String(entry?.comment || entry?.notes || '').trim(),
     createdAt: entry?.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString()
@@ -11078,6 +11084,7 @@ app.get('/api/directory/extensions/search', requireAuth(), async (req, res) => {
       limit: Math.max(1, Math.min(50, Number(req.query.limit) || 50)),
       source: result.source,
       directoryAvailable: result.directoryAvailable,
+      allowExternalDirectoryNumbers: result.allowExternalDirectoryNumbers,
       fallbackReason: result.fallbackReason || null
     });
   } catch (error: any) {
@@ -12201,6 +12208,8 @@ type LiveTransferTarget = {
   id: string;
   extension: string;
   label: string;
+  targetNumber: string;
+  targetType: LiveTransferTargetType;
 };
 
 function parseAmiBlocks(raw: string): AmiBlock[] {
@@ -12285,7 +12294,8 @@ function runAmiCoreShowChannels(settings: AppSettings): Promise<AmiBlock[]> {
 function runAmiBlindTransfer(
   settings: AppSettings,
   channel: string,
-  targetExtension: string
+  targetNumber: string,
+  targetType: LiveTransferTargetType
 ): Promise<{ success: boolean; error?: string; message?: string }> {
   return new Promise((resolve) => {
     const host = settings.amiHost || 'localhost';
@@ -12294,13 +12304,16 @@ function runAmiBlindTransfer(
     const pass = settings.amiPass || '';
     const context = settings.amiContext || 'from-internal';
     const safeChannel = String(channel || '').replace(/[\r\n]+/g, '').trim();
-    const safeTarget = onlyDigits(targetExtension);
+    const safeTarget = onlyDigits(targetNumber);
 
     if (!host || !user || !pass) {
       resolve({ success: false, error: 'AMI не настроен' });
       return;
     }
-    if (!safeChannel || !safeTarget || !isInternalExt(safeTarget)) {
+    const validInternalTarget = targetType === 'internal' && isInternalExt(safeTarget);
+    const validDirectoryPhoneTarget = targetType === 'directory_phone'
+      && normalizeLiveTransferDirectoryNumber(safeTarget) === safeTarget;
+    if (!safeChannel || (!validInternalTarget && !validDirectoryPhoneTarget)) {
       resolve({ success: false, error: 'Некорректные параметры перевода' });
       return;
     }
@@ -12587,31 +12600,30 @@ function liveFormatSeconds(value: number): string {
   return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
-function getDirectoryInternalTransferExtension(entry: any): string {
-  const normalized = normalizeDirectoryEntry(entry);
-  return getLiveTransferInternalExtension(normalized);
-}
-
-function buildLiveTransferTargets(directory: any[], req: Request, localDb: any, operatorExt: string): LiveTransferTarget[] {
-  const currentExt = onlyDigits(operatorExt);
-  const seen = new Set<string>();
-
+function buildLiveTransferTargets(
+  directory: any[],
+  req: Request,
+  localDb: any,
+  operatorExt: string,
+  allowExternalDirectoryNumbers: boolean
+): LiveTransferTarget[] {
   return (directory || [])
     .map((entry: any) => normalizeDirectoryEntry(entry, localDb.settings))
     .filter((entry: any) => canReadDirectoryEntry(entry, (req as any).user, getAuthenticatedDbUser(localDb, req), localDb.settings))
-    .filter((entry: any) => entry.isSpam !== true && entry.isBlacklisted !== true && entry.disabled !== true && entry.hidden !== true)
-    .map((entry: any) => {
-      const extension = getDirectoryInternalTransferExtension(entry);
-      if (!extension || extension === currentExt || seen.has(extension)) return null;
-      seen.add(extension);
-      return {
-        id: String(entry.id || extension),
-        extension,
-        label: String(entry.name || entry.company || 'Внутренний номер').slice(0, 120)
-      };
-    })
-    .filter((item: LiveTransferTarget | null): item is LiveTransferTarget => Boolean(item))
-    .sort((a, b) => a.extension.localeCompare(b.extension, 'ru', { numeric: true }));
+    .flatMap((entry: any) => buildLiveTransferTargetOptions(
+      entry,
+      operatorExt,
+      allowExternalDirectoryNumbers,
+      String(entry.source || 'directory')
+    ))
+    .filter(target => target.canTransfer)
+    .map(target => ({
+      id: target.id,
+      extension: target.extension,
+      label: target.label,
+      targetNumber: target.targetNumber,
+      targetType: target.targetType
+    }));
 }
 
 function findLiveTransferChannelForOperator(channels: AmiBlock[], operatorExt: string): { channel: string; linkedid: string } | null {
@@ -12995,17 +13007,36 @@ app.post('/api/live/call-transfer', requireAuth(), async (req, res) => {
     }
 
     const requestedOperatorExt = String(req.body?.operatorExt || '').trim();
-    const targetExtension = onlyDigits(req.body?.targetExtension);
-    if (!requestedOperatorExt || !targetExtension) {
-      res.status(400).json({ error: 'Нужны operatorExt и targetExtension' });
+    const rawTargetType = String(req.body?.targetType || 'internal').trim();
+    if (rawTargetType !== 'internal' && rawTargetType !== 'directory_phone') {
+      res.status(400).json({ error: 'Некорректный targetType переадресации' });
       return;
     }
-    if (!isInternalExt(targetExtension)) {
-      res.status(400).json({ error: 'Перевод разрешён только на внутренний номер' });
+    const targetType = rawTargetType as LiveTransferTargetType;
+    const targetId = String(req.body?.targetId || '').trim();
+    const requestedTargetNumber = onlyDigits(req.body?.targetNumber ?? req.body?.targetExtension);
+    const targetNumber = targetType === 'directory_phone'
+      ? normalizeLiveTransferDirectoryNumber(requestedTargetNumber)
+      : requestedTargetNumber;
+    if (!requestedOperatorExt || !targetNumber) {
+      res.status(400).json({ error: 'Нужны operatorExt и допустимый targetNumber' });
+      return;
+    }
+    if (targetType === 'internal' && !isInternalExt(targetNumber)) {
+      res.status(400).json({ error: 'Некорректный внутренний номер переадресации' });
+      return;
+    }
+    if (targetType === 'directory_phone' && !targetId) {
+      res.status(400).json({ error: 'Внешний номер должен быть выбран из справочника' });
       return;
     }
 
     const localDb = await readLocalDb();
+    const allowExternalDirectoryNumbers = await isExternalDirectoryTransferAllowed();
+    if (targetType === 'directory_phone' && !allowExternalDirectoryNumbers) {
+      res.status(403).json({ error: 'Перевод на номера справочника отключён настройкой' });
+      return;
+    }
     const effectiveOperatorExt = getEffectiveOperatorExt(localDb, req, requestedOperatorExt);
     if (!effectiveOperatorExt) {
       res.status(400).json({ error: 'Для пользователя не назначен SIP-номер' });
@@ -13013,10 +13044,20 @@ app.post('/api/live/call-transfer', requireAuth(), async (req, res) => {
     }
 
     const directoryRuntime = await getDirectoryRuntimeSnapshotForRequest(localDb, req);
-    const transferTargets = buildLiveTransferTargets(directoryRuntime.contacts, req, localDb, effectiveOperatorExt);
-    const target = transferTargets.find(item => item.extension === targetExtension);
+    const transferTargets = buildLiveTransferTargets(
+      directoryRuntime.contacts,
+      req,
+      localDb,
+      effectiveOperatorExt,
+      allowExternalDirectoryNumbers
+    );
+    const target = transferTargets.find(item => item.targetType === targetType
+      && item.targetNumber === targetNumber
+      && (targetType === 'internal' || item.id === targetId));
     if (!target) {
-      res.status(400).json({ error: 'Номер назначения не найден среди внутренних контактов справочника' });
+      res.status(400).json({ error: targetType === 'directory_phone'
+        ? 'Номер назначения не принадлежит доступной записи справочника'
+        : 'Внутренний номер назначения не найден в справочнике' });
       return;
     }
 
@@ -13027,7 +13068,7 @@ app.post('/api/live/call-transfer', requireAuth(), async (req, res) => {
       return;
     }
 
-    const result = await runAmiBlindTransfer(localDb.settings, transferChannel.channel, target.extension);
+    const result = await runAmiBlindTransfer(localDb.settings, transferChannel.channel, target.targetNumber, target.targetType);
     if (!result.success) {
       res.status(502).json({ success: false, error: result.error || 'Не удалось перевести звонок' });
       return;
@@ -13037,8 +13078,10 @@ app.post('/api/live/call-transfer', requireAuth(), async (req, res) => {
       id: `transfer_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`,
       linkedid: transferChannel.linkedid || '',
       operatorExt: effectiveOperatorExt,
-      targetExtension: target.extension,
-      blindTransferTargetExt: target.extension,
+      targetExtension: target.targetNumber,
+      targetNumber: target.targetNumber,
+      targetType: target.targetType,
+      blindTransferTargetExt: target.targetNumber,
       targetLabel: target.label,
       blindTransfer: true,
       transferType: 'blind',
@@ -13053,7 +13096,9 @@ app.post('/api/live/call-transfer', requireAuth(), async (req, res) => {
 
     res.json({
       success: true,
-      targetExtension: target.extension,
+      targetExtension: target.targetType === 'internal' ? target.targetNumber : '',
+      targetNumber: target.targetNumber,
+      targetType: target.targetType,
       targetLabel: target.label,
       linkedid: transferChannel.linkedid,
       message: result.message || 'Transfer queued'

@@ -3,6 +3,7 @@ import { queryPBXPulsDb, sanitizePBXPulsDbError } from './pbxpulsDb.js';
 import { writePBXPulsSystemEvent } from './pbxpulsEvents.js';
 import { getPBXPulsSetting } from './pbxpulsSettings.js';
 import { rankLiveTransferTargets, type LiveTransferSearchTarget } from './liveTransferSearch.js';
+import { isExternalDirectoryTransferAllowed } from './liveTransferSettings.js';
 
 export type DirectoryStorageMode = 'legacy' | 'sql';
 export type DirectoryEffectiveSource = 'data/db.json' | 'pbxpuls_sql';
@@ -27,6 +28,7 @@ export interface DirectoryExtensionSearchResult {
   items: LiveTransferSearchTarget[];
   source: DirectoryEffectiveSource;
   directoryAvailable: boolean;
+  allowExternalDirectoryNumbers: boolean;
   fallbackReason?: string;
 }
 
@@ -58,6 +60,7 @@ type DirectorySqlMetadataRow = {
   field_key?: string | null;
   show_in_search?: number | boolean | null;
   is_visible?: number | boolean | null;
+  field_type?: string | null;
 };
 
 const DIRECTORY_SQL_READ_AUDIT_COOLDOWN_MS = 5 * 60 * 1000;
@@ -142,6 +145,7 @@ export async function searchDirectoryInternalExtensions(
   const excludeExtension = safeText(rawExcludeExtension, 20).replace(/\D/g, '');
   const limit = Math.max(1, Math.min(50, Number(rawLimit) || 50));
   const configuredMode = await getDirectoryStorageMode();
+  const allowExternalDirectoryNumbers = await isExternalDirectoryTransferAllowed();
 
   if (configuredMode === 'sql') {
     try {
@@ -167,7 +171,7 @@ export async function searchDirectoryInternalExtensions(
               LEFT JOIN directory_custom_fields sf ON sf.id = sm.field_id
               WHERE sm.contact_id = c.id
                 AND (
-                  sm.metadata_key IN ('phones','position','department','group','internalExtension','tags','sipStatus','deviceStatus','deviceType','source','firstName','lastName','surname')
+                  sm.metadata_key IN ('phones','position','department','group','internalExtension','linkedExternalNumber','linked_external_number','externalNumber','tags','sipStatus','deviceStatus','deviceType','source','firstName','lastName','surname')
                   OR (sf.show_in_search = 1 AND COALESCE(sf.is_visible, 1) = 1)
                 )
                 AND COALESCE(sm.metadata_key, sf.field_key, '') NOT REGEXP 'password|passwd|token|secret|credential|private[_-]?key|api[_-]?key'
@@ -228,6 +232,9 @@ export async function searchDirectoryInternalExtensions(
               'department',
               'group',
               'internalExtension',
+              'linkedExternalNumber',
+              'linked_external_number',
+              'externalNumber',
               'tags',
               'sipStatus',
               'deviceStatus',
@@ -243,30 +250,47 @@ export async function searchDirectoryInternalExtensions(
           .flatMap(value => Array.isArray(value) ? value : [value])
           .map(value => safeText(value, 500))
           .filter(Boolean);
+        entry.transferPhoneNumbers = metadataRows
+          .filter(metadata => {
+            const key = String(metadata.metadata_key || metadata.field_key || '');
+            const isBuiltInPhone = ['phones', 'linkedExternalNumber', 'linked_external_number', 'externalNumber'].includes(key);
+            const isAllowedCustomPhone = metadata.field_type === 'phone'
+              && Number(metadata.is_visible ?? 1) === 1
+              && (metadata.show_in_search === true || Number(metadata.show_in_search || 0) === 1);
+            return (isBuiltInPhone || isAllowedCustomPhone)
+              && !/(password|passwd|token|secret|credential|private[_-]?key|api[_-]?key)/i.test(key);
+          })
+          .map(parseDirectoryMetadataValue)
+          .flatMap(value => Array.isArray(value) ? value : [value])
+          .map(value => safeText(value, 100))
+          .filter(Boolean);
         entry.source = 'pbxpuls_sql';
         return entry;
       });
 
       return {
-        items: rankLiveTransferTargets(contacts, query, excludeExtension, limit, 'pbxpuls_sql'),
+        items: rankLiveTransferTargets(contacts, query, excludeExtension, limit, 'pbxpuls_sql', allowExternalDirectoryNumbers),
         source: 'pbxpuls_sql',
-        directoryAvailable: true
+        directoryAvailable: true,
+        allowExternalDirectoryNumbers
       };
     } catch (error: any) {
-      const fallback = rankLiveTransferTargets(context.legacyDirectory || [], query, excludeExtension, limit, 'data/db.json');
+      const fallback = rankLiveTransferTargets(context.legacyDirectory || [], query, excludeExtension, limit, 'data/db.json', allowExternalDirectoryNumbers);
       return {
         items: fallback,
         source: 'data/db.json',
         directoryAvailable: Array.isArray(context.legacyDirectory) && context.legacyDirectory.length > 0,
+        allowExternalDirectoryNumbers,
         fallbackReason: sanitizePBXPulsDbError(error)
       };
     }
   }
 
   return {
-    items: rankLiveTransferTargets(context.legacyDirectory || [], query, excludeExtension, limit, 'data/db.json'),
+    items: rankLiveTransferTargets(context.legacyDirectory || [], query, excludeExtension, limit, 'data/db.json', allowExternalDirectoryNumbers),
     source: 'data/db.json',
-    directoryAvailable: true
+    directoryAvailable: true,
+    allowExternalDirectoryNumbers
   };
 }
 
@@ -322,7 +346,7 @@ async function selectDirectorySearchMetadataRows(contactIds: string[]): Promise<
   const placeholders = contactIds.map(() => '?').join(', ');
   const rows = await queryPBXPulsDb(
     `SELECT m.contact_id, m.metadata_key, m.metadata_value, m.metadata_json, m.value,
-            f.field_key, f.show_in_search, f.is_visible
+            f.field_key, f.show_in_search, f.is_visible, f.field_type
      FROM directory_contact_metadata m
      LEFT JOIN directory_custom_fields f ON f.id = m.field_id
      WHERE m.contact_id IN (${placeholders})

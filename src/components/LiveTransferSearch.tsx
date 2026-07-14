@@ -1,14 +1,22 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronDown, Loader2, PhoneForwarded, Search, X } from 'lucide-react';
+import { getLiveTransferPresenceLabel, type LiveTransferPresence } from './liveTransferPresence';
 
-export type LiveTransferPresence = 'online' | 'offline' | 'busy' | 'unknown';
+export type LiveTransferTargetType = 'internal' | 'directory_phone';
 
 export interface LiveTransferSearchTarget {
   id: string;
+  label: string;
+  displayName: string;
+  displayNumber: string;
+  targetNumber: string;
+  targetType: LiveTransferTargetType;
+  numberLabel: string;
   extension: string;
   name: string;
   company: string;
   phone: string;
+  phone2: string;
   extraPhone: string;
   department: string;
   position: string;
@@ -42,17 +50,12 @@ const isInternalExtension = (value: unknown): boolean => {
   return /^\d{2,5}$/.test(String(value ?? '').trim());
 };
 
-const presenceLabels: Record<LiveTransferPresence, string> = {
-  online: 'online',
-  offline: 'offline',
-  busy: 'busy',
-  unknown: 'unknown'
-};
-
 const presenceClasses: Record<LiveTransferPresence, string> = {
   online: 'border-emerald-200 bg-emerald-50 text-emerald-700',
   offline: 'border-slate-200 bg-slate-50 text-slate-500',
   busy: 'border-amber-200 bg-amber-50 text-amber-700',
+  unavailable: 'border-red-200 bg-red-50 text-red-700',
+  ringing: 'border-blue-200 bg-blue-50 text-blue-700',
   unknown: 'border-slate-200 bg-white text-slate-400'
 };
 
@@ -79,10 +82,12 @@ export function LiveTransferSearch({
   const [transferError, setTransferError] = useState('');
   const [transferring, setTransferring] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
+  const [panelStyle, setPanelStyle] = useState<React.CSSProperties>({});
 
   const current = digits(currentExtension);
   const manualExtension = digits(query);
-  const canUseManual = isInternalExtension(query) && manualExtension !== current && !targets.some(target => target.extension === manualExtension);
+  const canUseManual = isInternalExtension(query) && manualExtension !== current
+    && !targets.some(target => target.targetType === 'internal' && target.targetNumber === manualExtension);
   const selectableIndexes = useMemo(() => [
     ...targets.map((target, index) => target.canTransfer ? index : -1).filter(index => index >= 0),
     ...(canUseManual ? [targets.length] : [])
@@ -104,6 +109,31 @@ export function LiveTransferSearch({
     };
     document.addEventListener('mousedown', handleOutside);
     return () => document.removeEventListener('mousedown', handleOutside);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    let frame = 0;
+    const updatePosition = () => {
+      const popup = rootRef.current?.closest('[data-live-call-popup]') as HTMLElement | null;
+      if (popup) {
+        const rect = popup.getBoundingClientRect();
+        const viewportPadding = 16;
+        const left = Math.max(viewportPadding, Math.min(rect.left, window.innerWidth - viewportPadding));
+        const width = Math.min(rect.width, window.innerWidth - left - viewportPadding);
+        const top = rect.bottom + 10;
+        const maxHeight = Math.max(0, window.innerHeight - top - 12);
+        setPanelStyle(previous => previous.left === left
+          && previous.top === top
+          && previous.width === width
+          && previous.maxHeight === maxHeight
+          ? previous
+          : { left, top, width, maxHeight });
+      }
+      frame = window.requestAnimationFrame(updatePosition);
+    };
+    updatePosition();
+    return () => window.cancelAnimationFrame(frame);
   }, [open]);
 
   useEffect(() => {
@@ -170,6 +200,12 @@ export function LiveTransferSearch({
     if (!canUseManual) return;
     setSelected({
       id: `manual-${manualExtension}`,
+      label: 'Внутренний номер',
+      displayName: 'Внутренний номер',
+      displayNumber: manualExtension,
+      targetNumber: manualExtension,
+      targetType: 'internal',
+      numberLabel: 'Внутренний номер',
       extension: manualExtension,
       name: 'Внутренний номер',
       department: '',
@@ -177,6 +213,7 @@ export function LiveTransferSearch({
       comment: '',
       company: '',
       phone: '',
+      phone2: '',
       extraPhone: '',
       metadataMatches: [],
       canTransfer: true,
@@ -223,7 +260,9 @@ export function LiveTransferSearch({
   };
 
   const confirmTransfer = async () => {
-    if (!selected || !selected.canTransfer || !isInternalExtension(selected.extension) || transferring) return;
+    const validInternal = selected?.targetType === 'internal' && isInternalExtension(selected.targetNumber);
+    const validDirectoryPhone = selected?.targetType === 'directory_phone' && /^\d{6,15}$/.test(selected.targetNumber);
+    if (!selected || !selected.canTransfer || (!validInternal && !validDirectoryPhone) || transferring) return;
     setTransferring(true);
     setTransferError('');
     const result = await onTransfer(selected);
@@ -232,8 +271,8 @@ export function LiveTransferSearch({
       setTransferError(result.error || 'Не удалось выполнить переадресацию');
       return;
     }
-    const label = result.targetLabel || selected.name;
-    setSuccessMessage(`Переадресовано на ${selected.extension}${label ? ` ${label}` : ''}`);
+    const label = result.targetLabel || selected.displayName;
+    setSuccessMessage(`Переадресовано на ${selected.targetNumber}${label ? ` — ${label}` : ''}`);
     setSelected(null);
     closeTimerRef.current = window.setTimeout(resetAndClose, 1400);
   };
@@ -257,7 +296,10 @@ export function LiveTransferSearch({
       </button>
 
       {open && (
-        <div className="absolute left-10 top-0 z-[80] w-[min(25rem,calc(100vw-4rem))] overflow-hidden rounded-xl border border-slate-200 bg-white text-left shadow-2xl">
+        <div
+          style={panelStyle}
+          className="fixed z-[80] flex min-w-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white text-left shadow-2xl"
+        >
           <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2">
             <div>
               <div className="text-xs font-black text-slate-900">Переадресовать звонок</div>
@@ -276,11 +318,17 @@ export function LiveTransferSearch({
           ) : selected ? (
             <div className="space-y-3 p-4">
               <div className="text-sm font-bold text-slate-900">
-                Переадресовать звонок на <span className="font-mono text-blue-700">{selected.extension}</span> — {selected.name}?
+                {selected.targetType === 'internal' ? 'Переадресовать звонок на внутренний ' : 'Переадресовать звонок на номер из справочника '}
+                <span className="font-mono text-blue-700">{selected.targetNumber}</span> — {selected.displayName}?
               </div>
               <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
-                {(selected.department || selected.position) && <span>{[selected.department, selected.position].filter(Boolean).join(' · ')}</span>}
-                <span className={`rounded-full border px-2 py-0.5 font-bold ${presenceClasses[selectedStatus]}`}>{presenceLabels[selectedStatus]}</span>
+                <span className="rounded-full border border-blue-100 bg-blue-50 px-2 py-0.5 font-bold text-blue-700">
+                  {selected.targetType === 'internal' ? 'Внутренний' : 'Номер из справочника'}
+                </span>
+                {(selected.company || selected.department || selected.position) && <span>{[selected.company, selected.department, selected.position].filter(Boolean).join(' · ')}</span>}
+                {getLiveTransferPresenceLabel(selectedStatus) && (
+                  <span className={`rounded-full border px-2 py-0.5 font-bold ${presenceClasses[selectedStatus]}`}>{getLiveTransferPresenceLabel(selectedStatus)}</span>
+                )}
               </div>
               {transferError && (
                 <div className="rounded-lg border border-red-100 bg-red-50 p-2">
@@ -320,16 +368,17 @@ export function LiveTransferSearch({
                 </div>
               </div>
 
-              <div className="max-h-72 overflow-y-auto border-t border-slate-100 p-2" role="listbox">
+              <div className="min-h-0 flex-1 overflow-y-auto border-t border-slate-100 p-2" role="listbox">
                 {loading && !targets.length ? (
                   <div className="px-3 py-6 text-center text-xs font-semibold text-slate-400">Поиск…</div>
                 ) : targets.length || canUseManual ? (
                   <>
                     {targets.map((target, index) => {
                       const status = target.sipStatus !== 'unknown' ? target.sipStatus : target.deviceStatus;
+                      const statusLabel = getLiveTransferPresenceLabel(status);
                       return (
                         <button
-                          key={`${target.id}-${target.extension}`}
+                          key={`${target.id}-${target.targetType}-${target.targetNumber || index}`}
                           type="button"
                           role="option"
                           disabled={!target.canTransfer}
@@ -339,15 +388,17 @@ export function LiveTransferSearch({
                           onClick={() => { if (target.canTransfer) { setSelected(target); setTransferError(''); } }}
                           className={`mb-1 flex w-full items-start gap-3 rounded-lg px-3 py-2 text-left transition last:mb-0 ${!target.canTransfer ? 'cursor-not-allowed bg-slate-50 opacity-70' : index === activeIndex ? 'bg-blue-50 ring-1 ring-blue-100' : 'hover:bg-slate-50'}`}
                         >
-                          <span className={`w-16 shrink-0 font-mono text-base font-black ${target.canTransfer ? 'text-blue-700' : 'text-slate-400'}`}>{target.extension || '—'}</span>
+                          <span className={`w-32 shrink-0 font-mono text-sm font-black ${target.canTransfer ? 'text-blue-700' : 'text-slate-400'}`}>{target.displayNumber || '—'}</span>
                           <span className="min-w-0 flex-1">
-                            <span className="block truncate text-xs font-black text-slate-900">{target.name}</span>
-                            {target.phone && <span className="mt-0.5 block truncate font-mono text-[10px] font-semibold text-slate-600">{[target.phone, target.extraPhone].filter(Boolean).join(' · ')}</span>}
+                            <span className="block truncate text-xs font-black text-slate-900">{target.displayName}</span>
+                            <span className="mt-0.5 block truncate text-[10px] font-bold text-blue-600">
+                              {target.targetType === 'internal' ? 'Внутренний' : 'Номер из справочника'} · {target.numberLabel}
+                            </span>
                             <span className="mt-0.5 block truncate text-[10px] font-semibold text-slate-500">{[target.company, target.department, target.position].filter(Boolean).join(' · ') || target.comment || 'Контакт справочника'}</span>
                             {!target.canTransfer && <span className="mt-1 block text-[10px] font-bold text-amber-700">{target.transferDisabledReason || 'Нет внутреннего номера для переадресации'}</span>}
                             {target.deviceType && <span className="mt-0.5 block truncate text-[10px] text-slate-400">{target.deviceType}</span>}
                           </span>
-                          <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-bold ${presenceClasses[status]}`}>{presenceLabels[status]}</span>
+                          {statusLabel && <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-bold ${presenceClasses[status]}`}>{statusLabel}</span>}
                         </button>
                       );
                     })}
@@ -368,7 +419,7 @@ export function LiveTransferSearch({
                 ) : (
                   <div className="px-3 py-5 text-center">
                     <div className="text-xs font-bold text-slate-500">Ничего не найдено</div>
-                    <div className="mt-1 text-[10px] text-slate-400">Введите внутренний номер вручную</div>
+                    <div className="mt-1 text-[10px] text-slate-400">Внешний номер можно выбрать только из справочника</div>
                   </div>
                 )}
               </div>

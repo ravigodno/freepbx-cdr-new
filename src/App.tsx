@@ -1956,14 +1956,18 @@ export default function App() {
     if (!session || !liveCallBanner?.active || isLiveTransferLoading) {
       return { success: false, error: 'Активный звонок уже завершён или перевод выполняется' };
     }
-    const rawTarget = String(target.extension || '').trim();
+    const rawTarget = String(target.targetNumber || '').trim();
     const cleanedTarget = rawTarget.replace(/\D/g, '');
-    if (!target.canTransfer || !/^\d{2,5}$/.test(rawTarget) || cleanedTarget !== rawTarget) {
-      return { success: false, error: target.transferDisabledReason || 'Перевод разрешён только на внутренний номер' };
+    const validInternalTarget = target.targetType === 'internal' && /^\d{2,5}$/.test(rawTarget);
+    const validDirectoryPhoneTarget = target.targetType === 'directory_phone'
+      && /^\d{6,15}$/.test(rawTarget)
+      && target.source !== 'manual';
+    if (!target.canTransfer || cleanedTarget !== rawTarget || (!validInternalTarget && !validDirectoryPhoneTarget)) {
+      return { success: false, error: target.transferDisabledReason || 'Выберите допустимый номер переадресации' };
     }
 
     setIsLiveTransferLoading(true);
-    setLiveTransferStatus(`Переводим на ${cleanedTarget}...`);
+    setLiveTransferStatus(`Переводим на ${target.targetType === 'internal' ? 'внутренний ' : 'номер справочника '}${cleanedTarget}...`);
 
     try {
       const resp = await fetch('/api/live/call-transfer', {
@@ -1974,7 +1978,10 @@ export default function App() {
         },
         body: JSON.stringify({
           operatorExt: (liveCallBanner.operatorExt || myExt || '').trim(),
-          targetExtension: cleanedTarget
+          targetId: target.id,
+          targetType: target.targetType,
+          targetNumber: cleanedTarget,
+          targetExtension: target.targetType === 'internal' ? cleanedTarget : undefined
         })
       });
 
@@ -5257,6 +5264,7 @@ export default function App() {
             }}
           >
             <div
+              data-live-call-popup
               onMouseDown={handleLiveCallBannerDragStart}
               className="pointer-events-auto relative overflow-visible rounded-2xl border border-blue-200 bg-white shadow-2xl shadow-slate-900/12 animate-fade-in select-none cursor-grab active:cursor-grabbing"
               title="Перетащить окно звонка"
