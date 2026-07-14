@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { rankLiveTransferTargets } from '../server/liveTransferSearch.js';
 import { getLiveTransferPresenceLabel } from '../src/components/liveTransferPresence.js';
+import { addCallTarget } from '../src/components/callTargetSelection.js';
+import { createConferenceFromActiveCall, validateConferenceParticipants } from '../server/conferenceService.js';
 
 const directory = Array.from({ length: 300 }, (_, index) => {
   const extension = String(100 + index);
@@ -145,5 +147,30 @@ const metadataResultsWithCustomField = rankLiveTransferTargets([
 assert.deepEqual(metadataResultsWithCustomField[0]?.metadataMatches, ['Любимый клиент'], 'allowed metadata must participate in search');
 assert.ok(metadataResultsWithCustomField.some(item => item.targetNumber === '74950000001'), 'linked external number must be a separate target');
 assert.ok(metadataResultsWithCustomField.some(item => item.targetNumber === '79990000002'), 'allowed phone metadata must be a separate target');
+
+const internal201 = exactResults[0];
+assert.ok(internal201);
+assert.deepEqual(addCallTarget('transfer', [], internal201, '100').selected.map(item => item.targetNumber), ['201'], 'transfer mode must use one target');
+const conferenceFirst = addCallTarget('conference', [], internal201, '100');
+assert.equal(conferenceFirst.error, '');
+const conferenceDuplicate = addCallTarget('conference', conferenceFirst.selected, internal201, '100');
+assert.equal(conferenceDuplicate.error, 'Участник уже выбран', 'conference mode must reject duplicates');
+assert.equal(addCallTarget('conference', [], internal201, '201').error, 'Текущий оператор уже участвует в звонке');
+const externalTarget = gruninPhoneResults.find(item => item.targetType === 'directory_phone');
+assert.ok(externalTarget?.canConference, 'directory phone must be conference-capable when external directory calls are enabled');
+assert.equal(addCallTarget('meeting', [], externalTarget!, '').selected.length, 1, 'meeting mode must accept an allowed directory phone');
+
+const validated = validateConferenceParticipants([internal201, externalTarget!], [internal201, externalTarget!], '100');
+assert.equal(validated.valid, true);
+assert.equal(validated.participants.length, 2);
+const rejectedCurrent = validateConferenceParticipants([internal201], [internal201], '201');
+assert.equal(rejectedCurrent.valid, false, 'backend validation must reject the current operator');
+const unavailableConference = await createConferenceFromActiveCall({
+  conferenceAvailable: false,
+  mechanism: 'confbridge',
+  reason: 'Безопасный executor не включён',
+  checked: []
+});
+assert.equal(unavailableConference.success, false, 'unavailable backend must never report fake conference success');
 
 console.log('Live transfer search ranking tests passed');

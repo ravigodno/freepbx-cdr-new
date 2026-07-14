@@ -23,6 +23,9 @@ export interface LiveTransferSearchTarget {
   comment: string;
   metadataMatches: string[];
   canTransfer: boolean;
+  canCall: boolean;
+  canConference: boolean;
+  disabledReason: string;
   transferDisabledReason: string;
   sipStatus: LiveTransferPresence;
   deviceStatus: LiveTransferPresence;
@@ -217,6 +220,9 @@ export function LiveTransferSearch({
       extraPhone: '',
       metadataMatches: [],
       canTransfer: true,
+      canCall: true,
+      canConference: true,
+      disabledReason: '',
       transferDisabledReason: '',
       sipStatus: 'unknown',
       deviceStatus: 'unknown',

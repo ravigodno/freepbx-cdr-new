@@ -74,7 +74,8 @@ import TcpdumpTab from './modules/monitoring/tabs/monitoring/TcpdumpTab';
 import ReportsTab from './components/reports/ReportsTab';
 import MarketingTab from './components/marketing/MarketingTab';
 import { AboutSystemTab } from './components/AboutSystemTab';
-import { LiveTransferSearch, type LiveTransferResult, type LiveTransferSearchTarget } from './components/LiveTransferSearch';
+import { type LiveTransferResult, type LiveTransferSearchTarget } from './components/LiveTransferSearch';
+import { CallTargetSelector, type ConferenceBackendStatus } from './components/CallTargetSelector';
 import ActiveCallsTab from './modules/monitoring/tabs/monitoring/ActiveCallsTab';
 import { getLiveCallPopupTitle, normalizeLiveCallBannerPayload } from './utils/liveCallBanner';
 import CommandCenterTab from './modules/monitoring/tabs/monitoring/CommandCenterTab';
@@ -146,6 +147,25 @@ type DirectoryOptionalColumnKey =
 type DirectoryColumnKey = DirectoryRequiredColumnKey | DirectoryOptionalColumnKey | DirectorySystemColumnKey;
 
 type ContactSyncProvider = 'google' | 'yandex' | 'mailru' | 'file';
+
+const directoryEntryToMeetingTarget = (entry: DirectoryEntry): LiveTransferSearchTarget | null => {
+  if (entry.isSpam || entry.isBlacklisted || (entry as any).hidden || (entry as any).disabled) return null;
+  const extension = String(entry.internalExtension || '').replace(/\D/g, '');
+  const rawPhone = String(entry.number || entry.phones?.[0] || '').trim();
+  const phone = rawPhone.replace(/\D/g, '').replace(/^8(?=\d{10}$)/, '7');
+  const targetType = /^\d{2,5}$/.test(extension) ? 'internal' : 'directory_phone';
+  const targetNumber = targetType === 'internal' ? extension : phone;
+  if (!(targetType === 'internal' ? /^\d{2,5}$/.test(targetNumber) : /^\d{6,15}$/.test(targetNumber))) return null;
+  const displayName = String(entry.name || entry.company || 'Контакт').trim();
+  return {
+    id: String(entry.id), label: displayName, displayName, displayNumber: targetNumber, targetNumber, targetType,
+    numberLabel: targetType === 'internal' ? 'Внутренний номер' : 'Основной телефон', extension,
+    name: displayName, company: String(entry.company || ''), phone: rawPhone, phone2: '', extraPhone: '',
+    department: String(entry.department || ''), position: String(entry.position || ''), comment: String(entry.comment || ''),
+    metadataMatches: [], canCall: true, canTransfer: true, canConference: true, disabledReason: '', transferDisabledReason: '',
+    sipStatus: 'unknown', deviceStatus: 'unknown', deviceType: '', source: 'directory'
+  };
+};
 type ContactFileSourceFormat = 'google_csv' | 'mailru_csv' | 'generic_csv' | 'yandex_vcf' | 'generic_vcf';
 type DirectoryPageMode = 'list' | 'import' | 'personal_import' | 'contact_new' | 'contact_edit';
 type OnlineContactSyncProvider = Exclude<ContactSyncProvider, 'file'>;
@@ -782,6 +802,13 @@ export default function App() {
 
   const [directory, setDirectory] = useState<DirectoryEntry[]>([]);
   const [directoryLookup, setDirectoryLookup] = useState<DirectoryEntry[]>([]);
+  const [selectedMeetingContactIds, setSelectedMeetingContactIds] = useState<string[]>([]);
+  const [conferenceBackendStatus, setConferenceBackendStatus] = useState<ConferenceBackendStatus | null>(null);
+  const selectedMeetingTargets = useMemo(() => selectedMeetingContactIds
+    .map(id => directory.find(entry => entry.id === id) || directoryLookup.find(entry => entry.id === id))
+    .filter((entry): entry is DirectoryEntry => Boolean(entry))
+    .map(directoryEntryToMeetingTarget)
+    .filter((target): target is LiveTransferSearchTarget => Boolean(target)), [selectedMeetingContactIds, directory, directoryLookup]);
   const [isLoadingDirectory, setIsLoadingDirectory] = useState(false);
   const [editingDirEntry, setEditingDirEntry] = useState<DirectoryEntry | null>(null);
   const [dirName, setDirName] = useState('');
@@ -3015,6 +3042,24 @@ export default function App() {
     const interval = setInterval(loadLiveCallBanner, 2000);
     return () => clearInterval(interval);
   }, [session, myExt]);
+
+  useEffect(() => {
+    if (!session) {
+      setConferenceBackendStatus(null);
+      return;
+    }
+    const controller = new AbortController();
+    fetch('/api/live-calls/conference/status', {
+      headers: { Authorization: `Bearer ${session.token}` },
+      cache: 'no-store',
+      signal: controller.signal
+    }).then(async response => {
+      if (response.status === 401) handleAuthError(response);
+      const data = await response.json().catch(() => ({}));
+      if (response.ok) setConferenceBackendStatus(data as ConferenceBackendStatus);
+    }).catch(() => undefined);
+    return () => controller.abort();
+  }, [session]);
 
   // Trigger main loads on mount or settings pivot
   useEffect(() => {
@@ -5273,13 +5318,23 @@ export default function App() {
               <div className="flex items-stretch min-h-[104px]">
                 <div className="relative flex items-center gap-4 py-4 pl-20 pr-6 min-w-[420px] max-w-[520px] border-r border-slate-200">
                   <div className="absolute left-4 top-3 bottom-3 z-10 flex flex-col justify-center gap-1">
-                    <LiveTransferSearch
+                    <CallTargetSelector
+                      mode="transfer"
                       token={session?.token || ''}
                       currentExtension={liveCallBanner.operatorExt || myExt}
                       disabled={isLiveTransferLoading}
                       buttonClassName={liveActionButtonClass}
                       onUnauthorized={handleAuthError}
                       onTransfer={handleLiveCallTransfer}
+                    />
+                    <CallTargetSelector
+                      mode="conference"
+                      token={session?.token || ''}
+                      currentExtension={liveCallBanner.operatorExt || myExt}
+                      disabled={isLiveTransferLoading}
+                      buttonClassName={liveActionButtonClass}
+                      backendStatus={conferenceBackendStatus}
+                      onUnauthorized={handleAuthError}
                     />
                     {canUseLiveMonitorActions && (
                       <>
@@ -6233,6 +6288,18 @@ export default function App() {
               </button>
             )}
 
+            <CallTargetSelector
+              mode="meeting"
+              token={session?.token || ''}
+              currentExtension={myExt}
+              disabled={selectedMeetingContactIds.length === 0}
+              buttonClassName="flex shrink-0 items-center justify-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-xs font-semibold text-blue-700 shadow-sm transition-all hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+              triggerLabel={`Совещание${selectedMeetingContactIds.length ? ` (${selectedMeetingContactIds.length})` : ''}`}
+              backendStatus={conferenceBackendStatus}
+              initialTargets={selectedMeetingTargets}
+              onUnauthorized={handleAuthError}
+            />
+
             <button
               type="button"
               onClick={() => {
@@ -6398,6 +6465,17 @@ export default function App() {
             <table className="w-full min-w-[980px] border-collapse text-left text-xs text-slate-500">
               <thead className="border-b border-slate-200 bg-slate-50 text-[10px] font-bold uppercase tracking-wider text-slate-700">
                 <tr>
+                  <th scope="col" className="w-10 py-2 px-3">
+                    <input
+                      type="checkbox"
+                      aria-label="Выбрать контакты на странице"
+                      checked={directory.length > 0 && directory.every(entry => selectedMeetingContactIds.includes(entry.id))}
+                      onChange={event => setSelectedMeetingContactIds(current => event.target.checked
+                        ? Array.from(new Set([...current, ...directory.map(entry => entry.id)]))
+                        : current.filter(id => !directory.some(entry => entry.id === id)))}
+                      className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                    />
+                  </th>
                   {effectiveDirectoryColumnConfigs.map(column => (
                     <th key={column.key} scope="col" className={`py-2 px-3 ${column.className || ''}`}>
                       {column.label}
@@ -6413,7 +6491,7 @@ export default function App() {
                   if (dirListError) {
                     return (
                       <tr>
-                        <td colSpan={effectiveDirectoryColumnConfigs.length} className="py-8 text-center text-slate-500">
+                        <td colSpan={effectiveDirectoryColumnConfigs.length + 1} className="py-8 text-center text-slate-500">
                           <div className="flex flex-col items-center justify-center gap-3">
                             <div className="font-bold text-slate-600">{dirListError}</div>
                             <button type="button" onClick={() => loadDirectory(dirPage)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50">Повторить</button>
@@ -6426,7 +6504,7 @@ export default function App() {
                   if (list.length === 0) {
                     return (
                       <tr>
-                        <td colSpan={effectiveDirectoryColumnConfigs.length} className="py-8 text-center text-slate-400">
+                        <td colSpan={effectiveDirectoryColumnConfigs.length + 1} className="py-8 text-center text-slate-400">
                           {isLoadingDirectory ? (
                             <div className="flex items-center justify-center gap-2">
                               <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
@@ -6442,6 +6520,17 @@ export default function App() {
 
                   return list.map((entry) => (
                     <tr key={entry.id} className="transition-colors hover:bg-slate-50/80">
+                      <td className="w-10 py-3.5 px-3 align-top">
+                        <input
+                          type="checkbox"
+                          aria-label={`Выбрать ${entry.name || entry.company || entry.number || 'контакт'}`}
+                          checked={selectedMeetingContactIds.includes(entry.id)}
+                          onChange={() => setSelectedMeetingContactIds(current => current.includes(entry.id)
+                            ? current.filter(id => id !== entry.id)
+                            : [...current, entry.id])}
+                          className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                        />
+                      </td>
                       {effectiveDirectoryColumnConfigs.map(column => (
                         <td key={column.key} className={`py-3.5 px-3 align-top ${column.key === 'actions' ? 'text-right' : 'text-slate-700'}`}>
                           {renderDirectoryCell(entry, column.key)}

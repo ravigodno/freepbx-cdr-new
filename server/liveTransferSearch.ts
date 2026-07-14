@@ -22,6 +22,9 @@ export interface LiveTransferSearchTarget {
   comment: string;
   metadataMatches: string[];
   canTransfer: boolean;
+  canCall: boolean;
+  canConference: boolean;
+  disabledReason: string;
   transferDisabledReason: string;
   sipStatus: LiveTransferPresence;
   deviceStatus: LiveTransferPresence;
@@ -231,6 +234,9 @@ export function buildLiveTransferTargetOptions(
       numberLabel: 'Внутренний номер',
       extension,
       canTransfer,
+      canCall: canTransfer,
+      canConference: canTransfer,
+      disabledReason: canTransfer ? '' : 'Текущий оператор уже участвует в звонке',
       transferDisabledReason: canTransfer ? '' : 'Нельзя перевести звонок на текущий внутренний номер'
     });
   }
@@ -245,6 +251,9 @@ export function buildLiveTransferTargetOptions(
       numberLabel: phone.numberLabel,
       extension,
       canTransfer: allowExternalDirectoryNumbers,
+      canCall: allowExternalDirectoryNumbers,
+      canConference: allowExternalDirectoryNumbers,
+      disabledReason: allowExternalDirectoryNumbers ? '' : 'Звонки на номера справочника отключены',
       transferDisabledReason: allowExternalDirectoryNumbers ? '' : 'Перевод на номера справочника отключён'
     });
   }
@@ -259,6 +268,9 @@ export function buildLiveTransferTargetOptions(
       numberLabel: 'Номер справочника',
       extension: '',
       canTransfer: false,
+      canCall: false,
+      canConference: false,
+      disabledReason: 'Нет допустимого номера для звонка',
       transferDisabledReason: 'Нет допустимого номера для переадресации'
     });
   }

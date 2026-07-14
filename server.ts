@@ -26,6 +26,7 @@ import os from 'os';
 import { registerManagementRoutes } from './server-management.js';
 import { registerAiPbxAdminRoutes } from './server/aiPbxAdmin.js';
 import { resolveAsteriskCli, runAsteriskCliCommand } from './server/asteriskCli.js';
+import { getConferenceBackendStatus } from './server/conferenceService.js';
 import { runPBXPulsMigrations } from './server/pbxpulsMigrations.js';
 import { registerPBXPulsSqlStatusRoutes } from './server/pbxpulsSqlStatus.js';
 import { authenticatePBXPulsSqlUser, compareLegacyUserWithSql, getAuthStorageMode, getPBXPulsUsers } from './server/pbxpulsAuthDb.js';
@@ -12995,6 +12996,27 @@ app.get('/api/debug/live-call-payload', requireAuth(), async (req, res) => {
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Live call popup diagnostics failed' });
+  }
+});
+
+app.get('/api/live-calls/conference/status', requireAuth(), async (req, res) => {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin'
+    && authUser?.permissions?.make_calls !== true
+    && authUser?.permissions?.view_active_calls !== true) {
+    res.status(403).json({ error: 'Нет прав на просмотр статуса конференций' });
+    return;
+  }
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(await getConferenceBackendStatus());
+  } catch (error: any) {
+    res.status(503).json({
+      conferenceAvailable: false,
+      mechanism: 'unavailable',
+      reason: error?.message || 'Не удалось проверить backend конференций',
+      checked: []
+    });
   }
 });
 
