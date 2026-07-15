@@ -544,6 +544,7 @@ interface LiveCallBanner {
   durationText?: string;
   startedAt?: string;
   phoneMeeting?: boolean;
+  phoneMeetingKind?: 'meeting' | 'active_conference';
   phoneMeetingId?: string;
   phoneMeetingInitiator?: string;
   phoneMeetingParticipants?: string[];
@@ -2047,6 +2048,35 @@ export default function App() {
       setLiveTransferStatus(data.error || 'Консультационная переадресация недоступна');
     } catch {
       setLiveTransferStatus('Не удалось проверить консультационную переадресацию');
+    }
+  };
+
+  const handleActiveCallConferenceStart = async (targets: LiveTransferSearchTarget[]) => {
+    if (!session || !liveCallBanner?.active || !liveCallBanner.linkedid || !targets.length) return;
+    setIsLiveTransferLoading(true);
+    setLiveTransferStatus('Создаём конференцию из активного звонка…');
+    try {
+      const response = await fetch(`/api/live-calls/${encodeURIComponent(liveCallBanner.linkedid)}/conference/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.token}` },
+        body: JSON.stringify({
+          operatorExt: liveCallBanner.operatorExt || myExt,
+          targets: targets.map(target => ({ id: target.id, directoryContactId: target.id, targetType: target.targetType, targetNumber: target.targetNumber }))
+        })
+      });
+      if (response.status === 401) handleAuthError(response);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) throw new Error(data.error || 'Не удалось создать конференцию');
+      const message = `Конференция создана. Приглашены: ${(data.invited || []).join(', ') || '—'}.`;
+      setLiveTransferStatus(message);
+      setTimeout(() => setLiveTransferStatus(''), 5000);
+      return message;
+    } catch (error: any) {
+      const message = error?.message || 'Не удалось создать конференцию';
+      setLiveTransferStatus(message);
+      throw error;
+    } finally {
+      setIsLiveTransferLoading(false);
     }
   };
 
@@ -5484,6 +5514,7 @@ export default function App() {
                         buttonClassName={liveActionButtonClass}
                         backendStatus={conferenceBackendStatus}
                         onUnauthorized={handleAuthError}
+                        onConfirm={handleActiveCallConferenceStart}
                       />
                       {canUseLiveMonitorActions && (
                         <>

@@ -36,7 +36,9 @@ export default function CDRChronologyModal({
           <div className="flex items-center gap-3 flex-wrap min-w-0">
             <h3 className="text-base font-bold text-slate-800 flex items-center gap-2">
               <Route className="h-5 w-5 text-red-600" />
-              {chronologyData?.phoneMeeting ? 'Таймлайн совещания' : 'Таймлайн прохождения звонка'}
+              {chronologyData?.phoneMeeting
+                ? chronologyData?.meeting?.kind === 'active_conference' ? 'Таймлайн конференции' : 'Таймлайн совещания'
+                : 'Таймлайн прохождения звонка'}
             </h3>
             <span className="text-xs text-slate-500 font-medium font-mono">ID: {chronologyCallId}</span>
           </div>

@@ -25,7 +25,7 @@ export interface ConferenceValidationResult {
 
 const digits = (value: unknown) => String(value ?? '').replace(/\D/g, '');
 
-export async function getConferenceBackendStatus(executor = { amiConfigured: false, originateAvailable: false }): Promise<ConferenceBackendStatus> {
+export async function getConferenceBackendStatus(executor = { amiConfigured: false, originateAvailable: false, redirectAvailable: false }): Promise<ConferenceBackendStatus> {
   const [confBridge, meetMe] = await Promise.all([
     runAsteriskCliCommand('core show applications like ConfBridge', 3000),
     runAsteriskCliCommand('core show applications like MeetMe', 3000)
@@ -35,7 +35,7 @@ export async function getConferenceBackendStatus(executor = { amiConfigured: fal
   const freePbxModule = fs.existsSync('/var/www/html/admin/modules/conferences');
   let conferenceContext = false;
   try {
-    conferenceContext = /\bConfBridge\s*\(/i.test(fs.readFileSync('/etc/asterisk/extensions_additional.conf', 'utf8'));
+    conferenceContext = /\[pbxpuls-conference\][\s\S]*?\bConfBridge\s*\(/i.test(fs.readFileSync('/etc/asterisk/extensions_custom.conf', 'utf8'));
   } catch {
     conferenceContext = false;
   }
@@ -44,14 +44,15 @@ export async function getConferenceBackendStatus(executor = { amiConfigured: fal
     : meetMeAvailable ? 'meetme' : 'unavailable';
 
   const meetingAvailable = confBridgeAvailable && executor.amiConfigured && executor.originateAvailable;
+  const activeCallAvailable = meetingAvailable && executor.redirectAvailable && conferenceContext;
   return {
-    conferenceAvailable: false,
+    conferenceAvailable: activeCallAvailable,
     meetingAvailable,
-    conferenceFromCallAvailable: false,
+    conferenceFromCallAvailable: activeCallAvailable,
     mechanism,
     reason: mechanism === 'unavailable'
       ? 'В Asterisk не найден доступный backend конференций'
-      : 'Конференция из активного звонка пока недоступна: безопасный re-bridge не включён',
+      : activeCallAvailable ? 'Конференция из активного звонка доступна через AMI Redirect + ConfBridge' : 'Конференция из активного звонка недоступна: нужны AMI Redirect, Originate и context pbxpuls-conference',
     meetingReason: meetingAvailable
       ? 'Динамические телефонные совещания доступны через AMI Originate + ConfBridge'
       : 'Телефонные совещания недоступны: нужны ConfBridge и AMI Originate',
@@ -61,8 +62,9 @@ export async function getConferenceBackendStatus(executor = { amiConfigured: fal
       { name: 'freepbx_conferences_module', available: freePbxModule, detail: freePbxModule ? 'Модуль Conferences установлен' : 'Модуль Conferences не найден' },
       { name: 'conference_context', available: conferenceContext, detail: conferenceContext ? 'В dialplan найден существующий ConfBridge context' : 'ConfBridge context не найден' },
       { name: 'ami_originate', available: executor.originateAvailable, detail: executor.originateAvailable ? 'AMI Originate доступен' : 'AMI Originate не подтверждён' },
+      { name: 'ami_redirect', available: executor.redirectAvailable, detail: executor.redirectAvailable ? 'AMI Redirect доступен' : 'AMI Redirect не подтверждён' },
       { name: 'pbxpuls_meeting_executor', available: meetingAvailable, detail: meetingAvailable ? 'Executor динамических совещаний включён' : 'Executor динамических совещаний недоступен' },
-      { name: 'pbxpuls_active_call_executor', available: false, detail: 'Re-bridge активного звонка намеренно не активирован' }
+      { name: 'pbxpuls_active_call_executor', available: activeCallAvailable, detail: activeCallAvailable ? 'Re-bridge активного звонка включён' : 'Re-bridge активного звонка недоступен' }
     ]
   };
 }
@@ -107,10 +109,6 @@ export function validateConferenceParticipants(
 async function unavailableOperation(status?: ConferenceBackendStatus) {
   const currentStatus = status || await getConferenceBackendStatus();
   return { success: false as const, error: currentStatus.reason };
-}
-
-export function createConferenceFromActiveCall(status?: ConferenceBackendStatus) {
-  return unavailableOperation(status);
 }
 
 type AmiActionResult = { success: boolean; message: string };
@@ -163,6 +161,72 @@ function meetingChannel(
   return target.targetType === 'internal'
     ? `${internalTechnology[digits(target.targetNumber)] || 'PJSIP'}/${digits(target.targetNumber)}`
     : `Local/${digits(target.targetNumber)}@from-internal`;
+}
+
+export async function createConferenceFromActiveCall(
+  settings: AppSettings,
+  operatorChannel: string,
+  customerChannel: string,
+  participants: Array<Pick<LiveTransferSearchTarget, 'targetType' | 'targetNumber'>>,
+  internalTechnology: Record<string, 'SIP' | 'PJSIP'> = {}
+) {
+  const safeOperatorChannel = String(operatorChannel || '').replace(/[\r\n]/g, '').trim();
+  const safeCustomerChannel = String(customerChannel || '').replace(/[\r\n]/g, '').trim();
+  if (!safeOperatorChannel || !safeCustomerChannel) return { success: false as const, error: 'Не найдены оба канала активного звонка' };
+  // Redirect targets a dialplan extension matched by _X!, so the dynamic room id
+  // must contain digits only. ConfBridge itself accepts the same numeric id.
+  const randomSuffix = String(crypto.randomBytes(2).readUInt16BE(0) % 10000).padStart(4, '0');
+  const roomId = `9${String(Date.now()).slice(-10)}${randomSuffix}`;
+  const conferenceId = `conf-${crypto.randomBytes(3).toString('hex')}`;
+  const recordingFile = `pbxpuls-${conferenceId}.wav`;
+  const uniqueParticipants = participants.filter((target, index, list) => list.findIndex(item => `${item.targetType}:${digits(item.targetNumber)}` === `${target.targetType}:${digits(target.targetNumber)}`) === index);
+  const invitations = uniqueParticipants.map(target => ({ target, channelId: `pbxpuls.${Date.now()}.${crypto.randomBytes(4).readUInt32BE(0)}` }));
+  const originated = await Promise.all(invitations.map(({ target, channelId }) => runAmiAction(settings, {
+    Action: 'Originate',
+    ActionID: `pbxpuls-active-conf-${crypto.randomBytes(5).toString('hex')}`,
+    Channel: meetingChannel(target, internalTechnology),
+    Context: 'pbxpuls-conference-participant',
+    Exten: roomId,
+    Priority: '1',
+    Timeout: '30000',
+    CallerID: `Конференция <${digits(target.targetNumber)}>`,
+    ChannelId: channelId,
+    Async: 'true'
+  })));
+  const failed = originated.map((result, index) => ({ result, target: invitations[index].target })).filter(item => !item.result.success);
+  if (failed.length) {
+    await runAmiAction(settings, { Action: 'ConfbridgeKick', Conference: roomId, Channel: 'all' });
+    return { success: false as const, error: `Не удалось пригласить: ${failed.map(item => item.target.targetNumber).join(', ')}` };
+  }
+  const redirected = await runAmiAction(settings, {
+    Action: 'Redirect',
+    ActionID: `pbxpuls-active-conf-redirect-${crypto.randomBytes(5).toString('hex')}`,
+    Channel: safeOperatorChannel,
+    ExtraChannel: safeCustomerChannel,
+    Context: 'pbxpuls-conference-initiator',
+    Exten: roomId,
+    Priority: '1',
+    ExtraContext: 'pbxpuls-conference-participant',
+    ExtraExten: roomId,
+    ExtraPriority: '1'
+  });
+  if (!redirected.success) {
+    await runAmiAction(settings, { Action: 'ConfbridgeKick', Conference: roomId, Channel: 'all' });
+    return { success: false as const, error: `Не удалось перевести активный звонок в конференцию: ${redirected.message}` };
+  }
+  return {
+    success: true as const,
+    conferenceId,
+    roomId,
+    recordingFile,
+    invited: uniqueParticipants.map(target => digits(target.targetNumber)),
+    channelIds: invitations.map(invitation => invitation.channelId),
+    invitations: invitations.map(invitation => ({
+      targetNumber: digits(invitation.target.targetNumber),
+      targetType: invitation.target.targetType,
+      channelId: invitation.channelId
+    }))
+  };
 }
 
 const wait = (delayMs: number) => new Promise(resolve => setTimeout(resolve, delayMs));

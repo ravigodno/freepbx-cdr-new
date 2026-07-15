@@ -4,6 +4,7 @@ import {
   PhoneCall,
   PhoneForwarded,
   UserPlus,
+  UserRoundCheck,
   UsersRound,
 } from 'lucide-react';
 import { isMultiNumberValue } from '../utils/CDRRowHelpers';
@@ -73,8 +74,9 @@ export default function CDRCalleeCell({
             <UsersRound className="h-4 w-4 shrink-0 text-violet-600" />
             <span>{displayedDst}</span>
           </div>
-          <div className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-            Инициатор: <span className="font-mono font-bold text-slate-700 dark:text-slate-200">{call.phoneMeetingInitiator || '—'}</span>
+          <div className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+            <UserRoundCheck className="h-3.5 w-3.5 shrink-0 text-violet-500" aria-hidden="true" />
+            <span>Инициатор: <span className="font-mono font-bold text-slate-700 dark:text-slate-200">{call.phoneMeetingInitiator || '—'}</span></span>
           </div>
         </div>
       </td>

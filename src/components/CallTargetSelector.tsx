@@ -179,6 +179,7 @@ function MultiCallTargetSelector({
             </span>
           ))}</div>}
           {!operationAvailable && <div className="m-3 rounded-lg border border-amber-200 bg-amber-50 p-2 text-[11px] font-semibold text-amber-800">{unavailableReason || `Проверка backend ${isConsult ? 'консультационной переадресации' : 'конференций'} ещё не завершена`}</div>}
+          {mode === 'conference' && operationAvailable && <div className="mx-3 mb-3 rounded-lg border border-emerald-200 bg-emerald-50 p-2 text-[11px] font-semibold text-emerald-800">ConfBridge готов. Выберите участников и нажмите «Создать конференцию».</div>}
           <div className="relative px-3 pb-3"><Search className="absolute left-6 top-2.5 h-4 w-4 text-slate-400" /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="ФИО, компания, телефон, отдел…" className="w-full rounded-lg border border-slate-200 py-2 pl-9 pr-8 text-sm outline-none focus:border-blue-400" />{loading && <Loader2 className="absolute right-6 top-2.5 h-4 w-4 animate-spin text-blue-500" />}</div>
           <div className="min-h-0 flex-1 overflow-y-auto border-t border-slate-100 p-2">
             {targets.map(target => {
@@ -195,7 +196,7 @@ function MultiCallTargetSelector({
           {isConsult && selected[0] && <div className="border-t border-slate-100 px-3 pt-3 text-xs font-bold text-slate-800">Спросить у <span className="font-mono text-blue-700">{selected[0].targetNumber}</span> — {selected[0].displayName}?</div>}
           <div className="flex justify-end gap-2 border-t border-slate-100 p-3">
             <button type="button" onClick={() => setOpen(false)} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600">Отмена</button>
-            <button type="button" disabled={!selected.length || !operationAvailable || actionLoading} onClick={confirm} title={!operationAvailable ? unavailableReason : ''} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:opacity-50">{actionLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PhoneForwarded className="h-3.5 w-3.5" />}{isConsult ? 'Позвонить и поставить клиента на удержание' : mode === 'conference' ? 'Создать конференцию' : 'Создать совещание'}</button>
+            <button type="button" disabled={!selected.length || !operationAvailable || actionLoading} onMouseDown={event => event.stopPropagation()} onClick={event => { event.stopPropagation(); void confirm(); }} title={!operationAvailable ? unavailableReason : ''} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:opacity-50">{actionLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PhoneForwarded className="h-3.5 w-3.5" />}{isConsult ? 'Позвонить и поставить клиента на удержание' : mode === 'conference' ? 'Создать конференцию' : 'Создать совещание'}</button>
           </div>
           </>}
         </div>

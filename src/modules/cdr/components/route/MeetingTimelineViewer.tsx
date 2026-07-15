@@ -11,6 +11,7 @@ interface MeetingParticipant {
 }
 
 interface MeetingData {
+  kind?: 'meeting' | 'active_conference';
   createdAt: string;
   initiatorExt: string;
   participants: MeetingParticipant[];
@@ -53,6 +54,8 @@ function Step({ icon: Icon, label, title, children, tone = 'blue' }: any) {
 }
 
 export default function MeetingTimelineViewer({ meeting }: { meeting: MeetingData }) {
+  const isConference = meeting?.kind === 'active_conference';
+  const eventName = isConference ? 'конференция' : 'совещание';
   const participants = Array.isArray(meeting?.participants) ? meeting.participants : [];
   const invitees = participants.filter(participant => !participant.initiator);
   const connected = participants.filter(participant => participant.status === 'connected');
@@ -61,9 +64,9 @@ export default function MeetingTimelineViewer({ meeting }: { meeting: MeetingDat
 
   return (
     <div className="rounded-2xl border border-violet-200 bg-white p-4 shadow-xs">
-      <div className="mb-3 text-[10px] font-extrabold uppercase tracking-widest text-violet-600">Ход телефонного совещания</div>
+      <div className="mb-3 text-[10px] font-extrabold uppercase tracking-widest text-violet-600">Ход телефонной {isConference ? 'конференции' : 'совещания'}</div>
       <div className="space-y-2">
-        <Step icon={UsersRound} label="Создание" title={`Инициатор ${meeting.initiatorExt} создал совещание`} tone="violet">
+        <Step icon={UsersRound} label="Создание" title={`Инициатор ${meeting.initiatorExt} создал ${eventName}`} tone="violet">
           <div className="mt-1 text-xs text-slate-500">{createdAt}</div>
         </Step>
         <Step icon={Send} label="Приглашения" title="Отправлены приглашения">
@@ -79,10 +82,10 @@ export default function MeetingTimelineViewer({ meeting }: { meeting: MeetingDat
             </Step>
           );
         })}
-        <Step icon={AudioLines} label="Запись" title={meeting.recordingFile ? 'Запись совещания доступна' : 'Запись совещания отсутствует'} tone="violet">
+        <Step icon={AudioLines} label="Запись" title={meeting.recordingFile ? `Запись ${isConference ? 'конференции' : 'совещания'} доступна` : `Запись ${isConference ? 'конференции' : 'совещания'} отсутствует`} tone="violet">
           <div className="mt-1 text-xs text-slate-500">Длительность: {durationText(meeting.durationSec)}</div>
         </Step>
-        <Step icon={Flag} label="Завершение" title="Совещание завершено" tone="emerald">
+        <Step icon={Flag} label="Завершение" title={`${isConference ? 'Конференция' : 'Совещание'} завершено`} tone="emerald">
           <div className="mt-1 text-xs text-slate-600">Участвовали: {connected.map(item => item.number).join(', ') || '—'} · Пропустили: {missed.map(item => item.number).join(', ') || '—'}</div>
         </Step>
       </div>

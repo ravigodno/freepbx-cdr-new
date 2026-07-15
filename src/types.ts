@@ -83,6 +83,7 @@ export interface CallEntry {
   transferTargetExt?: string;
   transferTargetLabel?: string;
   phoneMeeting?: boolean;
+  phoneMeetingKind?: 'meeting' | 'active_conference';
   phoneMeetingId?: string;
   phoneMeetingInitiator?: string;
   phoneMeetingParticipants?: string[];

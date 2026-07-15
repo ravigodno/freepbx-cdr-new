@@ -26,7 +26,7 @@ import os from 'os';
 import { registerManagementRoutes } from './server-management.js';
 import { registerAiPbxAdminRoutes } from './server/aiPbxAdmin.js';
 import { resolveAsteriskCli, runAsteriskCliCommand } from './server/asteriskCli.js';
-import { createNewPhoneMeeting, getConferenceBackendStatus, startPhoneMeetingRecording, validateConferenceParticipants } from './server/conferenceService.js';
+import { createConferenceFromActiveCall, createNewPhoneMeeting, getConferenceBackendStatus, startPhoneMeetingRecording, validateConferenceParticipants } from './server/conferenceService.js';
 import {
   buildConsultTransferCapabilities,
   unavailableConsultOperation,
@@ -13145,11 +13145,15 @@ app.get('/api/live-calls/conference/status', requireAuth(), async (req, res) => 
   }
   try {
     const localDb = await readLocalDb();
-    const originate = await runAsteriskCliCommand('manager show command Originate', 3000);
+    const [originate, redirect] = await Promise.all([
+      runAsteriskCliCommand('manager show command Originate', 3000),
+      runAsteriskCliCommand('manager show command Redirect', 3000)
+    ]);
     res.setHeader('Cache-Control', 'no-store');
     res.json(await getConferenceBackendStatus({
       amiConfigured: Boolean(localDb.settings?.amiHost && localDb.settings?.amiUser && localDb.settings?.amiPass),
-      originateAvailable: originate.success && /Action:\s*Originate/i.test(originate.message)
+      originateAvailable: originate.success && /Action:\s*Originate/i.test(originate.message),
+      redirectAvailable: redirect.success && /Action:\s*Redirect/i.test(redirect.message)
     }));
   } catch (error: any) {
     res.status(503).json({
@@ -13161,6 +13165,87 @@ app.get('/api/live-calls/conference/status', requireAuth(), async (req, res) => 
       meetingReason: error?.message || 'Не удалось проверить backend совещаний',
       checked: []
     });
+  }
+});
+
+app.post('/api/live-calls/:id/conference/start', requireAuth(), async (req, res) => {
+  const authUser = (req as any).user;
+  console.log('[ACTIVE CONFERENCE] request received', {
+    callId: String(req.params.id || '').slice(0, 80),
+    operatorExt: onlyDigits(req.body?.operatorExt),
+    targetCount: Array.isArray(req.body?.targets) ? req.body.targets.length : 0,
+    user: String(authUser?.username || '').slice(0, 80)
+  });
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.make_calls !== true) {
+    return res.status(403).json({ success: false, error: 'Нет прав на создание конференции' });
+  }
+  try {
+    const localDb = await readLocalDb();
+    const operatorExt = getEffectiveOperatorExt(localDb, req, String(req.body?.operatorExt || '').trim());
+    const requestedTargets = Array.isArray(req.body?.targets) ? req.body.targets : [];
+    if (!operatorExt || !requestedTargets.length) return res.status(400).json({ success: false, error: 'Не найден оператор или не выбраны участники' });
+    const channels = await runAmiCoreShowChannels(localDb.settings);
+    const callChannels = findConsultCallChannels(channels, operatorExt, String(req.params.id || ''));
+    if (!callChannels.operatorChannel || !callChannels.customerChannel) return res.status(409).json({ success: false, error: 'Активный звонок уже завершён или его каналы не найдены' });
+    const directoryContext = { legacyDirectory: localDb.directory || [], settings: localDb.settings, authUser, dbUser: getAuthenticatedDbUser(localDb, req) };
+    const authoritativeTargets = (await Promise.all(requestedTargets.map((target: any) => searchDirectoryInternalExtensions(target?.targetNumber, 50, operatorExt, directoryContext)))).flatMap(result => result.items);
+    const requested = requestedTargets.map((target: any) => ({ ...target, id: String(target?.id || target?.directoryContactId || '') }));
+    const validation = validateConferenceParticipants(requested, authoritativeTargets, operatorExt);
+    if (!validation.valid) return res.status(400).json({ success: false, error: validation.errors.join('; ') });
+    const [originate, redirect] = await Promise.all([
+      runAsteriskCliCommand('manager show command Originate', 3000),
+      runAsteriskCliCommand('manager show command Redirect', 3000)
+    ]);
+    const status = await getConferenceBackendStatus({
+      amiConfigured: Boolean(localDb.settings?.amiHost && localDb.settings?.amiUser && localDb.settings?.amiPass),
+      originateAvailable: originate.success && /Action:\s*Originate/i.test(originate.message),
+      redirectAvailable: redirect.success && /Action:\s*Redirect/i.test(redirect.message)
+    });
+    if (!status.conferenceFromCallAvailable) return res.status(503).json({ success: false, error: status.reason });
+    const internalNumbers = validation.participants.filter(target => target.targetType === 'internal').map(target => target.targetNumber);
+    const technologyEntries = await Promise.all(internalNumbers.map(async extension => {
+      const pjsip = await runAsteriskCliCommand(`pjsip show endpoint ${extension}`, 3000);
+      if (pjsip.success && new RegExp(`Endpoint:\\s+${extension}(?:/|\\s)`).test(pjsip.message)) return [extension, 'PJSIP'] as const;
+      const sip = await runAsteriskCliCommand(`sip show peer ${extension}`, 3000);
+      return [extension, sip.success && new RegExp(`\\* Name\\s+:\\s*${extension}`).test(sip.message) ? 'SIP' : 'PJSIP'] as const;
+    }));
+    const result = await createConferenceFromActiveCall(localDb.settings, callChannels.operatorChannel, callChannels.customerChannel, validation.participants, Object.fromEntries(technologyEntries));
+    if (result.success) {
+      const channelExtension = (channel: string) => String(channel || '').match(/(?:SIP|PJSIP)\/(\d{2,5})-/i)?.[1] || '';
+      const existingParticipant = channelExtension(callChannels.customerChannel);
+      const invitations = [
+        { targetNumber: operatorExt, targetType: 'internal', channelId: callChannels.linkedid, initiator: true },
+        ...(existingParticipant && existingParticipant !== operatorExt
+          ? [{ targetNumber: existingParticipant, targetType: 'internal', channelId: callChannels.linkedid }]
+          : []),
+        ...result.invitations
+      ];
+      const participants = Array.from(new Set(invitations.map(item => item.targetNumber).filter(number => number && number !== operatorExt)));
+      localDb.phoneMeetings = Array.isArray(localDb.phoneMeetings) ? localDb.phoneMeetings : [];
+      localDb.phoneMeetings.push({
+        id: result.conferenceId,
+        roomId: result.roomId,
+        kind: 'active_conference',
+        createdAt: new Date().toISOString(),
+        createdBy: String(authUser?.username || ''),
+        initiatorExt: operatorExt,
+        participants,
+        invited: invitations.map(item => item.targetNumber),
+        recordingFile: result.recordingFile,
+        channelIds: Array.from(new Set([callChannels.linkedid, ...result.channelIds].filter(Boolean))),
+        invitations
+      });
+      localDb.phoneMeetings = localDb.phoneMeetings.slice(-500);
+      await writeLocalDb(localDb);
+      void startPhoneMeetingRecording(localDb.settings, result.roomId, result.recordingFile)
+        .then(recording => {
+          if (!recording.success) console.warn(`[ACTIVE CONFERENCE] Не удалось запустить запись ${result.conferenceId}: ${recording.message}`);
+        })
+        .catch(error => console.warn(`[ACTIVE CONFERENCE] Ошибка запуска записи ${result.conferenceId}: ${error?.message || 'unknown error'}`));
+    }
+    return res.status(result.success ? 200 : 502).json(result);
+  } catch (error: any) {
+    return res.status(500).json({ success: false, error: error?.message || 'Не удалось создать конференцию' });
   }
 });
 
@@ -13193,10 +13278,14 @@ app.post('/api/live-calls/conference/meeting/start', requireAuth(), async (req, 
     const validation = validateConferenceParticipants(requested, authoritativeTargets, initiatorExt);
     if (!validation.valid) return res.status(400).json({ success: false, error: validation.errors.join('; ') });
 
-    const originate = await runAsteriskCliCommand('manager show command Originate', 3000);
+    const [originate, redirect] = await Promise.all([
+      runAsteriskCliCommand('manager show command Originate', 3000),
+      runAsteriskCliCommand('manager show command Redirect', 3000)
+    ]);
     const status = await getConferenceBackendStatus({
       amiConfigured: Boolean(localDb.settings?.amiHost && localDb.settings?.amiUser && localDb.settings?.amiPass),
-      originateAvailable: originate.success && /Action:\s*Originate/i.test(originate.message)
+      originateAvailable: originate.success && /Action:\s*Originate/i.test(originate.message),
+      redirectAvailable: redirect.success && /Action:\s*Redirect/i.test(redirect.message)
     });
     if (!status.meetingAvailable) return res.status(503).json({ success: false, error: status.meetingReason });
     const internalNumbers = Array.from(new Set([initiatorExt, ...validation.participants
@@ -13942,8 +14031,10 @@ app.get('/api/calls/:uniqueid/chronology', requireAuth(), async (req, res) => {
           ? new RegExp(`(?:^|/)(?:SIP|PJSIP)/?${participantNumber}-`, 'i')
           : null;
         const participantLegs = meetingLegs.filter(leg => {
-          const assignedChannel = String(leg.uniqueid || '') === String(invitation.channelId)
-            || String(leg.linkedid || '') === String(invitation.channelId);
+          const assignedChannel = String(invitation.channelId || '').startsWith('pbxpuls.') && (
+            String(leg.uniqueid || '') === String(invitation.channelId)
+            || String(leg.linkedid || '') === String(invitation.channelId)
+          );
           const endpointChannel = Boolean(internalChannelPattern && (
             internalChannelPattern.test(String(leg.channel || ''))
             || internalChannelPattern.test(String(leg.dstchannel || ''))
@@ -13968,6 +14059,7 @@ app.get('/api/calls/:uniqueid/chronology', requireAuth(), async (req, res) => {
         phoneMeeting: true,
         meeting: {
           id: String(phoneMeeting.id),
+          kind: String(phoneMeeting.kind || 'meeting'),
           createdAt: String(phoneMeeting.createdAt || ''),
           initiatorExt: String(phoneMeeting.initiatorExt || ''),
           participants: participantStatuses,
@@ -14357,14 +14449,15 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
           uniqueid: String(meeting.id),
           linkedid: String(meeting.id),
           src: String(meeting.initiatorExt || ''),
-          dst: `Совещание: ${participants.join(', ')}`,
-          clid: 'Телефонное совещание',
+          dst: `${meeting.kind === 'active_conference' ? 'Конференция' : 'Совещание'}: ${participants.join(', ')}`,
+          clid: meeting.kind === 'active_conference' ? 'Телефонная конференция' : 'Телефонное совещание',
           disposition: answered ? 'ANSWERED' : 'NO ANSWER',
           duration: Math.max(...sorted.map(c => Number(c.duration || 0)), 0),
           billsec: Math.max(...sorted.map(c => Number(c.billsec || 0)), 0),
           recordingfile: String(meeting.recordingFile || sorted.find(c => c.recordingfile)?.recordingfile || ''),
           dstchannel: '',
           phoneMeeting: true,
+          phoneMeetingKind: String(meeting.kind || 'meeting'),
           phoneMeetingId: String(meeting.id),
           phoneMeetingInitiator: String(meeting.initiatorExt || ''),
           phoneMeetingParticipants: participants
