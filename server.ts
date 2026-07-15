@@ -3585,6 +3585,7 @@ function getDefaultAccessRoles() {
         make_calls: true,
         view_monitoring: true,
         view_active_calls: true,
+        view_quality: true,
         view_tcpdump: true,
         view_sngrep: true,
         view_cli: true,
@@ -3620,6 +3621,7 @@ function getDefaultAccessRoles() {
         export_excel: true,
         view_monitoring: true,
         view_active_calls: true,
+        view_quality: true,
         view_tcpdump: true,
         view_sngrep: true,
         view_cli: true,
@@ -3646,6 +3648,7 @@ function getDefaultAccessRoles() {
         export_excel: true,
         view_monitoring: true,
         view_active_calls: true,
+        view_quality: true,
         view_tcpdump: true,
         view_sngrep: true,
         view_cli: true,
@@ -3779,6 +3782,7 @@ const PERMISSION_MODULE_MAP: Record<string, OptionalModuleKey> = {
 
   view_monitoring: 'monitoring',
   view_active_calls: 'monitoring',
+  view_quality: 'monitoring',
   view_tcpdump: 'monitoring',
   view_sngrep: 'monitoring',
   view_cli: 'monitoring',
@@ -4238,6 +4242,13 @@ async function readLocalDb(): Promise<LocalDb> {
     if (!Array.isArray(data.roles)) {
       data.roles = getDefaultAccessRoles();
       changed = true;
+    }
+    for (const role of data.roles) {
+      if (role?.permissions?.view_active_calls === true
+        && !Object.prototype.hasOwnProperty.call(role.permissions, 'view_quality')) {
+        role.permissions.view_quality = true;
+        changed = true;
+      }
     }
 
     if (!Array.isArray((data as any).contactSyncAccounts)) {
@@ -18424,7 +18435,15 @@ setInterval(async () => {
 }, 60000);
 
 // --- VoIP QUALITY ENDPOINTS ---
-app.get('/api/quality/cache', requireAuth(), async (req, res) => {
+async function requireQualityAccess(req: Request, res: Response, next: NextFunction) {
+  if (!(await checkUserPermission(req, 'view_quality'))) {
+    res.status(403).json({ error: 'Access denied: view_quality permission required' });
+    return;
+  }
+  next();
+}
+
+app.get('/api/quality/cache', requireAuth(), requireQualityAccess, async (req, res) => {
   try {
     const period = String(req.query.period || '1h').trim();
     const ext = String(req.query.ext || 'all').trim();
@@ -18462,7 +18481,7 @@ app.get('/api/quality/cache', requireAuth(), async (req, res) => {
   }
 });
 
-app.get('/api/quality/devices', requireAuth(), async (req, res) => {
+app.get('/api/quality/devices', requireAuth(), requireQualityAccess, async (req, res) => {
   try {
     const cliDiagnostics = resolveAsteriskCli();
     const cliWarnings: string[] = [];
@@ -18516,7 +18535,7 @@ app.get('/api/quality/devices', requireAuth(), async (req, res) => {
   }
 });
 
-app.get('/api/quality/history', requireAuth(), async (req, res) => {
+app.get('/api/quality/history', requireAuth(), requireQualityAccess, async (req, res) => {
   try {
     const ext = String(req.query.ext || '').trim();
     const period = String(req.query.period || req.query.range || '').trim();
@@ -18548,7 +18567,7 @@ app.get('/api/quality/history', requireAuth(), async (req, res) => {
   }
 });
 
-app.get('/api/quality/alerts', requireAuth(), async (req, res) => {
+app.get('/api/quality/alerts', requireAuth(), requireQualityAccess, async (req, res) => {
   try {
     const localDb = await readLocalDb();
     const settings = localDb.settings;
@@ -18565,7 +18584,7 @@ app.get('/api/quality/alerts', requireAuth(), async (req, res) => {
   }
 });
 
-app.get('/api/quality/device/:ext', requireAuth(), async (req, res) => {
+app.get('/api/quality/device/:ext', requireAuth(), requireQualityAccess, async (req, res) => {
   try {
     const ext = String(req.params.ext);
     const localDb = await readLocalDb();
@@ -18609,7 +18628,7 @@ app.get('/api/quality/device/:ext', requireAuth(), async (req, res) => {
   }
 });
 
-app.post('/api/quality/ping/:ext', requireAuth(), async (req, res) => {
+app.post('/api/quality/ping/:ext', requireAuth(), requireQualityAccess, async (req, res) => {
   try {
     const ext = String(req.params.ext);
     const localDb = await readLocalDb();
@@ -18645,7 +18664,7 @@ app.post('/api/quality/ping/:ext', requireAuth(), async (req, res) => {
   }
 });
 
-app.post('/api/quality/traceroute/:ext', requireAuth(), async (req, res) => {
+app.post('/api/quality/traceroute/:ext', requireAuth(), requireQualityAccess, async (req, res) => {
   try {
     const ext = String(req.params.ext);
     const localDb = await readLocalDb();

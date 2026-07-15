@@ -106,6 +106,7 @@ const GROUPS: PermissionGroup[] = [
     rows: [
       { key: 'view_monitoring', label: 'Открыть раздел мониторинга', kind: 'tab', hint: 'Показывает общий раздел мониторинга' },
       { key: 'view_active_calls', label: 'Активные звонки', kind: 'tab', hint: 'Показывает live-сессии Asterisk' },
+      { key: 'view_quality', label: 'Качество связи', kind: 'tab', hint: 'Показывает IP/RTP-телеметрию, MOS, джиттер, RTT и потери пакетов' },
       { key: 'view_tcpdump', label: 'TCPDUMP / SIP-RTP', kind: 'tab', hint: 'Показывает tcpdump и SIP/RTP диагностику' },
       { key: 'view_sngrep', label: 'SNGREP', kind: 'tab', hint: 'Показывает SIP flow' },
   { key: 'view_cli', label: 'Командный центр / DB Explorer', kind: 'tab', hint: 'Командный центр (диагностика, CLI, справочник) и DB Explorer' },

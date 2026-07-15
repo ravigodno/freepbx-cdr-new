@@ -792,6 +792,24 @@ export default function App() {
     localStorage.setItem('asterisk_cdr_monitor_mode', monitorMode);
   }, [monitorMode]);
 
+  useEffect(() => {
+    if (activeView !== 'monitoring') return;
+    const permissionByMode: Record<string, PermissionKey> = {
+      calls: 'view_active_calls',
+      tcpdump: 'view_tcpdump',
+      sngrep: 'view_sngrep',
+      cli: 'view_cli',
+      db: 'view_cli',
+      devices: 'view_sip_devices_map',
+      quality: 'view_quality',
+      health: 'view_cli',
+      'ai-admin': 'view_ai_pbx_admin'
+    };
+    if (hasPermission(permissionByMode[monitorMode] || 'view_monitoring')) return;
+    const fallback = Object.entries(permissionByMode).find(([, permission]) => hasPermission(permission))?.[0];
+    if (fallback) setMonitorMode(fallback as any);
+  }, [activeView, monitorMode, session?.permissions, settings]);
+
   const [directory, setDirectory] = useState<DirectoryEntry[]>([]);
   const [directoryLookup, setDirectoryLookup] = useState<DirectoryEntry[]>([]);
   const [conferenceBackendStatus, setConferenceBackendStatus] = useState<ConferenceBackendStatus | null>(null);
@@ -3887,7 +3905,7 @@ export default function App() {
               </button>
               )}
 
-              {hasPermission('view_active_calls') && (
+              {hasPermission('view_quality') && (
               <button
                 onClick={() => setMonitorMode('quality')}
                 className={`px-3 py-2 rounded-lg text-xs font-bold border ${monitorMode === 'quality'
@@ -3960,7 +3978,7 @@ export default function App() {
             </Suspense>
           )}
 
-          {monitorMode === 'quality' && hasPermission('view_active_calls') && (
+          {monitorMode === 'quality' && hasPermission('view_quality') && (
             <QualityTab token={session?.token || ''} />
           )}
 

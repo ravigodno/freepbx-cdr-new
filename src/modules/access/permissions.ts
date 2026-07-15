@@ -18,6 +18,7 @@ export type PermissionKey =
   | 'export_excel'
   | 'view_monitoring'
   | 'view_active_calls'
+  | 'view_quality'
   | 'view_tcpdump'
   | 'view_sngrep'
   | 'view_cli'
@@ -67,6 +68,7 @@ const PERMISSION_MODULE_MAP: Partial<Record<PermissionKey, OptionalModuleKey>> =
 
   view_monitoring: 'monitoring',
   view_active_calls: 'monitoring',
+  view_quality: 'monitoring',
   view_tcpdump: 'monitoring',
   view_sngrep: 'monitoring',
   view_cli: 'monitoring',
