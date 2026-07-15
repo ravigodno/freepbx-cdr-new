@@ -13187,6 +13187,13 @@ app.post('/api/live-calls/:id/conference/start', requireAuth(), async (req, res)
     const channels = await runAmiCoreShowChannels(localDb.settings);
     const callChannels = findConsultCallChannels(channels, operatorExt, String(req.params.id || ''));
     if (!callChannels.operatorChannel || !callChannels.customerChannel) return res.status(409).json({ success: false, error: 'Активный звонок уже завершён или его каналы не найдены' });
+    const activeCallSnapshot = await buildLiveCallBannerPayload(
+      channels,
+      operatorExt,
+      localDb.directory || [],
+      localDb.settings,
+      localDb.phoneMeetings || []
+    );
     const directoryContext = { legacyDirectory: localDb.directory || [], settings: localDb.settings, authUser, dbUser: getAuthenticatedDbUser(localDb, req) };
     const authoritativeTargets = (await Promise.all(requestedTargets.map((target: any) => searchDirectoryInternalExtensions(target?.targetNumber, 50, operatorExt, directoryContext)))).flatMap(result => result.items);
     const requested = requestedTargets.map((target: any) => ({ ...target, id: String(target?.id || target?.directoryContactId || '') }));
@@ -13213,10 +13220,14 @@ app.post('/api/live-calls/:id/conference/start', requireAuth(), async (req, res)
     if (result.success) {
       const channelExtension = (channel: string) => String(channel || '').match(/(?:SIP|PJSIP)\/(\d{2,5})-/i)?.[1] || '';
       const existingParticipant = channelExtension(callChannels.customerChannel);
+      const externalParticipant = onlyDigits(activeCallSnapshot.externalCallerNumber || activeCallSnapshot.number);
       const invitations = [
         { targetNumber: operatorExt, targetType: 'internal', channelId: callChannels.linkedid, initiator: true },
         ...(existingParticipant && existingParticipant !== operatorExt
           ? [{ targetNumber: existingParticipant, targetType: 'internal', channelId: callChannels.linkedid }]
+          : []),
+        ...(!existingParticipant && externalParticipant.length >= 7
+          ? [{ targetNumber: externalParticipant, targetType: 'directory_phone', channelId: callChannels.linkedid }]
           : []),
         ...result.invitations
       ];
@@ -14039,13 +14050,15 @@ app.get('/api/calls/:uniqueid/chronology', requireAuth(), async (req, res) => {
             internalChannelPattern.test(String(leg.channel || ''))
             || internalChannelPattern.test(String(leg.dstchannel || ''))
           ));
-          return assignedChannel || endpointChannel;
+          const externalNumberMatch = participantNumber.length >= 7 && callHasExactNumber(leg, participantNumber);
+          return assignedChannel || endpointChannel || externalNumberMatch;
         });
         const connected = participantLegs.some(leg => String(leg.disposition || '').toUpperCase() === 'ANSWERED' && Number(leg.billsec || 0) > 0);
         const dispositions = participantLegs.map(leg => String(leg.disposition || '').toUpperCase());
         const status = connected ? 'connected' : dispositions.includes('BUSY') ? 'busy' : dispositions.includes('FAILED') ? 'failed' : 'missed';
         return {
           number: participantNumber,
+          targetType: String(invitation.targetType || (/^\d{2,5}$/.test(participantNumber) ? 'internal' : 'directory_phone')),
           initiator: String(invitation.targetNumber) === String(phoneMeeting.initiatorExt || ''),
           status,
           durationSec: Math.max(0, ...participantLegs.map(leg => Number(leg.billsec || 0)))

@@ -5,6 +5,7 @@ type ParticipantStatus = 'connected' | 'missed' | 'busy' | 'failed';
 
 interface MeetingParticipant {
   number: string;
+  targetType?: 'internal' | 'directory_phone';
   initiator: boolean;
   status: ParticipantStatus;
   durationSec: number;
@@ -55,7 +56,6 @@ function Step({ icon: Icon, label, title, children, tone = 'blue' }: any) {
 
 export default function MeetingTimelineViewer({ meeting }: { meeting: MeetingData }) {
   const isConference = meeting?.kind === 'active_conference';
-  const eventName = isConference ? 'конференция' : 'совещание';
   const participants = Array.isArray(meeting?.participants) ? meeting.participants : [];
   const invitees = participants.filter(participant => !participant.initiator);
   const connected = participants.filter(participant => participant.status === 'connected');
@@ -66,7 +66,7 @@ export default function MeetingTimelineViewer({ meeting }: { meeting: MeetingDat
     <div className="rounded-2xl border border-violet-200 bg-white p-4 shadow-xs">
       <div className="mb-3 text-[10px] font-extrabold uppercase tracking-widest text-violet-600">Ход телефонной {isConference ? 'конференции' : 'совещания'}</div>
       <div className="space-y-2">
-        <Step icon={UsersRound} label="Создание" title={`Инициатор ${meeting.initiatorExt} создал ${eventName}`} tone="violet">
+        <Step icon={UsersRound} label="Создание" title={`Инициатор ${meeting.initiatorExt} создал ${isConference ? 'конференцию' : 'совещание'}`} tone="violet">
           <div className="mt-1 text-xs text-slate-500">{createdAt}</div>
         </Step>
         <Step icon={Send} label="Приглашения" title="Отправлены приглашения">
@@ -77,7 +77,7 @@ export default function MeetingTimelineViewer({ meeting }: { meeting: MeetingDat
           const StatusIcon = participant.initiator ? Mic2 : state.icon;
           const StateIcon = state.icon;
           return (
-            <Step key={participant.number} icon={StatusIcon} label={participant.initiator ? 'Инициатор' : 'Участник'} title={`Внутренний номер ${participant.number}`}>
+            <Step key={participant.number} icon={StatusIcon} label={participant.initiator ? 'Инициатор' : 'Участник'} title={`${participant.targetType === 'directory_phone' ? 'Внешний' : 'Внутренний'} номер ${participant.number}`}>
               <div className={`mt-2 inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-[11px] font-bold ${state.className}`}><StateIcon className="h-3.5 w-3.5" />{state.label}</div>
             </Step>
           );
@@ -85,7 +85,7 @@ export default function MeetingTimelineViewer({ meeting }: { meeting: MeetingDat
         <Step icon={AudioLines} label="Запись" title={meeting.recordingFile ? `Запись ${isConference ? 'конференции' : 'совещания'} доступна` : `Запись ${isConference ? 'конференции' : 'совещания'} отсутствует`} tone="violet">
           <div className="mt-1 text-xs text-slate-500">Длительность: {durationText(meeting.durationSec)}</div>
         </Step>
-        <Step icon={Flag} label="Завершение" title={`${isConference ? 'Конференция' : 'Совещание'} завершено`} tone="emerald">
+        <Step icon={Flag} label="Завершение" title={`${isConference ? 'Конференция завершена' : 'Совещание завершено'}`} tone="emerald">
           <div className="mt-1 text-xs text-slate-600">Участвовали: {connected.map(item => item.number).join(', ') || '—'} · Пропустили: {missed.map(item => item.number).join(', ') || '—'}</div>
         </Step>
       </div>

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { HelpCircle, Loader2, PhoneForwarded, Search, Star, Users, X } from 'lucide-react';
-import { LiveTransferSearch, type LiveTransferResult, type LiveTransferSearchTarget } from './LiveTransferSearch';
+import { callTargetColumnLabels, defaultCallTargetColumns, getCallTargetCellValue, LiveTransferSearch, type LiveTransferResult, type LiveTransferSearchTarget } from './LiveTransferSearch';
 import { addCallTarget, callTargetKey, removeCallTarget, type CallTargetSelectorMode } from './callTargetSelection';
 
 export interface ConferenceBackendStatus {
@@ -56,6 +56,7 @@ function MultiCallTargetSelector({
   backendStatus,
   consultStatus,
   initialTargets = EMPTY_CALL_TARGETS,
+  directoryVisibleColumns = defaultCallTargetColumns,
   onUnauthorized,
   onConfirm
 }: Props) {
@@ -181,15 +182,19 @@ function MultiCallTargetSelector({
           {!operationAvailable && <div className="m-3 rounded-lg border border-amber-200 bg-amber-50 p-2 text-[11px] font-semibold text-amber-800">{unavailableReason || `Проверка backend ${isConsult ? 'консультационной переадресации' : 'конференций'} ещё не завершена`}</div>}
           {mode === 'conference' && operationAvailable && <div className="mx-3 mb-3 rounded-lg border border-emerald-200 bg-emerald-50 p-2 text-[11px] font-semibold text-emerald-800">ConfBridge готов. Выберите участников и нажмите «Создать конференцию».</div>}
           <div className="relative px-3 pb-3"><Search className="absolute left-6 top-2.5 h-4 w-4 text-slate-400" /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="ФИО, компания, телефон, отдел…" className="w-full rounded-lg border border-slate-200 py-2 pl-9 pr-8 text-sm outline-none focus:border-blue-400" />{loading && <Loader2 className="absolute right-6 top-2.5 h-4 w-4 animate-spin text-blue-500" />}</div>
-          <div className="min-h-0 flex-1 overflow-y-auto border-t border-slate-100 p-2">
+          <div className="min-h-0 flex-1 overflow-auto border-t border-slate-100">
+            {!!targets.length && <div className="min-w-max">
+              <div className="sticky top-0 z-10 grid bg-slate-50 text-[10px] font-black uppercase tracking-wide text-slate-500 shadow-sm" style={{ gridTemplateColumns: `repeat(${directoryVisibleColumns.length}, minmax(140px, 1fr))` }}>
+                {directoryVisibleColumns.map(column => <div key={column} className="border-r border-slate-200 px-3 py-2">{callTargetColumnLabels[column] || column}</div>)}
+              </div>
             {targets.map(target => {
               const unavailable = (isConsult ? !target.canTransfer : !target.canConference)
                 || (mode !== 'meeting' && target.targetType === 'internal' && target.targetNumber === currentExtension);
-              return <button key={`${target.id}:${target.targetType}:${target.targetNumber}`} type="button" disabled={unavailable} onClick={() => choose(target)} className="mb-1 flex w-full items-start justify-between gap-3 rounded-lg px-3 py-2 text-left hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">
-                <span><span className="flex items-center gap-1 text-xs font-bold text-slate-900">{target.isFavorite && <Star className="h-3 w-3 fill-amber-400 text-amber-500" />}{target.displayName}</span><span className="text-[11px] text-slate-500">{target.numberLabel} · {target.displayNumber || 'без номера'}{target.company ? ` · ${target.company}` : ''}</span></span>
-                <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600">{target.targetType === 'internal' ? 'Внутренний' : 'Справочник'}</span>
+              return <button key={`${target.id}:${target.targetType}:${target.targetNumber}`} type="button" disabled={unavailable} onClick={() => choose(target)} className="grid w-full border-b border-slate-100 text-left text-xs transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:opacity-50" style={{ gridTemplateColumns: `repeat(${directoryVisibleColumns.length}, minmax(140px, 1fr))` }}>
+                {directoryVisibleColumns.map(column => <span key={column} className={`flex min-w-0 items-center gap-1 border-r border-slate-100 px-3 py-2 ${column === 'phone' ? 'font-mono font-bold text-blue-700' : 'text-slate-700'}`} title={String(getCallTargetCellValue(target, column))}>{column === 'fullName' && target.isFavorite && <Star className="h-3 w-3 shrink-0 fill-amber-400 text-amber-500" />}<span className="truncate">{getCallTargetCellValue(target, column)}</span></span>)}
               </button>;
             })}
+            </div>}
             {!loading && !targets.length && <div className="p-5 text-center text-xs text-slate-400">Ничего не найдено</div>}
           </div>
           {error && <div className="px-3 pb-2 text-[11px] font-semibold text-red-600">{error}</div>}

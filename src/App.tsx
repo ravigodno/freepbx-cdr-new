@@ -5503,6 +5503,7 @@ export default function App() {
                         disabled={isLiveTransferLoading}
                         buttonClassName={liveActionButtonClass}
                         consultStatus={consultTransferStatus}
+                        directoryVisibleColumns={selectedDirectoryVisibleColumns}
                         onUnauthorized={handleAuthError}
                         onConfirm={handleConsultTransferStart}
                       />
@@ -5513,6 +5514,7 @@ export default function App() {
                         disabled={isLiveTransferLoading}
                         buttonClassName={liveActionButtonClass}
                         backendStatus={conferenceBackendStatus}
+                        directoryVisibleColumns={selectedDirectoryVisibleColumns}
                         onUnauthorized={handleAuthError}
                         onConfirm={handleActiveCallConferenceStart}
                       />
@@ -6447,6 +6449,7 @@ export default function App() {
               buttonClassName="flex shrink-0 items-center justify-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-xs font-semibold text-blue-700 shadow-sm transition-all hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
               triggerLabel="Совещание"
               backendStatus={conferenceBackendStatus}
+              directoryVisibleColumns={selectedDirectoryVisibleColumns}
               onUnauthorized={handleAuthError}
               onConfirm={handlePhoneMeetingStart}
             />

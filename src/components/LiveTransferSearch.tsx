@@ -63,7 +63,7 @@ interface Props {
   directoryVisibleColumns?: string[];
 }
 
-const transferColumnLabels: Record<string, string> = {
+export const callTargetColumnLabels: Record<string, string> = {
   type: 'Тип', fullName: 'ФИО', phone: 'Телефон', visibility: 'Видимость', isSpam: 'Спам',
   organization: 'Организация', position: 'Должность', phone2: 'Доп. телефон', email: 'Email', website: 'Сайт',
   inn: 'ИНН', kpp: 'КПП', ogrn: 'ОГРН', address: 'Адрес', comment: 'Комментарий', department: 'Отдел / группа',
@@ -71,9 +71,9 @@ const transferColumnLabels: Record<string, string> = {
   responsibleUserId: 'Ответственный сотрудник'
 };
 
-const defaultTransferColumns = ['type', 'fullName', 'phone', 'email', 'organization', 'visibility', 'isSpam'];
+export const defaultCallTargetColumns = ['type', 'fullName', 'phone', 'email', 'organization', 'visibility', 'isSpam'];
 
-const transferCellValue = (target: LiveTransferSearchTarget, column: string): React.ReactNode => {
+export const getCallTargetCellValue = (target: LiveTransferSearchTarget, column: string): React.ReactNode => {
   const values: Record<string, React.ReactNode> = {
     type: target.targetType === 'internal' ? 'Внутренний' : 'Справочник',
     fullName: target.displayName,
@@ -121,7 +121,7 @@ export function LiveTransferSearch({
   buttonClassName,
   onUnauthorized,
   onTransfer,
-  directoryVisibleColumns = defaultTransferColumns
+  directoryVisibleColumns = defaultCallTargetColumns
 }: Props) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -445,9 +445,8 @@ export function LiveTransferSearch({
                   <div className="px-3 py-6 text-center text-xs font-semibold text-slate-400">Поиск…</div>
                 ) : targets.length || canUseManual ? (
                   <div className="min-w-max">
-                    <div className="sticky top-0 z-10 grid bg-slate-50 text-[10px] font-black uppercase tracking-wide text-slate-500 shadow-sm" style={{ gridTemplateColumns: `repeat(${directoryVisibleColumns.length}, minmax(140px, 1fr)) 92px` }}>
-                      {directoryVisibleColumns.map(column => <div key={column} className="border-r border-slate-200 px-3 py-2">{transferColumnLabels[column] || column}</div>)}
-                      <div className="px-3 py-2 text-right">Действие</div>
+                    <div className="sticky top-0 z-10 grid bg-slate-50 text-[10px] font-black uppercase tracking-wide text-slate-500 shadow-sm" style={{ gridTemplateColumns: `repeat(${directoryVisibleColumns.length}, minmax(140px, 1fr))` }}>
+                      {directoryVisibleColumns.map(column => <div key={column} className="border-r border-slate-200 px-3 py-2">{callTargetColumnLabels[column] || column}</div>)}
                     </div>
                     {targets.map((target, index) => {
                       const status = target.sipStatus !== 'unknown' ? target.sipStatus : target.deviceStatus;
@@ -461,10 +460,9 @@ export function LiveTransferSearch({
                           onMouseEnter={() => { if (target.canTransfer) setActiveIndex(index); }}
                           onClick={() => { if (target.canTransfer) { setSelected(target); setTransferError(''); } }}
                           className={`grid border-b border-slate-100 text-left text-xs transition ${!target.canTransfer ? 'cursor-not-allowed bg-slate-50 opacity-70' : index === activeIndex ? 'bg-blue-50' : 'hover:bg-slate-50'}`}
-                          style={{ gridTemplateColumns: `repeat(${directoryVisibleColumns.length}, minmax(140px, 1fr)) 92px` }}
+                          style={{ gridTemplateColumns: `repeat(${directoryVisibleColumns.length}, minmax(140px, 1fr))` }}
                         >
-                          {directoryVisibleColumns.map(column => <div key={column} className={`flex min-w-0 items-center gap-1 border-r border-slate-100 px-3 py-2 ${column === 'phone' ? 'font-mono font-bold text-blue-700' : 'text-slate-700'}`} title={String(transferCellValue(target, column))}>{column === 'fullName' && target.isFavorite && <Star className="h-3 w-3 shrink-0 fill-amber-400 text-amber-500" />}<span className="truncate">{transferCellValue(target, column)}</span>{column === 'type' && statusLabel && <span className={`ml-auto shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-bold ${presenceClasses[status]}`}>{statusLabel}</span>}</div>)}
-                          <div className="flex items-center justify-end px-2 py-1.5"><button type="button" disabled={!target.canTransfer} onClick={() => { if (target.canTransfer) { setSelected(target); setTransferError(''); } }} className="rounded-md bg-blue-600 px-2 py-1 text-[10px] font-bold text-white disabled:bg-slate-300">Выбрать</button></div>
+                          {directoryVisibleColumns.map(column => <div key={column} className={`flex min-w-0 items-center gap-1 border-r border-slate-100 px-3 py-2 ${column === 'phone' ? 'font-mono font-bold text-blue-700' : 'text-slate-700'}`} title={String(getCallTargetCellValue(target, column))}>{column === 'fullName' && target.isFavorite && <Star className="h-3 w-3 shrink-0 fill-amber-400 text-amber-500" />}<span className="truncate">{getCallTargetCellValue(target, column)}</span>{column === 'type' && statusLabel && <span className={`ml-auto shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-bold ${presenceClasses[status]}`}>{statusLabel}</span>}</div>)}
                           {!target.canTransfer && <div className="col-span-full px-3 pb-2 text-[10px] font-bold text-amber-700">{target.transferDisabledReason || 'Нет номера для переадресации'}</div>}
                         </div>
                       );
