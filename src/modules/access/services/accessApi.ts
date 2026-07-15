@@ -53,3 +53,25 @@ export async function deleteAccessUserApi(
     throw new Error(data.error || 'Не удалось удалить пользователя.');
   }
 }
+
+export async function previewBulkAccessUsers(token: string, rows: Array<Record<string, unknown>>) {
+  const resp = await fetch('/api/users/bulk-preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ rows })
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.error || 'Не удалось проверить пользователей.');
+  return data;
+}
+
+export async function createBulkAccessUsers(token: string, rows: Array<Record<string, unknown>>) {
+  const resp = await fetch('/api/users/bulk-create', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ rows, confirm: true })
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.error || 'Не удалось создать пользователей.');
+  return data;
+}

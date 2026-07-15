@@ -727,6 +727,7 @@ export default function App() {
   const [isLoadingRoles, setIsLoadingRoles] = useState(false);
   const [isSavingRoles, setIsSavingRoles] = useState(false);
   const [userForm, setUserForm] = useState({
+    fullName: '',
     username: '',
     password: '',
     role: 'operator' as UserRole,
@@ -2797,13 +2798,13 @@ export default function App() {
 
   const resetUserForm = () => {
     setEditingUserId(null);
-    setUserForm({ username: '', password: '', role: 'operator', extension: '', disabled: false, permissions: {} });
+    setUserForm({ fullName: '', username: '', password: '', role: 'operator', extension: '', disabled: false, permissions: {} });
     setAccessError('');
   };
 
   const openEditUser = (user: AccessUser) => {
     setEditingUserId(user.id);
-    setUserForm({ username: user.username, password: '', role: user.role as UserRole, extension: user.extension || '', disabled: !!user.disabled, permissions: user.permissions || {} });
+    setUserForm({ fullName: user.fullName || '', username: user.username, password: '', role: user.role as UserRole, extension: user.extension || '', disabled: !!user.disabled, permissions: user.permissions || {} });
     setAccessError('');
     setSettingsTab('access');
   };
@@ -4300,7 +4301,7 @@ export default function App() {
       case 'linkedExternalNumber':
         return renderDirectoryTextCell(entry.linkedExternalNumber, 'max-w-[170px]');
       case 'responsibleUserId':
-        return renderDirectoryTextCell(entry.responsibleUserId, 'max-w-[170px]');
+        return renderDirectoryTextCell(entry.responsibleUserLabel || entry.responsibleUserId, 'max-w-[220px]');
       case 'actions':
         return (
           <div className="flex items-center justify-end gap-1.5">
@@ -7132,6 +7133,8 @@ export default function App() {
                       saveAccessUser={saveAccessUser}
                       resetUserForm={resetUserForm}
                       roles={roles}
+                      token={session.token}
+                      onBulkCreated={loadAccessUsers}
                     />
                   )}
                   

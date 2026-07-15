@@ -13,6 +13,7 @@ export interface AccessRole {
 
 export interface AccessUser {
   id: string;
+  fullName?: string;
   username: string;
   role: UserRole | string;
   extension?: string;
@@ -21,6 +22,7 @@ export interface AccessUser {
 }
 
 export interface UserFormState {
+  fullName: string;
   username: string;
   password: string;
   role: UserRole | string;

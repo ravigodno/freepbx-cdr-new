@@ -216,6 +216,7 @@ export interface DirectoryEntry {
   internalExtension?: string;
   linkedExternalNumber?: string;
   responsibleUserId?: string;
+  responsibleUserLabel?: string;
   tags?: string[];
   isSpam?: boolean;
   isBlacklisted?: boolean;

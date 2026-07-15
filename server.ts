@@ -84,7 +84,8 @@ import {
 import {
   canEditDirectoryContactByOwner,
   hasFullDirectoryEditPermission,
-  hasOwnDirectoryEditPermission
+  hasOwnDirectoryEditPermission,
+  restrictDirectoryContactInputToOwner
 } from './server/directoryContactAccess.js';
 import {
   assertDirectorySqlWriteTestAllowed,
@@ -3188,6 +3189,18 @@ const getDirectorySearchText = (entry: any): string => {
   ].join(' ').toLowerCase();
 };
 
+const getDirectoryResponsibleUserLabel = (userId: unknown, localDb: any): string => {
+  const normalizedId = String(userId || '').trim();
+  if (!normalizedId) return '';
+  const user = (localDb.users || []).find((item: any) => String(item.id || '') === normalizedId);
+  if (!user) return normalizedId;
+  const fullName = normalizeAccessUserFullName(user.fullName);
+  const username = String(user.username || '').trim();
+  const extension = String(user.extension || '').trim();
+  const primary = fullName || username || normalizedId;
+  return extension ? `${primary} · SIP ${extension}` : primary;
+};
+
 const compareDirectoryEntries = (a: any, b: any): number => {
   const aName = String(a?.name || '').trim().toLowerCase();
   const bName = String(b?.name || '').trim().toLowerCase();
@@ -3263,7 +3276,11 @@ const applyDirectoryAccessAndFilters = (entries: any[], req: Request, localDb: a
         .map((value: any) => onlyDigits(value))
         .some((digits: string) => digits && (digits.includes(qDigits) || qDigits.includes(digits)));
     })
-    .map((entry: any) => ({ ...entry, canEdit: canEditDirectoryEntry(entry, authUser, dbUser, localDb.settings) }));
+    .map((entry: any) => ({
+      ...entry,
+      responsibleUserLabel: getDirectoryResponsibleUserLabel(entry.responsibleUserId, localDb),
+      canEdit: canEditDirectoryEntry(entry, authUser, dbUser, localDb.settings)
+    }));
 };
 
 const buildDirectoryPaginatedResponse = (entries: any[], req: Request, localDb: any) => {
@@ -10456,6 +10473,61 @@ app.put('/api/roles', requireAuth(), async (req, res) => {
 
 
 // --- USER ACCESS MANAGEMENT ENDPOINTS ---
+type BulkAccessUserInput = {
+  fullName?: unknown;
+  username?: unknown;
+  password?: unknown;
+  role?: unknown;
+  extension?: unknown;
+  disabled?: unknown;
+};
+
+function normalizeAccessUserFullName(value: unknown): string {
+  return String(value || '').trim().replace(/\s+/g, ' ').slice(0, 255);
+}
+
+function normalizeBulkAccessUserRow(raw: BulkAccessUserInput, index: number, roles: any[], usernames: Set<string>, authUser: any) {
+  const fullName = normalizeAccessUserFullName(raw?.fullName);
+  const username = String(raw?.username || '').trim().slice(0, 100);
+  const password = String(raw?.password || '');
+  const roleValue = String(raw?.role || '').trim();
+  const extension = String(raw?.extension || '').trim();
+  const disabled = raw?.disabled === true || ['1', 'true', 'yes', 'да'].includes(String(raw?.disabled || '').trim().toLowerCase());
+  const matchedRole = roles.find((item: any) => item.id === roleValue || item.name === roleValue);
+  const errors: string[] = [];
+  if (!fullName) errors.push('ФИО обязательно');
+  if (!username) errors.push('Логин обязателен');
+  if (!password) errors.push('Пароль обязателен');
+  if (!matchedRole) errors.push('Некорректная роль');
+  if (matchedRole?.id === 'su' && authUser?.role !== 'su') errors.push('Недостаточно прав для роли SU');
+  if (extension && !/^\d+$/.test(extension)) errors.push('SIP-номер должен содержать только цифры');
+  const usernameKey = username.toLowerCase();
+  if (username && usernames.has(usernameKey)) errors.push('Логин уже существует или повторяется в списке');
+  if (username) usernames.add(usernameKey);
+  return {
+    index,
+    fullName,
+    username,
+    password,
+    role: matchedRole?.id || roleValue,
+    extension,
+    disabled,
+    errors
+  };
+}
+
+function buildBulkAccessUsersPreview(localDb: any, rows: BulkAccessUserInput[], authUser: any) {
+  const roles = localDb.roles || getDefaultAccessRoles();
+  const usernames = new Set<string>((localDb.users || []).map((user: any) => String(user.username || '').trim().toLowerCase()).filter(Boolean));
+  const normalized = rows.map((row, index) => normalizeBulkAccessUserRow(row, index, roles, usernames, authUser));
+  return {
+    rows: normalized.map(({ password: _password, ...row }) => ({ ...row, status: row.errors.length ? 'error' : 'ready' })),
+    readyCount: normalized.filter(row => row.errors.length === 0).length,
+    errorCount: normalized.filter(row => row.errors.length > 0).length,
+    normalized
+  };
+}
+
 app.get('/api/users', requireAuth(), async (req, res) => {
   const authUser = (req as any).user;
   if (authUser?.role !== 'su' && authUser?.permissions?.manage_users !== true) {
@@ -10482,7 +10554,7 @@ app.post('/api/users', requireAuth(), async (req, res) => {
 
   try {
     const authUser = (req as any).user;
-    const { username, password, role, extension, disabled, permissions } = req.body;
+    const { fullName, username, password, role, extension, disabled, permissions } = req.body;
 
     if (role === 'su' && authUser?.role !== 'su') {
       return res.status(403).json({ error: 'Доступ запрещен' });
@@ -10507,6 +10579,7 @@ app.post('/api/users', requireAuth(), async (req, res) => {
     const passwordHash = bcrypt.hashSync(String(password), bcrypt.genSaltSync(10));
     const user = {
       id: crypto.randomBytes(8).toString('hex'),
+      fullName: normalizeAccessUserFullName(fullName),
       username: cleanUsername,
       passwordHash,
       role: matchedRole.id,
@@ -10524,6 +10597,57 @@ app.post('/api/users', requireAuth(), async (req, res) => {
   }
 });
 
+app.post('/api/users/bulk-preview', requireAuth(), async (req, res) => {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.permissions?.manage_users !== true) {
+    return res.status(403).json({ error: 'Access denied: manage_users permission required' });
+  }
+  try {
+    const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+    if (!rows.length || rows.length > 500) return res.status(400).json({ error: 'Передайте от 1 до 500 пользователей' });
+    const localDb = await readLocalDb();
+    const preview = buildBulkAccessUsersPreview(localDb, rows, authUser);
+    res.json({ rows: preview.rows, readyCount: preview.readyCount, errorCount: preview.errorCount });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/users/bulk-create', requireAuth(), async (req, res) => {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.permissions?.manage_users !== true) {
+    return res.status(403).json({ error: 'Access denied: manage_users permission required' });
+  }
+  try {
+    if (req.body?.confirm !== true) return res.status(400).json({ error: 'Требуется подтверждение preview' });
+    const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+    if (!rows.length || rows.length > 500) return res.status(400).json({ error: 'Передайте от 1 до 500 пользователей' });
+    const localDb = await readLocalDb();
+    const preview = buildBulkAccessUsersPreview(localDb, rows, authUser);
+    if (preview.errorCount > 0) return res.status(409).json({ error: 'Исправьте ошибки preview перед созданием', rows: preview.rows });
+    const now = new Date().toISOString();
+    const created = preview.normalized.map(row => {
+      const user = {
+        id: crypto.randomBytes(8).toString('hex'),
+        fullName: row.fullName,
+        username: row.username,
+        passwordHash: bcrypt.hashSync(row.password, bcrypt.genSaltSync(10)),
+        role: row.role,
+        extension: row.extension,
+        disabled: row.disabled,
+        permissions: {},
+        createdAt: now
+      };
+      localDb.users.push(user as any);
+      return { index: row.index, id: user.id, fullName: user.fullName, username: user.username, status: 'created' };
+    });
+    await writeLocalDb(localDb);
+    res.json({ success: true, createdCount: created.length, results: created });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.put('/api/users/:id', requireAuth(), async (req, res) => {
   const authUser = (req as any).user;
   if (authUser?.role !== 'su' && authUser?.permissions?.manage_users !== true) {
@@ -10533,7 +10657,7 @@ app.put('/api/users/:id', requireAuth(), async (req, res) => {
   try {
     const authUser = (req as any).user;
     const { id } = req.params;
-    const { username, password, role, extension, disabled, permissions } = req.body;
+    const { fullName, username, password, role, extension, disabled, permissions } = req.body;
 
     if (role === 'su' && authUser?.role !== 'su') {
       return res.status(403).json({ error: 'Доступ запрещен' });
@@ -10564,6 +10688,7 @@ app.put('/api/users/:id', requireAuth(), async (req, res) => {
 
     const nextUser = {
       ...localDb.users[idx],
+      fullName: normalizeAccessUserFullName(fullName),
       username: cleanUsername,
       role: matchedRole.id,
       extension: String(extension || '').trim(),
@@ -11699,8 +11824,7 @@ app.post('/api/directory', requireAuth(), async (req, res) => {
 
     const localDb = await readLocalDb();
     const dbUser = getAuthenticatedDbUser(localDb, req);
-    const ownOnly = !hasFullDirectoryEditPermission(authUser) && hasOwnDirectoryEditPermission(authUser);
-    const createBody = ownOnly ? { ...req.body, visibility: 'private', contact_type: 'personal', ownerUserId: getDirectoryUserId(dbUser, authUser) } : req.body;
+    const createBody = restrictDirectoryContactInputToOwner(req.body, authUser, getDirectoryUserId(dbUser, authUser));
 
     const actor = getDirectoryStorageModeActor(req);
     const writeDecision = await getDirectoryWriteRuntimeDecision('create', actor);
@@ -11764,8 +11888,7 @@ app.put('/api/directory/:id', requireAuth(), async (req, res) => {
     if (!canEditDirectoryEntry(existingEntry, authUser, dbUser, localDb.settings)) {
       return res.status(403).json({ error: 'Можно редактировать только собственные личные контакты' });
     }
-    const ownOnly = !hasFullDirectoryEditPermission(authUser);
-    const updateBody = ownOnly ? { ...req.body, visibility: 'private', contact_type: 'personal', ownerUserId: getDirectoryUserId(dbUser, authUser) } : req.body;
+    const updateBody = restrictDirectoryContactInputToOwner(req.body, authUser, getDirectoryUserId(dbUser, authUser));
 
     const actor = getDirectoryStorageModeActor(req);
     const writeDecision = await getDirectoryWriteRuntimeDecision('update', actor);

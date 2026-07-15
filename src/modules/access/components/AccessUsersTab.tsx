@@ -3,6 +3,7 @@ import { Edit2, Trash2 } from 'lucide-react';
 import { UserRole } from '../../../types';
 import { AccessRole, AccessUser, UserFormState } from '../types';
 import { PermissionKey } from '../permissions';
+import BulkUsersCreatePanel from './BulkUsersCreatePanel';
 
 
 
@@ -18,6 +19,8 @@ interface AccessUsersTabProps {
   saveAccessUser: () => void;
   resetUserForm: () => void;
   roles: AccessRole[];
+  token: string;
+  onBulkCreated: () => Promise<void>;
 }
 
 export default function AccessUsersTab({
@@ -31,7 +34,9 @@ export default function AccessUsersTab({
   deleteAccessUser,
   saveAccessUser,
   resetUserForm,
-  roles
+  roles,
+  token,
+  onBulkCreated
 }: AccessUsersTabProps) {
   const permissionRows: Array<{ key: PermissionKey; label: string; description: string }> = [
     { key: 'view_calls', label: 'Просмотр звонков', description: 'Доступ к журналу CDR и списку вызовов' },
@@ -72,8 +77,10 @@ export default function AccessUsersTab({
             >
               <div className="min-w-0">
                 <div className="font-black text-slate-900 text-sm truncate">
-                  {user.username}
+                  {user.fullName || user.username}
                 </div>
+
+                {user.fullName && <div className="mt-0.5 truncate text-[11px] text-slate-500">Логин: {user.username}</div>}
 
                 <div className="text-xs text-slate-500 mt-1 flex flex-wrap gap-2">
                   <span className="px-2 py-0.5 rounded-full bg-slate-100 border border-slate-200">
@@ -126,6 +133,17 @@ export default function AccessUsersTab({
             {accessError}
           </div>
         )}
+
+        <label className="text-xs font-bold text-slate-600 block">
+          ФИО
+          <input
+            type="text"
+            value={userForm.fullName}
+            onChange={(e) => setUserForm({ ...userForm, fullName: e.target.value })}
+            className="mt-1 w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs"
+            placeholder="Иванов Иван Иванович"
+          />
+        </label>
 
         <label className="text-xs font-bold text-slate-600 block">
           Логин
@@ -239,6 +257,9 @@ export default function AccessUsersTab({
             Сброс
           </button>
         </div>
+      </div>
+      <div className="lg:col-span-2">
+        <BulkUsersCreatePanel token={token} roles={roles} onCreated={onBulkCreated} />
       </div>
     </div>
   );
