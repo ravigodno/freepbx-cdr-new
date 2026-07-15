@@ -34,37 +34,35 @@ export default function CDRCalleeCell({
   const transferTargetLabel = String(call?.transferTargetLabel || '').trim();
   const hasTransferTarget = Boolean(isBlindTransferBadgeEligible(call) && transferTargetExt);
   const compactInternal = calleeName === `Внутренний ${displayedDst}`;
-  const callActions = !isMultiDst && (
-    <div className="flex items-center gap-1">
-      <button
+  const compactCalleeLabel = compactInternal ? calleeName.slice(0, -displayedDst.length).trim() : calleeName;
+  const callAction = !isMultiDst && (
+    <button
         type="button"
         onClick={() => triggerClickToCall(displayedDst, calleeName)}
         className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 text-emerald-600 hover:text-emerald-700 transition-colors cursor-pointer"
         title={`Позвонить на ${displayedDst}`}
       >
         <PhoneCall className="h-3 w-3" />
-      </button>
-
-      {!isFoundDst && (
-        <button
-          type="button"
-          onClick={() =>
-            openAddFromCall(
-              displayedDst,
-              calleeName &&
-              !calleeName.startsWith('Внешний') &&
-              !calleeName.startsWith('Внутренний')
-                ? calleeName
-                : ''
-            )
-          }
-          className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 text-indigo-605 hover:text-indigo-700 transition-colors cursor-pointer"
-          title={`Добавить ${displayedDst} в справочник`}
-        >
-          <UserPlus className="h-3 w-3" />
-        </button>
-      )}
-    </div>
+    </button>
+  );
+  const addAction = !isMultiDst && !isFoundDst && (
+    <button
+      type="button"
+      onClick={() =>
+        openAddFromCall(
+          displayedDst,
+          calleeName &&
+          !calleeName.startsWith('Внешний') &&
+          !calleeName.startsWith('Внутренний')
+            ? calleeName
+            : ''
+        )
+      }
+      className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 text-indigo-605 hover:text-indigo-700 transition-colors cursor-pointer"
+      title={`Добавить ${displayedDst} в справочник`}
+    >
+      <UserPlus className="h-3 w-3" />
+    </button>
   );
 
   if (call?.phoneMeeting) {
@@ -95,26 +93,33 @@ export default function CDRCalleeCell({
                   ? 'text-red-800 dark:text-red-400'
                   : 'text-slate-800 dark:text-slate-100'
               }`}>
-                {calleeName}
+                {compactCalleeLabel}
               </span>
-              {compactInternal && callActions}
+              {compactInternal && callAction}
+              {compactInternal && (
+                <span className="font-mono font-bold text-xs text-slate-800 dark:text-slate-200">
+                  {displayedDst}
+                </span>
+              )}
+              {compactInternal && addAction}
             </span>
           </div>
 
           {!compactInternal && (
             <div className="text-xs font-bold text-slate-800 dark:text-slate-200 flex flex-wrap items-center gap-1.5">
+              {callAction}
               <span>{displayedDst}</span>
-              {callActions}
+              {addAction}
             </div>
           )}
 
           {hasTransferTarget && (
-            <div className="inline-flex w-fit items-center gap-1.5 rounded-md border border-blue-100 bg-blue-50 px-2 py-1 text-[10px] font-black uppercase tracking-wide text-blue-700">
+            <div className="inline-flex w-fit items-center gap-1.5 rounded-md border border-slate-200 bg-transparent px-2 py-1 text-[10px] font-black uppercase tracking-wide text-slate-700 dark:border-slate-700 dark:text-slate-200">
               <PhoneForwarded className="h-3.5 w-3.5" aria-label="Переведён" />
               <span>на</span>
               <span className="font-mono text-xs">{transferTargetExt}</span>
               {transferTargetLabel && (
-                <span className="max-w-[160px] truncate normal-case tracking-normal text-blue-600">
+                <span className="max-w-[160px] truncate normal-case tracking-normal text-slate-600 dark:text-slate-300">
                   {transferTargetLabel}
                 </span>
               )}

@@ -86,6 +86,19 @@ function directDestinationCandidates(row: any): string[] {
   );
 }
 
+function explicitDestinationCandidates(row: any): string[] {
+  return numberCandidates(read(row, 'Exten', 'exten', 'dst'));
+}
+
+function followMePrimaryDestination(row: any): string {
+  const evidence = [
+    rowChannel(row),
+    read(row, 'ApplicationData', 'appData', 'applicationData', 'lastdata')
+  ].map(String).join(' ');
+  const extension = evidence.match(/(?:Local\/)?FMPR-([0-9]{2,5})(?:@|\b)/i)?.[1] || '';
+  return isInternal(extension) ? extension : '';
+}
+
 function isOutboundContext(context: string): boolean {
   return context.includes('from-internal') || context.includes('outbound') ||
     context.includes('dialout') || context.includes('macro-dialout');
@@ -122,6 +135,20 @@ function allGroupNumbers(group: any[]): string[] {
 export function detectLiveCallDirection(group: any[], operatorExt = ''): LiveCallDirectionResolution {
   const rows = Array.isArray(group) ? group.filter(Boolean) : [];
   const operator = normalizeNumber(operatorExt);
+
+  // Follow Me places its parallel external destinations into ApplicationData.
+  // A direct internal Exten/dst remains the authoritative dialed destination.
+  for (const row of rows) {
+    const explicitCaller = explicitCallerExtension(row);
+    const endpoint = endpointExtension(row);
+    const internalCaller = explicitCaller || endpoint;
+    const internalDestination = explicitDestinationCandidates(row)
+      .find(number => isInternal(number) && number !== internalCaller)
+      || followMePrimaryDestination(row);
+    if (internalCaller && internalDestination) {
+      return { direction: 'internal', internalCaller, destinationNumber: internalDestination, trunkNumber: '' };
+    }
+  }
 
   for (const row of rows) {
     const context = rowContext(row);

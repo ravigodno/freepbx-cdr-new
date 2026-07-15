@@ -20,6 +20,19 @@ export interface LiveTransferSearchTarget {
   department: string;
   position: string;
   comment: string;
+  visibility: string;
+  isSpam: boolean;
+  email: string;
+  website: string;
+  inn: string;
+  kpp: string;
+  ogrn: string;
+  address: string;
+  group: string;
+  tags: string[];
+  internalExtension: string;
+  linkedExternalNumber: string;
+  responsibleUserId: string;
   metadataMatches: string[];
   canTransfer: boolean;
   canCall: boolean;
@@ -216,6 +229,19 @@ export function buildLiveTransferTargetOptions(
     department: cleanText(entry.department || entry.group).slice(0, 120),
     position: cleanText(entry.position).slice(0, 120),
     comment: cleanText(entry.comment).slice(0, 200),
+    visibility: cleanText(entry.visibility || 'shared').slice(0, 20),
+    isSpam: truthyFlag(entry.isSpam),
+    email: cleanText(entry.email).slice(0, 255),
+    website: cleanText(entry.website).slice(0, 255),
+    inn: cleanText(entry.inn).slice(0, 32),
+    kpp: cleanText(entry.kpp).slice(0, 32),
+    ogrn: cleanText(entry.ogrn).slice(0, 32),
+    address: cleanText(entry.address).slice(0, 300),
+    group: cleanText(entry.group).slice(0, 120),
+    tags: uniqueText([Array.isArray(entry.tags) ? entry.tags : []]).slice(0, 30),
+    internalExtension: cleanText(entry.internalExtension || extension).slice(0, 32),
+    linkedExternalNumber: cleanText(entry.linkedExternalNumber).slice(0, 64),
+    responsibleUserId: cleanText(entry.responsibleUserId).slice(0, 64),
     metadataMatches: [] as string[],
     sipStatus: normalizePresence((entry as any).sipStatus),
     deviceStatus: normalizePresence((entry as any).deviceStatus),

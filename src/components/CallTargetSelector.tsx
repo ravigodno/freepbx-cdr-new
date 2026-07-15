@@ -30,6 +30,7 @@ interface Props {
   backendStatus?: ConferenceBackendStatus | null;
   consultStatus?: ConsultTransferCapabilities | null;
   initialTargets?: LiveTransferSearchTarget[];
+  directoryVisibleColumns?: string[];
   onUnauthorized?: (response: Response) => void;
   onTransfer?: (target: LiveTransferSearchTarget) => Promise<LiveTransferResult>;
   onConfirm?: (targets: LiveTransferSearchTarget[]) => void | string | Promise<void | string>;
@@ -40,7 +41,7 @@ const EMPTY_CALL_TARGETS: LiveTransferSearchTarget[] = [];
 export function CallTargetSelector(props: Props) {
   if (props.mode === 'transfer') {
     if (!props.onTransfer) return null;
-    return <LiveTransferSearch {...props} currentExtension={props.currentExtension || ''} onTransfer={props.onTransfer} />;
+    return <LiveTransferSearch {...props} currentExtension={props.currentExtension || ''} onTransfer={props.onTransfer} directoryVisibleColumns={props.directoryVisibleColumns} />;
   }
   return <MultiCallTargetSelector {...props} />;
 }

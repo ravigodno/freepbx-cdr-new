@@ -5377,13 +5377,11 @@ export default function App() {
         const display = liveCallBanner.displayName || liveCallBanner.displayNumber || 'Неизвестный номер';
         const isSpamOrBlacklisted = liveCallBanner.isSpam === true || liveCallBanner.isBlacklisted === true;
         const cleanName = display.replace(/\s*\(([^)]*)\)\s*$/, '');
-        const positionMatch = display.match(/\(([^)]*)\)\s*$/);
-        const position = positionMatch?.[1] || liveCallBanner.contactComment || '';
+        const company = String(liveCallBanner.company || '').trim();
+        const position = String(liveCallBanner.position || '').trim();
         const durationText = liveCallBanner.durationText || `${Math.floor((liveCallBanner.durationSec || 0) / 60)}:${String((liveCallBanner.durationSec || 0) % 60).padStart(2, '0')}`;
         const canUseLiveMonitorActions = session?.role === 'su' || session?.role === 'admin' || session?.role === 'manager';
         const liveActionButtonClass = 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60';
-        const routeNumberLabel = isIncomingLive ? 'DID' : isOutgoingLive ? 'Транк' : 'Кому';
-        const routeNumber = isIncomingLive ? liveCallBanner.did : isOutgoingLive ? liveCallBanner.trunkNumber : liveCallBanner.destinationNumber;
         const endpointLabel = isIncomingLive ? 'На мой SIP' : 'От внутреннего';
         const endpointNumber = isIncomingLive
           ? (liveCallBanner.destinationNumber || liveCallBanner.internalNumber)
@@ -5406,59 +5404,7 @@ export default function App() {
             >
               <div className="absolute inset-y-0 left-0 w-2 bg-gradient-to-b from-blue-500 to-sky-600" />
               <div className="flex items-stretch min-h-[104px]">
-                <div className="relative flex items-center gap-4 py-4 pl-20 pr-6 min-w-[420px] max-w-[520px] border-r border-slate-200">
-                  <div className="absolute left-4 top-3 bottom-3 z-10 flex flex-col justify-center gap-1">
-                    <CallTargetSelector
-                      mode="transfer"
-                      token={session?.token || ''}
-                      currentExtension={liveCallBanner.operatorExt || myExt}
-                      disabled={isLiveTransferLoading}
-                      buttonClassName={liveActionButtonClass}
-                      onUnauthorized={handleAuthError}
-                      onTransfer={handleLiveCallTransfer}
-                    />
-                    <CallTargetSelector
-                      mode="consult"
-                      token={session?.token || ''}
-                      currentExtension={liveCallBanner.operatorExt || myExt}
-                      disabled={isLiveTransferLoading}
-                      buttonClassName={liveActionButtonClass}
-                      consultStatus={consultTransferStatus}
-                      onUnauthorized={handleAuthError}
-                      onConfirm={handleConsultTransferStart}
-                    />
-                    <CallTargetSelector
-                      mode="conference"
-                      token={session?.token || ''}
-                      currentExtension={liveCallBanner.operatorExt || myExt}
-                      disabled={isLiveTransferLoading}
-                      buttonClassName={liveActionButtonClass}
-                      backendStatus={conferenceBackendStatus}
-                      onUnauthorized={handleAuthError}
-                    />
-                    {canUseLiveMonitorActions && (
-                      <>
-                        <button
-                          type="button"
-                          disabled
-                          onClick={() => handleLiveCallMonitor('listen')}
-                          className={liveActionButtonClass}
-                          title="Прослушивание временно недоступно"
-                        >
-                          <Headphones className="h-4 w-4" />
-                        </button>
-                        <button
-                          type="button"
-                          disabled
-                          onClick={() => handleLiveCallMonitor('whisper')}
-                          className={liveActionButtonClass}
-                          title="Режим суфлёра временно недоступен"
-                        >
-                          <Mic2 className="h-4 w-4" />
-                        </button>
-                      </>
-                    )}
-                  </div>
+                <div className="relative flex items-center gap-4 py-4 px-6 min-w-[360px] max-w-[480px] border-r border-slate-200">
                   <div className={`h-14 w-14 rounded-full flex items-center justify-center shadow-sm shrink-0 ${iconClass}`}>
                     {isIncomingLive ? <PhoneIncoming className="h-7 w-7" /> : isOutgoingLive ? <PhoneOutgoing className="h-7 w-7" /> : <PhoneCall className="h-7 w-7" />}
                   </div>
@@ -5469,8 +5415,8 @@ export default function App() {
                         {isIncomingLive && <span className="h-2.5 w-2.5 rounded-full bg-blue-500 animate-pulse" />}
                       </div>
                     )}
-                    <div className="mt-1 flex items-center gap-2 min-w-0" title={display}>
-                      <span className="text-xl font-black text-slate-950 truncate">
+                    <div className="mt-1 flex items-start gap-2 min-w-0" title={display}>
+                      <span className="text-sm leading-4 font-black text-slate-950 line-clamp-2 break-words">
                         {cleanName || display}
                       </span>
                       {isSpamOrBlacklisted && (
@@ -5487,19 +5433,16 @@ export default function App() {
                     )}
                   </div></div>
 
-                <div className="grid grid-cols-2 xl:grid-cols-6 flex-1 divide-x divide-slate-200">
+                <div className="grid grid-cols-2 xl:grid-cols-[minmax(90px,.7fr)_minmax(130px,1fr)_minmax(130px,1fr)_minmax(110px,.8fr)_minmax(110px,.8fr)_minmax(112px,.8fr)] flex-1 divide-x divide-slate-200">
                   <div className="px-6 py-4 flex flex-col justify-center">
                     <span className="text-[11px] uppercase tracking-wider font-bold text-slate-500">Тип</span>
                     <span className={`mt-2 w-fit rounded-md border px-2 py-1 text-xs font-bold ${contactTypeClass}`}>{contactTypeLabel}</span></div>
                   <div className="px-6 py-4 flex flex-col justify-center min-w-0">
-                    <span className="text-[11px] uppercase tracking-wider font-bold text-slate-500">Справочник</span>
-                    <span className="mt-2 text-sm font-black text-slate-900 truncate" title={display}>{cleanName}</span></div>
+                    <span className="text-[11px] uppercase tracking-wider font-bold text-slate-500">Компания</span>
+                    <span className="mt-2 text-xs leading-4 font-black text-slate-900 line-clamp-2 break-words" title={company}>{company || '—'}</span></div>
                   <div className="px-6 py-4 flex flex-col justify-center min-w-0">
-                    <span className="text-[11px] uppercase tracking-wider font-bold text-slate-500">Должность / комментарий</span>
-                    <span className="mt-2 text-sm font-bold text-slate-900 truncate" title={position}>{position || '—'}</span></div>
-                  <div className="px-6 py-4 flex flex-col justify-center">
-                    <span className="text-[11px] uppercase tracking-wider font-bold text-slate-500">{routeNumberLabel}</span>
-                    <span className="mt-2 text-base font-black text-slate-950">{routeNumber || '—'}</span></div>
+                    <span className="text-[11px] uppercase tracking-wider font-bold text-slate-500">Должность</span>
+                    <span className="mt-2 text-xs leading-4 font-bold text-slate-900 line-clamp-2 break-words" title={position}>{position || '—'}</span></div>
                   <div className="px-6 py-4 flex flex-col justify-center">
                     <span className="text-[11px] uppercase tracking-wider font-bold text-slate-500">{endpointLabel}</span>
                     <span className="mt-2 text-base font-black text-slate-950">{endpointNumber || '—'}</span></div>
@@ -5510,6 +5453,49 @@ export default function App() {
                     {liveTransferStatus && (
                       <span className="mt-2 max-w-[220px] text-right text-[11px] font-bold text-slate-500">{liveTransferStatus}</span>
                     )}
+                  </div>
+                  <div className="px-4 py-4 flex items-center justify-center">
+                    <div className="grid grid-cols-3 gap-1.5">
+                      <CallTargetSelector
+                        mode="transfer"
+                        token={session?.token || ''}
+                        currentExtension={liveCallBanner.operatorExt || myExt}
+                        disabled={isLiveTransferLoading}
+                        buttonClassName={liveActionButtonClass}
+                        directoryVisibleColumns={selectedDirectoryVisibleColumns}
+                        onUnauthorized={handleAuthError}
+                        onTransfer={handleLiveCallTransfer}
+                      />
+                      <CallTargetSelector
+                        mode="consult"
+                        token={session?.token || ''}
+                        currentExtension={liveCallBanner.operatorExt || myExt}
+                        disabled={isLiveTransferLoading}
+                        buttonClassName={liveActionButtonClass}
+                        consultStatus={consultTransferStatus}
+                        onUnauthorized={handleAuthError}
+                        onConfirm={handleConsultTransferStart}
+                      />
+                      <CallTargetSelector
+                        mode="conference"
+                        token={session?.token || ''}
+                        currentExtension={liveCallBanner.operatorExt || myExt}
+                        disabled={isLiveTransferLoading}
+                        buttonClassName={liveActionButtonClass}
+                        backendStatus={conferenceBackendStatus}
+                        onUnauthorized={handleAuthError}
+                      />
+                      {canUseLiveMonitorActions && (
+                        <>
+                          <button type="button" disabled onClick={() => handleLiveCallMonitor('listen')} className={liveActionButtonClass} title="Прослушивание временно недоступно">
+                            <Headphones className="h-4 w-4" />
+                          </button>
+                          <button type="button" disabled onClick={() => handleLiveCallMonitor('whisper')} className={liveActionButtonClass} title="Режим суфлёра временно недоступен">
+                            <Mic2 className="h-4 w-4" />
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </div>
                 </div></div>
             </div>

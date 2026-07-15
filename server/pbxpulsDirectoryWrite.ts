@@ -19,6 +19,18 @@ export interface DirectorySqlContactInput {
   id?: string | null;
   name?: string | null;
   company?: string | null;
+  position?: string | null;
+  department?: string | null;
+  group?: string | null;
+  website?: string | null;
+  inn?: string | null;
+  kpp?: string | null;
+  ogrn?: string | null;
+  address?: string | null;
+  internalExtension?: string | null;
+  linkedExternalNumber?: string | null;
+  responsibleUserId?: string | null;
+  tags?: unknown[] | null;
   number?: string | null;
   phone?: string | null;
   phone2?: string | null;
@@ -490,6 +502,19 @@ function normalizeBusinessType(value: unknown): DirectorySqlBusinessType {
 
 function normalizeMetadataInput(input: DirectorySqlContactInput): Record<string, unknown> {
   return {
+    phones: input.phones || [],
+    position: input.position || '',
+    department: input.department || '',
+    group: input.group || '',
+    website: input.website || '',
+    inn: input.inn || '',
+    kpp: input.kpp || '',
+    ogrn: input.ogrn || '',
+    address: input.address || '',
+    internalExtension: input.internalExtension || '',
+    linkedExternalNumber: input.linkedExternalNumber || '',
+    responsibleUserId: input.responsibleUserId || '',
+    tags: input.tags || [],
     ...(input.metadata && typeof input.metadata === 'object' && !Array.isArray(input.metadata) ? input.metadata : {}),
     ...(input.customFields && typeof input.customFields === 'object' && !Array.isArray(input.customFields) ? input.customFields : {})
   };
