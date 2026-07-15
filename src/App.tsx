@@ -1944,7 +1944,7 @@ export default function App() {
     }
   };
 
-  const loadLiveCallBanner = async () => {
+  const loadLiveCallBanner = async (signal?: AbortSignal) => {
     if (!session || !myExt.trim()) {
       setLiveCallBanner(null);
       return;
@@ -1953,7 +1953,8 @@ export default function App() {
       const qParams = new URLSearchParams({ operatorExt: myExt.trim() });
       const resp = await fetch(`/api/live/call-banner?${qParams.toString()}`, {
         headers: { 'Authorization': `Bearer ${session.token}` },
-        cache: 'no-store'
+        cache: 'no-store',
+        signal
       });
       if (resp.status === 401) {
         handleAuthError(resp);
@@ -3139,9 +3140,23 @@ export default function App() {
       setLiveCallBanner(null);
       return;
     }
-    loadLiveCallBanner();
-    const interval = setInterval(loadLiveCallBanner, 2000);
-    return () => clearInterval(interval);
+    let stopped = false;
+    let timer: number | undefined;
+    let controller: AbortController | null = null;
+    const poll = async () => {
+      controller = new AbortController();
+      await loadLiveCallBanner(controller.signal);
+      controller = null;
+      if (!stopped) {
+        timer = window.setTimeout(poll, document.hidden ? 15000 : 3000);
+      }
+    };
+    void poll();
+    return () => {
+      stopped = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+      controller?.abort();
+    };
   }, [session, myExt]);
 
   useEffect(() => {

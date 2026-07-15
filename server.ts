@@ -117,6 +117,7 @@ import {
   buildCallRouteSummaryFromTimeline,
   mapRouteSummaryToLivePopup
 } from './server/callRouteSummary.js';
+import { createLiveSnapshotCache } from './server/liveSnapshotCache.js';
 import {
   appendDevicesAlertsToSql, appendDevicesHistoryToSql, appendHealthHistoryToSql, appendQualityAlertsToSql,
   appendQualityHistoryToSql, getMonitoringStorageMode, getMonitoringStorageStatus, readDevicesAlertsFromSql,
@@ -6871,6 +6872,35 @@ async function getDirectoryRuntimeSnapshotForRequest(localDb: any, req: Request)
   });
 }
 
+const LIVE_DIRECTORY_SNAPSHOT_TTL_MS = 15000;
+const liveDirectorySnapshotCache = new Map<string, { expiresAt: number; snapshot: any }>();
+const liveDirectorySnapshotInFlight = new Map<string, Promise<any>>();
+
+async function getLiveDirectoryRuntimeSnapshot(localDb: any, req: Request) {
+  const authUser = (req as any).user || {};
+  const dbUser = getAuthenticatedDbUser(localDb, req) || {};
+  const key = [authUser.username, authUser.role, authUser.extension, dbUser.id].map(value => String(value || '')).join('|');
+  const cached = liveDirectorySnapshotCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.snapshot;
+  const inFlight = liveDirectorySnapshotInFlight.get(key);
+  if (inFlight) return inFlight;
+
+  const request = getDirectoryRuntimeSnapshotForRequest(localDb, req)
+    .then(snapshot => {
+      liveDirectorySnapshotCache.set(key, { expiresAt: Date.now() + LIVE_DIRECTORY_SNAPSHOT_TTL_MS, snapshot });
+      if (liveDirectorySnapshotCache.size > 100) {
+        const now = Date.now();
+        liveDirectorySnapshotCache.forEach((entry, cacheKey) => {
+          if (entry.expiresAt <= now) liveDirectorySnapshotCache.delete(cacheKey);
+        });
+      }
+      return snapshot;
+    })
+    .finally(() => liveDirectorySnapshotInFlight.delete(key));
+  liveDirectorySnapshotInFlight.set(key, request);
+  return request;
+}
+
 function buildSettingsApiSwitchReason(switchEnabled: boolean, safeToEnable: boolean): string {
   if (!switchEnabled) return 'switch_disabled';
   return safeToEnable ? 'switch_enabled_guard_passed' : 'settings_readiness_failed';
@@ -12323,7 +12353,7 @@ function parseAmiBlocks(raw: string): AmiBlock[] {
     .filter(item => Object.keys(item).length > 0);
 }
 
-function runAmiCoreShowChannels(settings: AppSettings): Promise<AmiBlock[]> {
+function runAmiCoreShowChannelsUncached(settings: AppSettings): Promise<AmiBlock[]> {
   return new Promise((resolve, reject) => {
     const host = settings.amiHost || 'localhost';
     const port = Number(settings.amiPort || 5038);
@@ -12331,7 +12361,7 @@ function runAmiCoreShowChannels(settings: AppSettings): Promise<AmiBlock[]> {
     const pass = settings.amiPass || '';
 
     if (!host || !user || !pass) {
-      resolve([]);
+      reject(new Error('AMI is not configured'));
       return;
     }
 
@@ -12356,7 +12386,7 @@ function runAmiCoreShowChannels(settings: AppSettings): Promise<AmiBlock[]> {
         const lower = buffer.toLowerCase();
         if (!lower.includes('success') && !lower.includes('authentication accepted')) {
           socket.destroy();
-          resolve([]);
+          reject(new Error('AMI authentication failed'));
           return;
         }
         buffer = '';
@@ -12374,14 +12404,32 @@ function runAmiCoreShowChannels(settings: AppSettings): Promise<AmiBlock[]> {
     });
 
     socket.on('error', (err) => {
-      resolve([]);
+      reject(err);
     });
 
     socket.on('timeout', () => {
       socket.destroy();
-      resolve([]);
+      reject(new Error('AMI CoreShowChannels timeout'));
     });
   });
+}
+
+let liveAmiSnapshotSettings: AppSettings | null = null;
+const liveAmiSnapshotCache = createLiveSnapshotCache<AmiBlock[]>({
+  ttlMs: 2000,
+  staleTtlMs: 15000,
+  load: () => liveAmiSnapshotSettings
+    ? runAmiCoreShowChannelsUncached(liveAmiSnapshotSettings)
+    : Promise.reject(new Error('AMI settings are unavailable'))
+});
+
+async function runAmiCoreShowChannels(settings: AppSettings): Promise<AmiBlock[]> {
+  liveAmiSnapshotSettings = settings;
+  try {
+    return await liveAmiSnapshotCache.get();
+  } catch (_error) {
+    return [];
+  }
 }
 
 function runAmiBlindTransfer(
@@ -13116,15 +13164,33 @@ app.get('/api/live/call-banner', requireAuth(), async (req, res) => {
       res.json({ active: false });
       return;
     }
-    const directoryRuntime = await getDirectoryRuntimeSnapshotForRequest(localDb, req);
     const channels = await runAmiCoreShowChannels(localDb.settings);
-    const banner = await buildLiveCallBannerPayload(
+    let banner = await buildLiveCallBannerPayload(
       channels,
       effectiveOperatorExt,
-      directoryRuntime.contacts,
+      [],
       localDb.settings,
       localDb.phoneMeetings || []
     );
+    if (!banner.active) {
+      res.json(banner);
+      return;
+    }
+    if (banner.phoneMeeting !== true) {
+      const directoryRuntime = await getLiveDirectoryRuntimeSnapshot(localDb, req);
+      const contact = resolveLiveContact(banner.displayNumber || banner.number || '', directoryRuntime.contacts, localDb.settings);
+      banner = {
+        ...banner,
+        displayName: contact.name || banner.displayName,
+        contactType: contact.type,
+        contactComment: contact.comment,
+        isSpam: contact.isSpam,
+        isBlacklisted: contact.isBlacklisted,
+        company: contact.company,
+        position: contact.position
+      };
+      banner = { ...banner, ...buildLiveCallBannerDisplay(banner as Record<string, any>) };
+    }
     res.json(banner);
   } catch (error: any) {
     res.json({ active: false, error: error.message });
