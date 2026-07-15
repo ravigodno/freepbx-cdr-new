@@ -77,6 +77,19 @@ function MultiCallTargetSelector({
     let frame = 0;
     const update = () => {
       const popup = rootRef.current?.closest('[data-live-call-popup]') as HTMLElement | null;
+      if (mode === 'meeting' && !popup) {
+        const viewportPaddingX = Math.max(16, window.innerWidth * 0.05);
+        const viewportPaddingY = Math.max(16, window.innerHeight * 0.1);
+        const width = Math.max(320, window.innerWidth - viewportPaddingX * 2);
+        const height = Math.max(360, window.innerHeight - viewportPaddingY * 2);
+        setPanelStyle(previous => previous.left === viewportPaddingX
+          && previous.top === viewportPaddingY
+          && previous.width === width
+          && previous.height === height
+          ? previous
+          : { left: viewportPaddingX, top: viewportPaddingY, width, height, maxHeight: height });
+        return;
+      }
       const anchor = popup || rootRef.current;
       if (!anchor) return;
       const rect = anchor.getBoundingClientRect();
@@ -98,7 +111,7 @@ function MultiCallTargetSelector({
       window.cancelAnimationFrame(frame);
       window.removeEventListener('resize', update);
     };
-  }, [open]);
+  }, [open, mode]);
 
   useEffect(() => {
     if (!open) return;
