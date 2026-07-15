@@ -77,6 +77,16 @@ import {
   getDirectoryWriteRuntimeDecision
 } from './server/pbxpulsDirectoryWriteRouter.js';
 import {
+  findContactImportDuplicate,
+  getContactImportDuplicateResultReason,
+  getContactImportDuplicateWarning
+} from './server/contactImportDuplicate.js';
+import {
+  canEditDirectoryContactByOwner,
+  hasFullDirectoryEditPermission,
+  hasOwnDirectoryEditPermission
+} from './server/directoryContactAccess.js';
+import {
   assertDirectorySqlWriteTestAllowed,
   getDirectorySqlWriteTestConfirmPhrase,
   getDirectorySqlWriteTestDisabledReason,
@@ -753,19 +763,14 @@ const contactPreviewDuplicateStatus = (directoryContact: any, normalized: Normal
     mapping.userId === userId && mapping.provider === normalized.provider && mapping.externalContactId === normalized.externalContactId
   ));
   if (mapped) warnings.push('Контакт уже связан с этим внешним провайдером.');
-  const phoneDigits = [directoryContact.number, ...(directoryContact.phones || [])].map(onlyDigits).filter(Boolean);
-  const email = String(directoryContact.email || '').trim().toLowerCase();
-  const fullName = String(directoryContact.name || '').trim().toLowerCase();
-  const organization = String(directoryContact.company || '').trim().toLowerCase();
-  const possibleDuplicate = (localDb.directory || []).map((entry: any) => normalizeDirectoryEntry(entry, localDb.settings)).some((entry: any) => {
-    if (entry.visibility === 'private' && entry.ownerUserId !== userId) return false;
-    const entryPhones = [entry.number, ...(entry.phones || [])].map(onlyDigits).filter(Boolean);
-    if (phoneDigits.length && entryPhones.some((phone: string) => phoneDigits.includes(phone))) return true;
-    if (email && String(entry.email || '').trim().toLowerCase() === email) return true;
-    return !!fullName && !!organization && String(entry.name || '').trim().toLowerCase() === fullName && String(entry.company || '').trim().toLowerCase() === organization;
-  });
-  if (possibleDuplicate) warnings.push('Возможный дубль в справочнике.');
-  return { status: mapped || possibleDuplicate ? 'possible_duplicate' : 'new', warnings };
+  const duplicate = findContactImportDuplicate(
+    directoryContact,
+    localDb.directory || [],
+    userId,
+    entry => normalizeDirectoryEntry(entry, localDb.settings)
+  );
+  if (duplicate) warnings.push(getContactImportDuplicateWarning(duplicate.reason));
+  return { status: mapped || duplicate ? 'possible_duplicate' : 'new', warnings };
 };
 
 const getRequiredExternalContactImportErrors = (directoryContact: any, normalized?: NormalizedExternalContact): string[] => {
@@ -1743,22 +1748,9 @@ const getExistingContactSyncMapping = (localDb: any, userId: string, provider: C
 };
 
 const findExternalImportPossibleDuplicate = (localDb: any, entry: any, userId: string): { reason: string } | null => {
-  const phones = [entry.number, ...(entry.phones || [])].map(onlyDigits).filter(Boolean);
-  const email = String(entry.email || '').trim().toLowerCase();
-  const fullName = String(entry.name || '').trim().toLowerCase();
-  const organization = String(entry.company || '').trim().toLowerCase();
-  const duplicate = (localDb.directory || []).map((item: any) => normalizeDirectoryEntry(item, localDb.settings)).find((existing: any) => {
-    if (existing.visibility === 'private' && existing.ownerUserId !== userId) return false;
-    const existingPhones = [existing.number, ...(existing.phones || [])].map(onlyDigits).filter(Boolean);
-    if (phones.length && existingPhones.some((phone: string) => phones.includes(phone))) return true;
-    if (email && String(existing.email || '').trim().toLowerCase() === email) return true;
-    return !!fullName && !!organization && String(existing.name || '').trim().toLowerCase() === fullName && String(existing.company || '').trim().toLowerCase() === organization;
-  });
+  const duplicate = findContactImportDuplicate(entry, localDb.directory || [], userId, item => normalizeDirectoryEntry(item, localDb.settings));
   if (!duplicate) return null;
-  const duplicatePhones = [duplicate.number, ...(duplicate.phones || [])].map(onlyDigits).filter(Boolean);
-  if (phones.length && duplicatePhones.some((phone: string) => phones.includes(phone))) return { reason: 'Possible duplicate by phone' };
-  if (email && String(duplicate.email || '').trim().toLowerCase() === email) return { reason: 'Possible duplicate by email' };
-  return { reason: 'Possible duplicate by name and organization' };
+  return { reason: getContactImportDuplicateResultReason(duplicate.reason) };
 };
 
 const createContactSyncMapping = (localDb: any, userId: string, provider: ContactProvider, contactId: string, externalContactId: string, now: string, item: any) => {
@@ -1779,20 +1771,27 @@ const createContactSyncMapping = (localDb: any, userId: string, provider: Contac
   });
 };
 
-const importExternalContactItems = (localDb: any, req: Request, provider: ContactProvider, userId: string, items: any[], force: boolean) => {
+const importExternalContactItems = async (localDb: any, req: Request, provider: ContactProvider, userId: string, items: any[], force: boolean, visibility: 'private' | 'shared' = 'private') => {
   const results: any[] = [];
   const now = nowIso();
   if (!Array.isArray(localDb.directory)) localDb.directory = [];
-  items.forEach((item: any) => {
+  const actor = getDirectoryStorageModeActor(req);
+  const writeDecision = await getDirectoryWriteRuntimeDecision('create', actor);
+  if (writeDecision.blocked || (!writeDecision.useLegacy && !writeDecision.useSql)) {
+    throw new Error(writeDecision.reason || 'Directory write storage is unavailable');
+  }
+  const directoryRuntime = await getDirectoryRuntimeSnapshotForRequest(localDb, req);
+  const duplicateDirectory = [...(directoryRuntime.contacts || [])];
+  for (const item of items) {
     const externalContactId = String(item?.externalContactId || '').trim();
     if (!externalContactId) {
       results.push({ externalContactId: '', status: 'failed', error: 'externalContactId is required' });
-      return;
+      continue;
     }
     const existingMapping = getExistingContactSyncMapping(localDb, userId, provider, externalContactId);
     if (existingMapping) {
       results.push({ externalContactId, status: 'skipped_existing_mapping', contactId: existingMapping.contactId || null });
-      return;
+      continue;
     }
     try {
       const rawEntry = buildExternalContactImportRawEntry(item, userId);
@@ -1804,11 +1803,11 @@ const importExternalContactItems = (localDb: any, req: Request, provider: Contac
       const requiredErrors = getRequiredExternalContactImportErrors(previewLikeContact);
       if (item?.status === 'invalid' || requiredErrors.length) {
         results.push({ externalContactId, status: 'failed', error: requiredErrors.length ? 'Не заполнено ФИО или телефон.' : 'Invalid preview contact' });
-        return;
+        continue;
       }
       const prepared = prepareDirectoryEntryForSave(rawEntry, localDb, req);
-      prepared.visibility = 'private';
-      prepared.ownerUserId = userId;
+      prepared.visibility = visibility;
+      prepared.ownerUserId = visibility === 'private' ? userId : null;
       prepared.type = prepared.type || 'client';
       prepared.isSpam = false;
       prepared.internalExtension = '';
@@ -1817,22 +1816,30 @@ const importExternalContactItems = (localDb: any, req: Request, provider: Contac
       const preparedRequiredErrors = getRequiredExternalContactImportErrors({ name: prepared.name, phone: prepared.number || prepared.phones?.[0] || '', number: prepared.number || '' });
       if (preparedRequiredErrors.length) {
         results.push({ externalContactId, status: 'failed', error: 'Не заполнено ФИО или телефон.' });
-        return;
+        continue;
       }
-      const duplicate = findExternalImportPossibleDuplicate(localDb, prepared, userId);
+      const duplicateDb = { ...localDb, directory: duplicateDirectory };
+      const duplicate = findExternalImportPossibleDuplicate(duplicateDb, prepared, userId);
       if ((item?.status === 'possible_duplicate' || duplicate) && !force) {
         results.push({ externalContactId, status: 'skipped_possible_duplicate', reason: duplicate?.reason || 'Possible duplicate' });
-        return;
+        continue;
       }
       prepared.createdAt = prepared.createdAt || now;
       prepared.updatedAt = now;
-      localDb.directory.push(prepared);
-      createContactSyncMapping(localDb, userId, provider, prepared.id, externalContactId, now, item);
-      results.push({ externalContactId, status: 'imported', contactId: prepared.id });
+      let contactId = prepared.id;
+      if (writeDecision.useSql) {
+        const sqlResult = await createDirectoryContactSql(prepared, actor);
+        contactId = sqlResult.contactId;
+      } else {
+        localDb.directory.push(prepared);
+      }
+      duplicateDirectory.push({ ...prepared, id: contactId });
+      createContactSyncMapping(localDb, userId, provider, contactId, externalContactId, now, item);
+      results.push({ externalContactId, status: 'imported', contactId, source: writeDecision.useSql ? 'pbxpuls_sql' : 'data/db.json' });
     } catch (error: any) {
       results.push({ externalContactId, status: 'failed', error: error?.details?.[0] || error?.message || 'Import failed' });
     }
-  });
+  }
   const imported = results.filter(item => item.status === 'imported').length;
   const failed = results.filter(item => item.status === 'failed').length;
   const skipped = results.length - imported - failed;
@@ -3147,6 +3154,11 @@ const canWriteDirectoryEntry = (entry: any, authUser: any, dbUser: any, settings
   return !!normalized.ownerUserId && normalized.ownerUserId === getDirectoryUserId(dbUser, authUser);
 };
 
+const canEditDirectoryEntry = (entry: any, authUser: any, dbUser: any, settings?: AppSettings): boolean => {
+  const normalized = normalizeDirectoryEntry(entry, settings);
+  return canEditDirectoryContactByOwner(normalized, authUser, getDirectoryUserId(dbUser, authUser));
+};
+
 const parseDirectoryPaginationNumber = (value: any, fallback: number, max: number): number => {
   const parsed = Number.parseInt(String(value ?? ''), 10);
   if (!Number.isFinite(parsed) || parsed < 1) return fallback;
@@ -3250,7 +3262,8 @@ const applyDirectoryAccessAndFilters = (entries: any[], req: Request, localDb: a
       return [entry.number, entry.internalExtension, entry.linkedExternalNumber, ...(entry.phones || [])]
         .map((value: any) => onlyDigits(value))
         .some((digits: string) => digits && (digits.includes(qDigits) || qDigits.includes(digits)));
-    });
+    })
+    .map((entry: any) => ({ ...entry, canEdit: canEditDirectoryEntry(entry, authUser, dbUser, localDb.settings) }));
 };
 
 const buildDirectoryPaginatedResponse = (entries: any[], req: Request, localDb: any) => {
@@ -3459,6 +3472,47 @@ const upsertDirectoryEntries = (current: any[], incoming: any[], mode: string): 
   return { directory, added, updated };
 };
 
+const writeDirectoryImportedEntries = async (localDb: any, req: Request, incoming: any[], mode: string): Promise<{ added: number; updated: number; source: string }> => {
+  const actor = getDirectoryStorageModeActor(req);
+  const writeDecision = await getDirectoryWriteRuntimeDecision('create', actor);
+  if (writeDecision.blocked || (!writeDecision.useLegacy && !writeDecision.useSql)) {
+    throw new Error(writeDecision.reason || 'Directory write storage is unavailable');
+  }
+  if (writeDecision.useLegacy) {
+    const result = upsertDirectoryEntries(localDb.directory || [], incoming, mode);
+    localDb.directory = result.directory;
+    return { added: result.added, updated: result.updated, source: 'data/db.json' };
+  }
+
+  const runtime = await getDirectoryRuntimeSnapshotForRequest(localDb, req);
+  const known = [...(runtime.contacts || [])];
+  let added = 0;
+  let updated = 0;
+  for (const entry of incoming) {
+    const duplicate = known.find(existing => (
+      (entry.phones || []).some((phone: string) => directoryEntryMatchesNumber(existing, phone))
+      || (!!entry.email && String(existing.email || '').trim().toLowerCase() === String(entry.email).trim().toLowerCase())
+    ));
+    if (duplicate && mode !== 'append') {
+      const merged = {
+        ...duplicate,
+        ...entry,
+        id: duplicate.id,
+        phones: Array.from(new Set([...(duplicate.phones || []), ...(entry.phones || [])])),
+        tags: Array.from(new Set([...(duplicate.tags || []), ...(entry.tags || [])]))
+      };
+      await updateDirectoryContactSql(String(duplicate.id), merged, actor);
+      Object.assign(duplicate, merged);
+      updated++;
+    } else {
+      const result = await createDirectoryContactSql(entry, actor);
+      known.push({ ...entry, id: result.contactId });
+      added++;
+    }
+  }
+  return { added, updated, source: 'pbxpuls_sql' };
+};
+
 const fetchTextFromUrl = (url: string): Promise<string> => {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
@@ -3545,7 +3599,7 @@ function runAMICommand(settings: AppSettings, command: string): Promise<{ succes
   });
 }
 
-async function syncDirectoryFromConfiguredUrl(localDb: any): Promise<{ count: number; added: number; updated: number; message: string }> {
+async function syncDirectoryFromConfiguredUrl(localDb: any, req: Request): Promise<{ count: number; added: number; updated: number; source: string; message: string }> {
   const settings = localDb.settings || {};
   const url = String(settings.directoryImportUrl || '').trim();
   if (!url) throw new Error('URL импорта справо��ника не задан');
@@ -3554,12 +3608,11 @@ async function syncDirectoryFromConfiguredUrl(localDb: any): Promise<{ count: nu
   const format = settings.directoryImportFormat || (url.toLowerCase().endsWith('.json') ? 'json' : 'csv');
   const mode = settings.directoryImportMode || 'upsert';
   const entries = parseDirectoryPayload(text, format, settings);
-  const result = upsertDirectoryEntries(localDb.directory || [], entries, mode);
-  localDb.directory = result.directory;
+  const result = await writeDirectoryImportedEntries(localDb, req, entries, mode);
   localDb.settings.directoryLastSyncAt = new Date().toISOString();
   localDb.settings.directoryLastSyncStatus = 'success';
   localDb.settings.directoryLastSyncMessage = `Загружено: ${entries.length}, добавлено: ${result.added}, обновлено: ${result.updated}`;
-  return { count: entries.length, added: result.added, updated: result.updated, message: localDb.settings.directoryLastSyncMessage };
+  return { count: entries.length, added: result.added, updated: result.updated, source: result.source, message: localDb.settings.directoryLastSyncMessage };
 }
 
 
@@ -11374,10 +11427,17 @@ const contactFileTextParser = express.raw({
   limit: '25mb'
 });
 
+const canImportDirectoryContacts = async (req: Request): Promise<boolean> => {
+  const authUser = (req as any).user;
+  return authUser?.role === 'su'
+    || await checkUserPermission(req, 'directory_import_contacts')
+    || await checkUserPermission(req, 'manage_directory_import');
+};
+
 app.post('/api/directory/sync/file/preview-import', requireAuth(), contactFileTextParser, async (req, res) => {
   try {
-    if (!(await checkUserPermission(req, 'view_directory'))) {
-      return res.status(403).json({ error: 'Access denied: view_directory permission required' });
+    if (!(await canImportDirectoryContacts(req))) {
+      return res.status(403).json({ error: 'Нет прав на импорт контактов' });
     }
     const localDb = await readLocalDb();
     ensureContactImportSourceEnabled(localDb, 'file');
@@ -11386,7 +11446,8 @@ app.post('/api/directory/sync/file/preview-import', requireAuth(), contactFileTe
     const normalized = parsed.contacts;
     if (!normalized.length) return contactSyncPreviewError(res, 400, 'file', 'parse', 'CSV/vCard file contains no contacts');
     const userId = getCurrentDirectoryUserId(localDb, req);
-    const items = buildContactPreviewItems('file', normalized, localDb, userId);
+    const directoryRuntime = await getDirectoryRuntimeSnapshotForRequest(localDb, req);
+    const items = buildContactPreviewItems('file', normalized, { ...localDb, directory: directoryRuntime.contacts }, userId);
     const readyToImport = items.filter((item: any) => item.status === 'new').length;
     const invalid = items.filter((item: any) => item.status === 'invalid').length;
     const duplicates = items.filter((item: any) => item.status === 'possible_duplicate').length;
@@ -11400,8 +11461,8 @@ app.post('/api/directory/sync/file/preview-import', requireAuth(), contactFileTe
 
 app.post('/api/directory/sync/file/import', requireAuth(), async (req, res) => {
   try {
-    if (!(await checkUserPermission(req, 'view_directory'))) {
-      return res.status(403).json({ error: 'Access denied: view_directory permission required' });
+    if (!(await canImportDirectoryContacts(req))) {
+      return res.status(403).json({ error: 'Нет прав на импорт контактов' });
     }
     const localDb = await readLocalDb();
     ensureContactImportSourceEnabled(localDb, 'file');
@@ -11409,11 +11470,15 @@ app.post('/api/directory/sync/file/import', requireAuth(), async (req, res) => {
     const bodyItems = Array.isArray(req.body?.items) ? req.body.items : [];
     const externalContactIds = Array.isArray(req.body?.externalContactIds) ? req.body.externalContactIds : [];
     const force = req.body?.force === true;
+    const visibility = req.body?.visibility === 'shared' ? 'shared' : 'private';
+    if (visibility === 'shared' && (req as any).user?.role !== 'su' && !(await checkUserPermission(req, 'manage_directory_import'))) {
+      return res.status(403).json({ error: 'Нет прав на импорт общих контактов' });
+    }
     const items = bodyItems.length
       ? bodyItems
       : externalContactIds.map((externalContactId: any) => ({ externalContactId, status: 'new' }));
     if (!items.length) return res.status(400).json({ error: 'No contacts selected for import' });
-    const result = importExternalContactItems(localDb, req, 'file', userId, items, force);
+    const result = await importExternalContactItems(localDb, req, 'file', userId, items, force, visibility);
     await writeLocalDb(localDb);
     res.json({ ok: true, provider: 'file', imported: result.imported, skipped: result.skipped, failed: result.failed, results: result.results });
   } catch (error: any) {
@@ -11423,6 +11488,7 @@ app.post('/api/directory/sync/file/import', requireAuth(), async (req, res) => {
 
 app.post('/api/directory/sync/google/preview-import', requireAuth(), async (req, res) => {
   try {
+    if (!(await canImportDirectoryContacts(req))) return res.status(403).json({ error: 'Нет прав на импорт контактов' });
     const localDb = await readLocalDb();
     ensureContactImportSourceEnabled(localDb, 'google');
     const userId = getCurrentDirectoryUserId(localDb, req);
@@ -11459,7 +11525,8 @@ app.post('/api/directory/sync/google/preview-import', requireAuth(), async (req,
     if (!peopleResp.ok) return contactSyncPreviewError(res, 400, 'google', 'people_api', payload?.error?.message || 'Google People API request failed');
     const normalized = (payload.connections || []).map(normalizeGooglePerson);
     if (!normalized.length) return contactSyncPreviewError(res, 404, 'google', 'preview', 'Google returned no contacts');
-    const items = buildContactPreviewItems('google', normalized, localDb, userId);
+    const directoryRuntime = await getDirectoryRuntimeSnapshotForRequest(localDb, req);
+    const items = buildContactPreviewItems('google', normalized, { ...localDb, directory: directoryRuntime.contacts }, userId);
     res.json({ provider: 'google', items, totalPreviewed: items.length });
   } catch (error: any) {
     const message = String(error?.message || 'Google Contacts preview import failed');
@@ -11506,6 +11573,7 @@ app.post('/api/directory/sync/mailru/connect', requireAuth(), (req, res) => conn
 app.post('/api/directory/sync/:provider/preview-import', requireAuth(), async (req, res) => {
   let provider: ContactProvider = 'yandex';
   try {
+    if (!(await canImportDirectoryContacts(req))) return res.status(403).json({ error: 'Нет прав на импорт контактов' });
     provider = String(req.params.provider || '') as ContactProvider;
     if (!isOnlineContactProvider(provider)) return res.status(404).json({ error: 'Unknown contact sync provider' });
     if (provider === 'google') return res.status(405).json({ provider, step: 'provider', message: 'Use /api/directory/sync/google/preview-import', error: 'Use /api/directory/sync/google/preview-import' });
@@ -11532,7 +11600,8 @@ app.post('/api/directory/sync/:provider/preview-import', requireAuth(), async (r
     if (!vcards.length) return contactSyncPreviewError(res, 404, provider, 'vcards', 'CardDAV returned no contacts');
     const normalized = normalizeVCardContacts(provider, vcards.join('\n'));
     if (!normalized.length) return contactSyncPreviewError(res, 404, provider, 'normalize', 'vCard parse returned no contacts');
-    const items = buildContactPreviewItems(provider, normalized, localDb, userId);
+    const directoryRuntime = await getDirectoryRuntimeSnapshotForRequest(localDb, req);
+    const items = buildContactPreviewItems(provider, normalized, { ...localDb, directory: directoryRuntime.contacts }, userId);
     res.json({ provider, items, totalPreviewed: items.length });
   } catch (error: any) {
     const message = String(error?.message || 'CardDAV request failed');
@@ -11562,6 +11631,7 @@ app.post('/api/directory/sync/:provider/preview-import', requireAuth(), async (r
 
 app.post('/api/directory/sync/:provider/import', requireAuth(), async (req, res) => {
   try {
+    if (!(await canImportDirectoryContacts(req))) return res.status(403).json({ error: 'Нет прав на импорт контактов' });
     const provider = String(req.params.provider || '');
     if (!isOnlineContactProvider(provider)) return res.status(404).json({ error: 'Unknown contact sync provider' });
     const localDb = await readLocalDb();
@@ -11573,11 +11643,15 @@ app.post('/api/directory/sync/:provider/import', requireAuth(), async (req, res)
     const bodyItems = Array.isArray(req.body?.items) ? req.body.items : [];
     const externalContactIds = Array.isArray(req.body?.externalContactIds) ? req.body.externalContactIds : [];
     const force = req.body?.force === true;
+    const visibility = req.body?.visibility === 'shared' ? 'shared' : 'private';
+    if (visibility === 'shared' && (req as any).user?.role !== 'su' && !(await checkUserPermission(req, 'manage_directory_import'))) {
+      return res.status(403).json({ error: 'Нет прав на импорт общих контактов' });
+    }
     const items = bodyItems.length
       ? bodyItems
       : externalContactIds.map((externalContactId: any) => ({ externalContactId, status: 'new' }));
     if (!items.length) return res.status(400).json({ error: 'No contacts selected for import' });
-    const result = importExternalContactItems(localDb, req, provider, userId, items, force);
+    const result = await importExternalContactItems(localDb, req, provider, userId, items, force, visibility);
     await writeLocalDb(localDb);
     res.json({ ok: true, provider, imported: result.imported, skipped: result.skipped, failed: result.failed, results: result.results });
   } catch (error: any) {
@@ -11618,15 +11692,20 @@ app.post('/api/directory/sync/:provider/disconnect', requireAuth(), async (req, 
 app.post('/api/directory', requireAuth(), async (req, res) => {
   try {
     const authUser = (req as any).user;
-    if (authUser?.role !== 'su' && authUser?.permissions?.edit_directory !== true) {
+    if (!hasFullDirectoryEditPermission(authUser) && !hasOwnDirectoryEditPermission(authUser)) {
       res.status(403).json({ error: 'Нет прав на создание записей справочника' });
       return;
     }
 
+    const localDb = await readLocalDb();
+    const dbUser = getAuthenticatedDbUser(localDb, req);
+    const ownOnly = !hasFullDirectoryEditPermission(authUser) && hasOwnDirectoryEditPermission(authUser);
+    const createBody = ownOnly ? { ...req.body, visibility: 'private', contact_type: 'personal', ownerUserId: getDirectoryUserId(dbUser, authUser) } : req.body;
+
     const actor = getDirectoryStorageModeActor(req);
     const writeDecision = await getDirectoryWriteRuntimeDecision('create', actor);
     if (writeDecision.useSql === true && writeDecision.blocked === false) {
-      const result = await createDirectoryContactSql(req.body, actor);
+      const result = await createDirectoryContactSql(createBody, actor);
       res.json({
         ok: true,
         success: true,
@@ -11644,10 +11723,9 @@ app.post('/api/directory', requireAuth(), async (req, res) => {
       return;
     }
 
-    const localDb = await readLocalDb();
     if (!localDb.directory) localDb.directory = [];
 
-    const newEntry = prepareDirectoryEntryForSave({ ...req.body, department: req.body.department || '' }, localDb, req);
+    const newEntry = prepareDirectoryEntryForSave({ ...createBody, department: createBody.department || '' }, localDb, req);
     if (!(newEntry.name || newEntry.company) || (!newEntry.phones.length && !newEntry.email)) {
       res.status(400).json({ error: 'Укажите организацию или ФИО и хотя бы один способ связи: телефон или email' });
       return;
@@ -11673,15 +11751,26 @@ app.post('/api/directory', requireAuth(), async (req, res) => {
 app.put('/api/directory/:id', requireAuth(), async (req, res) => {
   try {
     const authUser = (req as any).user;
-    if (authUser?.role !== 'su' && authUser?.permissions?.edit_directory !== true) {
+    if (!hasFullDirectoryEditPermission(authUser) && !hasOwnDirectoryEditPermission(authUser)) {
       res.status(403).json({ error: 'Нет прав на редактирование справочника' });
       return;
     }
 
+    const localDb = await readLocalDb();
+    const dbUser = getAuthenticatedDbUser(localDb, req);
+    const directoryRuntime = await getDirectoryRuntimeSnapshotForRequest(localDb, req);
+    const existingEntry = (directoryRuntime.contacts || []).find((entry: any) => String(entry.id) === String(req.params.id));
+    if (!existingEntry) return res.status(404).json({ error: 'Контакт не найден' });
+    if (!canEditDirectoryEntry(existingEntry, authUser, dbUser, localDb.settings)) {
+      return res.status(403).json({ error: 'Можно редактировать только собственные личные контакты' });
+    }
+    const ownOnly = !hasFullDirectoryEditPermission(authUser);
+    const updateBody = ownOnly ? { ...req.body, visibility: 'private', contact_type: 'personal', ownerUserId: getDirectoryUserId(dbUser, authUser) } : req.body;
+
     const actor = getDirectoryStorageModeActor(req);
     const writeDecision = await getDirectoryWriteRuntimeDecision('update', actor);
     if (writeDecision.useSql === true && writeDecision.blocked === false) {
-      const result = await updateDirectoryContactSql(req.params.id, req.body, actor);
+      const result = await updateDirectoryContactSql(req.params.id, updateBody, actor);
       res.json({
         ok: true,
         success: true,
@@ -11700,7 +11789,6 @@ app.put('/api/directory/:id', requireAuth(), async (req, res) => {
     }
 
     const { id } = req.params;
-    const localDb = await readLocalDb();
     if (!localDb.directory) localDb.directory = [];
 
     const entryIdx = localDb.directory.findIndex((e: any) => e.id === id);
@@ -11709,15 +11797,14 @@ app.put('/api/directory/:id', requireAuth(), async (req, res) => {
       return;
     }
 
-    const dbUser = getAuthenticatedDbUser(localDb, req);
-    if (!canWriteDirectoryEntry(localDb.directory[entryIdx], authUser, dbUser, localDb.settings)) {
+    if (!canEditDirectoryEntry(localDb.directory[entryIdx], authUser, dbUser, localDb.settings)) {
       res.status(403).json({ error: 'Нет прав на редактирование этого личного контакта' });
       return;
     }
 
     const safeBody = {
-      ...req.body,
-      department: req.body.department || ''
+      ...updateBody,
+      department: updateBody.department || ''
     };
 
     const updatedEntry = prepareDirectoryEntryForSave({
@@ -11851,11 +11938,10 @@ app.post('/api/directory/import', requireAuth(), async (req, res) => {
       .filter((entry: any) => (entry.name || entry.company) && (entry.phones?.length || entry.email));
 
     const saveMode = overwrite === true ? 'overwrite' : (mode || 'upsert');
-    const result = upsertDirectoryEntries(localDb.directory, normalizedEntries, saveMode);
-    localDb.directory = result.directory;
+    const result = await writeDirectoryImportedEntries(localDb, req, normalizedEntries, saveMode);
 
     await writeLocalDb(localDb);
-    res.json({ success: true, count: normalizedEntries.length, added: result.added, updated: result.updated });
+    res.json({ success: true, count: normalizedEntries.length, added: result.added, updated: result.updated, source: result.source });
   } catch (error: any) {
     if (error?.code === 'INVALID_DIRECTORY_PHONE') {
       res.status(400).json({ error: 'Invalid phone number format', message: DIRECTORY_PHONE_VALIDATION_MESSAGE, details: error.details || [] });
@@ -11916,7 +12002,7 @@ app.post('/api/directory/sync-url', async (req, res) => {
     }
 
     try {
-      const result = await syncDirectoryFromConfiguredUrl(localDb);
+      const result = await syncDirectoryFromConfiguredUrl(localDb, req);
       await writeLocalDb(localDb);
 
       if (localDb.settings.directorySyncAsteriskBlacklist) {
@@ -11957,6 +12043,7 @@ app.post('/api/directory/import/preview', requireAuth(), async (req, res) => {
       res.status(403).json({ error: 'Directory import is disabled by administrator' });
       return;
     }
+    const directoryRuntime = await getDirectoryRuntimeSnapshotForRequest(localDb, req);
     const normalized = entries.map((entry: any, index: number) => {
       let normalizedEntry: any;
       const errors: string[] = [];
@@ -11972,7 +12059,7 @@ app.post('/api/directory/import/preview', requireAuth(), async (req, res) => {
       }
       if (!(normalizedEntry.name || normalizedEntry.company)) errors.push('Укажите организацию или ФИО');
       if (!normalizedEntry.phones.length && !normalizedEntry.email) errors.push('Укажите телефон или email');
-      const duplicate = errors.length ? null : (localDb.directory || []).find((existing: any) => {
+      const duplicate = errors.length ? null : (directoryRuntime.contacts || []).find((existing: any) => {
         const phoneMatch = normalizedEntry.phones.some((phone: string) => directoryEntryMatchesNumber(existing, phone));
         const emailMatch = normalizedEntry.email && String(existing.email || '').toLowerCase() === normalizedEntry.email.toLowerCase();
         return phoneMatch || emailMatch;
@@ -12030,21 +12117,32 @@ app.get('/api/directory/:id', requireAuth(), async (req, res) => {
 app.post('/api/directory/:id/spam', requireAuth(), async (req, res) => {
   try {
     const authUser = (req as any).user;
-    if (authUser?.role !== 'su' && authUser?.permissions?.edit_directory !== true) {
+    if (!hasFullDirectoryEditPermission(authUser) && !hasOwnDirectoryEditPermission(authUser)) {
       res.status(403).json({ error: 'Нет прав на изменение справочника' });
       return;
     }
     const localDb = await readLocalDb();
-    const entry = (localDb.directory || []).find((item: any) => item.id === req.params.id);
+    const directoryRuntime = await getDirectoryRuntimeSnapshotForRequest(localDb, req);
+    const entry = (directoryRuntime.contacts || []).find((item: any) => item.id === req.params.id);
     if (!entry) return res.status(404).json({ error: 'Контакт не найден' });
     const dbUser = getAuthenticatedDbUser(localDb, req);
-    if (!canWriteDirectoryEntry(entry, authUser, dbUser, localDb.settings)) {
-      return res.status(403).json({ error: 'Нет прав на изменение этого личного контакта' });
+    if (!canEditDirectoryEntry(entry, authUser, dbUser, localDb.settings)) {
+      return res.status(403).json({ error: 'Можно изменять только собственные личные контакты' });
     }
-    entry.isSpam = req.body?.enabled !== false;
-    entry.updatedAt = new Date().toISOString();
-    await writeLocalDb(localDb);
-    res.json({ success: true, entry: normalizeDirectoryEntry(entry, localDb.settings) });
+    const nextEntry = { ...entry, isSpam: req.body?.enabled !== false, updatedAt: new Date().toISOString() };
+    const actor = getDirectoryStorageModeActor(req);
+    const writeDecision = await getDirectoryWriteRuntimeDecision('update', actor);
+    if (writeDecision.useSql && !writeDecision.blocked) {
+      await updateDirectoryContactSql(req.params.id, nextEntry, actor);
+    } else if (writeDecision.useLegacy) {
+      const index = (localDb.directory || []).findIndex((item: any) => item.id === req.params.id);
+      if (index < 0) return res.status(404).json({ error: 'Контакт не найден' });
+      localDb.directory[index] = nextEntry;
+      await writeLocalDb(localDb);
+    } else {
+      return res.status(409).json(buildBlockedDirectoryWriteEndpointResponse(writeDecision));
+    }
+    res.json({ success: true, entry: normalizeDirectoryEntry(nextEntry, localDb.settings) });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -12101,9 +12199,18 @@ app.post('/api/directory/:id/blacklist', requireAuth(), async (req, res) => {
 app.delete('/api/directory/:id', requireAuth(), async (req, res) => {
   try {
     const authUser = (req as any).user;
-    if (authUser?.role !== 'su' && authUser?.permissions?.edit_directory !== true) {
+    if (!hasFullDirectoryEditPermission(authUser) && !hasOwnDirectoryEditPermission(authUser)) {
       res.status(403).json({ error: 'Нет прав на удаление записей ��правочника' });
       return;
+    }
+
+    const localDb = await readLocalDb();
+    const dbUser = getAuthenticatedDbUser(localDb, req);
+    const directoryRuntime = await getDirectoryRuntimeSnapshotForRequest(localDb, req);
+    const existingEntry = (directoryRuntime.contacts || []).find((entry: any) => String(entry.id) === String(req.params.id));
+    if (!existingEntry) return res.status(404).json({ error: 'Контакт не найден' });
+    if (!canEditDirectoryEntry(existingEntry, authUser, dbUser, localDb.settings)) {
+      return res.status(403).json({ error: 'Можно удалять только собственные личные контакты' });
     }
 
     const actor = getDirectoryStorageModeActor(req);
@@ -12128,7 +12235,6 @@ app.delete('/api/directory/:id', requireAuth(), async (req, res) => {
     }
 
     const { id } = req.params;
-    const localDb = await readLocalDb();
     if (!localDb.directory) localDb.directory = [];
 
     const entryIdx = localDb.directory.findIndex((e: any) => e.id === id);
@@ -12137,8 +12243,7 @@ app.delete('/api/directory/:id', requireAuth(), async (req, res) => {
       return;
     }
 
-    const dbUser = getAuthenticatedDbUser(localDb, req);
-    if (!canWriteDirectoryEntry(localDb.directory[entryIdx], authUser, dbUser, localDb.settings)) {
+    if (!canEditDirectoryEntry(localDb.directory[entryIdx], authUser, dbUser, localDb.settings)) {
       res.status(403).json({ error: 'Нет прав на удаление этого личного контакта' });
       return;
     }
@@ -17718,7 +17823,7 @@ function getDbExplorerSettings() {
   return localDb.settings || {};
 }
 
-const DB_EXPLORER_ALLOWED_DATABASES = ['asteriskcdrdb', 'asterisk'];
+const DB_EXPLORER_ALLOWED_DATABASES = ['asteriskcdrdb', 'asterisk', 'pbxpuls'];
 const DB_EXPLORER_ALLOWED_TABLES = [
   'cdr',
   'cel',
@@ -17737,6 +17842,13 @@ const DB_EXPLORER_ALLOWED_TABLES = [
   'queues_config',
   'queues_details'
 ];
+const DB_EXPLORER_PBXPULS_TABLES = [
+  'audit_log', 'directory_contacts', 'directory_contact_metadata', 'directory_custom_fields',
+  'monitoring_devices_alerts', 'monitoring_devices_conflicts', 'monitoring_devices_history', 'monitoring_devices_map',
+  'monitoring_health_history', 'monitoring_quality_alerts', 'permissions', 'quality_current', 'quality_history',
+  'roles', 'role_permissions', 'schema_migrations', 'system_events', 'tools', 'users', 'user_roles'
+];
+const DB_EXPLORER_PBXPULS_BLOCKED_TABLES = ['settings', 'monitor_settings'];
 
 function isSafeSelectSql(sql) {
   const q = String(sql || '').trim();
@@ -17758,16 +17870,20 @@ app.get('/api/db-explorer/tables', requireAuth(), async (req, res) => {
     const result = {};
 
     for (const databaseName of DB_EXPLORER_ALLOWED_DATABASES) {
-      const rows = await queryFreePBXCDR(
-        getDbExplorerSettings(),
-        false,
-        'SELECT TABLE_NAME AS name FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME',
-        [databaseName]
-      );
+      const rows = databaseName === 'pbxpuls'
+        ? await queryPBXPulsDb('SELECT TABLE_NAME AS name, TABLE_ROWS AS rows FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() ORDER BY TABLE_NAME')
+        : await queryFreePBXCDR(
+          getDbExplorerSettings(),
+          false,
+          'SELECT TABLE_NAME AS name FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME',
+          [databaseName]
+        );
 
       result[databaseName] = rows
-        .map((r) => r.name)
-        .filter((name) => DB_EXPLORER_ALLOWED_TABLES.includes(name));
+        .filter((row: any) => databaseName === 'pbxpuls'
+          ? [...DB_EXPLORER_PBXPULS_TABLES, ...DB_EXPLORER_PBXPULS_BLOCKED_TABLES].includes(String(row.name))
+          : DB_EXPLORER_ALLOWED_TABLES.includes(String(row.name)))
+        .map((row: any) => row.name);
     }
 
     res.json({ success: true, databases: result });
@@ -17792,16 +17908,24 @@ app.get('/api/db-explorer/columns', requireAuth(), async (req, res) => {
       return res.status(400).json({ success: false, error: 'База не разрешена' });
     }
 
-    if (!DB_EXPLORER_ALLOWED_TABLES.includes(tableName)) {
+    const allowedTables = databaseName === 'pbxpuls'
+      ? [...DB_EXPLORER_PBXPULS_TABLES, ...DB_EXPLORER_PBXPULS_BLOCKED_TABLES]
+      : DB_EXPLORER_ALLOWED_TABLES;
+    if (!allowedTables.includes(tableName)) {
       return res.status(400).json({ success: false, error: 'Таблица не разрешена' });
     }
 
-    const rows = await queryFreePBXCDR(
-      getDbExplorerSettings(),
-      false,
-      'SELECT COLUMN_NAME AS name, DATA_TYPE AS type FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION',
-      [databaseName, tableName]
-    );
+    const rows = databaseName === 'pbxpuls'
+      ? await queryPBXPulsDb(
+        'SELECT COLUMN_NAME AS name, DATA_TYPE AS type FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION',
+        [tableName]
+      )
+      : await queryFreePBXCDR(
+        getDbExplorerSettings(),
+        false,
+        'SELECT COLUMN_NAME AS name, DATA_TYPE AS type FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION',
+        [databaseName, tableName]
+      );
 
     res.json({ success: true, columns: rows });
   } catch (e) {
@@ -17821,11 +17945,24 @@ app.post('/api/db-explorer/query', requireAuth(), async (req, res) => {
     const limit = Math.min(Number(req.body?.limit || 200), 1000);
     const allowWriters = req.body?.allowWriters === true;
     const writeType = String(req.body?.writeType || '').toLowerCase(); // 'insert' | 'update' | 'delete'
+    const targetsPbxpuls = /\bpbxpuls\s*\./i.test(sql);
+
+    if (targetsPbxpuls) {
+      if (!isSafeSelectSql(sql)) return res.status(403).json({ success: false, error: 'Для базы PBXPuls разрешены только SELECT-запросы.' });
+      const referencedSchemas = Array.from(sql.matchAll(/\b(?:from|join)\s+`?([a-zA-Z0-9_]+)`?\s*\./gi)).map(match => match[1].toLowerCase());
+      if (referencedSchemas.some(schema => schema !== 'pbxpuls')) {
+        return res.status(403).json({ success: false, error: 'В одном запросе PBXPuls нельзя обращаться к другим базам.' });
+      }
+      const referencedTables = Array.from(sql.matchAll(/\b(?:from|join)\s+`?pbxpuls`?\s*\.\s*`?([a-zA-Z0-9_]+)`?/gi)).map(match => match[1]);
+      if (!referencedTables.length || referencedTables.some(table => !DB_EXPLORER_PBXPULS_TABLES.includes(table))) {
+        return res.status(403).json({ success: false, error: 'Таблица PBXPuls недоступна для просмотра или содержит защищённые настройки.' });
+      }
+    }
 
     let isSafe = false;
     let isWrite = false;
 
-    if (allowWriters && (writeType === 'insert' || writeType === 'update' || writeType === 'delete')) {
+    if (!targetsPbxpuls && allowWriters && (writeType === 'insert' || writeType === 'update' || writeType === 'delete')) {
       const q = sql.trim();
       if (/;\s*\S+/i.test(q)) {
         isSafe = false;
@@ -17872,7 +18009,15 @@ app.post('/api/db-explorer/query', requireAuth(), async (req, res) => {
         rows = filterMockCDR(querySql, []);
       }
     } else {
-      rows = await queryFreePBXCDR(settings, false, querySql, []);
+      rows = targetsPbxpuls
+        ? await queryPBXPulsDb(querySql)
+        : await queryFreePBXCDR(settings, false, querySql, []);
+    }
+
+    if (targetsPbxpuls) {
+      rows = (rows || []).map((row: any) => Object.fromEntries(Object.entries(row).map(([key, value]) => (
+        /password|secret|token|credential|hash/i.test(key) ? [key, value ? '••••••••' : value] : [key, value]
+      ))));
     }
 
     const columns = rows && rows.length ? Object.keys(rows[0]) : [];

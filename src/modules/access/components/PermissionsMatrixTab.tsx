@@ -67,6 +67,7 @@ const GROUPS: PermissionGroup[] = [
     rows: [
       { key: 'view_directory', label: 'Открыть вкладку справочника', kind: 'tab', hint: 'Показывает телефонный справочник' },
       { key: 'edit_directory', label: 'Редактирование справочника', kind: 'feature', hint: 'Создание, изменение и удаление контактов' },
+      { key: 'edit_own_directory_contacts', label: 'Только свои контакты', kind: 'feature', hint: 'Создание личных и изменение/удаление только собственных личных контактов' },
       { key: 'directory_import_contacts', label: 'Личный импорт контактов', kind: 'feature', hint: 'Google/CSV/vCard импорт только в личный справочник пользователя' },
       { key: 'directory_manage_import_settings', label: 'Настройки импорта контактов', kind: 'feature', hint: 'Глобальные переключатели источников личного импорта' },
       { key: 'manage_directory_import', label: 'Импорт и синхронизация', kind: 'feature', hint: 'Админский импорт CSV/JSON, экспорт, нормализация и sync-url' },

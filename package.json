@@ -1,7 +1,7 @@
 {
   "name": "freepbx-cdr-new",
   "private": true,
-  "version": "5.6.26",
+  "version": "5.6.27",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
@@ -17,6 +17,8 @@
     "test:live-popup-route-summary": "tsx scripts/test-live-popup-route-summary.ts",
     "test:live-snapshot-cache": "tsx scripts/test-live-snapshot-cache.ts",
     "test:quality-permission": "tsx scripts/test-quality-permission.ts",
+    "test:contact-import-duplicates": "tsx scripts/test-contact-import-duplicates.ts",
+    "test:directory-own-contact-permission": "tsx scripts/test-directory-own-contact-permission.ts",
     "test:live-transfer-search": "tsx scripts/test-live-transfer-search.ts"
   },
   "dependencies": {

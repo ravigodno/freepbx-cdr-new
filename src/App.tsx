@@ -884,6 +884,7 @@ export default function App() {
   const [contactSyncPreviewItems, setContactSyncPreviewItems] = useState<Record<ContactSyncProvider, ContactSyncPreviewItem[]>>({ google: [], yandex: [], mailru: [], file: [] });
   const [contactSyncSelectedIds, setContactSyncSelectedIds] = useState<Record<ContactSyncProvider, string[]>>({ google: [], yandex: [], mailru: [], file: [] });
   const [contactSyncForceDuplicates, setContactSyncForceDuplicates] = useState<Record<ContactSyncProvider, boolean>>({ google: false, yandex: false, mailru: false, file: false });
+  const [contactImportVisibility, setContactImportVisibility] = useState<'private' | 'shared'>('private');
   const [contactSyncDiagnostics, setContactSyncDiagnostics] = useState<Partial<Record<ContactSyncProvider, ContactSyncDiagnosticResult>>>({});
   const [contactFileSourceFormat, setContactFileSourceFormat] = useState<ContactFileSourceFormat | ''>('');
   const [contactFileEncoding, setContactFileEncoding] = useState('');
@@ -1670,10 +1671,25 @@ export default function App() {
 
   const handleSelectNewContactSyncItems = (provider: ContactSyncProvider) => {
     const ids = (contactSyncPreviewItems[provider] || [])
-      .filter(item => item.status === 'new')
+      .filter(item => item.status === 'new' || (contactSyncForceDuplicates[provider] === true && item.status === 'possible_duplicate'))
       .map(item => String(item.externalContactId || ''))
       .filter(Boolean);
     setContactSyncSelectedIds(prev => ({ ...prev, [provider]: ids }));
+  };
+
+  const handleContactSyncForceDuplicatesChange = (provider: ContactSyncProvider, checked: boolean) => {
+    const duplicateIds = (contactSyncPreviewItems[provider] || [])
+      .filter(item => item.status === 'possible_duplicate')
+      .map(item => String(item.externalContactId || ''))
+      .filter(Boolean);
+    setContactSyncForceDuplicates(prev => ({ ...prev, [provider]: checked }));
+    setContactSyncSelectedIds(prev => {
+      const current = prev[provider] || [];
+      const next = checked
+        ? Array.from(new Set([...current, ...duplicateIds]))
+        : current.filter(id => !duplicateIds.includes(id));
+      return { ...prev, [provider]: next };
+    });
   };
 
   const handleClearContactSyncSelection = (provider: ContactSyncProvider) => {
@@ -1708,11 +1724,11 @@ export default function App() {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer ' + session?.token
         },
-        body: JSON.stringify({ items, force: contactSyncForceDuplicates[provider] === true })
+        body: JSON.stringify({ items, force: contactSyncForceDuplicates[provider] === true, visibility: contactImportVisibility })
       });
       const data = await resp.json();
       if (resp.ok) {
-        setContactSyncMessage('Импортировано: ' + (data.imported || 0) + ', пропущено: ' + (data.skipped || 0) + ', ошибок: ' + (data.failed || 0) + '.');
+        setContactSyncMessage('Импортировано в ' + (contactImportVisibility === 'shared' ? 'общий' : 'личный') + ' справочник: ' + (data.imported || 0) + ', пропущено: ' + (data.skipped || 0) + ', ошибок: ' + (data.failed || 0) + '.');
         setContactSyncSelectedIds(prev => ({ ...prev, [provider]: [] }));
         setDirPage(1);
         await loadDirectory(1);
@@ -2298,7 +2314,7 @@ export default function App() {
   };
 
   const handleDeleteDirEntry = async (id: string) => {
-    if (!hasPermission('edit_directory')) {
+    if (!hasPermission('edit_directory') && !hasPermission('edit_own_directory_contacts')) {
       alert('Нет прав на удаление записей справочника.');
       return;
     }
@@ -2367,7 +2383,7 @@ export default function App() {
 
   const handleToggleSpam = async (entry: DirectoryEntry, enabled: boolean) => {
     if (!session) return;
-    if (!hasPermission('edit_directory')) {
+    if (!hasPermission('edit_directory') && !hasPermission('edit_own_directory_contacts')) {
       alert('Нет прав на изменение справочника.');
       return;
     }
@@ -2456,6 +2472,7 @@ export default function App() {
 
   const openCreateDirEntry = () => {
     resetDirFormFields();
+    if (!hasPermission('edit_directory') && hasPermission('edit_own_directory_contacts')) setDirVisibility('private');
     setDirectoryContactEditId(null);
     setDirectoryPageMode('contact_new');
     setActiveView('directory');
@@ -4287,7 +4304,7 @@ export default function App() {
       case 'actions':
         return (
           <div className="flex items-center justify-end gap-1.5">
-            {hasPermission('edit_directory') && (
+            {(entry as any).canEdit === true && (
               <button
                 onClick={() => handleToggleSpam(entry, !entry.isSpam)}
                 className={`rounded-lg border p-1.5 transition-all cursor-pointer ${entry.isSpam ? 'text-amber-700 bg-amber-50 border-amber-200' : 'text-slate-500 hover:text-amber-700 hover:bg-amber-50 border-transparent hover:border-amber-200'}`}
@@ -4305,7 +4322,7 @@ export default function App() {
                 <AlertCircle className="h-3.5 w-3.5" />
               </button>
             )}
-            {hasPermission('edit_directory') && (
+            {(entry as any).canEdit === true && (
               <button
                 onClick={() => openEditDirEntry(entry)}
                 className="rounded-lg border border-transparent p-1.5 text-slate-500 transition-all hover:border-slate-200 hover:bg-slate-100 hover:text-blue-700 cursor-pointer"
@@ -4314,7 +4331,7 @@ export default function App() {
                 <Edit2 className="h-3.5 w-3.5" />
               </button>
             )}
-            {hasPermission('edit_directory') && (
+            {(entry as any).canEdit === true && (
               <button
                 onClick={() => handleDeleteDirEntry(entry.id)}
                 className="rounded-lg border border-transparent p-1.5 text-slate-500 transition-all hover:border-slate-200 hover:bg-slate-100 hover:text-blue-700 cursor-pointer"
@@ -4613,13 +4630,13 @@ export default function App() {
         {previewItems.length > 0 && (
           <div className="mt-3 rounded-md border border-slate-200 bg-white p-2">
             <div className="mb-2 flex flex-wrap items-center gap-2">
-              <button type="button" onClick={() => handleSelectNewContactSyncItems(provider)} className="rounded-md border border-slate-200 px-2 py-1 text-[11px] font-bold text-slate-700 hover:bg-slate-50">Выбрать все новые</button>
+              <button type="button" onClick={() => handleSelectNewContactSyncItems(provider)} className="rounded-md border border-slate-200 px-2 py-1 text-[11px] font-bold text-slate-700 hover:bg-slate-50">{contactSyncForceDuplicates[provider] ? 'Выбрать новые и дубли' : 'Выбрать все новые'}</button>
               <button type="button" onClick={() => handleClearContactSyncSelection(provider)} className="rounded-md border border-slate-200 px-2 py-1 text-[11px] font-bold text-slate-500 hover:bg-slate-50">Снять выбор</button>
               <label className="flex items-center gap-1 text-[11px] font-semibold text-slate-600">
                 <input
                   type="checkbox"
                   checked={contactSyncForceDuplicates[provider] === true}
-                  onChange={(e) => setContactSyncForceDuplicates(prev => ({ ...prev, [provider]: e.target.checked }))}
+                  onChange={(e) => handleContactSyncForceDuplicatesChange(provider, e.target.checked)}
                 />
                 Импортировать возможные дубли как новые
               </label>
@@ -4694,13 +4711,13 @@ export default function App() {
           </div>
         )}
         <div className="mb-2 flex flex-wrap items-center gap-2">
-          <button type="button" onClick={() => handleSelectNewContactSyncItems('file')} className="rounded-md border border-slate-200 px-2 py-1 text-[11px] font-bold text-slate-700 hover:bg-slate-50">Выбрать все новые</button>
+          <button type="button" onClick={() => handleSelectNewContactSyncItems('file')} className="rounded-md border border-slate-200 px-2 py-1 text-[11px] font-bold text-slate-700 hover:bg-slate-50">{contactSyncForceDuplicates.file ? 'Выбрать новые и дубли' : 'Выбрать все новые'}</button>
           <button type="button" onClick={() => handleClearContactSyncSelection('file')} className="rounded-md border border-slate-200 px-2 py-1 text-[11px] font-bold text-slate-500 hover:bg-slate-50">Снять выбор</button>
           <label className="flex items-center gap-1 text-[11px] font-semibold text-slate-600">
             <input
               type="checkbox"
               checked={contactSyncForceDuplicates.file === true}
-              onChange={(e) => setContactSyncForceDuplicates(prev => ({ ...prev, file: e.target.checked }))}
+              onChange={(e) => handleContactSyncForceDuplicatesChange('file', e.target.checked)}
             />
             Импортировать возможные дубли как новые
           </label>
@@ -6103,15 +6120,31 @@ export default function App() {
               <div className="min-w-0">
                 <h2 className="flex items-center gap-2 break-words text-lg font-black text-slate-900">
                   <Upload className="h-5 w-5 text-blue-600" />
-                  Личный импорт контактов
+                  Импорт контактов
                 </h2>
-                <p className="mt-1 max-w-3xl text-xs leading-relaxed text-slate-500">Контакты будут импортированы только в ваш личный справочник.</p>
+                <p className="mt-1 max-w-3xl text-xs leading-relaxed text-slate-500">
+                  {isAdminRole(session?.role) || hasPermission('manage_directory_import')
+                    ? 'Выберите назначение: личный справочник пользователя или общий справочник PBXPuls.'
+                    : 'Контакты будут импортированы только в ваш личный справочник.'}
+                </p>
               </div>
               <button type="button" onClick={closeDirectoryImportPage} className="shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50">
                 Назад в справочник
               </button>
             </div>
           </div>
+          {(isAdminRole(session?.role) || hasPermission('manage_directory_import')) && (
+            <div className="flex flex-wrap items-center gap-3 rounded-xl border border-blue-200 bg-blue-50 p-4 text-xs shadow-sm">
+              <span className="font-black text-slate-800">Куда импортировать:</span>
+              <select value={contactImportVisibility} onChange={event => setContactImportVisibility(event.target.value as 'private' | 'shared')} className="rounded-lg border border-blue-200 bg-white px-3 py-2 font-bold text-slate-700">
+                <option value="private">В мой личный справочник</option>
+                <option value="shared">В общий справочник</option>
+              </select>
+              <button type="button" onClick={openDirectoryImportPage} className="rounded-lg border border-blue-200 bg-white px-3 py-2 font-bold text-blue-700 hover:bg-blue-100">
+                Расширенный CSV / URL импорт
+              </button>
+            </div>
+          )}
           {getPersonalContactImportUnavailableMessage() ? (
             <div className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-sm font-bold text-amber-900 shadow-sm">
               {getPersonalContactImportUnavailableMessage()}
@@ -6499,14 +6532,16 @@ export default function App() {
               Настроить столбцы
             </button>
 
-            <button
-              type="button"
-              onClick={openCreateDirEntry}
-              className="flex shrink-0 items-center justify-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-semibold cursor-pointer hover:bg-blue-600 transition-all select-none shadow-sm"
-            >
-              <Plus className="h-4 w-4" />
-              Добавить контакт
-            </button>
+            {(hasPermission('edit_directory') || hasPermission('edit_own_directory_contacts')) && (
+              <button
+                type="button"
+                onClick={openCreateDirEntry}
+                className="flex shrink-0 items-center justify-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-semibold cursor-pointer hover:bg-blue-600 transition-all select-none shadow-sm"
+              >
+                <Plus className="h-4 w-4" />
+                Добавить контакт
+              </button>
+            )}
           </div>
         </div>
 

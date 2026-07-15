@@ -42,6 +42,7 @@ const dbOverviewData = {
   databases: [
     { name: 'asterisk', size: '12.4 MB', tables: 54, rows: 24500, indexes: 78, desc: 'Конфигурация FreePBX, экстеншены и параметры' },
     { name: 'asteriskcdrdb', size: '452.8 MB', tables: 4, rows: 1240500, indexes: 12, desc: 'Хранилище детальной истории звонков (CDR & CEL)' },
+    { name: 'pbxpuls', size: 'SQL', tables: 22, rows: 0, indexes: 0, desc: 'Рабочие данные, справочник и мониторинг PBXPuls' },
     { name: 'mysql', size: '2.1 MB', tables: 31, rows: 4500, indexes: 41, desc: 'Системные привилегии и служебные пользователи' },
     { name: 'performance_schema', size: '0.0 MB', tables: 82, rows: 0, indexes: 0, desc: 'Метрики производительности СУБД в памяти' }
   ],
@@ -78,6 +79,21 @@ const mapCdr = [
   { name: 'cel', rows: 2950114, engine: 'Aria', desc: 'События жизненного цикла каналов CEL' },
   { name: 'queue_log', rows: 43210, engine: 'InnoDB', desc: 'Логи распределения вызовов очередями' },
   { name: 'recordings', rows: 120400, engine: 'InnoDB', desc: 'Индексы и пути к аудиофайлам записей' }
+];
+
+const mapPbxpuls = [
+  { name: 'directory_contacts', rows: 0, engine: 'InnoDB', desc: 'Контакты справочника PBXPuls' },
+  { name: 'directory_contact_metadata', rows: 0, engine: 'InnoDB', desc: 'Дополнительные поля контактов' },
+  { name: 'directory_custom_fields', rows: 0, engine: 'InnoDB', desc: 'Схема пользовательских полей' },
+  { name: 'users', rows: 0, engine: 'InnoDB', desc: 'Пользователи PBXPuls (секреты скрываются)' },
+  { name: 'roles', rows: 0, engine: 'InnoDB', desc: 'Роли доступа' },
+  { name: 'permissions', rows: 0, engine: 'InnoDB', desc: 'Матрица разрешений' },
+  { name: 'system_events', rows: 0, engine: 'InnoDB', desc: 'Системные события' },
+  { name: 'quality_current', rows: 0, engine: 'InnoDB', desc: 'Текущее качество связи' },
+  { name: 'quality_history', rows: 0, engine: 'InnoDB', desc: 'История качества связи' },
+  { name: 'monitoring_health_history', rows: 0, engine: 'InnoDB', desc: 'История состояния АТС' },
+  { name: 'monitoring_quality_alerts', rows: 0, engine: 'InnoDB', desc: 'Оповещения качества' },
+  { name: 'schema_migrations', rows: 0, engine: 'InnoDB', desc: 'История миграций' }
 ];
 
 const mockExtensions = [
@@ -282,14 +298,17 @@ export default function DbExplorerTab({ token }: { token: string }) {
     { title: 'Топ звонящих номеров (Аналитика)', sql: 'SELECT src, COUNT(*) as calls, SUM(billsec) as talk_sec FROM asteriskcdrdb.cdr WHERE calldate > NOW() - INTERVAL 1 DAY GROUP BY src ORDER BY calls DESC LIMIT 20' },
     { title: 'Спецификация экстеншенов FreePBX', sql: 'SELECT extension, name, voicemail FROM asterisk.users ORDER BY extension LIMIT 100' },
     { title: 'Лист соединений PJSIP', sql: 'SELECT * FROM asterisk.ps_contacts LIMIT 100' },
-    { title: 'Сброшенные звонки очередей', sql: 'SELECT time, callid, queuename, agent, event, data1 FROM asteriskcdrdb.queue_log WHERE event = "ABANDON" ORDER BY time DESC LIMIT 50' }
+    { title: 'Сброшенные звонки очередей', sql: 'SELECT time, callid, queuename, agent, event, data1 FROM asteriskcdrdb.queue_log WHERE event = "ABANDON" ORDER BY time DESC LIMIT 50' },
+    { title: 'Контакты PBXPuls', sql: 'SELECT id, name, company, phone, email, visibility, type, updated_at FROM pbxpuls.directory_contacts ORDER BY updated_at DESC LIMIT 100' },
+    { title: 'События PBXPuls', sql: 'SELECT event_type, severity, source, message, created_at FROM pbxpuls.system_events ORDER BY created_at DESC LIMIT 100' }
   ], []);
 
   // Sync builder parameters to SQL string.
   useEffect(() => {
     const selectFields = qbFields.join(', ');
     const cdrDbTables = ['cdr', 'cel', 'queue_log', 'recordings'];
-    const dbPrefix = cdrDbTables.includes(qbTable) ? 'asteriskcdrdb.' : 'asterisk.';
+    const pbxpulsTables = mapPbxpuls.map(table => table.name);
+    const dbPrefix = cdrDbTables.includes(qbTable) ? 'asteriskcdrdb.' : pbxpulsTables.includes(qbTable) ? 'pbxpuls.' : 'asterisk.';
     let built = `SELECT ${selectFields} FROM ${dbPrefix}${qbTable}`;
     if (qbFilter.trim()) {
       built += ` WHERE ${qbFilter}`;
@@ -660,7 +679,7 @@ export default function DbExplorerTab({ token }: { token: string }) {
                   </button>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   {dbOverviewData.databases.map((db, idx) => (
                     <div key={idx} className="p-4 bg-slate-50 dark:bg-slate-700 rounded-xl border border-slate-150 dark:border-slate-600 hover:border-indigo-300 dark:hover:border-indigo-900 transition">
                       <div className="flex justify-between items-start">
@@ -704,9 +723,10 @@ export default function DbExplorerTab({ token }: { token: string }) {
                     </h3>
                     <p className="text-[11px] text-slate-500 mt-0.5">Кликните на имя таблицы, чтобы просмотреть её содержимое</p>
                   </div>
+
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div>
                     <div className="flex items-center justify-between p-2 bg-slate-100 dark:bg-slate-700 rounded-lg text-xs font-bold">
                       <span className="text-slate-700 dark:text-slate-200">asterisk (Настройки)</span>
@@ -756,6 +776,25 @@ export default function DbExplorerTab({ token }: { token: string }) {
                           <span className="text-[10px] text-slate-400" title={tbl.desc}>
                             {tbl.rows > 1000 ? (tbl.rows / 1000).toFixed(0) + 'k' : tbl.rows} стр.
                           </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between p-2 bg-emerald-50 dark:bg-emerald-950/40 rounded-lg text-xs font-bold text-emerald-800 dark:text-emerald-200">
+                      <span>pbxpuls (Приложение)</span>
+                      <span className="text-[10px]">Только чтение</span>
+                    </div>
+                    <div className="mt-2 divide-y divide-slate-100 dark:divide-slate-700 max-h-96 overflow-y-auto">
+                      {mapPbxpuls.map((tbl, idx) => (
+                        <div key={idx} className="flex justify-between items-center py-2 text-xs hover:bg-emerald-50/40 dark:hover:bg-emerald-950/20 px-2 rounded-lg transition duration-150">
+                          <button onClick={() => handleTableClick('pbxpuls', tbl.name)} className="flex items-center gap-2 text-left cursor-pointer group focus:outline-none" title="Посмотреть содержимое таблицы">
+                            <span className="text-slate-400">├─</span>
+                            <span className="font-bold text-slate-700 dark:text-white font-mono group-hover:text-emerald-600 group-hover:underline transition flex items-center gap-1.5">
+                              {tbl.name}<Eye className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 text-emerald-600 transition-opacity" />
+                            </span>
+                          </button>
+                          <span className="text-[10px] text-slate-400" title={tbl.desc}>read-only</span>
                         </div>
                       ))}
                     </div>
@@ -1535,6 +1574,11 @@ export default function DbExplorerTab({ token }: { token: string }) {
                       </optgroup>
                       <optgroup label="asterisk (Настройки АТС)">
                         {mapAsterisk.map(t => (
+                          <option key={t.name} value={t.name}>{t.name} ({t.desc})</option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="pbxpuls (Приложение, только чтение)">
+                        {mapPbxpuls.map(t => (
                           <option key={t.name} value={t.name}>{t.name} ({t.desc})</option>
                         ))}
                       </optgroup>

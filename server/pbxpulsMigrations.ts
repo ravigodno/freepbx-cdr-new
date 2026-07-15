@@ -391,6 +391,14 @@ const MIGRATIONS: Migration[] = [
     seed: async connection => {
       await seedSetting(connection, MONITORING_RETENTION_DAYS_SETTING);
     }
+  },
+  {
+    key: '20260715_017_directory_own_contact_permission',
+    description: 'Register permission for editing only owned Directory contacts',
+    statements: [
+      `INSERT IGNORE INTO permissions (permission_key, name, category)
+       VALUES ('edit_own_directory_contacts', 'Edit owned Directory contacts', 'directory')`
+    ]
   }
 ];
 

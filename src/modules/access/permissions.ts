@@ -15,6 +15,7 @@ export type PermissionKey =
   | 'make_calls'
   | 'show_call_modal'
   | 'edit_directory'
+  | 'edit_own_directory_contacts'
   | 'export_excel'
   | 'view_monitoring'
   | 'view_active_calls'

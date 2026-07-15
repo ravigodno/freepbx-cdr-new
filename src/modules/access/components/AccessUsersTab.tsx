@@ -42,6 +42,7 @@ export default function AccessUsersTab({
     { key: 'listen_recordings', label: 'Прослушивание записей', description: 'Доступ к аудиозаписям разговоров' },
     { key: 'make_calls', label: 'Click2Call', description: 'Возможность инициировать звонки' },
     { key: 'edit_directory', label: 'Редактирование справочника', description: 'Создание и изменение контактов' },
+    { key: 'edit_own_directory_contacts', label: 'Только свои контакты', description: 'Создание личных и изменение только собственных личных контактов' },
     { key: 'directory_import_contacts', label: 'Личный импорт контактов', description: 'Импорт Google/CSV/vCard в личный справочник пользователя' },
     { key: 'directory_manage_import_settings', label: 'Настройки импорта контактов', description: 'Управление глобальными источниками личного импорта' }
   ];
