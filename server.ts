@@ -113,6 +113,11 @@ import {
 import { isExternalDirectoryTransferAllowed } from './server/liveTransferSettings.js';
 import { buildLiveCallBannerDisplay } from './src/utils/liveCallBanner.js';
 import {
+  buildCallRouteSummaryFromLivePayload,
+  buildCallRouteSummaryFromTimeline,
+  mapRouteSummaryToLivePopup
+} from './server/callRouteSummary.js';
+import {
   appendDevicesAlertsToSql, appendDevicesHistoryToSql, appendHealthHistoryToSql, appendQualityAlertsToSql,
   appendQualityHistoryToSql, getMonitoringStorageMode, getMonitoringStorageStatus, readDevicesAlertsFromSql,
   readDevicesConflictsFromSql, readDevicesHistoryFromSql, readDevicesMapFromSql, readHealthHistoryFromSql, readLatestHealthHistoryFromSql,
@@ -12250,6 +12255,7 @@ function triggerAMICall(settings: AppSettings, fromExtension: string, toPhoneNum
 
 interface LiveCallBanner {
   active: boolean;
+  scenario?: string;
   direction?: 'incoming' | 'outgoing' | 'internal';
   operatorExt?: string;
   number?: string;
@@ -12282,6 +12288,11 @@ interface LiveCallBanner {
   phoneMeetingInitiator?: string;
   phoneMeetingParticipants?: string[];
   phoneMeetingParticipantStatuses?: Array<{ number: string; connected: boolean; initiator: boolean }>;
+  queue?: string;
+  answeredBy?: string;
+  destinationLabel?: string;
+  followMeExternalTargets?: string[];
+  rejectedCandidates?: Array<{ value: string; reason: string }>;
 }
 
 type AmiBlock = Record<string, string>;
@@ -12870,28 +12881,45 @@ function buildLiveCallBannerFromAmiChannels(channels: AmiBlock[], operatorExt: s
         '';
     }
 
-    const contact = resolveLiveContact(number, directory, settings);
     const first = group[0];
     const durationSec = Math.max(...group.map(ch => liveDurationToSeconds(ch.Duration)), 0);
-
-    const callerNumber = hasInboundSignal ? number : directionResolution.internalCaller;
-    const destinationNumber = hasInboundSignal ? directionResolution.destinationNumber : number;
-    return {
+    const followMeExternalTargets = Array.from(new Set(group
+      .filter(ch => /FMPR-/i.test(String(ch.Channel || '')) || /FMPR-/i.test(String(ch.ApplicationData || '')))
+      .flatMap(ch => getLiveAppDataNumberCandidates(ch.ApplicationData))
+      .filter(candidate => isExternalNumber(candidate))));
+    const routeSummary = buildCallRouteSummaryFromLivePayload({
+      rows: group,
+      direction: directionResolution.direction,
+      externalCaller: inboundCallerResolution?.externalCallerNumber || inboundCaller,
+      trunk: directionResolution.trunkNumber || did,
+      did,
+      destinationNumber: directionResolution.destinationNumber,
+      internalCaller: directionResolution.internalCaller,
+      displayNumber: number,
+      followMeExternalTargets
+    });
+    const selectedNumber = routeSummary.displayNumber || number;
+    const contact = resolveLiveContact(selectedNumber, directory, settings);
+    const callerNumber = routeSummary.direction === 'incoming' ? selectedNumber : routeSummary.internalCaller;
+    const destinationNumber = routeSummary.direction === 'incoming'
+      ? (routeSummary.answeredBy || routeSummary.queue || routeSummary.ringGroup || routeSummary.internalDestination)
+      : selectedNumber;
+    const baseBanner: LiveCallBanner = {
       active: true,
-      direction,
+      direction: routeSummary.direction === 'unknown' ? direction : routeSummary.direction,
       operatorExt: ext,
-      number,
+      number: selectedNumber,
       callerNumber,
-      externalCallerNumber: inboundCallerResolution?.externalCallerNumber || '',
-      internalCaller: hasInboundSignal ? '' : directionResolution.internalCaller,
+      externalCallerNumber: routeSummary.externalCaller,
+      internalCaller: routeSummary.internalCaller,
       sourceNumber: callerNumber,
       destinationNumber,
-      dialedNumber: direction === 'outgoing' ? number : '',
+      dialedNumber: routeSummary.direction === 'outgoing' ? selectedNumber : '',
       targetNumber: destinationNumber,
-      internalNumber: direction === 'internal' ? destinationNumber : (direction === 'incoming' ? destinationNumber : callerNumber),
-      trunkNumber: hasInboundSignal ? (directionResolution.trunkNumber || did) : directionResolution.trunkNumber,
-      displayNumber: number,
-      displayName: contact.name,
+      internalNumber: routeSummary.direction === 'internal' ? destinationNumber : (routeSummary.direction === 'incoming' ? destinationNumber : callerNumber),
+      trunkNumber: routeSummary.trunk || directionResolution.trunkNumber,
+      displayNumber: selectedNumber,
+      displayName: contact.name || (routeSummary.direction === 'incoming' && routeSummary.externalCaller ? 'Внешний клиент' : ''),
       contactType: contact.type,
       contactComment: contact.comment,
       isSpam: contact.isSpam,
@@ -12904,6 +12932,7 @@ function buildLiveCallBannerFromAmiChannels(channels: AmiBlock[], operatorExt: s
       durationText: liveFormatSeconds(durationSec),
       startedAt: new Date().toLocaleTimeString('ru-RU', { hour12: false })
     };
+    return { ...baseBanner, ...mapRouteSummaryToLivePopup(routeSummary, baseBanner) };
   }
 
   return { active: false };
@@ -13132,6 +13161,73 @@ app.get('/api/debug/live-call-payload', requireAuth(), async (req, res) => {
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Live call popup diagnostics failed' });
+  }
+});
+
+app.get('/api/debug/live-popup-route', requireAuth(), async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    if (process.env.DEBUG_LIVE_CALL_POPUP !== '1') {
+      res.status(404).json({ error: 'Live call popup diagnostics are disabled' });
+      return;
+    }
+    const authUser = (req as any).user;
+    if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_active_calls !== true) {
+      res.status(403).json({ error: 'Нет прав на диагностику активных звонков' });
+      return;
+    }
+    const linkedid = String(req.query.linkedid || '').trim();
+    if (!linkedid) {
+      res.status(400).json({ error: 'linkedid is required' });
+      return;
+    }
+
+    const localDb = await readLocalDb();
+    const settings = localDb.settings;
+    const isDemo = isDemoMode(settings);
+    const legs = isDemo
+      ? mockCDRData.filter(call => String(call.linkedid || call.uniqueid) === linkedid)
+      : await queryFreePBXCDR(
+          settings,
+          false,
+          'SELECT uniqueid, calldate, clid, src, dst, dcontext, channel, dstchannel, lastapp, lastdata, duration, billsec, disposition, recordingfile, did, cnum, cnam, outbound_cnum, linkedid FROM cdr WHERE uniqueid = ? OR linkedid = ? ORDER BY calldate ASC',
+          [linkedid, linkedid]
+        );
+    const celRows = await loadCelCallerChain(settings, isDemo, linkedid);
+    const callerResolution = resolveInboundExternalCaller(legs, celRows);
+    const routeAnalysis = legs.length && !isDemo ? await enrichFreePBXRoute(settings, legs) : null;
+    const chronologyData = {
+      linkedid,
+      externalCallerNumber: callerResolution.externalCallerNumber,
+      inboundDid: String(routeAnalysis?.did || legs.find((leg: any) => leg.did)?.did || '').split('→')[0].trim(),
+      trunkNumber: String(routeAnalysis?.steps?.find((step: any) => step.type === 'inbound_trunk')?.number || routeAnalysis?.did || '').trim(),
+      timeline: legs,
+      routeAnalysis
+    };
+    const chronologySummary = buildCallRouteSummaryFromTimeline(chronologyData);
+
+    const channels = await runAmiCoreShowChannels(settings);
+    const liveGroup = channels.filter(channel => String(channel.Linkedid || channel.Uniqueid || '') === linkedid);
+    const liveDirection = detectLiveCallDirection(liveGroup, '');
+    const popupSummary = buildCallRouteSummaryFromLivePayload({
+      rows: liveGroup,
+      direction: liveDirection.direction,
+      internalCaller: liveDirection.internalCaller,
+      destinationNumber: liveDirection.destinationNumber,
+      trunk: liveDirection.trunkNumber,
+      externalCaller: callerResolution.externalCallerNumber
+    });
+    const selectedPopupSummary = chronologySummary.scenario !== 'unknown' ? chronologySummary : popupSummary;
+
+    res.json({
+      linkedid,
+      chronologySummary,
+      popupSummary,
+      selectedPopupSummary,
+      rejectedCandidates: selectedPopupSummary.rejectedCandidates
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Live popup route diagnostics failed' });
   }
 });
 

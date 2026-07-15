@@ -78,9 +78,10 @@ export function buildLiveCallBannerDisplay(call: Record<string, any>) {
   const rawDisplayName = firstLiveValue([call.displayName, call.contactName, call.name]);
   const displayName = /^неизвестный номер$/i.test(rawDisplayName) ? '' : rawDisplayName;
   const internalSubtitle = callerNumber ? `От внутреннего ${callerNumber}` : 'Внутренний звонок';
+  const routeSubtitle = firstLiveValue([call.subtitle, call.destinationLabel]);
   const subtitle = direction === 'internal'
     ? (displayName && displayNumber ? `${displayNumber} · ${internalSubtitle}` : internalSubtitle)
-    : (displayName && displayNumber ? displayNumber : '');
+    : (routeSubtitle || (displayName && displayNumber ? displayNumber : ''));
 
   return {
     direction,

@@ -14,6 +14,7 @@
     "pbxpuls:monitoring:sync": "tsx scripts/pbxpuls-monitoring-sync.ts",
     "pbxpuls:monitoring:retention": "tsx scripts/pbxpuls-monitoring-retention.ts",
     "test:inbound-caller": "tsx scripts/test-inbound-caller-resolver.ts",
+    "test:live-popup-route-summary": "tsx scripts/test-live-popup-route-summary.ts",
     "test:live-transfer-search": "tsx scripts/test-live-transfer-search.ts"
   },
   "dependencies": {
