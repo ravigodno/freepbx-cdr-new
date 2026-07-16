@@ -109,7 +109,8 @@ import {
   mergeLiveSessionAmiEvidence,
   normalizeLiveSessionCallers,
   resolveInboundExternalCaller,
-  resolveInboundLiveCaller
+  resolveInboundLiveCaller,
+  selectIncomingCallerEvidence
 } from './server/inboundCallerResolver.js';
 import {
   detectLiveCallDirection,
@@ -13226,6 +13227,7 @@ function buildLiveCallBannerFromAmiChannels(channels: AmiBlock[], operatorExt: s
 }
 
 const liveCelEvidenceCache = new Map<string, { expiresAt: number; rows: any[] }>();
+const liveCdrEvidenceCache = new Map<string, { expiresAt: number; rows: any[] }>();
 
 async function loadLiveCallEvidenceFromCel(settings: AppSettings, linkedid: string) {
   const key = String(linkedid || '').trim();
@@ -13243,6 +13245,21 @@ async function loadLiveCallEvidenceFromCel(settings: AppSettings, linkedid: stri
     });
   }
   return celRows;
+}
+
+async function loadLiveCallEvidenceFromCdr(settings: AppSettings, linkedid: string) {
+  const key = String(linkedid || '').trim();
+  if (!key) return [];
+  const cached = liveCdrEvidenceCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.rows;
+  const rows = await queryFreePBXCDR(
+    settings,
+    false,
+    'SELECT uniqueid, calldate, clid, src, dst, dcontext, channel, dstchannel, lastapp, lastdata, duration, billsec, disposition, did, cnum, cnam, outbound_cnum, linkedid FROM cdr WHERE uniqueid = ? OR linkedid = ? ORDER BY calldate ASC',
+    [key, key]
+  );
+  liveCdrEvidenceCache.set(key, { expiresAt: Date.now() + 5000, rows });
+  return rows;
 }
 
 async function buildLiveCallBannerPayload(
@@ -13289,29 +13306,51 @@ async function buildLiveCallBannerPayload(
     }
   }
   const bannerNeedsCelEvidence = banner.active && banner.linkedid && (
-    (banner.direction === 'incoming' && !isExternalNumber(banner.number)) ||
+    banner.direction === 'incoming' ||
     (banner.direction === 'outgoing' && !isExternalNumber(banner.number)) ||
     (banner.direction === 'internal' && (!isInternalExt(banner.number) || onlyDigits(banner.number) === onlyDigits(banner.callerNumber)))
   );
   if (!bannerNeedsCelEvidence || !banner.linkedid) return finalize(banner);
 
-  const celRows = await loadLiveCallEvidenceFromCel(settings, banner.linkedid);
+  const [celRows, cdrRows] = await Promise.all([
+    loadLiveCallEvidenceFromCel(settings, banner.linkedid),
+    banner.direction === 'incoming' ? loadLiveCallEvidenceFromCdr(settings, banner.linkedid) : Promise.resolve([])
+  ]);
   const celDirection = detectLiveCallDirection(celRows || [], operatorExt);
-  const celCaller = resolveInboundExternalCaller([], celRows || []);
+  const chronologySummary = banner.direction === 'incoming' && cdrRows.length
+    ? buildCallRouteSummaryFromTimeline({
+        linkedid: banner.linkedid,
+        timeline: cdrRows,
+        externalCallerNumber: resolveInboundExternalCaller(cdrRows, celRows || []).externalCallerNumber,
+        inboundDid: banner.did,
+        trunkNumber: banner.trunkNumber
+      })
+    : null;
+  const liveGroup = channels.filter(channel => String(channel.Linkedid || channel.Uniqueid || '') === String(banner.linkedid));
+  const incomingEvidence = banner.direction === 'incoming'
+    ? selectIncomingCallerEvidence({
+        chronologyExternalCallerNumber: chronologySummary?.externalCaller,
+        celRows: celRows || [], cdrRows, amiRows: liveGroup,
+        technicalCandidates: [banner.did, banner.trunkNumber, banner.queue]
+      })
+    : null;
   const evidenceNumber = banner.direction === 'incoming'
-    ? celCaller.externalCallerNumber
+    ? incomingEvidence?.externalCallerNumber || ''
     : celDirection.destinationNumber;
+  const incomingRoute = chronologySummary?.scenario?.startsWith('incoming_')
+    ? { ...banner, ...mapRouteSummaryToLivePopup(chronologySummary, banner as Record<string, any>) }
+    : banner;
   const validEvidenceNumber = banner.direction === 'incoming' || banner.direction === 'outgoing'
     ? isExternalNumber(evidenceNumber)
     : isInternalExt(evidenceNumber) && onlyDigits(evidenceNumber) !== onlyDigits(celDirection.internalCaller);
-  if (!validEvidenceNumber) return finalize(banner);
+  if (!validEvidenceNumber) return finalize(incomingRoute);
 
   const callerNumber = banner.direction === 'incoming'
     ? evidenceNumber
     : (celDirection.internalCaller || banner.callerNumber || '');
   const contact = resolveLiveContact(evidenceNumber, directory, settings);
   banner = {
-    ...banner,
+    ...incomingRoute,
     number: evidenceNumber,
     callerNumber,
     externalCallerNumber: banner.direction === 'incoming' ? evidenceNumber : '',
@@ -13523,13 +13562,40 @@ app.get('/api/debug/live-popup-route', requireAuth(), async (req, res) => {
       externalCaller: callerResolution.externalCallerNumber
     });
     const selectedPopupSummary = chronologySummary.scenario !== 'unknown' ? chronologySummary : popupSummary;
+    const evidenceSelection = selectIncomingCallerEvidence({
+      chronologyExternalCallerNumber: chronologySummary.externalCaller,
+      celRows,
+      cdrRows: legs,
+      amiRows: liveGroup,
+      technicalCandidates: [chronologyData.inboundDid, chronologyData.trunkNumber, selectedPopupSummary.queue]
+    });
 
     res.json({
       linkedid,
       chronologySummary,
       popupSummary,
       selectedPopupSummary,
-      rejectedCandidates: selectedPopupSummary.rejectedCandidates
+      selectedReason: evidenceSelection.selectedReason,
+      selectedCaller: evidenceSelection.externalCallerNumber,
+      candidates: evidenceSelection.candidates,
+      rejectedCandidates: [...evidenceSelection.rejectedCandidates, ...selectedPopupSummary.rejectedCandidates],
+      evidence: {
+        ami: liveGroup.map(channel => ({
+          uniqueid: channel.Uniqueid || '', linkedid: channel.Linkedid || '', channel: channel.Channel || '',
+          context: channel.Context || '', exten: channel.Exten || '', CallerIDNum: channel.CallerIDNum || '',
+          ConnectedLineNum: channel.ConnectedLineNum || ''
+        })),
+        cel: celRows.map((row: any) => ({
+          uniqueid: row.uniqueid || '', linkedid: row.linkedid || '', eventtype: row.eventtype || '',
+          cid_num: row.cid_num || '', cid_name: row.cid_name || '', exten: row.exten || '',
+          context: row.context || '', channame: row.channame || ''
+        })),
+        cdr: legs.map((row: any) => ({
+          uniqueid: row.uniqueid || '', linkedid: row.linkedid || '', src: row.src || '', cnum: row.cnum || '',
+          clid: row.clid || '', dst: row.dst || '', did: row.did || '', dcontext: row.dcontext || '',
+          channel: row.channel || '', dstchannel: row.dstchannel || ''
+        }))
+      }
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Live popup route diagnostics failed' });

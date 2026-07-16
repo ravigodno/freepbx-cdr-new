@@ -3,7 +3,8 @@ import {
   mergeLiveSessionAmiEvidence,
   normalizeLiveSessionCallers,
   resolveInboundExternalCaller,
-  resolveInboundLiveCaller
+  resolveInboundLiveCaller,
+  selectIncomingCallerEvidence
 } from '../server/inboundCallerResolver.js';
 import {
   detectLiveCallDirection,
@@ -395,6 +396,25 @@ const liveCelOnlyFallback = resolveInboundExternalCaller([], [
 assert.equal(liveCelOnlyFallback.externalCallerNumber, '74994907209');
 assert.equal(liveCelOnlyFallback.sourceField, 'cel.cid_num');
 assert.notEqual(liveCelOnlyFallback.externalCallerNumber, '841282');
+
+const debianEvidence = selectIncomingCallerEvidence({
+  chronologyExternalCallerNumber: '79789279880',
+  celRows: [{ cid_num: '79789279880', exten: '9000', context: 'ext-queues' }],
+  cdrRows: [{ src: '79789279880', cnum: '79789279880', clid: '"Client" <79789279880>', dst: '9000', did: '9891206012', dcontext: 'ext-queues' }],
+  amiRows: [{ CallerIDNum: '9000', ConnectedLineNum: '200' }],
+  technicalCandidates: ['9891206012', '9000']
+});
+assert.equal(debianEvidence.externalCallerNumber, '79789279880');
+assert.equal(debianEvidence.selectedReason, 'chronology');
+assert.equal(debianEvidence.sourceField, 'chronology.externalCallerNumber');
+
+const centosEvidence = selectIncomingCallerEvidence({
+  amiRows: [{ CallerIDNum: '74994907209', ConnectedLineNum: '200' }],
+  technicalCandidates: ['841282']
+});
+assert.equal(centosEvidence.externalCallerNumber, '74994907209');
+assert.equal(centosEvidence.selectedReason, 'ami.CallerIDNum');
+assert.equal(centosEvidence.sourceField, 'ami.CallerIDNum');
 
 const incomingDisplay = buildLiveCallBannerDisplay({
   direction: 'incoming',

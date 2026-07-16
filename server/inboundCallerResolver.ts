@@ -20,6 +20,13 @@ export interface InboundLiveCallerResolution extends InboundCallerResolution {
   fallbackSourceField: string | null;
 }
 
+export type IncomingCallerEvidenceSource = 'chronology' | 'cel' | 'cdr' | 'ami.CallerIDNum' | 'ami.ConnectedLineNum';
+
+export interface IncomingCallerEvidenceSelection extends InboundCallerResolution {
+  selectedReason: IncomingCallerEvidenceSource | null;
+  candidates: Array<{ value: string; sourceField: string; accepted: boolean; reason: string }>;
+}
+
 const UNKNOWN_CALLER_PATTERN = /^(?:anonymous|unknown|unavailable|restricted|private|none|null|n\/a)$/i;
 const TECHNICAL_CHANNEL_PATTERN = /^(?:local|sip|pjsip|iax2)\//i;
 
@@ -151,6 +158,81 @@ export function resolveInboundExternalCaller(
     sourceField: null,
     confidence: 'none',
     rejectedCandidates
+  };
+}
+
+export function selectIncomingCallerEvidence(input: {
+  chronologyExternalCallerNumber?: unknown;
+  celRows?: any[];
+  cdrRows?: any[];
+  amiRows?: any[];
+  technicalCandidates?: unknown[];
+}): IncomingCallerEvidenceSelection {
+  const celResolution = resolveInboundExternalCaller([], input.celRows || []);
+  const cdrResolution = resolveInboundExternalCaller(input.cdrRows || []);
+  const technicalNumbers = new Set(
+    [
+      ...(input.technicalCandidates || []),
+      ...(input.cdrRows || []).flatMap(row => [row?.did, row?.inboundDid, row?.trunkNumber]),
+      ...(input.celRows || []).flatMap(row => [row?.did, row?.inboundDid, row?.trunkNumber, row?.exten])
+    ].flatMap(extractNumberCandidates).filter(isExternalCandidate)
+  );
+  const candidates: IncomingCallerEvidenceSelection['candidates'] = [];
+  const rejectedCandidates = [...celResolution.rejectedCandidates, ...cdrResolution.rejectedCandidates];
+
+  const consider = (raw: unknown, sourceField: string, selectedReason: IncomingCallerEvidenceSource) => {
+    const values = extractNumberCandidates(raw);
+    if (!values.length && String(raw ?? '').trim()) {
+      candidates.push({ value: String(raw).slice(0, 64), sourceField, accepted: false, reason: 'not_external_number' });
+    }
+    for (const value of values) {
+      const rejection = !isExternalCandidate(value)
+        ? 'internal_or_service_number'
+        : technicalNumbers.has(value)
+          ? 'did_or_trunk_number'
+          : '';
+      candidates.push({ value, sourceField, accepted: !rejection, reason: rejection || selectedReason });
+      if (rejection && !rejectedCandidates.some(candidate => candidate.value === value && candidate.sourceField === sourceField && candidate.reason === rejection)) {
+        rejectedCandidates.push({
+          value,
+          sourceField,
+          reason: rejection as RejectedInboundCallerCandidate['reason']
+        });
+      }
+      if (!rejection) return { value, sourceField, selectedReason };
+    }
+    return null;
+  };
+
+  const orderedEvidence: Array<{ raw: unknown; sourceField: string; reason: IncomingCallerEvidenceSource }> = [
+    { raw: input.chronologyExternalCallerNumber, sourceField: 'chronology.externalCallerNumber', reason: 'chronology' },
+    { raw: celResolution.externalCallerNumber, sourceField: celResolution.sourceField || 'cel', reason: 'cel' },
+    { raw: cdrResolution.externalCallerNumber, sourceField: cdrResolution.sourceField || 'cdr', reason: 'cdr' }
+  ];
+  for (const row of input.amiRows || []) {
+    orderedEvidence.push({ raw: row?.CallerIDNum ?? row?.callerIdNum, sourceField: 'ami.CallerIDNum', reason: 'ami.CallerIDNum' });
+  }
+  for (const row of input.amiRows || []) {
+    orderedEvidence.push({ raw: row?.ConnectedLineNum ?? row?.connectedLineNum, sourceField: 'ami.ConnectedLineNum', reason: 'ami.ConnectedLineNum' });
+  }
+
+  for (const evidence of orderedEvidence) {
+    const selected = consider(evidence.raw, evidence.sourceField, evidence.reason);
+    if (selected) {
+      return {
+        externalCallerNumber: selected.value,
+        sourceField: selected.sourceField,
+        confidence: selected.selectedReason === 'ami.ConnectedLineNum' ? 'low' : selected.selectedReason.startsWith('ami.') ? 'medium' : 'high',
+        selectedReason: selected.selectedReason,
+        candidates,
+        rejectedCandidates
+      };
+    }
+  }
+
+  return {
+    externalCallerNumber: '', sourceField: null, confidence: 'none', selectedReason: null,
+    candidates, rejectedCandidates
   };
 }
 
