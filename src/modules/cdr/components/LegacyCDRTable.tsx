@@ -95,10 +95,12 @@ export default function LegacyCDRTable({
           return (
             <tr
               key={call.uniqueid}
-              className={`hover:bg-slate-50/50 dark:hover:bg-[#1e293b]/30 transition-colors ${
+              className={`hover:bg-slate-100/60 dark:hover:bg-slate-800/50 transition-colors ${
                 isMissed && !call.processed && !call.wasCallbacked
                   ? 'bg-rose-500/[0.015]'
-                  : ''
+                  : index % 2 === 0
+                    ? 'bg-white dark:bg-slate-900'
+                    : 'bg-slate-50/60 dark:bg-slate-800/25'
               }`}
             >
               {/* Column 1: TIME AND ID */}
