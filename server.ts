@@ -140,6 +140,7 @@ import {
 import { startMonitoringRetentionRunner } from './server/monitoringRetention.js';
 import { registerSecurityRoutes } from './server/security/router.js';
 import { startSecurityCollector } from './server/security/service.js';
+import { registerOutgoingReportRoutes } from './server/outgoingReports.js';
 
 // Load environment variables
 dotenv.config();
@@ -21434,6 +21435,13 @@ registerAiPbxAdminRoutes(app, requireAuth, readLocalDb, writeLocalDb);
 
 // REGISTER SECURITY MONITORING CENTER ROUTES
 registerSecurityRoutes(app, requireAuth, checkUserPermission);
+registerOutgoingReportRoutes(app, {
+  requireAuth,
+  checkPermission: checkUserPermission,
+  readLocalDb,
+  queryCdr: queryFreePBXCDR,
+  isDemoMode
+});
 
 // API fallback must stay before Vite/static SPA fallback so missing API routes return JSON, not index.html.
 app.use('/api', (req, res) => {

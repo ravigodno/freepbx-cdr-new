@@ -16,6 +16,7 @@ import { InboundDashboard } from './dashboard/InboundDashboard';
 import { EmployeesDashboard } from './dashboard/EmployeesDashboard';
 import { DepartmentsDashboard } from './dashboard/DepartmentsDashboard';
 import { LinesDashboard } from './dashboard/LinesDashboard';
+import { OutgoingDashboard } from './dashboard/OutgoingDashboard';
 
 type Props = {
   startDate: string;
@@ -392,6 +393,7 @@ export default function ReportsTab({
   const tabs = [
     ['overview', 'Обзор'],
     ['inbound', 'Входящие'],
+    ['outgoing', 'Исходящие'],
     ['departments', 'Отделы'],
     ['employees', 'Сотрудники'],
     ['clients', 'Клиенты'],
@@ -451,6 +453,13 @@ export default function ReportsTab({
           heatmap={heatmap}
           loading={loading}
           effectiveAnswerSlaSeconds={effectiveAnswerSlaSeconds}
+        />
+      ) : activeTab === 'outgoing' ? (
+        <OutgoingDashboard
+          startDate={startDate}
+          endDate={endDate}
+          onStartDateChange={onStartDateChange}
+          onEndDateChange={onEndDateChange}
         />
       ) : activeTab === 'departments' ? (
         <DepartmentsDashboard 
