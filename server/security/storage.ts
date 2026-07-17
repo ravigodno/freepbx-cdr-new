@@ -31,13 +31,13 @@ export async function updateSecuritySettings(input: Record<string, unknown>) {
   return saved;
 }
 
-export async function upsertSecurityEvent(event: SecurityEventInput) {
+export async function upsertSecurityEvent(event: SecurityEventInput):Promise<'created'|'updated'> {
   const settings = await getSecuritySettings();
   const rawEnabled = settings['security.raw_excerpt_enabled'] === true;
   const rawMax = Number(settings['security.raw_excerpt_max_length'] || 2000);
   const fingerprint = securityFingerprint(event);
   const raw = rawEnabled ? maskSecuritySecrets(event.rawExcerpt || '', rawMax) : null;
-  await queryPBXPulsDb(`INSERT INTO security_events
+  const result:any=await queryPBXPulsDb(`INSERT INTO security_events
     (occurred_at, received_at, severity, category, source, source_file, source_ip, source_port, destination_ip, destination_port,
      protocol, extension, username, jail, service, action, result, title, description, fingerprint, occurrence_count,
      first_seen_at, last_seen_at, is_private_ip, raw_excerpt, metadata_json)
@@ -50,7 +50,7 @@ export async function upsertSecurityEvent(event: SecurityEventInput) {
     event.result || 'unknown', event.title.slice(0, 255), event.description.slice(0, 2000), fingerprint,
     event.occurredAt, event.occurredAt, event.sourceIp ? (isPrivateSecurityIp(event.sourceIp) ? 1 : 0) : 0,
     raw, event.metadata ? maskSecuritySecrets(JSON.stringify(event.metadata), 8000) : null
-  ]);
+  ]);return Number(result?.affectedRows)===1?'created':'updated';
 }
 
 export async function listSecurityEvents(query: Record<string, unknown>) {

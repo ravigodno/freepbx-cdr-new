@@ -49,18 +49,28 @@ async function collectEventsJob() {
   if(eventCollecting)return;eventCollecting=true;
   runtime.activeJobs.push('events');
   try {
-    const cursorRows = await queryPBXPulsDb('SELECT source_key, last_size, last_mtime FROM security_event_sources');
+    const cursorRows = await queryPBXPulsDb('SELECT source_key, source_type, source_path, last_size, last_mtime, inode_value FROM security_event_sources WHERE active=1');
     const cursors = Object.fromEntries(cursorRows.map((row:any) => [String(row.source_key), {
       lastSize: Number(row.last_size || 0),
-      lastMtime: row.last_mtime ? new Date(row.last_mtime).toISOString() : undefined
+      lastMtime: row.last_mtime ? new Date(row.last_mtime).toISOString() : undefined,
+      inode: row.inode_value ? String(row.inode_value) : undefined
     }]));
     const { events, sources } = await collectRecentLogEvents(cursors);
-    for (const event of events) await upsertSecurityEvent(event);
-    for (const source of sources) await queryPBXPulsDb(`INSERT INTO security_event_sources
-      (source_key, source_type, source_path, status, last_size, last_mtime, last_success_at, last_error)
-      VALUES (?, ?, ?, ?, ?, ?, NOW(), NULL)
-      ON DUPLICATE KEY UPDATE status=VALUES(status), last_size=VALUES(last_size), last_mtime=VALUES(last_mtime), last_success_at=NOW(), last_error=NULL`,
-      [securityLogSourceKey(source.source,source.path), source.source, source.path, source.status, source.size || null, source.mtime ? source.mtime.slice(0, 19).replace('T', ' ') : null]);
+    const outcomes=new Map<string,{created:number;updated:number}>();
+    for (const event of events) {const outcome=await upsertSecurityEvent(event);const key=securityLogSourceKey(event.source,event.sourceFile||'');const current=outcomes.get(key)||{created:0,updated:0};current[outcome]+=1;outcomes.set(key,current);}
+    for (const source of sources) {
+      const sourceKey=securityLogSourceKey(source.source,source.path);await queryPBXPulsDb(`INSERT INTO security_event_sources
+        (source_key, source_type, source_path, status, active, collector_version, inode_value, last_size, last_mtime, last_success_at, last_error)
+        VALUES (?, ?, ?, ?, 1, '2', ?, ?, ?, NOW(), NULL)
+        ON DUPLICATE KEY UPDATE source_key=VALUES(source_key),status=VALUES(status),active=1,collector_version='2',inode_value=VALUES(inode_value),last_size=VALUES(last_size),last_mtime=VALUES(last_mtime),last_success_at=NOW(),last_error=NULL`,
+        [sourceKey,source.source,source.path,source.status,source.inode||null,source.size||0,source.mtime?source.mtime.slice(0,19).replace('T',' '):null]);
+      const sourceRows=await queryPBXPulsDb('SELECT id FROM security_event_sources WHERE source_type=? AND source_path=? AND active=1 LIMIT 1',[source.source,source.path]);const sourceId=Number(sourceRows[0]?.id||0);const outcome=outcomes.get(sourceKey)||{created:0,updated:0};
+      if(sourceId)await queryPBXPulsDb(`INSERT INTO security_event_source_stats
+        (source_id,bucket_start,lines_read,events_parsed,events_created,events_updated,last_event_at)
+        VALUES (?,DATE_FORMAT(NOW(),'%Y-%m-%d %H:00:00'),?,?,?,?,?)
+        ON DUPLICATE KEY UPDATE lines_read=lines_read+VALUES(lines_read),events_parsed=events_parsed+VALUES(events_parsed),events_created=events_created+VALUES(events_created),events_updated=events_updated+VALUES(events_updated),last_event_at=CASE WHEN VALUES(last_event_at) IS NULL THEN last_event_at WHEN last_event_at IS NULL THEN VALUES(last_event_at) ELSE GREATEST(last_event_at,VALUES(last_event_at)) END`,
+        [sourceId,Number(source.linesRead||0),Number(source.linesParsed||0),outcome.created,outcome.updated,source.lastEventAt||null]);
+    }
     runtime.lastSuccessfulRuns.events = new Date().toISOString();
   } catch (error:any) { runtime.lastErrors.events = sanitizePBXPulsDbError(error); }
   finally { eventCollecting=false;runtime.activeJobs = runtime.activeJobs.filter(job => job !== 'events'); }

@@ -1,5 +1,6 @@
 import fs from 'fs';
 import os from 'os';
+import path from 'path';
 import { runSecurityCommand } from './executor.js';
 import { parseFail2BanJail, parseFail2BanStatus, parseIptablesPolicies, parseIptablesRules, parseIptablesSpecRules, parseNftablesRules, parseSecurityLogLine, parseSecurityLogTimestamp, parseSsListeningPorts } from './parsers.js';
 import { calculateSecurityLevel } from './sanitize.js';
@@ -15,7 +16,8 @@ const LOG_SOURCES = [
   ['/var/log/httpd/access_log','apache'], ['/var/log/httpd/error_log','apache'],
   ['/var/log/apache2/access.log','apache'], ['/var/log/apache2/error.log','apache']
 ] as const;
-export const securityLogSourceKey=(source:string,file:string)=>`v2:${source}:${file}`;
+export const canonicalSecurityLogPath=(file:string)=>path.posix.normalize(String(file||'').trim());
+export const securityLogSourceKey=(source:string,file:string)=>`${String(source||'').trim()}:${canonicalSecurityLogPath(file)}`;
 
 export async function collectOsDiscovery() {
   let osRelease = ''; try { osRelease = await fs.promises.readFile('/etc/os-release', 'utf8'); } catch {}
@@ -115,22 +117,22 @@ export function buildSecurityChecks(input: { firewall: any; fail2ban: any; ports
   return result;
 }
 
-export async function collectRecentLogEvents(cursors: Record<string, { lastSize: number; lastMtime?: string }> = {}): Promise<{ events: SecurityEventInput[]; sources: any[] }> {
+export async function collectRecentLogEvents(cursors: Record<string, { lastSize: number; lastMtime?: string; inode?: string }> = {}): Promise<{ events: SecurityEventInput[]; sources: any[] }> {
   const events: SecurityEventInput[] = []; const sources = [];
   for (const [file, source] of LOG_SOURCES) {
     try {
-      const stat = await fs.promises.stat(file); const cursor = cursors[securityLogSourceKey(source,file)];
+      const canonicalPath=canonicalSecurityLogPath(file);const stat = await fs.promises.stat(canonicalPath); const cursor = cursors[securityLogSourceKey(source,canonicalPath)];const inode=String(stat.ino);
       if (cursor && cursor.lastSize === stat.size && cursor.lastMtime === stat.mtime.toISOString()) {
-        sources.push({ path:file, source, status:'available', size:stat.size, mtime:stat.mtime.toISOString() });
+        sources.push({ path:canonicalPath, source, status:'available', size:stat.size, mtime:stat.mtime.toISOString(),inode,linesRead:0,linesParsed:0,lastEventAt:null });
         continue;
       }
-      const rotated = !cursor || stat.size < cursor.lastSize; const maxRead=cursor?128*1024:2*1024*1024;
+      const rotated = !cursor || stat.size < cursor.lastSize || (cursor.inode&&cursor.inode!==inode); const maxRead=cursor?128*1024:2*1024*1024;
       const start = rotated ? Math.max(0, stat.size - maxRead) : cursor.lastSize;
       const length = Math.min(Math.max(0, stat.size - start), maxRead); const handle = await fs.promises.open(file, 'r');
       const buffer = Buffer.alloc(length); await handle.read(buffer, 0, length, Math.max(start, stat.size - length)); await handle.close();
-      const lines = buffer.toString('utf8').split(/\r?\n/).slice(cursor?-1000:-10000);const cutoff=Date.now()-24*60*60*1000;
-      for (const line of lines) { const timestamp=parseSecurityLogTimestamp(line);if(!cursor&&timestamp&&new Date(timestamp).getTime()<cutoff)continue;const event = parseSecurityLogLine(line, source,timestamp||new Date().toISOString()); if (event) { event.sourceFile = file; events.push(event); } }
-      sources.push({ path:file, source, status:'available', size:stat.size, mtime:stat.mtime.toISOString() });
+      const lines = buffer.toString('utf8').split(/\r?\n/).filter(Boolean).slice(cursor?-1000:-10000);const cutoff=Date.now()-24*60*60*1000;let linesParsed=0;let lastEventAt:string|null=null;
+      for (const line of lines) { const timestamp=parseSecurityLogTimestamp(line);if(!cursor&&timestamp&&new Date(timestamp.replace(' ','T')).getTime()<cutoff)continue;const event = parseSecurityLogLine(line, source,timestamp||new Date().toISOString()); if (event) { event.sourceFile = canonicalPath; events.push(event);linesParsed+=1;lastEventAt=event.occurredAt; } }
+      sources.push({ path:canonicalPath, source, status:'available', size:stat.size, mtime:stat.mtime.toISOString(),inode,linesRead:lines.length,linesParsed,lastEventAt });
     } catch (error:any) { if (error?.code !== 'ENOENT') sources.push({ path:file, source, status:error?.code === 'EACCES' ? 'permission_denied' : 'unknown' }); }
   }
   return { events: events.slice(-2000), sources };

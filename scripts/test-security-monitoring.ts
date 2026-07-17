@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { parseFail2BanJail, parseFail2BanStatus, parseIptablesRules, parseNftablesRules, parseSecurityLogLine, parseSsListeningPorts } from '../server/security/parsers.js';
+import { parseFail2BanJail, parseFail2BanStatus, parseIptablesRules, parseNftablesRules, parseSecurityLogLine, parseSecurityLogTimestamp, parseSsListeningPorts } from '../server/security/parsers.js';
 import { calculateSecurityLevel, isAllowedSecurityPath, isLoopbackIp, isPrivateSecurityIp, isValidJailName, isValidSecurityIp, maskSecuritySecrets, parseSecurityPortList, securityFingerprint } from '../server/security/sanitize.js';
 import { runSecurityCommand } from '../server/security/executor.js';
 import { buildSecurityChecks, classifyListeningPortExposure, normalizeServiceMetric } from '../server/security/collectors.js';
 import { analyzePortFirewall, filterAndSortPorts, groupPortSockets, parsePortQuery, parsePortRanges } from '../server/security/portDiagnostics.js';
-import { calculateThreatActivityStatus, groupThreatsByIp, normalizeThreatRow } from '../server/security/threatActivity.js';
+import { buildThreatWhere, calculateThreatActivityStatus, getThreatStreamState, groupThreatsByIp, mergeCanonicalSourceRows, normalizeThreatRow, summarizeRecentThreatRows } from '../server/security/threatActivity.js';
+import { activeSecurityThreatFilters, resetSecurityThreatFilters } from '../src/utils/securityThreatFilters.js';
 
 const fixture = (name:string) => fs.readFileSync(path.join(process.cwd(),'scripts/fixtures/security',name),'utf8').trim();
 assert.equal(isValidSecurityIp('192.0.2.10'),true); assert.equal(isValidSecurityIp('2001:db8::1'),true); assert.equal(isValidSecurityIp('1.2.3.4;rm -rf /'),false);
@@ -28,6 +29,13 @@ assert.deepEqual(parseFail2BanStatus('Status\n`- Jail list: asterisk, sshd').jai
 assert.equal(parseFail2BanJail('Currently failed: 2\nTotal failed: 8\nCurrently banned: 1\nTotal banned: 5\nBanned IP list: 192.0.2.9','asterisk').currentlyBanned,1);
 for(const [file,source] of [['asterisk-pjsip.log','asterisk'],['chan-sip.log','asterisk'],['fail2ban.log','fail2ban'],['ssh.log','auth'],['nginx.log','nginx'],['apache.log','apache']] as const) assert.ok(parseSecurityLogLine(fixture(file),source),`${file} should parse`);
 const now=Date.now();assert.equal(calculateThreatActivityStatus({last_seen_at:new Date(now-10_000).toISOString(),occurrence_count:3},now),'active');assert.equal(calculateThreatActivityStatus({last_seen_at:new Date(now-60_000).toISOString()},now),'recent');assert.equal(calculateThreatActivityStatus({last_seen_at:new Date(now-180_000).toISOString()},now),'ended');assert.equal(calculateThreatActivityStatus({last_seen_at:new Date().toISOString(),result:'blocked'},now),'blocked');
+assert.equal(calculateThreatActivityStatus({first_seen_at:new Date(now-7200_000).toISOString(),last_seen_at:new Date(now-120_000).toISOString()},now),'recent');
+assert.equal(parseSecurityLogTimestamp('[2026-07-17 14:48:20] NOTICE chan_sip.c'),'2026-07-17 14:48:20');
+const threatWhere=buildThreatWhere({range:'1h',category:'sip_auth_failure'});assert.match(threatWhere.sql,/last_seen_at>=DATE_SUB\(NOW\(\),INTERVAL \? MINUTE\)/);assert.equal(threatWhere.params[0],60);
+assert.deepEqual(summarizeRecentThreatRows([{occurrence_count:5,last_seen_at:new Date().toISOString()}]),{eventGroups5m:1,attempts5m:5});
+assert.equal(getThreatStreamState({collectorRunning:true,availableSources:13,lastEventAt:null}),'no_recent_threats');
+assert.equal(mergeCanonicalSourceRows([{source_key:'asterisk:/var/log/asterisk/full',source_type:'asterisk',source_path:'/var/log/asterisk/full',last_success_at:'2026-07-17 10:00:00'},{source_key:'v2:asterisk:/var/log/asterisk/full',source_type:'asterisk',source_path:'/var/log/asterisk/full',last_success_at:'2026-07-17 11:00:00'}]).length,1);
+const resetThreats=resetSecurityThreatFilters();assert.deepEqual(activeSecurityThreatFilters(resetThreats),[{key:'minutes',value:'60'}]);assert.equal(resetThreats.category,'');
 const threatRows=[normalizeThreatRow({id:1,source_ip:'192.0.2.10',category:'sip_auth_failure',severity:'high',occurrence_count:2,first_seen_at:new Date(now-20_000).toISOString(),last_seen_at:new Date(now-10_000).toISOString(),description:'password=hidden'}),normalizeThreatRow({id:2,source_ip:'192.0.2.10',category:'fail2ban_ban',severity:'medium',result:'blocked',occurrence_count:1,first_seen_at:new Date(now-5_000).toISOString(),last_seen_at:new Date(now-5_000).toISOString(),description:'Ban'})];const threatGroup=groupThreatsByIp(threatRows)[0];assert.equal(threatGroup.attempts,3);assert.equal(threatGroup.blocked,true);assert.ok(!threatRows[0].description.includes('hidden'));
 assert.equal(parseSecurityLogLine(fixture('asterisk-benign-security.log'),'asterisk'),null);assert.equal(parseSecurityLogLine('SecurityEvent="SuccessfulAuth",AccountID="200"','asterisk'),null);assert.equal(parseSecurityLogLine(fixture('ami-failure.log'),'asterisk')?.category,'ami_auth_failure');assert.equal(parseSecurityLogLine(fixture('firewall-drop.log'),'kernel')?.category,'firewall_drop');assert.equal(parseSecurityLogLine('GET /.env HTTP/1.1 from 192.0.2.5','nginx')?.category,'http_sensitive_file_probe');
 const event={category:'ssh_auth_failure',source:'auth',sourceIp:'192.0.2.1',title:'Failed'}; assert.equal(securityFingerprint(event),securityFingerprint(event));

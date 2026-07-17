@@ -506,6 +506,48 @@ const MIGRATIONS: Migration[] = [
         ('ssh_auth_burst','Массовые SSH auth failures','high',30),('asterisk_stopped','Asterisk остановлен','critical',10),
         ('disk_low','Критически заполнен диск','critical',30),('critical_file_changed','Изменён критический файл','critical',30)`
     ]
+  },
+  {
+    key: '20260717_019_security_threat_source_sync',
+    description: 'Normalize security timestamps and canonical event sources',
+    statements: [
+      `ALTER TABLE security_event_sources
+        ADD COLUMN active TINYINT(1) NOT NULL DEFAULT 1 AFTER status,
+        ADD COLUMN collector_version VARCHAR(32) NULL AFTER active`,
+      `UPDATE security_event_sources keep_row
+       JOIN (SELECT source_type,source_path,MIN(id) keep_id,MAX(last_success_at) newest_success
+             FROM security_event_sources GROUP BY source_type,source_path) grouped ON grouped.keep_id=keep_row.id
+       LEFT JOIN security_event_sources newest ON newest.source_type=grouped.source_type AND newest.source_path=grouped.source_path
+         AND newest.last_success_at=grouped.newest_success
+       SET keep_row.status=COALESCE(newest.status,keep_row.status),keep_row.cursor_value=COALESCE(newest.cursor_value,keep_row.cursor_value),
+         keep_row.inode_value=COALESCE(newest.inode_value,keep_row.inode_value),keep_row.last_size=COALESCE(newest.last_size,keep_row.last_size),
+         keep_row.last_mtime=COALESCE(newest.last_mtime,keep_row.last_mtime),keep_row.last_success_at=COALESCE(newest.last_success_at,keep_row.last_success_at),
+         keep_row.last_error=COALESCE(newest.last_error,keep_row.last_error),keep_row.collector_version='2',keep_row.active=1`,
+      `DELETE duplicate_row FROM security_event_sources duplicate_row
+       JOIN (SELECT source_type,source_path,MIN(id) keep_id FROM security_event_sources GROUP BY source_type,source_path) grouped
+         ON grouped.source_type=duplicate_row.source_type AND grouped.source_path=duplicate_row.source_path
+       WHERE duplicate_row.id<>grouped.keep_id`,
+      `UPDATE security_event_sources SET source_key=CONCAT(source_type,':',source_path),collector_version='2',active=1`,
+      `ALTER TABLE security_event_sources ADD UNIQUE KEY uniq_security_source_path (source_type(32),source_path(128))`,
+      `CREATE TABLE IF NOT EXISTS security_event_source_stats (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,source_id INT NOT NULL,bucket_start DATETIME NOT NULL,
+        lines_read BIGINT NOT NULL DEFAULT 0,events_parsed BIGINT NOT NULL DEFAULT 0,events_created BIGINT NOT NULL DEFAULT 0,
+        events_updated BIGINT NOT NULL DEFAULT 0,last_event_at DATETIME NULL,
+        UNIQUE KEY uniq_security_source_stats_bucket (source_id,bucket_start),INDEX idx_security_source_stats_time (bucket_start)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `UPDATE security_events SET
+         occurred_at=TIMESTAMPADD(SECOND,TIMESTAMPDIFF(SECOND,UTC_TIMESTAMP(),NOW()),occurred_at),
+         first_seen_at=TIMESTAMPADD(SECOND,TIMESTAMPDIFF(SECOND,UTC_TIMESTAMP(),NOW()),first_seen_at),
+         last_seen_at=TIMESTAMPADD(SECOND,TIMESTAMPDIFF(SECOND,UTC_TIMESTAMP(),NOW()),last_seen_at)
+      WHERE TIMESTAMPDIFF(MINUTE,occurred_at,received_at) BETWEEN 120 AND 360`
+    ]
+  },
+  {
+    key: '20260717_020_security_source_stats_null_time',
+    description: 'Keep empty source activity timestamps nullable',
+    statements: [
+      `UPDATE security_event_source_stats SET last_event_at=NULL WHERE last_event_at='1970-01-01 00:00:00'`
+    ]
   }
 ];
 
