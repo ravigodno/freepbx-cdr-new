@@ -37,6 +37,13 @@ export function isValidJailName(value: unknown): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(String(value || ''));
 }
 
+export function parseSecurityPortList(value: unknown): number[] {
+  const values = Array.isArray(value) ? value : [value];
+  const ports = values.flatMap(item => String(item ?? '').split(/[,;\s]+/))
+    .map(item => Number(item)).filter(port => Number.isInteger(port) && port >= 1 && port <= 65535);
+  return [...new Set(ports)].slice(0, 100);
+}
+
 const SECURITY_PATH_ROOTS = ['/etc/asterisk/', '/etc/fail2ban/', '/etc/ssh/', '/etc/nftables', '/etc/iptables/', '/etc/firewalld/', '/etc/ufw/', '/etc/nginx/', '/etc/httpd/', '/etc/apache2/', '/etc/systemd/system/'];
 export function isAllowedSecurityPath(value: unknown): boolean {
   const path = String(value || '').trim();

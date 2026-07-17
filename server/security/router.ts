@@ -4,7 +4,7 @@ import { queryPBXPulsDb } from '../pbxpulsDb.js';
 import { runFail2BanAction } from './executor.js';
 import { collectSecuritySnapshot, getSecurityOverview, getSecurityStatus } from './service.js';
 import { addWhitelist, deleteWhitelist, getSecurityEvent, getSecuritySettings, listSecurityEvents, listWhitelist, updateSecuritySettings } from './storage.js';
-import { isLoopbackIp, isPrivateSecurityIp, isValidJailName, isValidSecurityIp } from './sanitize.js';
+import { isLoopbackIp, isPrivateSecurityIp, isValidJailName, isValidSecurityIp, parseSecurityPortList } from './sanitize.js';
 
 type PermissionChecker = (req: Request, permission: string) => Promise<boolean>;
 const structuredError = (res:Response, status:number, code:string, message:string) => res.status(status).json({ success:false, error:{ code, message } });
@@ -30,8 +30,8 @@ export function registerSecurityRoutes(app: Express, requireAuth: any, checkPerm
   app.get('/api/security/ports', requireAuth(), permit('view_firewall'), async (req,res) => {
     let rows=(await collectSecuritySnapshot()).ports.ports || []; const risk=String(req.query.risk||''), protocol=String(req.query.protocol||''), exposure=String(req.query.exposure||'');
     if(risk) rows=rows.filter((r:any)=>r.risk===risk); if(protocol) rows=rows.filter((r:any)=>r.protocol===protocol); if(exposure) rows=rows.filter((r:any)=>r.exposure===exposure);
-    const port=Number(req.query.port||0), processName=String(req.query.process||'').trim().toLowerCase();
-    if(Number.isInteger(port)&&port>0) rows=rows.filter((r:any)=>r.port===port);
+    const ports=parseSecurityPortList([req.query.ports,req.query.port]), processName=String(req.query.process||'').trim().toLowerCase();
+    if(ports.length) rows=rows.filter((r:any)=>ports.includes(r.port));
     if(processName) rows=rows.filter((r:any)=>String(r.process||'').toLowerCase().includes(processName));
     if(String(req.query.external||'')==='true') rows=rows.filter((r:any)=>['external_possible','externally_exposed'].includes(r.exposure));
     if(String(req.query.critical||'')==='true') rows=rows.filter((r:any)=>r.risk==='critical');
@@ -69,7 +69,7 @@ export function registerSecurityRoutes(app: Express, requireAuth: any, checkPerm
   app.get('/api/security/sip/registrations', requireAuth(), permit('view_security_events'), async (req,res)=>{const limit=Math.min(Number(req.query.limit)||100,500);const rows=await queryPBXPulsDb(`SELECT endpoint,ip_address,port,transport,user_agent,first_seen_at,last_seen_at,seen_count,is_private,is_trusted FROM security_sip_registration_history ORDER BY last_seen_at DESC LIMIT ${limit}`);res.json({success:true,rows});});
   app.get('/api/security/checks', requireAuth(), permit('view_security_config_audit'), async (_req,res)=>res.json({success:true,rows:(await collectSecuritySnapshot()).checks}));
   app.post('/api/security/checks/run', requireAuth(), permit('view_security_config_audit'), async (_req,res)=>res.json({success:true,rows:(await collectSecuritySnapshot(true)).checks}));
-  app.get('/api/security/services', ...view, async (_req,res)=>res.json({success:true,...(await collectSecuritySnapshot()).services}));
+  app.get('/api/security/services', ...view, async (req,res)=>{const data=(await collectSecuritySnapshot()).services;const service=String(req.query.service||'').trim().toLowerCase();const services=service?(data.services||[]).filter((item:any)=>String(item.name||'').toLowerCase()===service):data.services;res.json({success:true,...data,services});});
   app.get('/api/security/file-changes', requireAuth(), permit('view_security_config_audit'), async (req,res)=>{const limit=Math.min(Number(req.query.limit)||100,500);const rows=await queryPBXPulsDb(`SELECT id,path,change_type,severity,detected_at,metadata_json FROM security_file_changes ORDER BY detected_at DESC LIMIT ${limit}`);res.json({success:true,rows,fileIntegrityEnabled:(await getSecuritySettings())['security.file_integrity_enabled']===true});});
   app.get('/api/security/alerts', ...view, async (_req,res)=>res.json({success:true,rows:await queryPBXPulsDb('SELECT * FROM security_alert_rules ORDER BY severity DESC, rule_key')}));
   app.put('/api/security/alerts/:id', requireAuth(), permit('manage_security_settings'), async (req,res)=>{const id=Number(req.params.id);if(!Number.isSafeInteger(id))return structuredError(res,400,'invalid_id','Некорректный ID');await queryPBXPulsDb('UPDATE security_alert_rules SET enabled=?,threshold_value=?,cooldown_minutes=?,updated_at=NOW() WHERE id=?',[req.body?.enabled===true?1:0,Number(req.body?.threshold)||null,Math.max(1,Number(req.body?.cooldownMinutes)||30),id]);res.json({success:true});});

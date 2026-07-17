@@ -1,5 +1,14 @@
 export type SecuritySeverity = 'info' | 'low' | 'medium' | 'high' | 'critical';
 export type SecurityAvailability = 'local_only' | 'lan_only' | 'external_possible' | 'externally_exposed' | 'unknown';
+export type SecurityTabKey = 'overview' | 'events' | 'sip' | 'firewall' | 'fail2ban' | 'ports' | 'checks' | 'services' | 'changes' | 'alerts' | 'settings';
+
+export type SecurityNavigationTarget = {
+  tab: SecurityTabKey;
+  filters?: {
+    ports?: number[]; service?: string; category?: string; severity?: string;
+    sourceIp?: string; jail?: string; search?: string;
+  };
+};
 
 export interface SecurityFirewallRule {
   id: string;
@@ -22,7 +31,9 @@ export interface SecurityCheckResult {
   id: string; group: string; title: string;
   status: 'passed' | 'warning' | 'failed' | 'unknown' | 'not_applicable';
   severity: SecuritySeverity; summary: string; details?: string; recommendation?: string;
-  evidence?: Record<string, unknown>; checkedAt: string;
+  checkId?: string; targetTab?: SecurityTabKey; relatedPorts?: number[]; service?: string;
+  category?: string; sourceIp?: string; navigation?: SecurityNavigationTarget;
+  evidence?: Record<string, unknown>; metadata?: Record<string, unknown>; checkedAt: string;
 }
 
 export interface SecurityEventInput {
