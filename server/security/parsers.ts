@@ -115,15 +115,26 @@ export function parseFail2BanJail(output: string, jail: string) {
 
 export function parseSecurityLogLine(line: string, source: string, occurredAt = new Date().toISOString()): SecurityEventInput | null {
   const text = maskSecuritySecrets(line, 2000); const lower = text.toLowerCase();
+  if (/securityevent="?(challengesent|successfulauth)|\bchallengesent\b|\bsuccessfulauth\b/.test(lower)) return null;
   const ip = text.match(/(?<![\d:])(?:\d{1,3}\.){3}\d{1,3}(?![\d:])/g)?.find(Boolean);
+  const sourcePort=Number(text.match(/(?:sourceport|spt)[=: ]+"?(\d+)/i)?.[1])||undefined,destinationPort=Number(text.match(/(?:destinationport|dpt)[=: ]+"?(\d+)/i)?.[1])||undefined;
+  const extension=text.match(/(?:accountid|username|extension|user)[=: ]+"?([A-Za-z0-9_.-]{1,64})/i)?.[1];
   let category = ''; let severity: SecuritySeverity = 'medium'; let title = '';
   if (/failed password|authentication failure|invalid user/.test(lower)) { category = lower.includes('invalid user') ? 'ssh_invalid_user' : 'ssh_auth_failure'; title = 'Неудачная SSH-аутентификация'; severity = 'high'; }
-  else if (/securityevent="?challengeresponsefailed|securityevent="?(?:invalidaccountid|failedacl|requestnotallowed)|failed to authenticate|no matching endpoint|wrong password/.test(lower)) { category = 'sip_auth_failure'; title = 'Ошибка SIP-аутентификации'; severity = 'high'; }
+  else if (/securityevent="?challengeresponsefailed|securityevent="?(?:invalidaccountid|failedacl|requestnotallowed)|failed to authenticate|wrong password/.test(lower)) { category = 'sip_auth_failure'; title = 'Ошибка SIP-аутентификации'; severity = 'high'; }
+  else if (/manager.*failed.*auth|ami.*failed.*auth|failed to authenticate.*manager/.test(lower)){category='ami_auth_failure';title='Неудачная AMI-аутентификация';severity='high';}
+  else if (/\boptions\b.*(?:no matching endpoint|failed|unknown)/.test(lower)){category='sip_options_scan';title='SIP OPTIONS-сканирование';severity='medium';}
+  else if (/no matching endpoint|unknown endpoint/.test(lower)){category='sip_scan';title='Попытка через неизвестный SIP endpoint';severity='medium';}
+  else if (/extension.*(?:not found|does not exist|unknown)|invalid extension/.test(lower)){category='sip_unknown_extension';title='Подбор внутреннего номера';severity='medium';}
   else if (/fail2ban.*\bban\b|\bban\s+/.test(lower)) { category = 'fail2ban_ban'; title = 'Fail2Ban заблокировал IP'; severity = 'medium'; }
   else if (/fail2ban.*\bunban\b|\bunban\s+/.test(lower)) { category = 'fail2ban_unban'; title = 'Fail2Ban разблокировал IP'; severity = 'info'; }
-  else if (/\.env|wp-login|phpmyadmin|\.git|etc\/passwd|\.\.\//.test(lower)) { category = 'http_sensitive_file_probe'; title = 'Проверка чувствительного HTTP-пути'; severity = 'high'; }
+  else if (/union(?:%20|\s)+select|select(?:%20|\s)+.*from|or(?:%20|\s)+1=1/.test(lower)){category='http_sql_injection';title='Попытка SQL-инъекции';severity='high';}
+  else if (/\.\.\/|%2e%2e|etc\/passwd/.test(lower)){category='http_path_traversal';title='Попытка обхода каталогов';severity='high';}
+  else if (/\.env|wp-login|wp-admin|phpmyadmin|\.git/.test(lower)) { category = 'http_sensitive_file_probe'; title = 'Проверка чувствительного HTTP-пути'; severity = 'high'; }
+  else if (/\b(drop|reject)\b.*\b(src|spt|dpt)=/i.test(text)){category='firewall_drop';title='Соединение отклонено Firewall';severity='medium';}
   else return null;
-  return { occurredAt, severity, category, source, sourceIp: ip, title, description: text.slice(0, 500), result: category === 'fail2ban_ban' ? 'blocked' : category === 'fail2ban_unban' ? 'success' : 'failed', rawExcerpt: text };
+  const service=category.startsWith('sip_')?'Asterisk SIP':category.startsWith('ami_')?'Asterisk AMI':category.startsWith('ssh_')?'SSH':category.startsWith('http_')?'Web':category.startsWith('firewall_')?'Firewall':category.startsWith('fail2ban_')?'Fail2Ban':undefined;
+  return { occurredAt, severity, category, source, sourceIp: ip, sourcePort,destinationPort,protocol:/\budp\b/i.test(text)?'udp':/\btcp\b/i.test(text)?'tcp':undefined,extension:category.startsWith('sip_')?extension:undefined,username:category.startsWith('ssh_')||category.startsWith('ami_')?extension:undefined,service,title, description: text.slice(0, 500), result: ['fail2ban_ban','firewall_drop'].includes(category) ? 'blocked' : category === 'fail2ban_unban' ? 'success' : 'failed', rawExcerpt: text };
 }
 
 export function parseSecurityLogTimestamp(line:string,now=new Date()):string|null{const iso=line.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})/)||line.match(/^\[(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})/);if(iso){const date=new Date(`${iso[1]}T${iso[2]}`);return Number.isNaN(date.getTime())?null:date.toISOString();}const syslog=line.match(/^([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{2}:\d{2}:\d{2})/);if(syslog){const date=new Date(`${syslog[1]} ${syslog[2]} ${now.getFullYear()} ${syslog[3]}`);if(date.getTime()>now.getTime()+86400000)date.setFullYear(date.getFullYear()-1);return Number.isNaN(date.getTime())?null:date.toISOString();}return null;}

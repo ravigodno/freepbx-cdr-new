@@ -2,11 +2,13 @@ import { queryPBXPulsDb, sanitizePBXPulsDbError } from '../pbxpulsDb.js';
 import { writePBXPulsSystemEvent } from '../pbxpulsEvents.js';
 import { buildOverview, buildSecurityChecks, classifyListeningPortExposure, collectFail2Ban, collectFirewall, collectListeningPorts, collectOsDiscovery, collectRecentLogEvents, collectServices, securityLogSourceKey } from './collectors.js';
 import { cleanupSecurityRetention, getSecuritySettings, saveSecurityChecks, upsertSecurityEvent } from './storage.js';
+import { listThreatActivity } from './threatActivity.js';
 
 type Snapshot = any;
 let cached: { expiresAt: number; value: Snapshot } | null = null;
 let collecting: Promise<Snapshot> | null = null;
-let collectorTimer: NodeJS.Timeout | null = null;
+let systemTimer: NodeJS.Timeout | null = null;let eventTimer:NodeJS.Timeout|null=null;let lastEventPoll=0;
+let eventCollecting=false;
 const runtime = { running: false, activeJobs: [] as string[], lastSuccessfulRuns: {} as Record<string,string>, lastErrors: {} as Record<string,string>, startedAt: null as string|null };
 
 async function counts24h() {
@@ -44,6 +46,7 @@ export async function collectSecuritySnapshot(force = false): Promise<Snapshot> 
 }
 
 async function collectEventsJob() {
+  if(eventCollecting)return;eventCollecting=true;
   runtime.activeJobs.push('events');
   try {
     const cursorRows = await queryPBXPulsDb('SELECT source_key, last_size, last_mtime FROM security_event_sources');
@@ -60,7 +63,7 @@ async function collectEventsJob() {
       [securityLogSourceKey(source.source,source.path), source.source, source.path, source.status, source.size || null, source.mtime ? source.mtime.slice(0, 19).replace('T', ' ') : null]);
     runtime.lastSuccessfulRuns.events = new Date().toISOString();
   } catch (error:any) { runtime.lastErrors.events = sanitizePBXPulsDbError(error); }
-  finally { runtime.activeJobs = runtime.activeJobs.filter(job => job !== 'events'); }
+  finally { eventCollecting=false;runtime.activeJobs = runtime.activeJobs.filter(job => job !== 'events'); }
 }
 
 async function collectorTick() {
@@ -70,11 +73,11 @@ async function collectorTick() {
 }
 
 export function startSecurityCollector() {
-  if (collectorTimer || runtime.running) return;
+  if (systemTimer || eventTimer || runtime.running) return;
   runtime.running = true; runtime.startedAt = new Date().toISOString();
   setTimeout(() => collectorTick().catch(error => { runtime.lastErrors.collector = sanitizePBXPulsDbError(error); }), 5000).unref();
-  collectorTimer = setInterval(() => collectorTick().catch(error => { runtime.lastErrors.collector = sanitizePBXPulsDbError(error); }), 60_000);
-  collectorTimer.unref();
+  systemTimer = setInterval(() => collectorTick().catch(error => { runtime.lastErrors.collector = sanitizePBXPulsDbError(error); }), 60_000);systemTimer.unref();
+  eventTimer=setInterval(async()=>{try{const settings=await getSecuritySettings();const interval=Math.max(5,Number(settings['security.log_poll_interval_seconds']||15))*1000;if(settings['security.enabled']===true&&Date.now()-lastEventPoll>=interval){lastEventPoll=Date.now();await collectEventsJob();}}catch(error:any){runtime.lastErrors.events=sanitizePBXPulsDbError(error);}},5000);eventTimer.unref();
   writePBXPulsSystemEvent({ event_type:'security_collector_started', severity:'info', source:'security', message:'Security collector started' }).catch(() => undefined);
 }
 
@@ -86,4 +89,4 @@ export async function getSecurityStatus() {
     logCursors: {}, generatedAt: new Date().toISOString() };
 }
 
-export async function getSecurityOverview() { return buildOverview(await collectSecuritySnapshot()); }
+export async function getSecurityOverview() { const overview=buildOverview(await collectSecuritySnapshot());try{return{...overview,activeThreats:(await listThreatActivity({minutes:5,limit:5})).rows.slice(0,5)};}catch{return{...overview,activeThreats:[]};} }

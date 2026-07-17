@@ -8,6 +8,7 @@ import type { SecurityCheckResult, SecurityEventInput, SecurityFirewallRule, Sec
 
 const LOG_SOURCES = [
   ['/var/log/auth.log','auth'], ['/var/log/secure','auth'], ['/var/log/fail2ban.log','fail2ban'],
+  ['/var/log/messages','kernel'],
   ['/var/log/asterisk/security','asterisk_security'], ['/var/log/asterisk/full','asterisk'],
   ['/var/log/asterisk/fail2ban','asterisk_security'], ['/var/log/asterisk/freepbx_security.log','freepbx'],
   ['/var/log/nginx/access.log','nginx'], ['/var/log/nginx/error.log','nginx'],

@@ -6,6 +6,7 @@ import { collectSecuritySnapshot, getSecurityOverview, getSecurityStatus } from 
 import { addWhitelist, deleteWhitelist, getSecurityEvent, getSecuritySettings, listSecurityEvents, listWhitelist, updateSecuritySettings } from './storage.js';
 import { isLoopbackIp, isPrivateSecurityIp, isValidJailName, isValidSecurityIp } from './sanitize.js';
 import { analyzePortFirewall, filterAndSortPorts, groupPortSockets, parsePortQuery } from './portDiagnostics.js';
+import { listThreatActivity, listThreatSources } from './threatActivity.js';
 
 type PermissionChecker = (req: Request, permission: string) => Promise<boolean>;
 const structuredError = (res:Response, status:number, code:string, message:string) => res.status(status).json({ success:false, error:{ code, message } });
@@ -18,6 +19,8 @@ export function registerSecurityRoutes(app: Express, requireAuth: any, checkPerm
   const view = [requireAuth(), permit('view_security')];
   app.get('/api/security/status', ...view, async (_req,res) => res.json({ success:true, ...(await getSecurityStatus()) }));
   app.get('/api/security/overview', ...view, async (_req,res) => res.json({ success:true, ...(await getSecurityOverview()) }));
+  app.get('/api/security/threats', requireAuth(), permit('view_security_events'), async (req,res)=>res.json({success:true,...(await listThreatActivity(req.query))}));
+  app.get('/api/security/threats/sources', requireAuth(), permit('view_security_events'), async (_req,res)=>res.json({success:true,rows:await listThreatSources()}));
   app.get('/api/security/events', requireAuth(), permit('view_security_events'), async (req,res) => res.json({ success:true, ...(await listSecurityEvents(req.query as any)) }));
   app.get('/api/security/events/:id', requireAuth(), permit('view_security_events'), async (req,res) => {
     const id = Number(req.params.id); if (!Number.isSafeInteger(id) || id < 1) return structuredError(res,400,'invalid_id','Некорректный идентификатор');
