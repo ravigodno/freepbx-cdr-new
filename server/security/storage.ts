@@ -20,9 +20,11 @@ export async function updateSecuritySettings(input: Record<string, unknown>) {
   const allowed = new Set(Object.keys(SECURITY_DEFAULT_SETTINGS));
   const saved: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(input || {})) {
-    if (!allowed.has(key) || key === 'security.fail2ban_actions_enabled') continue;
+    if (!allowed.has(key)) continue;
+    if (key === 'security.fail2ban_actions_enabled' && input.confirmFail2banActions !== true) continue;
     const original = SECURITY_DEFAULT_SETTINGS[key];
-    const normalized = typeof original === 'boolean' ? value === true : Math.max(1, Math.min(Number(value) || Number(original), key.includes('retention') ? 3650 : 86400));
+    const ranges:Record<string,[number,number]>={'security.event_retention_days':[1,3650],'security.raw_excerpt_max_length':[100,10000],'security.scan_interval_seconds':[30,86400],'security.log_poll_interval_seconds':[5,3600],'security.file_integrity_interval_minutes':[5,10080],'security.notification_cooldown_minutes':[1,10080]};
+    const range=ranges[key]||[1,86400];const normalized = typeof original === 'boolean' ? value === true : Math.max(range[0], Math.min(Number(value) || Number(original), range[1]));
     await upsertPBXPulsSetting(key, normalized, { category: 'security', valueType: typeof original === 'boolean' ? 'boolean' : 'number' });
     saved[key] = normalized;
   }

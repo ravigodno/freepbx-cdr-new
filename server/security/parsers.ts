@@ -4,12 +4,12 @@ import { isPrivateSecurityIp, maskSecuritySecrets } from './sanitize.js';
 
 const CRITICAL_PORTS: Record<number, { service: string; risk: SecuritySeverity; reason: string }> = {
   22: { service: 'SSH', risk: 'medium', reason: 'Административный SSH слушает wildcard/LAN адрес' },
-  3000: { service: 'PBXPuls', risk: 'high', reason: 'PBXPuls слушает не только loopback' },
-  3306: { service: 'MariaDB', risk: 'critical', reason: 'MariaDB слушает не только loopback' },
-  5038: { service: 'Asterisk AMI', risk: 'critical', reason: 'AMI слушает не только loopback' },
-  8088: { service: 'Asterisk HTTP/ARI', risk: 'high', reason: 'Asterisk HTTP слушает не только loopback' },
+  3000: { service: 'PBXPuls', risk: 'medium', reason: 'PBXPuls слушает все интерфейсы; требуется проверка Firewall' },
+  3306: { service: 'MariaDB', risk: 'high', reason: 'MariaDB слушает все интерфейсы; требуется проверка Firewall' },
+  5038: { service: 'Asterisk AMI', risk: 'high', reason: 'AMI слушает все интерфейсы; требуется проверка Firewall' },
+  8088: { service: 'Asterisk HTTP/ARI', risk: 'medium', reason: 'Asterisk HTTP слушает все интерфейсы; требуется проверка Firewall' },
   8089: { service: 'Asterisk HTTPS/WebSocket', risk: 'medium', reason: 'Asterisk HTTPS/WebSocket слушает не только loopback' },
-  5060: { service: 'SIP', risk: 'high', reason: 'SIP слушает wildcard/LAN адрес' },
+  5060: { service: 'SIP', risk: 'medium', reason: 'SIP слушает все интерфейсы; требуется проверка Firewall' },
   5061: { service: 'SIP TLS', risk: 'medium', reason: 'SIP TLS слушает wildcard/LAN адрес' }
 };
 
@@ -61,22 +61,27 @@ function firewallRisk(action: SecurityFirewallRule['action'], source: string, po
 
 export function parseIptablesRules(output: string, family: 'ipv4' | 'ipv6' = 'ipv4'): SecurityFirewallRule[] {
   const rules: SecurityFirewallRule[] = [];
-  let chain = '';
+  let chain = '';let chainPolicy='unknown';
   for (const line of String(output || '').split(/\r?\n/)) {
-    const chainMatch = line.match(/^Chain\s+(\S+)\s+\(policy\s+(\S+)/);
-    if (chainMatch) { chain = chainMatch[1]; continue; }
-    const match = line.trim().match(/^(\d+)\s+(\d+)\s+(ACCEPT|DROP|REJECT|LOG)\s+(\S+)\s+\S+\s+\S+\s+\S+\s+(\S+)\s+(\S+)(.*)$/i);
-    if (!match) continue;
-    const tail = match[7] || '';
+    const chainMatch = line.match(/^Chain\s+(\S+)\s+\((?:policy\s+(\S+)|\d+\s+references?)/);
+    if (chainMatch) { chain = chainMatch[1];chainPolicy=chainMatch[2]?.toUpperCase()||'unknown'; continue; }
+    const tokens=line.trim().split(/\s+/); if(!chain||tokens.length<9||tokens[0]==='num'||tokens[0]==='pkts')continue;
+    const offset=tokens.length>9&&/^\d+$/.test(tokens[0])&&/^\d+$/.test(tokens[1])&&/^\d+$/.test(tokens[2])?1:0;
+    const packets=Number(tokens[offset]),bytes=Number(tokens[offset+1]),target=tokens[offset+2],protocol=tokens[offset+3],interfaceIn=tokens[offset+5],interfaceOut=tokens[offset+6],source=tokens[offset+7],destination=tokens[offset+8];
+    if(!Number.isFinite(packets)||!Number.isFinite(bytes)||!target)continue; const tail=tokens.slice(offset+9).join(' ');
     const destinationPort = tail.match(/dpts?:([\d:]+)/)?.[1] || tail.match(/dpt:(\d+)/)?.[1] || '';
-    const action = match[3].toLowerCase() as SecurityFirewallRule['action'];
-    const risk = firewallRisk(action, match[5], destinationPort);
+    const action = /^(ACCEPT|DROP|REJECT|LOG)$/i.test(target)?target.toLowerCase() as SecurityFirewallRule['action']:'other';
+    const risk = firewallRisk(action, source, destinationPort);
     rules.push({ id: crypto.createHash('sha1').update(`${family}|${chain}|${line}`).digest('hex').slice(0, 16), family, table: 'filter', chain, action,
-      protocol: ['tcp', 'udp', 'icmp', 'all'].includes(match[4]) ? match[4] as any : 'other', source: match[5], destination: match[6],
-      destinationPort, packets: Number(match[1]), bytes: Number(match[2]), raw: maskSecuritySecrets(line, 1000), ...risk });
+      protocol: ['tcp', 'udp', 'icmp', 'all'].includes(protocol) ? protocol as any : 'other', source, destination, interfaceIn, interfaceOut,
+      destinationPort, packets, bytes, chainPolicy,raw: maskSecuritySecrets(line, 1000), sourceMechanism:/^fpbx/i.test(chain)?'freepbx':'iptables', ...risk });
   }
   return rules;
 }
+
+export function parseIptablesPolicies(output:string):Record<string,string>{const policies:Record<string,string>={};for(const line of String(output||'').split(/\r?\n/)){const match=line.match(/^-P\s+(\S+)\s+(\S+)/);if(match)policies[match[1].toLowerCase()]=match[2].toUpperCase();}return policies;}
+
+export function parseIptablesSpecRules(output:string,table='filter',family:'ipv4'|'ipv6'='ipv4',sourceMechanism:'iptables'|'firewalld'='iptables'):SecurityFirewallRule[]{const rules:SecurityFirewallRule[]=[];for(const line of String(output||'').split(/\r?\n/)){const match=line.match(/^-A\s+(\S+)\s+(.*)$/);if(!match)continue;const args=match[2],pick=(flag:string)=>args.match(new RegExp(`(?:^|\\s)${flag}\\s+(\\S+)`))?.[1]||'';const target=pick('-j'),action=/^(ACCEPT|DROP|REJECT|LOG)$/i.test(target)?target.toLowerCase() as SecurityFirewallRule['action']:'other';const protocol=pick('-p')||'all',source=pick('-s')|| (family==='ipv6'?'::/0':'0.0.0.0/0'),destination=pick('-d')|| (family==='ipv6'?'::/0':'0.0.0.0/0'),destinationPort=pick('--dport')||pick('--dports');rules.push({id:crypto.createHash('sha1').update(`${sourceMechanism}|${family}|${table}|${line}`).digest('hex').slice(0,16),family,table,chain:match[1],action,protocol:['tcp','udp','icmp','all'].includes(protocol)?protocol as any:'other',source,destination,destinationPort,interfaceIn:pick('-i'),interfaceOut:pick('-o'),raw:maskSecuritySecrets(line,1000),sourceMechanism,...firewallRisk(action,source,destinationPort)});}return rules;}
 
 export function parseNftablesRules(output: string): SecurityFirewallRule[] {
   const rules: SecurityFirewallRule[] = [];
@@ -91,7 +96,7 @@ export function parseNftablesRules(output: string): SecurityFirewallRule[] {
     const destinationPort = line.match(/dport\s+([\d-]+)/)?.[1] || '';
     const source = line.match(/saddr\s+(\S+)/)?.[1] || '0.0.0.0/0';
     rules.push({ id: crypto.createHash('sha1').update(`${family}|${table}|${chain}|${line}`).digest('hex').slice(0, 16), family, table, chain, action, protocol, source,
-      destinationPort, raw: maskSecuritySecrets(line.trim(), 1000), ...firewallRisk(action, source, destinationPort) });
+      destinationPort, raw: maskSecuritySecrets(line.trim(), 1000), sourceMechanism:'nftables', ...firewallRisk(action, source, destinationPort) });
   }
   return rules;
 }
@@ -112,10 +117,12 @@ export function parseSecurityLogLine(line: string, source: string, occurredAt = 
   const ip = text.match(/(?<![\d:])(?:\d{1,3}\.){3}\d{1,3}(?![\d:])/g)?.find(Boolean);
   let category = ''; let severity: SecuritySeverity = 'medium'; let title = '';
   if (/failed password|authentication failure|invalid user/.test(lower)) { category = lower.includes('invalid user') ? 'ssh_invalid_user' : 'ssh_auth_failure'; title = 'Неудачная SSH-аутентификация'; severity = 'high'; }
-  else if (/securityevent="?challeng|failed to authenticate|no matching endpoint|wrong password/.test(lower)) { category = 'sip_auth_failure'; title = 'Ошибка SIP-аутентификации'; severity = 'high'; }
+  else if (/securityevent="?challengeresponsefailed|securityevent="?(?:invalidaccountid|failedacl|requestnotallowed)|failed to authenticate|no matching endpoint|wrong password/.test(lower)) { category = 'sip_auth_failure'; title = 'Ошибка SIP-аутентификации'; severity = 'high'; }
   else if (/fail2ban.*\bban\b|\bban\s+/.test(lower)) { category = 'fail2ban_ban'; title = 'Fail2Ban заблокировал IP'; severity = 'medium'; }
   else if (/fail2ban.*\bunban\b|\bunban\s+/.test(lower)) { category = 'fail2ban_unban'; title = 'Fail2Ban разблокировал IP'; severity = 'info'; }
   else if (/\.env|wp-login|phpmyadmin|\.git|etc\/passwd|\.\.\//.test(lower)) { category = 'http_sensitive_file_probe'; title = 'Проверка чувствительного HTTP-пути'; severity = 'high'; }
   else return null;
   return { occurredAt, severity, category, source, sourceIp: ip, title, description: text.slice(0, 500), result: category === 'fail2ban_ban' ? 'blocked' : category === 'fail2ban_unban' ? 'success' : 'failed', rawExcerpt: text };
 }
+
+export function parseSecurityLogTimestamp(line:string,now=new Date()):string|null{const iso=line.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})/)||line.match(/^\[(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})/);if(iso){const date=new Date(`${iso[1]}T${iso[2]}`);return Number.isNaN(date.getTime())?null:date.toISOString();}const syslog=line.match(/^([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{2}:\d{2}:\d{2})/);if(syslog){const date=new Date(`${syslog[1]} ${syslog[2]} ${now.getFullYear()} ${syslog[3]}`);if(date.getTime()>now.getTime()+86400000)date.setFullYear(date.getFullYear()-1);return Number.isNaN(date.getTime())?null:date.toISOString();}return null;}

@@ -9,6 +9,7 @@ export interface SecurityFirewallRule {
   protocol?: 'tcp' | 'udp' | 'icmp' | 'all' | 'other';
   source?: string; destination?: string; sourcePort?: string; destinationPort?: string;
   interfaceIn?: string; interfaceOut?: string; packets?: number; bytes?: number; raw?: string;
+  sourceMechanism?: 'iptables' | 'firewalld' | 'freepbx' | 'nftables' | 'ufw'; chainPolicy?: string;
   risk: SecuritySeverity; riskReason?: string;
 }
 

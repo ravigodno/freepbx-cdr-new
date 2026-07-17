@@ -4,6 +4,7 @@ import path from 'node:path';
 import { parseFail2BanJail, parseFail2BanStatus, parseIptablesRules, parseNftablesRules, parseSecurityLogLine, parseSsListeningPorts } from '../server/security/parsers.js';
 import { calculateSecurityLevel, isAllowedSecurityPath, isLoopbackIp, isPrivateSecurityIp, isValidJailName, isValidSecurityIp, maskSecuritySecrets, securityFingerprint } from '../server/security/sanitize.js';
 import { runSecurityCommand } from '../server/security/executor.js';
+import { classifyListeningPortExposure, normalizeServiceMetric } from '../server/security/collectors.js';
 
 const fixture = (name:string) => fs.readFileSync(path.join(process.cwd(),'scripts/fixtures/security',name),'utf8').trim();
 assert.equal(isValidSecurityIp('192.0.2.10'),true); assert.equal(isValidSecurityIp('2001:db8::1'),true); assert.equal(isValidSecurityIp('1.2.3.4;rm -rf /'),false);
@@ -12,8 +13,11 @@ assert.equal(isValidJailName('asterisk-custom'),true); assert.equal(isValidJailN
 assert.equal(isAllowedSecurityPath('/etc/asterisk/pjsip.conf'),true); assert.equal(isAllowedSecurityPath('/etc/asterisk/../shadow'),false); assert.equal(isAllowedSecurityPath('/root/.ssh/id_rsa'),false);
 assert.ok(!maskSecuritySecrets('password=hunter2 Authorization: Bearer abc token=qwe').includes('hunter2'));
 const ss=parseSsListeningPorts('tcp LISTEN 0 128 *:5038 *:* users:(("asterisk",pid=10,fd=3))\nudp UNCONN 0 0 127.0.0.1:5060 *:* users:(("asterisk",pid=10,fd=4))');
-assert.equal(ss.length,2); assert.equal(ss[0].risk,'critical'); assert.equal(ss[0].exposure,'external_possible'); assert.equal(ss[1].exposure,'local_only');
+assert.equal(ss.length,2); assert.equal(ss[0].risk,'high'); assert.equal(ss[0].exposure,'external_possible'); assert.equal(ss[1].exposure,'local_only');
 const ipt=parseIptablesRules(fixture('iptables.txt')); assert.equal(ipt.length,1); assert.equal(ipt[0].risk,'critical');
+const numbered=parseIptablesRules('Chain INPUT (policy ACCEPT 0 packets, 0 bytes)\nnum pkts bytes target prot opt in out source destination\n1 10 640 ACCEPT tcp -- eth0 * 0.0.0.0/0 0.0.0.0/0 tcp dpt:5038');assert.equal(numbered.length,1);assert.equal(numbered[0].chain,'INPUT');
+assert.equal(normalizeServiceMetric('18446744073709551615'),null);assert.equal(normalizeServiceMetric('-1'),null);assert.equal(normalizeServiceMetric('4294967295'),null);assert.equal(normalizeServiceMetric(1024,1024**3),1024);
+assert.equal(classifyListeningPortExposure([ss[0]],{status:'active',rules:[]})[0].exposure,'external_possible');assert.equal(classifyListeningPortExposure([ss[0]],{status:'active',rules:[{chain:'INPUT',action:'accept',destinationPort:'5038',source:'0.0.0.0/0'}]})[0].exposure,'externally_exposed');
 const nft=parseNftablesRules(fixture('nftables.txt')); assert.equal(nft.length,1); assert.equal(nft[0].risk,'critical');
 assert.deepEqual(parseFail2BanStatus('Status\n`- Jail list: asterisk, sshd').jails,['asterisk','sshd']);
 assert.equal(parseFail2BanJail('Currently failed: 2\nTotal failed: 8\nCurrently banned: 1\nTotal banned: 5\nBanned IP list: 192.0.2.9','asterisk').currentlyBanned,1);

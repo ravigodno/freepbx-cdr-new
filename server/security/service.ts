@@ -1,6 +1,6 @@
 import { queryPBXPulsDb, sanitizePBXPulsDbError } from '../pbxpulsDb.js';
 import { writePBXPulsSystemEvent } from '../pbxpulsEvents.js';
-import { buildOverview, buildSecurityChecks, collectFail2Ban, collectFirewall, collectListeningPorts, collectOsDiscovery, collectRecentLogEvents, collectServices } from './collectors.js';
+import { buildOverview, buildSecurityChecks, classifyListeningPortExposure, collectFail2Ban, collectFirewall, collectListeningPorts, collectOsDiscovery, collectRecentLogEvents, collectServices, securityLogSourceKey } from './collectors.js';
 import { cleanupSecurityRetention, getSecuritySettings, saveSecurityChecks, upsertSecurityEvent } from './storage.js';
 
 type Snapshot = any;
@@ -25,13 +25,14 @@ export async function collectSecuritySnapshot(force = false): Promise<Snapshot> 
   collecting = (async () => {
     runtime.activeJobs = ['discovery','ports','firewall','fail2ban','services'];
     const generatedAt = new Date().toISOString();
-    const settled = await Promise.allSettled([collectOsDiscovery(), collectListeningPorts(), collectFirewall(), collectFail2Ban(), collectServices()]);
+    const settled = await Promise.allSettled([collectOsDiscovery(), collectListeningPorts(), collectFirewall(), collectFail2Ban()]);
     const value = (index:number, fallback:any) => settled[index].status === 'fulfilled' ? (settled[index] as PromiseFulfilledResult<any>).value : fallback;
     const discovery = value(0, { status:'unknown', tools:{} });
     const ports = value(1, { status:'unknown', ports:[], error:'Сбор портов завершился ошибкой' });
     const firewall = value(2, { status:'unknown', mechanism:'unknown', active:null, rules:[] });
     const fail2ban = value(3, { status:'unknown', installed:null, activeJails:null, currentlyBanned:null, jails:[] });
-    const services = value(4, { status:'unknown', services:[] });
+    if(Array.isArray(ports.ports))ports.ports=classifyListeningPortExposure(ports.ports,firewall);
+    const services = await collectServices(ports.ports || []).catch(() => ({ status:'unknown',services:[] }));
     const checks = buildSecurityChecks({ firewall, fail2ban, ports: ports.ports || [], services: services.services || [] });
     try { await saveSecurityChecks(checks); } catch (error:any) { runtime.lastErrors.database = sanitizePBXPulsDbError(error); }
     const snapshot = { generatedAt, discovery, ports, firewall, fail2ban, services, checks, ...(await counts24h()) };
@@ -56,7 +57,7 @@ async function collectEventsJob() {
       (source_key, source_type, source_path, status, last_size, last_mtime, last_success_at, last_error)
       VALUES (?, ?, ?, ?, ?, ?, NOW(), NULL)
       ON DUPLICATE KEY UPDATE status=VALUES(status), last_size=VALUES(last_size), last_mtime=VALUES(last_mtime), last_success_at=NOW(), last_error=NULL`,
-      [`${source.source}:${source.path}`, source.source, source.path, source.status, source.size || null, source.mtime ? source.mtime.slice(0, 19).replace('T', ' ') : null]);
+      [securityLogSourceKey(source.source,source.path), source.source, source.path, source.status, source.size || null, source.mtime ? source.mtime.slice(0, 19).replace('T', ' ') : null]);
     runtime.lastSuccessfulRuns.events = new Date().toISOString();
   } catch (error:any) { runtime.lastErrors.events = sanitizePBXPulsDbError(error); }
   finally { runtime.activeJobs = runtime.activeJobs.filter(job => job !== 'events'); }
