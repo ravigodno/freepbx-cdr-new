@@ -399,6 +399,113 @@ const MIGRATIONS: Migration[] = [
       `INSERT IGNORE INTO permissions (permission_key, name, category)
        VALUES ('edit_own_directory_contacts', 'Edit owned Directory contacts', 'directory')`
     ]
+  },
+  {
+    key: '20260717_018_security_monitoring_center',
+    description: 'Create security monitoring storage, settings and permissions',
+    statements: [
+      `CREATE TABLE IF NOT EXISTS security_events (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, occurred_at DATETIME NOT NULL, received_at DATETIME NOT NULL,
+        severity ENUM('info','low','medium','high','critical') NOT NULL, category VARCHAR(100) NOT NULL,
+        source VARCHAR(100) NOT NULL, source_file VARCHAR(512) NULL, source_ip VARCHAR(64) NULL, source_port INT NULL,
+        destination_ip VARCHAR(64) NULL, destination_port INT NULL, protocol VARCHAR(32) NULL, extension VARCHAR(64) NULL,
+        username VARCHAR(191) NULL, jail VARCHAR(100) NULL, service VARCHAR(100) NULL, action VARCHAR(100) NULL,
+        result ENUM('allowed','blocked','failed','success','unknown') NOT NULL DEFAULT 'unknown', title VARCHAR(255) NOT NULL,
+        description TEXT NOT NULL, fingerprint CHAR(64) NOT NULL, occurrence_count BIGINT NOT NULL DEFAULT 1,
+        first_seen_at DATETIME NOT NULL, last_seen_at DATETIME NOT NULL, country_code CHAR(2) NULL,
+        country_name VARCHAR(100) NULL, asn VARCHAR(64) NULL, organization VARCHAR(191) NULL,
+        is_private_ip TINYINT(1) NOT NULL DEFAULT 0, raw_excerpt TEXT NULL, metadata_json LONGTEXT NULL,
+        UNIQUE KEY uniq_security_event_fingerprint (fingerprint), INDEX idx_security_events_occurred (occurred_at),
+        INDEX idx_security_events_last_seen (last_seen_at), INDEX idx_security_events_severity (severity),
+        INDEX idx_security_events_category (category), INDEX idx_security_events_source_ip (source_ip),
+        INDEX idx_security_events_extension (extension), INDEX idx_security_events_jail (jail), INDEX idx_security_events_result (result)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS security_event_sources (
+        id INT AUTO_INCREMENT PRIMARY KEY, source_key VARCHAR(191) NOT NULL UNIQUE, source_type VARCHAR(100) NOT NULL,
+        source_path VARCHAR(512) NULL, status VARCHAR(64) NOT NULL DEFAULT 'unknown', cursor_value VARCHAR(512) NULL,
+        inode_value VARCHAR(100) NULL, last_size BIGINT NULL, last_mtime DATETIME NULL, last_success_at DATETIME NULL,
+        last_error VARCHAR(500) NULL, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS security_ip_whitelist (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, ip_address VARCHAR(64) NOT NULL UNIQUE, comment VARCHAR(255) NULL,
+        created_by VARCHAR(191) NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_security_whitelist_ip (ip_address)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS security_sip_registration_history (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, endpoint VARCHAR(64) NOT NULL, ip_address VARCHAR(64) NOT NULL,
+        port INT NULL, transport VARCHAR(16) NULL, user_agent VARCHAR(255) NULL, first_seen_at DATETIME NOT NULL,
+        last_seen_at DATETIME NOT NULL, seen_count BIGINT NOT NULL DEFAULT 1, is_private TINYINT(1) NOT NULL DEFAULT 0,
+        is_trusted TINYINT(1) NOT NULL DEFAULT 0, metadata_json LONGTEXT NULL,
+        UNIQUE KEY uniq_security_sip_endpoint_ip (endpoint,ip_address,port,transport),
+        INDEX idx_security_sip_last_seen (last_seen_at), INDEX idx_security_sip_endpoint (endpoint), INDEX idx_security_sip_ip (ip_address)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS security_check_results (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, check_key VARCHAR(191) NOT NULL UNIQUE, check_group VARCHAR(100) NOT NULL,
+        title VARCHAR(255) NOT NULL, status ENUM('passed','warning','failed','unknown','not_applicable') NOT NULL,
+        severity ENUM('info','low','medium','high','critical') NOT NULL, summary VARCHAR(1000) NOT NULL,
+        details TEXT NULL, recommendation TEXT NULL, evidence_json LONGTEXT NULL, checked_at DATETIME NOT NULL,
+        INDEX idx_security_checks_status (status), INDEX idx_security_checks_severity (severity), INDEX idx_security_checks_time (checked_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS security_file_baselines (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, path VARCHAR(191) NOT NULL UNIQUE, sha256 CHAR(64) NULL, size_bytes BIGINT NULL,
+        mtime DATETIME NULL, mode_value VARCHAR(16) NULL, owner_name VARCHAR(100) NULL, group_name VARCHAR(100) NULL,
+        baseline_at DATETIME NOT NULL, metadata_json LONGTEXT NULL, INDEX idx_security_baseline_path (path(191))
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS security_file_changes (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, path VARCHAR(1000) NOT NULL, change_type VARCHAR(32) NOT NULL,
+        severity ENUM('info','low','medium','high','critical') NOT NULL, previous_sha256 CHAR(64) NULL,
+        current_sha256 CHAR(64) NULL, detected_at DATETIME NOT NULL, metadata_json LONGTEXT NULL,
+        INDEX idx_security_file_changes_time (detected_at), INDEX idx_security_file_changes_severity (severity), INDEX idx_security_file_changes_path (path(191))
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS security_alert_rules (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, rule_key VARCHAR(191) NOT NULL UNIQUE, name VARCHAR(255) NOT NULL,
+        enabled TINYINT(1) NOT NULL DEFAULT 1, severity ENUM('info','low','medium','high','critical') NOT NULL,
+        threshold_value DECIMAL(20,4) NULL, cooldown_minutes INT NOT NULL DEFAULT 30, last_triggered_at DATETIME NULL,
+        trigger_count BIGINT NOT NULL DEFAULT 0, config_json LONGTEXT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NULL, INDEX idx_security_alert_rules_severity (severity)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS security_alert_history (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, rule_key VARCHAR(191) NOT NULL, severity ENUM('info','low','medium','high','critical') NOT NULL,
+        title VARCHAR(255) NOT NULL, details_json LONGTEXT NULL, triggered_at DATETIME NOT NULL,
+        INDEX idx_security_alert_history_time (triggered_at), INDEX idx_security_alert_history_rule (rule_key), INDEX idx_security_alert_history_severity (severity)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS security_scan_runs (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, scan_type VARCHAR(100) NOT NULL, status VARCHAR(32) NOT NULL,
+        started_at DATETIME NOT NULL, completed_at DATETIME NULL, duration_ms BIGINT NULL, summary_json LONGTEXT NULL,
+        error_text VARCHAR(500) NULL, INDEX idx_security_scan_type_status (scan_type,status), INDEX idx_security_scan_started (started_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `INSERT IGNORE INTO permissions (permission_key,name,description,category) VALUES
+        ('view_security','View security center','Open PBXPuls security monitoring center','security'),
+        ('view_security_events','View security events','View normalized security events and external IPs','security'),
+        ('view_firewall','View firewall','View Firewall rules and listening ports','security'),
+        ('view_fail2ban','View Fail2Ban','View Fail2Ban jails and bans','security'),
+        ('manage_fail2ban','Manage Fail2Ban','Manually ban and unban IP addresses','security'),
+        ('manage_security_whitelist','Manage security whitelist','Manage PBXPuls security IP whitelist','security'),
+        ('view_security_config_audit','View security config audit','View security checks and file changes','security'),
+        ('manage_security_settings','Manage security settings','Manage security monitoring settings and alert rules','security'),
+        ('export_security_report','Export security report','Export security monitoring reports','security')`,
+      `INSERT IGNORE INTO role_permissions (role_id,permission_id)
+       SELECT r.id,p.id FROM roles r JOIN permissions p ON p.category='security' WHERE r.role_key IN ('su','admin')`,
+      `INSERT IGNORE INTO settings (setting_key,setting_value,value_type,category,is_secret,description) VALUES
+        ('security.enabled','1','boolean','security',0,'Enable security monitoring collector'),
+        ('security.event_retention_days','30','number','security',0,'Security event retention days'),
+        ('security.raw_excerpt_enabled','1','boolean','security',0,'Store masked raw excerpts'),
+        ('security.raw_excerpt_max_length','2000','number','security',0,'Maximum masked raw excerpt length'),
+        ('security.scan_interval_seconds','60','number','security',0,'Security scan interval'),
+        ('security.log_poll_interval_seconds','15','number','security',0,'Security log polling interval'),
+        ('security.file_integrity_enabled','0','boolean','security',0,'Enable file integrity monitoring'),
+        ('security.file_integrity_interval_minutes','60','number','security',0,'File integrity interval'),
+        ('security.geoip_enabled','1','boolean','security',0,'Use local GeoIP database when available'),
+        ('security.sip_new_ip_detection_enabled','1','boolean','security',0,'Detect new SIP registration IPs'),
+        ('security.notification_cooldown_minutes','30','number','security',0,'Security notification cooldown'),
+        ('security.fail2ban_actions_enabled','0','boolean','security',0,'Guard manual Fail2Ban actions')`,
+      `INSERT IGNORE INTO security_alert_rules (rule_key,name,severity,cooldown_minutes) VALUES
+        ('firewall_disabled','Firewall выключен','critical',30),('fail2ban_stopped','Fail2Ban остановлен','high',30),
+        ('critical_port_exposed','Критический порт','critical',30),('ami_exposed','AMI доступен извне','critical',30),
+        ('mariadb_exposed','MariaDB доступна извне','critical',30),('sip_auth_burst','Массовые SIP auth failures','high',30),
+        ('ssh_auth_burst','Массовые SSH auth failures','high',30),('asterisk_stopped','Asterisk остановлен','critical',10),
+        ('disk_low','Критически заполнен диск','critical',30),('critical_file_changed','Изменён критический файл','critical',30)`
+    ]
   }
 ];
 

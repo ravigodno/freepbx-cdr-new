@@ -24,6 +24,15 @@ export type PermissionKey =
   | 'view_sngrep'
   | 'view_cli'
   | 'view_sip_devices_map'
+  | 'view_security'
+  | 'view_security_events'
+  | 'view_firewall'
+  | 'view_fail2ban'
+  | 'manage_fail2ban'
+  | 'manage_security_whitelist'
+  | 'view_security_config_audit'
+  | 'manage_security_settings'
+  | 'export_security_report'
   | 'view_settings'
   | 'manage_users'
   | 'manage_roles'
@@ -74,6 +83,15 @@ const PERMISSION_MODULE_MAP: Partial<Record<PermissionKey, OptionalModuleKey>> =
   view_sngrep: 'monitoring',
   view_cli: 'monitoring',
   view_sip_devices_map: 'monitoring',
+  view_security: 'monitoring',
+  view_security_events: 'monitoring',
+  view_firewall: 'monitoring',
+  view_fail2ban: 'monitoring',
+  manage_fail2ban: 'monitoring',
+  manage_security_whitelist: 'monitoring',
+  view_security_config_audit: 'monitoring',
+  manage_security_settings: 'monitoring',
+  export_security_report: 'monitoring',
 
   view_management: 'management',
   dangerous_pbx_write: 'management',

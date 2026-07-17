@@ -81,6 +81,7 @@ import ActiveCallsTab from './modules/monitoring/tabs/monitoring/ActiveCallsTab'
 import { getLiveCallPopupTitle, normalizeLiveCallBannerPayload } from './utils/liveCallBanner';
 import CommandCenterTab from './modules/monitoring/tabs/monitoring/CommandCenterTab';
 const DbExplorerTab = lazy(() => import('./modules/monitoring/tabs/monitoring/DbExplorerTab'));
+const SecurityTab = lazy(() => import('./modules/monitoring/tabs/monitoring/SecurityTab'));
 import QualityTab from './modules/monitoring/tabs/monitoring/QualityTab';
 import DevicesMapTab from './modules/monitoring/tabs/monitoring/DevicesMapTab';
 import HealthReportTab from './modules/monitoring/tabs/monitoring/HealthReportTab';
@@ -769,8 +770,8 @@ export default function App() {
   const [tcpdumpFiles, setTcpdumpFiles] = useState<any[]>([]);
   const [tcpdumpMessage, setTcpdumpMessage] = useState('');
   const [tcpdumpOutput, setTcpdumpOutput] = useState('');
-  const [monitorMode, setMonitorMode] = useState<'calls' | 'tcpdump' | 'sngrep' | 'cli' | 'freepbx' | 'db' | 'devices' | 'quality'>(() => {
-    const saved = localStorage.getItem('asterisk_cdr_monitor_mode') as 'calls' | 'tcpdump' | 'sngrep' | 'cli' | 'freepbx' | 'db' | 'devices' | 'quality' | null;
+  const [monitorMode, setMonitorMode] = useState<'calls' | 'tcpdump' | 'sngrep' | 'cli' | 'freepbx' | 'db' | 'devices' | 'quality' | 'health' | 'ai-admin' | 'security'>(() => {
+    const saved = localStorage.getItem('asterisk_cdr_monitor_mode') as 'calls' | 'tcpdump' | 'sngrep' | 'cli' | 'freepbx' | 'db' | 'devices' | 'quality' | 'security' | null;
     return saved || 'calls';
   });
 
@@ -803,6 +804,7 @@ export default function App() {
       db: 'view_cli',
       devices: 'view_sip_devices_map',
       quality: 'view_quality',
+      security: 'view_security',
       health: 'view_cli',
       'ai-admin': 'view_ai_pbx_admin'
     };
@@ -3598,6 +3600,7 @@ export default function App() {
       monitorMode === 'devices' ? 'Карта IP / SIP устройств' :
       monitorMode === 'quality' ? 'Качество связи' :
       monitorMode === 'health' ? 'Состояние АТС' :
+      monitorMode === 'security' ? 'Безопасность' :
       monitorMode === 'ai-admin' ? 'AI-администратор АТС' :
       'Мониторинг';
 
@@ -3611,6 +3614,7 @@ export default function App() {
       monitorMode === 'quality' ? 'Интегрированная IP/RTP-телеметрия качества связи Asterisk,\nдиагностика джиттера, RTT, потерь пакетов и MOS' :
       monitorMode === 'ai-admin' ? 'AI-консультант администратора для диагностики Asterisk и FreePBX, анализа логов и подготовки команд' :
       monitorMode === 'health' ? 'Health Report сервера FreePBX/Asterisk: железо, диски, сеть, интернет, службы и общее состояние АТС' :
+      monitorMode === 'security' ? 'Единый read-only центр Firewall, Fail2Ban, портов, служб и событий безопасности' :
       '';
     const sessions = liveSessionsData?.sessions || [];
     const q = liveSearch.trim().toLowerCase();
@@ -3955,6 +3959,17 @@ export default function App() {
                 AI-администратор АТС
               </button>
               )}
+
+              {hasPermission('view_security') && (
+              <button
+                onClick={() => setMonitorMode('security')}
+                className={`px-3 py-2 rounded-lg text-xs font-bold border ${monitorMode === 'security'
+                  ? 'bg-red-50 text-red-700 border-red-200 dark:bg-red-950/40 dark:text-red-300 dark:border-red-900'
+                  : 'bg-white text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700'}`}
+              >
+                Безопасность
+              </button>
+              )}
               </div>
             </div>
 
@@ -4010,6 +4025,12 @@ export default function App() {
 
           {monitorMode === 'devices' && hasPermission('view_sip_devices_map') && (
             <DevicesMapTab token={session?.token || ''} />
+          )}
+
+          {monitorMode === 'security' && hasPermission('view_security') && (
+            <Suspense fallback={<div className="p-8 text-center text-slate-500">Загрузка центра безопасности...</div>}>
+              <SecurityTab token={session?.token || ''} hasPermission={hasPermission} />
+            </Suspense>
           )}
 
           {snapshotStatus && (

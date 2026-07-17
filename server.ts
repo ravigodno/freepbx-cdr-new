@@ -138,6 +138,8 @@ import {
   setMonitoringStorageMode, upsertDevicesConflictsToSql, upsertDevicesMapToSql
 } from './server/monitoringSqlStorage.js';
 import { startMonitoringRetentionRunner } from './server/monitoringRetention.js';
+import { registerSecurityRoutes } from './server/security/router.js';
+import { startSecurityCollector } from './server/security/service.js';
 
 // Load environment variables
 dotenv.config();
@@ -3660,6 +3662,15 @@ function getDefaultAccessRoles() {
         view_tcpdump: true,
         view_sngrep: true,
         view_cli: true,
+        view_security: true,
+        view_security_events: true,
+        view_firewall: true,
+        view_fail2ban: true,
+        manage_fail2ban: true,
+        manage_security_whitelist: true,
+        view_security_config_audit: true,
+        manage_security_settings: true,
+        export_security_report: true,
         view_settings: true,
         manage_users: true,
         manage_roles: true,
@@ -3696,6 +3707,15 @@ function getDefaultAccessRoles() {
         view_tcpdump: true,
         view_sngrep: true,
         view_cli: true,
+        view_security: true,
+        view_security_events: true,
+        view_firewall: true,
+        view_fail2ban: true,
+        manage_fail2ban: true,
+        manage_security_whitelist: true,
+        view_security_config_audit: true,
+        manage_security_settings: true,
+        export_security_report: true,
         view_settings: true,
         manage_users: true,
         manage_roles: true,
@@ -4319,6 +4339,14 @@ async function readLocalDb(): Promise<LocalDb> {
         && !Object.prototype.hasOwnProperty.call(role.permissions, 'view_quality')) {
         role.permissions.view_quality = true;
         changed = true;
+      }
+      if (role?.permissions && (role.id === 'su' || role.id === 'admin')) {
+        for (const permission of ['view_security','view_security_events','view_firewall','view_fail2ban','manage_fail2ban','manage_security_whitelist','view_security_config_audit','manage_security_settings','export_security_report']) {
+          if (!Object.prototype.hasOwnProperty.call(role.permissions, permission)) {
+            role.permissions[permission] = true;
+            changed = true;
+          }
+        }
       }
     }
 
@@ -10308,7 +10336,10 @@ const SU_PERMISSION_KEYS = [
   'manage_trunks',
   'manage_outbound_routes',
   'manage_numbering_capacity',
-  'manage_balance_providers'
+  'manage_balance_providers',
+  'manage_fail2ban',
+  'manage_security_whitelist',
+  'manage_security_settings'
 ];
 
 // --- ACCESS ROLES MANAGEMENT ENDPOINTS ---
@@ -21401,6 +21432,9 @@ registerManagementRoutes(app, requireAuth);
 // REGISTER AI PBX ADMIN ROUTES
 registerAiPbxAdminRoutes(app, requireAuth, readLocalDb, writeLocalDb);
 
+// REGISTER SECURITY MONITORING CENTER ROUTES
+registerSecurityRoutes(app, requireAuth, checkUserPermission);
+
 // API fallback must stay before Vite/static SPA fallback so missing API routes return JSON, not index.html.
 app.use('/api', (req, res) => {
   res.status(404).json({ error: 'API endpoint not found' });
@@ -21444,6 +21478,7 @@ async function startServer() {
   console.log('[PBXPULS_DB] runtime configuration:', getPBXPulsDbConfigLogFields());
   await runPBXPulsMigrations();
   startMonitoringRetentionRunner();
+  startSecurityCollector();
   startDtmfAmiListener(startupDb.settings).catch((e: any) => console.error('[DTMF] listener start failed:', e.message));
 
   app.listen(parseInt(PORT, 10), '0.0.0.0', () => {

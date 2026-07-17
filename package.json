@@ -20,6 +20,7 @@
     "test:contact-import-duplicates": "tsx scripts/test-contact-import-duplicates.ts",
     "test:directory-own-contact-permission": "tsx scripts/test-directory-own-contact-permission.ts",
     "test:live-transfer-search": "tsx scripts/test-live-transfer-search.ts"
+    ,"test:security": "tsx scripts/test-security-monitoring.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

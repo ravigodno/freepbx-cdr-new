@@ -1,0 +1,24 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { parseFail2BanJail, parseFail2BanStatus, parseIptablesRules, parseNftablesRules, parseSecurityLogLine, parseSsListeningPorts } from '../server/security/parsers.js';
+import { calculateSecurityLevel, isAllowedSecurityPath, isLoopbackIp, isPrivateSecurityIp, isValidJailName, isValidSecurityIp, maskSecuritySecrets, securityFingerprint } from '../server/security/sanitize.js';
+import { runSecurityCommand } from '../server/security/executor.js';
+
+const fixture = (name:string) => fs.readFileSync(path.join(process.cwd(),'scripts/fixtures/security',name),'utf8').trim();
+assert.equal(isValidSecurityIp('192.0.2.10'),true); assert.equal(isValidSecurityIp('2001:db8::1'),true); assert.equal(isValidSecurityIp('1.2.3.4;rm -rf /'),false);
+assert.equal(isLoopbackIp('127.0.0.1'),true); assert.equal(isLoopbackIp('::1'),true); assert.equal(isPrivateSecurityIp('192.168.1.10'),true);
+assert.equal(isValidJailName('asterisk-custom'),true); assert.equal(isValidJailName('asterisk;id'),false);
+assert.equal(isAllowedSecurityPath('/etc/asterisk/pjsip.conf'),true); assert.equal(isAllowedSecurityPath('/etc/asterisk/../shadow'),false); assert.equal(isAllowedSecurityPath('/root/.ssh/id_rsa'),false);
+assert.ok(!maskSecuritySecrets('password=hunter2 Authorization: Bearer abc token=qwe').includes('hunter2'));
+const ss=parseSsListeningPorts('tcp LISTEN 0 128 *:5038 *:* users:(("asterisk",pid=10,fd=3))\nudp UNCONN 0 0 127.0.0.1:5060 *:* users:(("asterisk",pid=10,fd=4))');
+assert.equal(ss.length,2); assert.equal(ss[0].risk,'critical'); assert.equal(ss[0].exposure,'external_possible'); assert.equal(ss[1].exposure,'local_only');
+const ipt=parseIptablesRules(fixture('iptables.txt')); assert.equal(ipt.length,1); assert.equal(ipt[0].risk,'critical');
+const nft=parseNftablesRules(fixture('nftables.txt')); assert.equal(nft.length,1); assert.equal(nft[0].risk,'critical');
+assert.deepEqual(parseFail2BanStatus('Status\n`- Jail list: asterisk, sshd').jails,['asterisk','sshd']);
+assert.equal(parseFail2BanJail('Currently failed: 2\nTotal failed: 8\nCurrently banned: 1\nTotal banned: 5\nBanned IP list: 192.0.2.9','asterisk').currentlyBanned,1);
+for(const [file,source] of [['asterisk-pjsip.log','asterisk'],['chan-sip.log','asterisk'],['fail2ban.log','fail2ban'],['ssh.log','auth'],['nginx.log','nginx'],['apache.log','apache']] as const) assert.ok(parseSecurityLogLine(fixture(file),source),`${file} should parse`);
+const event={category:'ssh_auth_failure',source:'auth',sourceIp:'192.0.2.1',title:'Failed'}; assert.equal(securityFingerprint(event),securityFingerprint(event));
+assert.equal(calculateSecurityLevel([{severity:'critical',status:'failed'},{severity:'low',status:'warning'}]),'critical'); assert.equal(calculateSecurityLevel([{severity:'info',status:'passed'}]),'protected');
+await assert.rejects(()=>runSecurityCommand('sh',['-c','id']),/allowlisted/); await assert.rejects(()=>runSecurityCommand('ss',['-H\nrm']),/allowlisted/);
+console.log('security monitoring tests: ok');

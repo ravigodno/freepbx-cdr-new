@@ -111,7 +111,16 @@ const GROUPS: PermissionGroup[] = [
       { key: 'view_tcpdump', label: 'TCPDUMP / SIP-RTP', kind: 'tab', hint: 'Показывает tcpdump и SIP/RTP диагностику' },
       { key: 'view_sngrep', label: 'SNGREP', kind: 'tab', hint: 'Показывает SIP flow' },
   { key: 'view_cli', label: 'Командный центр / DB Explorer', kind: 'tab', hint: 'Командный центр (диагностика, CLI, справочник) и DB Explorer' },
-      { key: 'view_sip_devices_map', label: 'Карта IP / SIP устройств', kind: 'tab', hint: 'Показывает SIP/PJSIP регистрации, IP-адреса, User-Agent и конфликтующие устройства' }
+      { key: 'view_sip_devices_map', label: 'Карта IP / SIP устройств', kind: 'tab', hint: 'Показывает SIP/PJSIP регистрации, IP-адреса, User-Agent и конфликтующие устройства' },
+      { key: 'view_security', label: 'Безопасность', kind: 'tab', hint: 'Открывает центр мониторинга безопасности' },
+      { key: 'view_security_events', label: 'События безопасности', kind: 'feature', hint: 'Просмотр событий и внешних IP' },
+      { key: 'view_firewall', label: 'Firewall и порты', kind: 'feature', hint: 'Просмотр Firewall и сетевых сервисов' },
+      { key: 'view_fail2ban', label: 'Fail2Ban', kind: 'feature', hint: 'Просмотр jail и блокировок' },
+      { key: 'manage_fail2ban', label: 'Управление Fail2Ban', kind: 'su', hint: 'Ручные действия только при включенном feature flag' },
+      { key: 'manage_security_whitelist', label: 'Белый список безопасности', kind: 'feature', hint: 'Управление доверенными IP PBXPuls' },
+      { key: 'view_security_config_audit', label: 'Аудит конфигурации', kind: 'feature', hint: 'Просмотр проверок и изменений файлов' },
+      { key: 'manage_security_settings', label: 'Настройки безопасности', kind: 'su', hint: 'Управление мониторингом и уведомлениями' },
+      { key: 'export_security_report', label: 'Экспорт security-отчетов', kind: 'feature', hint: 'Экспорт отчетов безопасности' }
     ]
   },
   {
