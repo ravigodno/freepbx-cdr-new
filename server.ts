@@ -17580,8 +17580,33 @@ app.get('/api/diagnostics/network-status', requireAuth(), async (req, res) => {
 
 
 let tcpdumpProcess: any = null;
+let tcpdumpInspectorProcess: any = null;
 let tcpdumpFilePath = '';
 let tcpdumpStartedAt = '';
+let tcpdumpSessionId = '';
+let tcpdumpEvents: SipCaptureEvent[] = [];
+const TCPDUMP_EVENT_LIMIT = 2000;
+const tcpdumpDiagnostics: any = {
+  capturePacketsRead: 0, captureBytesRead: 0, sipCandidatesDetected: 0, sipMessagesParsed: 0,
+  sipParseErrors: 0, sipEventsStored: 0, sipEventsReturnedByApi: 0, lastPacketAt: null,
+  lastSipPacketAt: null, lastParseError: null, activeInterface: null, activeCaptureFilter: null,
+  tcpdumpPid: null, tcpdumpRunning: false, tcpdumpExitCode: null, tcpdumpStderrTail: '', tlsTrafficDetected: false
+};
+
+function appendTcpdumpStderr(value: string) {
+  const safe = value.replace(/(Authorization|Proxy-Authorization)\s*:.*/gi, '$1: [MASKED]');
+  tcpdumpDiagnostics.tcpdumpStderrTail = (tcpdumpDiagnostics.tcpdumpStderrTail + safe).slice(-2000);
+}
+
+function tcpdumpStatusPayload() {
+  return {
+    success: true, running: !!tcpdumpProcess && !!tcpdumpInspectorProcess, file: tcpdumpFilePath,
+    startedAt: tcpdumpStartedAt, sessionId: tcpdumpSessionId, totalEvents: tcpdumpEvents.length,
+    lastEventAt: tcpdumpEvents.at(-1)?.capturedAt || null,
+    trafficDetectedButNoSipParsed: tcpdumpDiagnostics.capturePacketsRead > 0 && tcpdumpDiagnostics.sipMessagesParsed === 0,
+    diagnostics: { ...tcpdumpDiagnostics, tcpdumpRunning: !!tcpdumpProcess && !!tcpdumpInspectorProcess }
+  };
+}
 
 app.get('/api/diagnostics/tcpdump/status', requireAuth(), async (req, res) => {
   const authUser = (req as any).user;
@@ -17590,12 +17615,7 @@ app.get('/api/diagnostics/tcpdump/status', requireAuth(), async (req, res) => {
     return;
   }
 
-  res.json({
-    success: true,
-    running: !!tcpdumpProcess,
-    file: tcpdumpFilePath,
-    startedAt: tcpdumpStartedAt
-  });
+  res.json(tcpdumpStatusPayload());
 });
 
 app.post('/api/diagnostics/tcpdump/start', requireAuth(), async (req, res) => {
@@ -17607,7 +17627,7 @@ app.post('/api/diagnostics/tcpdump/start', requireAuth(), async (req, res) => {
   }
 
 
-    if (tcpdumpProcess) {
+    if (tcpdumpProcess || tcpdumpInspectorProcess) {
       return res.json({
         success: true,
         running: true,
@@ -17618,15 +17638,17 @@ app.post('/api/diagnostics/tcpdump/start', requireAuth(), async (req, res) => {
 
     const mode = String(req.query.mode || 'sip');
     const iface = String(req.query.iface || 'any');
+    const sipPorts = String(req.query.ports || '5060,5061,5160').split(',').map(Number).filter(port => Number.isInteger(port) && port > 0 && port <= 65535);
 
-    let filter = 'port 5060 or port 5061';
+    const sipFilter = `(udp or tcp) and (${sipPorts.map(port => `port ${port}`).join(' or ')})`;
+    let filter = sipFilter;
 
     if (mode === 'rtp') {
       filter = 'udp portrange 20000-40000';
     }
 
     if (mode === 'siprtp') {
-      filter = '(port 5060 or port 5061 or udp portrange 20000-40000)';
+      filter = `(${sipFilter} or udp portrange 20000-40000)`;
     }
 
     const customTcpdumpFilter = String(req.query.filter || '').trim();
@@ -17641,8 +17663,17 @@ app.post('/api/diagnostics/tcpdump/start', requireAuth(), async (req, res) => {
     const filename = 'pbxpuls-' + mode + '-' + stamp + '.pcap';
     tcpdumpFilePath = path.join(dir, filename);
     tcpdumpStartedAt = new Date().toISOString();
+    tcpdumpSessionId = crypto.randomUUID();
+    tcpdumpEvents = [];
+    Object.assign(tcpdumpDiagnostics, {
+      capturePacketsRead: 0, captureBytesRead: 0, sipCandidatesDetected: 0, sipMessagesParsed: 0,
+      sipParseErrors: 0, sipEventsStored: 0, sipEventsReturnedByApi: 0, lastPacketAt: null,
+      lastSipPacketAt: null, lastParseError: null, activeInterface: iface, activeCaptureFilter: filter,
+      tcpdumpPid: null, tcpdumpRunning: false, tcpdumpExitCode: null, tcpdumpStderrTail: '', tlsTrafficDetected: false
+    });
 
-    const args = ['-i', iface, '-s', '0', '-U', '-w', tcpdumpFilePath, filter];
+    const args = ['-i', iface, '-nn', '-s', '0', '-U', '-w', tcpdumpFilePath, filter];
+    const inspectorArgs = ['-i', iface, '-l', '-nn', '-s', '0', '-A', filter];
 
     tcpdumpProcess = spawn('tcpdump', args, {
       stdio: ['ignore', 'ignore', 'pipe']
@@ -17652,19 +17683,58 @@ app.post('/api/diagnostics/tcpdump/start', requireAuth(), async (req, res) => {
 
     tcpdumpProcess.stderr.on('data', (d: any) => {
       errText += d.toString();
+      appendTcpdumpStderr(d.toString());
     });
 
-    tcpdumpProcess.on('exit', () => {
+    tcpdumpProcess.on('exit', (code: number | null) => {
+      tcpdumpDiagnostics.tcpdumpExitCode = code;
       tcpdumpProcess = null;
+      if (code && tcpdumpInspectorProcess) tcpdumpInspectorProcess.kill('SIGINT');
+    });
+
+    const parser = new TcpdumpTextStreamParser((result, bytes) => {
+      tcpdumpDiagnostics.capturePacketsRead += 1;
+      tcpdumpDiagnostics.captureBytesRead += bytes;
+      tcpdumpDiagnostics.lastPacketAt = new Date().toISOString();
+      if (result.tls && !result.candidate) tcpdumpDiagnostics.tlsTrafficDetected = true;
+      if (result.candidate) {
+        tcpdumpDiagnostics.sipCandidatesDetected += 1;
+        tcpdumpDiagnostics.lastSipPacketAt = new Date().toISOString();
+      }
+      if (result.error) {
+        tcpdumpDiagnostics.sipParseErrors += 1;
+        tcpdumpDiagnostics.lastParseError = result.error;
+      }
+      tcpdumpDiagnostics.sipMessagesParsed += result.events.length;
+      for (const event of result.events) {
+        tcpdumpEvents.push(event);
+        tcpdumpDiagnostics.sipEventsStored += 1;
+      }
+      if (tcpdumpEvents.length > TCPDUMP_EVENT_LIMIT) tcpdumpEvents.splice(0, tcpdumpEvents.length - TCPDUMP_EVENT_LIMIT);
+    }, new Set(sipPorts.includes(5061) ? [5061] : []));
+
+    tcpdumpInspectorProcess = spawn('tcpdump', inspectorArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
+    tcpdumpDiagnostics.tcpdumpPid = tcpdumpInspectorProcess.pid || tcpdumpProcess.pid || null;
+    tcpdumpDiagnostics.tcpdumpRunning = true;
+    tcpdumpInspectorProcess.stdout.on('data', (d: Buffer) => parser.push(d.toString('latin1')));
+    tcpdumpInspectorProcess.stderr.on('data', (d: Buffer) => appendTcpdumpStderr(d.toString()));
+    tcpdumpInspectorProcess.on('exit', (code: number | null) => {
+      parser.flush();
+      tcpdumpDiagnostics.tcpdumpExitCode = code;
+      tcpdumpDiagnostics.tcpdumpRunning = false;
+      tcpdumpInspectorProcess = null;
     });
 
     setTimeout(() => {
       res.json({
         success: true,
-        running: !!tcpdumpProcess,
+        running: !!tcpdumpProcess && !!tcpdumpInspectorProcess,
         mode,
         iface,
         filter,
+        sessionId: tcpdumpSessionId,
+        captureCommand: ['tcpdump', ...args].join(' '),
+        inspectorCommand: ['tcpdump', ...inspectorArgs].join(' '),
         file: tcpdumpFilePath,
         stderr: errText.trim()
       });
@@ -17683,7 +17753,7 @@ app.post('/api/diagnostics/tcpdump/stop', requireAuth(), async (req, res) => {
   }
 
 
-    if (!tcpdumpProcess) {
+    if (!tcpdumpProcess && !tcpdumpInspectorProcess) {
       return res.json({
         success: true,
         running: false,
@@ -17692,7 +17762,8 @@ app.post('/api/diagnostics/tcpdump/stop', requireAuth(), async (req, res) => {
       });
     }
 
-    tcpdumpProcess.kill('SIGINT');
+    tcpdumpProcess?.kill('SIGINT');
+    tcpdumpInspectorProcess?.kill('SIGINT');
 
     const stoppedFile = tcpdumpFilePath;
 
@@ -17791,6 +17862,18 @@ app.get('/api/diagnostics/tcpdump/output', requireAuth(), async (req, res) => {
   } catch (e) {
     res.status(500).json({ success: false, error: e.message || String(e) });
   }
+});
+
+app.get('/api/diagnostics/tcpdump/events', requireAuth(), async (req, res) => {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_tcpdump !== true) {
+    res.status(403).json({ error: 'Нет прав на TCPDUMP' });
+    return;
+  }
+  const limit = Math.min(Math.max(Number(req.query.limit) || 1000, 1), TCPDUMP_EVENT_LIMIT);
+  const events = tcpdumpEvents.slice(-limit);
+  tcpdumpDiagnostics.sipEventsReturnedByApi += events.length;
+  res.json({ ...tcpdumpStatusPayload(), events, returned: events.length });
 });
 
 

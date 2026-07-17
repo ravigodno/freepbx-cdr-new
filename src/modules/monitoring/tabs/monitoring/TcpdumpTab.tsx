@@ -49,6 +49,11 @@ interface SipMessage {
   code: number;
   status: 'Nominal' | 'Warning' | 'Critical';
   seq: number;
+  srcPort?: number;
+  dstPort?: number;
+  direction?: string;
+  capturedAt?: string;
+  transport?: string;
 }
 
 interface RtpStream {
@@ -240,7 +245,7 @@ export default function TcpdumpTab({
     return base || 'port 5060';
   }, [mode, sipPorts, rtpPorts, hostFilter, customFilter, targetType]);
 
-  const commandPreview = `tcpdump -i ${iface} -s 0 -U -w <file.pcap> ${bpfFilterCalculated}`;
+  const commandPreview = `PCAP: tcpdump -i ${iface} -nn -s 0 -U -w <file.pcap> ${bpfFilterCalculated}\nLive SIP: tcpdump -i ${iface} -l -nn -s 0 -A ${bpfFilterCalculated}`;
 
   // Read backend status
   const loadStatus = async () => {
@@ -275,6 +280,21 @@ export default function TcpdumpTab({
     } catch (e) {}
   };
 
+  const loadSipEvents = async () => {
+    try {
+      const res = await fetch('/api/diagnostics/tcpdump/events?limit=2000', { headers: { Authorization: `Bearer ${token}` } });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Не удалось загрузить SIP-события');
+      setStatus(data);
+      setSipMessages(Array.isArray(data.events) ? data.events : []);
+      setSelectedSipCallId(current => data.events?.some((event: SipMessage) => event.callId === current)
+        ? current
+        : (data.events?.find((event: SipMessage) => event.callId)?.callId || ''));
+    } catch (error: any) {
+      setStatus((current: any) => ({ ...current, apiError: error?.message || 'Не удалось загрузить SIP-события' }));
+    }
+  };
+
   const loadNetworkStatus = async () => {
     try {
       const res = await fetch('/api/diagnostics/network-status', {
@@ -298,106 +318,6 @@ export default function TcpdumpTab({
         setDevices(data.devices);
       }
     } catch (e) {}
-  };
-
-  // Parse SIP messages from raw tcpdump text output
-  const parseSipMessagesFromTcpdump = (outputStr: string): SipMessage[] => {
-    if (!outputStr || outputStr.includes('PCAP файл ещё не создан') || outputStr.includes('Пакетов пока нет')) {
-      return [];
-    }
-
-    const messages: SipMessage[] = [];
-    const packets = outputStr.split(/(?=\d{2}:\d{2}:\d{2}\.\d+ IP)/);
-
-    let idCounter = 1;
-    for (const packet of packets) {
-      if (!packet.trim()) continue;
-
-      const headerMatch = packet.match(/(?:(\d{4}-\d{2}-\d{2})\s+)?(\d{2}:\d{2}:\d{2}\.\d+)\s+IP\s+([\d\.]+)\.(\d+)\s+>\s+([\d\.]+)\.(\d+)/);
-      if (!headerMatch) continue;
-
-      const time = headerMatch[2];
-      const srcIp = headerMatch[3];
-      const srcPort = headerMatch[4];
-      const dstIp = headerMatch[5];
-      const dstPort = headerMatch[6];
-
-      if (srcPort !== '5060' && srcPort !== '5061' && srcPort !== '5160' && dstPort !== '5060' && dstPort !== '5061' && dstPort !== '5160') {
-        continue;
-      }
-
-      const lines = packet.split('\n');
-      let method = '';
-      let callId = '';
-      let userAgent = 'Unknown';
-      let cseq = '';
-      let phone = '—';
-      let code = 0;
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        
-        const reqMatch = trimmed.match(/^(INVITE|REGISTER|BYE|ACK|CANCEL|OPTIONS|SUBSCRIBE|NOTIFY|PRACK|INFO|UPDATE|REFER|PUBLISH)\s+sip:([^@\s]+)@?[^\s]*\s+SIP\/2\.0/i);
-        if (reqMatch) {
-          method = reqMatch[1].toUpperCase();
-          phone = reqMatch[2];
-          continue;
-        }
-
-        const respMatch = trimmed.match(/^SIP\/2\.0\s+(\d+)\s+(.+)/i);
-        if (respMatch) {
-          code = parseInt(respMatch[1], 10);
-          method = `${code} ${respMatch[2]}`;
-          continue;
-        }
-
-        if (trimmed.toLowerCase().startsWith('call-id:')) {
-          callId = trimmed.slice(8).trim();
-        }
-        if (trimmed.toLowerCase().startsWith('user-agent:')) {
-          userAgent = trimmed.slice(11).trim();
-        }
-        if (trimmed.toLowerCase().startsWith('cseq:')) {
-          cseq = trimmed.slice(5).trim();
-        }
-      }
-
-      if (!method && packet.includes('SIP')) {
-        method = 'SIP MSG';
-      }
-
-      if (method) {
-        if (!callId) {
-          callId = `pcap-id-${srcIp}-${dstIp}`;
-        }
-
-        let status: 'Nominal' | 'Warning' | 'Critical' = 'Nominal';
-        if (code >= 400 && code < 500) status = 'Warning';
-        if (code >= 500) status = 'Critical';
-
-        let seq = 1;
-        if (cseq) {
-          const seqMatch = cseq.match(/^(\d+)/);
-          if (seqMatch) seq = parseInt(seqMatch[1], 10);
-        }
-
-        messages.push({
-          id: `parsed-${idCounter++}`,
-          time,
-          srcIp,
-          dstIp,
-          method,
-          phone,
-          callId,
-          userAgent,
-          code,
-          status,
-          seq
-        });
-      }
-    }
-
-    return messages;
   };
 
   const parseRtpStreamsFromTcpdump = (outputStr: string): RtpStream[] => {
@@ -436,21 +356,6 @@ export default function TcpdumpTab({
     
     return Object.values(streamsMap);
   };
-
-  // Effect to parse / auto-generate SIP dialogs
-  useEffect(() => {
-    let parsedSip = parseSipMessagesFromTcpdump(output);
-
-    if (parsedSip.length > 0) {
-      setSipMessages(parsedSip);
-      const hasSelected = parsedSip.some(m => m.callId === selectedSipCallId);
-      if (!hasSelected) {
-        setSelectedSipCallId(parsedSip[0].callId);
-      }
-    } else {
-      setSipMessages([]);
-    }
-  }, [output, selectedSipCallId]);
 
   // Effect to parse / auto-generate RTP streams
   useEffect(() => {
@@ -528,12 +433,14 @@ export default function TcpdumpTab({
     loadStatus();
     loadFiles();
     loadOutput();
+    loadSipEvents();
     loadNetworkStatus();
     loadDevices();
 
     const t = setInterval(() => {
       loadStatus();
       loadOutput();
+      loadSipEvents();
       loadNetworkStatus();
       loadDevices();
     }, 3000);
@@ -548,6 +455,7 @@ export default function TcpdumpTab({
         '/api/diagnostics/tcpdump/start' +
         '?mode=' + encodeURIComponent(mode) +
         '&iface=' + encodeURIComponent(iface) +
+        '&ports=' + encodeURIComponent(sipPorts) +
         '&filter=' + encodeURIComponent(bpfFilterCalculated);
 
       const res = await fetch(url, {
@@ -1047,6 +955,19 @@ export default function TcpdumpTab({
                       </td>
                     </tr>
                   ))}
+                  {filteredSipMessages.length === 0 && (
+                    <tr><td colSpan={8} className="p-10 text-center font-sans text-slate-500">
+                      {status?.apiError
+                        ? `Не удалось загрузить события: ${status.apiError}`
+                        : !status?.running
+                        ? (status?.diagnostics?.tcpdumpExitCode ? `Захват завершился с кодом ${status.diagnostics.tcpdumpExitCode}` : 'Захват трафика не запущен')
+                        : status?.diagnostics?.tlsTrafficDetected
+                        ? 'Трафик на SIP TLS-порту обнаружен, содержимое зашифровано и не может быть разобрано tcpdump-анализатором.'
+                        : status?.trafficDetectedButNoSipParsed
+                        ? 'Сетевой трафик поступает, но SIP-сообщения не обнаружены. Проверьте интерфейс, транспорт и SIP-порты.'
+                        : 'Ожидание SIP-сообщений…'}
+                    </td></tr>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -1065,27 +986,19 @@ export default function TcpdumpTab({
                 </span>
               </div>
 
-              {/* Graphic nodes structure */}
-              <div className="grid grid-cols-3 text-center text-[10px] font-mono mb-6 border-b border-slate-900 pb-2">
-                <div>
-                  <div className="text-emerald-400 font-bold">CLIENT NODE</div>
-                  <div className="text-slate-500 mt-1 truncate">79201112233</div>
+              {activeFlowMessages.length > 0 ? (
+                <div className="grid grid-cols-2 text-center text-[10px] font-mono mb-6 border-b border-slate-900 pb-2">
+                  {[...new Set(activeFlowMessages.flatMap(message => [message.srcIp, message.dstIp]))].slice(0, 2).map(address => (
+                    <div key={address} className="border-x border-slate-900"><div className="text-blue-400 font-bold">SIP NODE</div><div className="text-slate-500 mt-1 truncate">{address}</div></div>
+                  ))}
                 </div>
-                <div className="border-x border-slate-900">
-                  <div className="text-blue-400 font-bold">FREEPBX CORE</div>
-                  <div className="text-slate-500 mt-1">192.168.10.200</div>
-                </div>
-                <div>
-                  <div className="text-sky-400 font-bold">OUT TRUNK</div>
-                  <div className="text-slate-500 mt-1">MTT SIP-Trunk</div>
-                </div>
-              </div>
+              ) : <div className="py-12 text-center text-xs text-slate-500">Выберите реальный SIP-диалог. Демонстрационные данные не используются.</div>}
 
               {/* Interactive SVG / CSS Flow Diagrams mapping messages */}
               <div className="space-y-4 max-h-[380px] overflow-y-auto pr-2">
                 {activeFlowMessages.map((m, idx) => {
-                  const isLeftToRight = m.srcIp.includes('.104') || m.srcIp.includes('.155') || m.srcIp.includes('.180') || m.srcIp.includes('.111');
-                  const isTrunkSide = m.dstIp.includes('185.12') || m.srcIp.includes('185.12');
+                  const firstAddress = activeFlowMessages[0]?.srcIp;
+                  const isLeftToRight = m.srcIp === firstAddress;
 
                   return (
                     <div key={m.id} className="text-[11px] font-mono bg-slate-900/60 p-2 rounded-lg relative border border-slate-900/80 hover:border-slate-800 transition">
