@@ -383,6 +383,16 @@ export default function ReportsTab({
     const seen = new Set<string>();
     return [...fromSummary, ...fromAccess, ...fromDirectory].filter(item => { if (seen.has(item.value)) return false; seen.add(item.value); return true; }).slice(0, 80);
   }, [accessUsers, directory, employeeSummary]);
+  const outgoingExtensions = useMemo(() => {
+    const explicitExtension = internalExt.trim();
+    if (explicitExtension) return [explicitExtension];
+    if (employee !== 'all') return [employee];
+    if (department === 'all') return [];
+    return employeeSummary
+      .filter(item => String(item.department || '').trim() === department)
+      .map(item => String(item.extension || '').trim())
+      .filter(item => internalExtensionPattern.test(item));
+  }, [department, employee, employeeSummary, internalExt]);
 
   const effectiveAnswerSlaSeconds = usedSettings?.answerSlaSeconds ?? settings?.answerSlaSeconds ?? slaSummary?.slaThresholdSeconds ?? 20;
   const slaPercentValue = slaSummary && Number.isFinite(Number(slaSummary.slaPercent)) ? Number(slaSummary.slaPercent) : summary.sla;
@@ -458,8 +468,12 @@ export default function ReportsTab({
         <OutgoingDashboard
           startDate={startDate}
           endDate={endDate}
-          onStartDateChange={onStartDateChange}
-          onEndDateChange={onEndDateChange}
+          group={groupType}
+          department={department}
+          employee={employee}
+          extensions={outgoingExtensions}
+          emptyDepartmentSelection={department !== 'all' && employee === 'all' && !internalExt.trim() && outgoingExtensions.length === 0}
+          refreshKey={refreshes}
         />
       ) : activeTab === 'departments' ? (
         <DepartmentsDashboard 

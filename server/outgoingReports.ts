@@ -10,12 +10,12 @@ type Dependencies = {
 };
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const GROUPS = new Set(['hour', 'day', 'week', 'month']);
+const GROUPS = new Set(['hour', 'day', 'week', 'month', 'weekday', 'year']);
 const RESULTS = new Set(['all', 'answered', 'no_answer', 'busy', 'failed', 'congestion', 'other']);
 
 export type OutgoingFilters = {
   startDate: string; endDate: string; group: string; extensions: string[];
-  trunk: string; result: string; search: string; page: number; pageSize: number;
+  trunk: string; result: string; search: string; page: number; pageSize: number; emptySelection: boolean;
 };
 
 export function parseOutgoingFilters(query: Record<string, unknown>, now = new Date()): OutgoingFilters {
@@ -35,7 +35,8 @@ export function parseOutgoingFilters(query: Record<string, unknown>, now = new D
     trunk: String(query.trunk || 'all').trim().slice(0, 120), result,
     search: String(query.search || '').trim().slice(0, 80),
     page: Math.max(1, Number(query.page) || 1),
-    pageSize: Math.min(100, Math.max(10, Number(query.pageSize) || 25))
+    pageSize: Math.min(100, Math.max(10, Number(query.pageSize) || 25)),
+    emptySelection: query.emptySelection === 'true'
   };
 }
 
@@ -48,11 +49,11 @@ export function buildOutgoingAttemptsSql(filters: OutgoingFilters, internal: str
   if (!internal.length) throw new Error('Не удалось определить внутренние номера АТС');
   const inList = placeholders(internal);
   const channelExt = endpointExpression('channel');
-  const params: any[] = [filters.startDate + ' 00:00:00', filters.endDate + ' 23:59:59', ...internal, ...internal, ...internal];
   const sql = `
     SELECT call_id, MIN(calldate) AS calldate,
       MAX(internal_extension) AS internal_extension,
       MAX(external_number) AS external_number,
+      MAX(normalized_external_number) AS normalized_external_number,
       MAX(trunk) AS trunk,
       CASE WHEN MAX(is_answered)=1 THEN 'answered'
            WHEN MAX(is_busy)=1 THEN 'busy'
@@ -66,9 +67,13 @@ export function buildOutgoingAttemptsSql(filters: OutgoingFilters, internal: str
       MIN(uniqueid) AS technical_id
     FROM (
       SELECT COALESCE(NULLIF(linkedid,''), uniqueid) AS call_id, calldate, uniqueid, recordingfile,
-        CASE WHEN ${channelExt} IN (${inList}) THEN ${channelExt}
-             WHEN src IN (${inList}) THEN src ELSE NULL END AS internal_extension,
-        CASE WHEN dcontext LIKE 'from-internal%' AND dst REGEXP '^[+]?[0-9]{6,20}$' AND dst NOT IN (${inList}) THEN dst ELSE NULL END AS external_number,
+        CASE WHEN dcontext LIKE 'from-internal%' AND dst REGEXP '^[+]?[0-9]{6,20}$' AND ${channelExt} IN (${inList})
+             THEN ${channelExt} ELSE NULL END AS internal_extension,
+        CASE WHEN dcontext LIKE 'from-internal%' AND dst REGEXP '^[+]?[0-9]{6,20}$' AND ${channelExt} IN (${inList})
+             THEN dst ELSE NULL END AS external_number,
+        CASE WHEN dcontext LIKE 'from-internal%' AND dst REGEXP '^[+]?[0-9]{6,20}$' AND ${channelExt} IN (${inList})
+             THEN CASE WHEN REPLACE(dst,'+','') REGEXP '^8[0-9]{10}$' THEN CONCAT('7',SUBSTRING(REPLACE(dst,'+',''),2)) ELSE REPLACE(dst,'+','') END
+             ELSE NULL END AS normalized_external_number,
         CASE WHEN dcontext LIKE 'from-internal%' AND dstchannel<>''
              THEN SUBSTRING_INDEX(dstchannel, '-', 1) ELSE NULL END AS trunk,
         CASE WHEN disposition='ANSWERED' AND billsec>0 THEN 1 ELSE 0 END AS is_answered,
@@ -86,6 +91,7 @@ export function buildOutgoingAttemptsSql(filters: OutgoingFilters, internal: str
 function scopedSql(base: string, filters: OutgoingFilters, params: any[]) {
   let sql = `SELECT * FROM (${base}) attempts WHERE 1=1`;
   const out = [...params];
+  if (filters.emptySelection) sql += ' AND 1=0';
   if (filters.extensions.length) { sql += ` AND internal_extension IN (${placeholders(filters.extensions)})`; out.push(...filters.extensions); }
   if (filters.trunk !== 'all') { sql += ' AND trunk=?'; out.push(filters.trunk); }
   if (filters.result !== 'all') { sql += ' AND result=?'; out.push(filters.result); }
@@ -116,10 +122,10 @@ export function registerOutgoingReportRoutes(app: Express, deps: Dependencies) {
       extensionRows.forEach((row: any) => { const ext=String(row.extension||'').trim(); if (/^\d{2,8}$/.test(ext) && !extensionMap.has(ext)) extensionMap.set(ext, String(row.name||ext)); });
       const built = buildOutgoingAttemptsSql(filters, [...extensionMap.keys()]);
       const scoped = scopedSql(built.sql, filters, built.params);
-      const groupExpr: Record<string,string> = { hour: `DATE_FORMAT(calldate,'%Y-%m-%d %H:00')`, day: `DATE(calldate)`, week: `DATE_FORMAT(calldate,'%x-W%v')`, month: `DATE_FORMAT(calldate,'%Y-%m-01')` };
+      const groupExpr: Record<string,string> = { hour: `DATE_FORMAT(calldate,'%Y-%m-%d %H:00')`, day: `DATE(calldate)`, week: `DATE_FORMAT(calldate,'%x-W%v')`, month: `DATE_FORMAT(calldate,'%Y-%m-01')`, weekday: `WEEKDAY(calldate)`, year: `DATE_FORMAT(calldate,'%Y-01-01')` };
       const median = `(CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(GROUP_CONCAT(wait_seconds ORDER BY wait_seconds), ',', FLOOR((COUNT(wait_seconds)+1)/2)), ',', -1) AS DECIMAL(12,2)) + CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(GROUP_CONCAT(wait_seconds ORDER BY wait_seconds), ',', FLOOR((COUNT(wait_seconds)+2)/2)), ',', -1) AS DECIMAL(12,2))) / 2`;
       const [summaryRows, timeline, results, heatmap, extensions, trunks, waitBuckets, durationBuckets, totalRows, detailRows, waits] = await Promise.all([
-        deps.queryCdr(db.settings,false,`SELECT COUNT(*) total,COUNT(DISTINCT external_number) unique_numbers,SUM(answered) answered,SUM(1-answered) missed,AVG(CASE WHEN answered=1 THEN wait_seconds END) avg_wait,AVG(CASE WHEN answered=1 THEN billsec END) avg_talk,SUM(billsec) talk_total FROM (${scoped.sql}) s`,scoped.params),
+        deps.queryCdr(db.settings,false,`SELECT COUNT(*) total,COUNT(DISTINCT normalized_external_number) unique_numbers,SUM(answered) answered,SUM(1-answered) missed,AVG(CASE WHEN answered=1 THEN wait_seconds END) avg_wait,AVG(CASE WHEN answered=1 THEN billsec END) avg_talk,SUM(billsec) talk_total FROM (${scoped.sql}) s`,scoped.params),
         deps.queryCdr(db.settings,false,`SELECT ${groupExpr[filters.group]} bucket,COUNT(*) attempts,SUM(answered) answered,SUM(1-answered) unanswered,ROUND(100*SUM(answered)/COUNT(*),1) answer_rate,AVG(CASE WHEN answered=1 THEN wait_seconds END) avg_wait,${median} median_wait FROM (${scoped.sql}) s GROUP BY bucket ORDER BY MIN(calldate)`,scoped.params),
         deps.queryCdr(db.settings,false,`SELECT result,COUNT(*) count FROM (${scoped.sql}) s GROUP BY result`,scoped.params),
         deps.queryCdr(db.settings,false,`SELECT WEEKDAY(calldate) weekday,HOUR(calldate) hour,COUNT(*) attempts,SUM(answered) answered,AVG(CASE WHEN answered=1 THEN wait_seconds END) avg_wait,AVG(CASE WHEN answered=1 THEN billsec END) avg_talk FROM (${scoped.sql}) s GROUP BY weekday,hour`,scoped.params),
@@ -128,12 +134,12 @@ export function registerOutgoingReportRoutes(app: Express, deps: Dependencies) {
         deps.queryCdr(db.settings,false,`SELECT CASE WHEN wait_seconds<=5 THEN '≤5' WHEN wait_seconds<=10 THEN '6–10' WHEN wait_seconds<=15 THEN '11–15' WHEN wait_seconds<=20 THEN '16–20' WHEN wait_seconds<=30 THEN '21–30' ELSE '>30' END bucket,COUNT(*) count FROM (${scoped.sql}) s WHERE answered=1 GROUP BY bucket`,scoped.params),
         deps.queryCdr(db.settings,false,`SELECT CASE WHEN billsec<10 THEN '<10' WHEN billsec<30 THEN '10–30' WHEN billsec<60 THEN '30–60' WHEN billsec<180 THEN '1–3 мин' WHEN billsec<300 THEN '3–5 мин' WHEN billsec<600 THEN '5–10 мин' ELSE '>10 мин' END bucket,COUNT(*) count FROM (${scoped.sql}) s WHERE answered=1 GROUP BY bucket`,scoped.params),
         deps.queryCdr(db.settings,false,`SELECT COUNT(*) total FROM (${scoped.sql}) s`,scoped.params),
-        deps.queryCdr(db.settings,false,`SELECT s.*,p.attempts_for_number FROM (${scoped.sql}) s JOIN (SELECT external_number,COUNT(*) attempts_for_number FROM (${scoped.sql}) x GROUP BY external_number) p USING(external_number) ORDER BY calldate DESC LIMIT ? OFFSET ?`,[...scoped.params,...scoped.params,filters.pageSize,(filters.page-1)*filters.pageSize]),
+        deps.queryCdr(db.settings,false,`SELECT s.*,p.attempts_for_number FROM (${scoped.sql}) s JOIN (SELECT normalized_external_number,COUNT(*) attempts_for_number FROM (${scoped.sql}) x GROUP BY normalized_external_number) p USING(normalized_external_number) ORDER BY calldate DESC LIMIT ? OFFSET ?`,[...scoped.params,...scoped.params,filters.pageSize,(filters.page-1)*filters.pageSize]),
         deps.queryCdr(db.settings,false,`SELECT wait_seconds FROM (${scoped.sql}) s WHERE answered=1 AND wait_seconds IS NOT NULL ORDER BY wait_seconds`,scoped.params)
       ]);
       const summary=summaryRows[0]||{}; const total=num(summary.total); const sortedWaits=waits.map((r:any)=>num(r.wait_seconds));
       const mid=Math.floor(sortedWaits.length/2); const medianWait=sortedWaits.length ? (sortedWaits.length%2 ? sortedWaits[mid] : (sortedWaits[mid-1]+sortedWaits[mid])/2) : null;
-      const retryRows = await deps.queryCdr(db.settings,false,`SELECT external_number,GROUP_CONCAT(answered ORDER BY calldate SEPARATOR ',') outcomes FROM (${scoped.sql}) s GROUP BY external_number`,scoped.params);
+      const retryRows = await deps.queryCdr(db.settings,false,`SELECT normalized_external_number,GROUP_CONCAT(answered ORDER BY calldate SEPARATOR ',') outcomes FROM (${scoped.sql}) s GROUP BY normalized_external_number`,scoped.params);
       const retryBuckets: Record<string,{numbers:number;answered:number;attempts:number}>={first:{numbers:0,answered:0,attempts:0},second:{numbers:0,answered:0,attempts:0},third:{numbers:0,answered:0,attempts:0},fourth:{numbers:0,answered:0,attempts:0},fifthPlus:{numbers:0,answered:0,attempts:0},never:{numbers:0,answered:0,attempts:0}};
       retryRows.forEach((r:any)=>{ const a=String(r.outcomes||'').split(',').map(Number); const first=a.indexOf(1); const key=first<0?'never':first===0?'first':first===1?'second':first===2?'third':first===3?'fourth':'fifthPlus'; retryBuckets[key].numbers++; a.forEach((v:number,i:number)=>{const k=i===0?'first':i===1?'second':i===2?'third':i===3?'fourth':'fifthPlus'; retryBuckets[k].attempts++; if(v) retryBuckets[k].answered++;}); });
       res.json({ appliedFilters:filters, metadata:{timezone:'PBX database local time',waitTimeSource:'duration_minus_billsec',limitations:['CDR does not contain answer/end timestamps','ANSWERED may include voicemail or an answering machine','retry sequences are limited to the selected period']},
