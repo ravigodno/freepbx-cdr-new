@@ -27,6 +27,14 @@ export interface SecurityListeningPort {
   service?: string; exposure: SecurityAvailability; risk: SecuritySeverity; riskReason?: string;
 }
 
+export interface PortFirewallAnalysis {
+  port: number; protocol: 'tcp' | 'udp'; address: string;
+  matchedRules: SecurityFirewallRule[];
+  effectiveAccess: 'local_only' | 'lan_only' | 'firewall_blocked' | 'external_possible' | 'externally_exposed' | 'conflicting' | 'unknown';
+  confidence: 'low' | 'medium' | 'high'; explanation: string; recommendation?: string;
+  chainPolicy?: string; debugTrail: string[];
+}
+
 export interface SecurityCheckResult {
   id: string; group: string; title: string;
   status: 'passed' | 'warning' | 'failed' | 'unknown' | 'not_applicable';

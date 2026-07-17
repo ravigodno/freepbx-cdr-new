@@ -4,7 +4,8 @@ import { queryPBXPulsDb } from '../pbxpulsDb.js';
 import { runFail2BanAction } from './executor.js';
 import { collectSecuritySnapshot, getSecurityOverview, getSecurityStatus } from './service.js';
 import { addWhitelist, deleteWhitelist, getSecurityEvent, getSecuritySettings, listSecurityEvents, listWhitelist, updateSecuritySettings } from './storage.js';
-import { isLoopbackIp, isPrivateSecurityIp, isValidJailName, isValidSecurityIp, parseSecurityPortList } from './sanitize.js';
+import { isLoopbackIp, isPrivateSecurityIp, isValidJailName, isValidSecurityIp } from './sanitize.js';
+import { analyzePortFirewall, filterAndSortPorts, parsePortQuery } from './portDiagnostics.js';
 
 type PermissionChecker = (req: Request, permission: string) => Promise<boolean>;
 const structuredError = (res:Response, status:number, code:string, message:string) => res.status(status).json({ success:false, error:{ code, message } });
@@ -28,16 +29,11 @@ export function registerSecurityRoutes(app: Express, requireAuth: any, checkPerm
     res.json({ success:true, rows:rules.slice(offset,offset+limit), total:rules.length, limit, offset });
   });
   app.get('/api/security/ports', requireAuth(), permit('view_firewall'), async (req,res) => {
-    let rows=(await collectSecuritySnapshot()).ports.ports || []; const risk=String(req.query.risk||''), protocol=String(req.query.protocol||''), exposure=String(req.query.exposure||'');
-    if(risk) rows=rows.filter((r:any)=>r.risk===risk); if(protocol) rows=rows.filter((r:any)=>r.protocol===protocol); if(exposure) rows=rows.filter((r:any)=>r.exposure===exposure);
-    const ports=parseSecurityPortList([req.query.ports,req.query.port]), processName=String(req.query.process||'').trim().toLowerCase();
-    if(ports.length) rows=rows.filter((r:any)=>ports.includes(r.port));
-    if(processName) rows=rows.filter((r:any)=>String(r.process||'').toLowerCase().includes(processName));
-    if(String(req.query.external||'')==='true') rows=rows.filter((r:any)=>['external_possible','externally_exposed'].includes(r.exposure));
-    if(String(req.query.critical||'')==='true') rows=rows.filter((r:any)=>r.risk==='critical');
-    const total=rows.length, limit=Math.min(Math.max(Number(req.query.limit)||50,1),500), offset=Math.max(Number(req.query.offset)||0,0);
-    res.json({ success:true, rows:rows.slice(offset,offset+limit), total, limit, offset, status:(await collectSecuritySnapshot()).ports.status });
+    const parsed=parsePortQuery(req.query);if((req.query.ports||req.query.port)&&!parsed.ranges.length)return structuredError(res,400,'invalid_ports','Некорректный список портов или диапазонов');const snapshot=await collectSecuritySnapshot();let rows=filterAndSortPorts(snapshot.ports.ports||[],parsed);
+    if(String(req.query.external||'')==='true')rows=rows.filter((r:any)=>['external_possible','externally_exposed'].includes(r.exposure));if(String(req.query.critical||'')==='true')rows=rows.filter((r:any)=>r.risk==='critical');
+    const total=rows.length;res.json({success:true,rows:rows.slice(parsed.offset,parsed.offset+parsed.limit),total,limit:parsed.limit,offset:parsed.offset,status:snapshot.ports.status,checkedAt:snapshot.generatedAt});
   });
+  app.get('/api/security/ports/diagnostics', requireAuth(), permit('view_firewall'), async (req,res)=>{const ranges=parsePortQuery({ports:req.query.ports||req.query.port}).ranges;if(!ranges.length)return structuredError(res,400,'invalid_ports','Укажите корректные порты или диапазоны 1–65535');const snapshot=await collectSecuritySnapshot();const sockets=(snapshot.ports.ports||[]).filter((row:any)=>ranges.some(range=>row.port>=range.from&&row.port<=range.to));const rows=sockets.slice(0,200).map((socket:any)=>({...socket,analysis:analyzePortFirewall(socket,snapshot.firewall),detectionSource:'ss/netstat',checkedAt:snapshot.generatedAt}));res.json({success:true,rows,total:rows.length,firewall:{mechanism:snapshot.firewall.mechanism,status:snapshot.firewall.status,policies:snapshot.firewall.policies},checkedAt:snapshot.generatedAt});});
   app.get('/api/security/fail2ban/status', requireAuth(), permit('view_fail2ban'), async (_req,res) => res.json({ success:true, ...(await collectSecuritySnapshot()).fail2ban }));
   app.get('/api/security/fail2ban/jails', requireAuth(), permit('view_fail2ban'), async (_req,res) => { const data=(await collectSecuritySnapshot()).fail2ban; res.json({ success:true, rows:data.jails||[], total:data.jails?.length||0 }); });
   app.get('/api/security/fail2ban/jails/:jail', requireAuth(), permit('view_fail2ban'), async (req,res) => {
