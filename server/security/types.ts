@@ -24,7 +24,7 @@ export interface SecurityFirewallRule {
 
 export interface SecurityListeningPort {
   protocol: 'tcp' | 'udp'; address: string; port: number; process?: string; pid?: number; user?: string;
-  service?: string; exposure: SecurityAvailability; risk: SecuritySeverity; riskReason?: string;
+  family?: 'ipv4' | 'ipv6'; service?: string; exposure: SecurityAvailability; risk: SecuritySeverity; riskReason?: string;
 }
 
 export interface PortFirewallAnalysis {

@@ -40,15 +40,16 @@ export function parseSsListeningPorts(output: string): SecurityListeningPort[] {
     const local = ['127.0.0.1', '::1'].includes(endpoint.address);
     const wildcard = ['*', '0.0.0.0', '::', '[::]'].includes(endpoint.address);
     const critical = CRITICAL_PORTS[endpoint.port];
+    const family = endpoint.address.includes(':') ? 'ipv6' : 'ipv4';
     result.push({
-      protocol, address: endpoint.address, port: endpoint.port, process, pid,
+      protocol, address: endpoint.address, port: endpoint.port, process, pid, family,
       service: critical?.service || process,
       exposure: local ? 'local_only' : wildcard ? 'external_possible' : isPrivateSecurityIp(endpoint.address) ? 'lan_only' : 'external_possible',
       risk: local ? 'info' : (critical?.risk || (wildcard ? 'low' : 'info')),
       riskReason: local ? undefined : critical?.reason || (wildcard ? 'Сервис слушает все интерфейсы; итог зависит от Firewall и маршрутизации' : undefined)
     });
   }
-  return result.filter((item, index, all) => all.findIndex(other => other.protocol === item.protocol && other.address === item.address && other.port === item.port) === index);
+  return result.filter((item, index, all) => all.findIndex(other => other.protocol === item.protocol && other.address === item.address && other.port === item.port && other.process === item.process && other.pid === item.pid) === index);
 }
 
 function firewallRisk(action: SecurityFirewallRule['action'], source: string, port: string): Pick<SecurityFirewallRule, 'risk' | 'riskReason'> {

@@ -5,7 +5,7 @@ import { runFail2BanAction } from './executor.js';
 import { collectSecuritySnapshot, getSecurityOverview, getSecurityStatus } from './service.js';
 import { addWhitelist, deleteWhitelist, getSecurityEvent, getSecuritySettings, listSecurityEvents, listWhitelist, updateSecuritySettings } from './storage.js';
 import { isLoopbackIp, isPrivateSecurityIp, isValidJailName, isValidSecurityIp } from './sanitize.js';
-import { analyzePortFirewall, filterAndSortPorts, parsePortQuery } from './portDiagnostics.js';
+import { analyzePortFirewall, filterAndSortPorts, groupPortSockets, parsePortQuery } from './portDiagnostics.js';
 
 type PermissionChecker = (req: Request, permission: string) => Promise<boolean>;
 const structuredError = (res:Response, status:number, code:string, message:string) => res.status(status).json({ success:false, error:{ code, message } });
@@ -29,7 +29,7 @@ export function registerSecurityRoutes(app: Express, requireAuth: any, checkPerm
     res.json({ success:true, rows:rules.slice(offset,offset+limit), total:rules.length, limit, offset });
   });
   app.get('/api/security/ports', requireAuth(), permit('view_firewall'), async (req,res) => {
-    const parsed=parsePortQuery(req.query);if((req.query.ports||req.query.port)&&!parsed.ranges.length)return structuredError(res,400,'invalid_ports','Некорректный список портов или диапазонов');const snapshot=await collectSecuritySnapshot();let rows=filterAndSortPorts(snapshot.ports.ports||[],parsed);
+    const parsed=parsePortQuery(req.query);if((req.query.ports||req.query.port)&&!parsed.ranges.length)return structuredError(res,400,'invalid_ports','Некорректный список портов или диапазонов');const snapshot=await collectSecuritySnapshot();let rows:any[]=filterAndSortPorts(snapshot.ports.ports||[],parsed);if(String(req.query.groupBy||'')==='port')rows=groupPortSockets(rows);
     if(String(req.query.external||'')==='true')rows=rows.filter((r:any)=>['external_possible','externally_exposed'].includes(r.exposure));if(String(req.query.critical||'')==='true')rows=rows.filter((r:any)=>r.risk==='critical');
     const total=rows.length;res.json({success:true,rows:rows.slice(parsed.offset,parsed.offset+parsed.limit),total,limit:parsed.limit,offset:parsed.offset,status:snapshot.ports.status,checkedAt:snapshot.generatedAt});
   });

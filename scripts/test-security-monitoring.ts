@@ -5,7 +5,7 @@ import { parseFail2BanJail, parseFail2BanStatus, parseIptablesRules, parseNftabl
 import { calculateSecurityLevel, isAllowedSecurityPath, isLoopbackIp, isPrivateSecurityIp, isValidJailName, isValidSecurityIp, maskSecuritySecrets, parseSecurityPortList, securityFingerprint } from '../server/security/sanitize.js';
 import { runSecurityCommand } from '../server/security/executor.js';
 import { buildSecurityChecks, classifyListeningPortExposure, normalizeServiceMetric } from '../server/security/collectors.js';
-import { analyzePortFirewall, filterAndSortPorts, parsePortQuery, parsePortRanges } from '../server/security/portDiagnostics.js';
+import { analyzePortFirewall, filterAndSortPorts, groupPortSockets, parsePortQuery, parsePortRanges } from '../server/security/portDiagnostics.js';
 
 const fixture = (name:string) => fs.readFileSync(path.join(process.cwd(),'scripts/fixtures/security',name),'utf8').trim();
 assert.equal(isValidSecurityIp('192.0.2.10'),true); assert.equal(isValidSecurityIp('2001:db8::1'),true); assert.equal(isValidSecurityIp('1.2.3.4;rm -rf /'),false);
@@ -17,6 +17,7 @@ assert.equal(isAllowedSecurityPath('/etc/asterisk/pjsip.conf'),true); assert.equ
 assert.ok(!maskSecuritySecrets('password=hunter2 Authorization: Bearer abc token=qwe').includes('hunter2'));
 const ss=parseSsListeningPorts('tcp LISTEN 0 128 *:5038 *:* users:(("asterisk",pid=10,fd=3))\nudp UNCONN 0 0 127.0.0.1:5060 *:* users:(("asterisk",pid=10,fd=4))');
 assert.equal(ss.length,2); assert.equal(ss[0].risk,'high'); assert.equal(ss[0].exposure,'external_possible'); assert.equal(ss[1].exposure,'local_only');
+const socketVariants=parseSsListeningPorts('tcp LISTEN 0 128 *:22 *:* users:(("sshd",pid=10,fd=3))\ntcp LISTEN 0 128 [::]:22 [::]:* users:(("sshd",pid=10,fd=4))\nudp UNCONN 0 0 *:53 *:* users:(("dnsmasq",pid=20,fd=5))\ntcp LISTEN 0 128 *:53 *:* users:(("dnsmasq",pid=20,fd=6))');assert.equal(socketVariants.length,4);assert.deepEqual(socketVariants.slice(0,2).map(row=>row.family),['ipv4','ipv6']);const groupedSockets=groupPortSockets(socketVariants);assert.equal(groupedSockets.find(row=>row.port===22)?.socketCount,2);assert.equal(groupedSockets.find(row=>row.port===53)?.socketCount,2);assert.equal(groupPortSockets([{...socketVariants[0],process:'sshd-a'},{...socketVariants[0],process:'sshd-b'}]).length,2);
 const ipt=parseIptablesRules(fixture('iptables.txt')); assert.equal(ipt.length,1); assert.equal(ipt[0].risk,'critical');
 const numbered=parseIptablesRules('Chain INPUT (policy ACCEPT 0 packets, 0 bytes)\nnum pkts bytes target prot opt in out source destination\n1 10 640 ACCEPT tcp -- eth0 * 0.0.0.0/0 0.0.0.0/0 tcp dpt:5038');assert.equal(numbered.length,1);assert.equal(numbered[0].chain,'INPUT');
 assert.equal(normalizeServiceMetric('18446744073709551615'),null);assert.equal(normalizeServiceMetric('-1'),null);assert.equal(normalizeServiceMetric('4294967295'),null);assert.equal(normalizeServiceMetric(1024,1024**3),1024);
