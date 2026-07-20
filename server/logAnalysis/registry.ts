@@ -55,8 +55,10 @@ export async function detectLogSources(): Promise<DetectedLogSource[]> {
       } catch (error:any) { result.push({...source,detected:error?.code!=='ENOENT',readable:false,active:false,modifiedAt:null,readError:error?.code==='ENOENT'?null:error?.code==='EACCES'?'Нет прав чтения':String(error?.message||error).slice(0,300)}); }
     } else if (source.sourceType === 'journald') {
       const unit = source.journalUnit || '';
-      const service = await runSecurityCommand('systemctl',['show',`${unit}.service`,'--property=LoadState','--value'],3000);
-      const detected = service.ok && service.stdout.trim() !== 'not-found';
+      // FreePBX Distro and older CentOS systemctl versions do not support --value.
+      const service = await runSecurityCommand('systemctl',['show',`${unit}.service`,'--property=LoadState'],3000);
+      const loadState = service.stdout.match(/^LoadState=(.+)$/m)?.[1]?.trim();
+      const detected = service.ok && Boolean(loadState) && loadState !== 'not-found';
       if (!detected) { result.push({...source,detected:false,readable:false,active:false,readError:null}); continue; }
       const probe = await runSecurityCommand('journalctl',['-u',unit,'-n','1','--no-pager','-o','json'],4000);
       result.push({...source,detected:true,readable:probe.ok,active:probe.ok,readError:probe.ok?null:(probe.stderr||'journald недоступен').slice(0,300)});
