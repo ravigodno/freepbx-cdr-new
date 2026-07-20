@@ -37,6 +37,7 @@ import {
   Sun,
   Moon
 } from 'lucide-react';
+import { getServerNow } from '../../../../utils/serverClock';
 
 interface Props {
   tcpdumpOutput: string;
@@ -434,16 +435,16 @@ export default function SngrepTab({ tcpdumpOutput, loadTcpdumpOutput, token, onN
     switch (actionName) {
       case 'SIP Debug':
         setSipDebugActive(!sipDebugActive);
-        setSimulatedLog(prev => [...prev, `${new Date().toLocaleTimeString()} -> Command executed: 'sip set debug ${!sipDebugActive ? 'on' : 'off'}'`]);
+        setSimulatedLog(prev => [...prev, `${getServerNow().toLocaleTimeString()} -> Command executed: 'sip set debug ${!sipDebugActive ? 'on' : 'off'}'`]);
         setUiMessage(`Команда Asterisk CLI отправлена: sip set debug ${!sipDebugActive ? 'ВКЛ' : 'ВЫКЛ'}`);
         break;
       case 'PJSIP Debug':
         setPJSIPDebugActive(!pjsipDebugActive);
-        setSimulatedLog(prev => [...prev, `${new Date().toLocaleTimeString()} -> Command executed: 'pjsip set logger ${!pjsipDebugActive ? 'on' : 'off'}'`]);
+        setSimulatedLog(prev => [...prev, `${getServerNow().toLocaleTimeString()} -> Command executed: 'pjsip set logger ${!pjsipDebugActive ? 'on' : 'off'}'`]);
         setUiMessage(`Команда PJSIP logger отправлена: ${!pjsipDebugActive ? 'ВКЛ' : 'ВЫКЛ'}`);
         break;
       case 'SIP Reload':
-        setSimulatedLog(prev => [...prev, `${new Date().toLocaleTimeString()} -> Command executed: 'sip reload' / 'pjsip reload'`]);
+        setSimulatedLog(prev => [...prev, `${getServerNow().toLocaleTimeString()} -> Command executed: 'sip reload' / 'pjsip reload'`]);
         setUiMessage('В конфигурации Asterisk выполнена перезагрузка каналов PJSIP/SIP!');
         setTimeout(() => setUiMessage(''), 3000);
         break;
@@ -1316,7 +1317,7 @@ export default function SngrepTab({ tcpdumpOutput, loadTcpdumpOutput, token, onN
                               <button
                                 onClick={() => {
                                   setUiMessage(`Адрес ${s.ip} успешно добавлен в черный список Fail2Ban.`);
-                                  setSimulatedLog(prev => [...prev, `${new Date().toLocaleTimeString()} -> Ip ban rule injected: 'iptables -A INPUT -s ${s.ip} -j DROP'`]);
+                                  setSimulatedLog(prev => [...prev, `${getServerNow().toLocaleTimeString()} -> Ip ban rule injected: 'iptables -A INPUT -s ${s.ip} -j DROP'`]);
                                 }}
                                 className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-slate-950 text-white rounded text-[10px] font-extrabold transition cursor-pointer"
                               >

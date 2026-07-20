@@ -576,10 +576,10 @@ export async function runPBXPulsMigrations(): Promise<void> {
   try {
     connection = await createPBXPulsConnection();
     const columns = await ensureSchemaMigrationsTable(connection);
+    const appliedMigrationKeys = await readAppliedMigrationKeys(connection, columns);
 
     for (const migration of MIGRATIONS) {
-      const alreadyApplied = await hasMigration(connection, columns, migration.key);
-      if (alreadyApplied) {
+      if (appliedMigrationKeys.has(migration.key)) {
         console.log('[PBXPULS_DB] migration already applied:', migration.key);
         continue;
       }
@@ -594,6 +594,7 @@ export async function runPBXPulsMigrations(): Promise<void> {
         await migration.seed(connection);
       }
       await markMigrationApplied(connection, columns, migration.key, migration.description);
+      appliedMigrationKeys.add(migration.key);
       await writeMigrationSystemEvent('migration_applied', 'info', 'PBXPuls migration applied', migration);
       console.log('[PBXPULS_DB] migration applied:', migration.key);
       activeMigration = null;
@@ -657,12 +658,14 @@ async function ensureSchemaMigrationsTable(connection: Connection): Promise<Sche
   };
 }
 
-async function hasMigration(connection: Connection, columns: SchemaMigrationColumns, migrationKey: string): Promise<boolean> {
-  const [rows] = await connection.execute(
-    `SELECT 1 AS ok FROM schema_migrations WHERE ${columns.keyColumn} = ? LIMIT 1`,
-    [migrationKey]
+async function readAppliedMigrationKeys(
+  connection: Connection,
+  columns: SchemaMigrationColumns
+): Promise<Set<string>> {
+  const [rows] = await connection.query(
+    `SELECT ${columns.keyColumn} AS migration_key FROM schema_migrations`
   );
-  return Array.isArray(rows) && rows.length > 0;
+  return new Set((rows as any[]).map(row => String(row.migration_key || '')).filter(Boolean));
 }
 
 async function markMigrationApplied(

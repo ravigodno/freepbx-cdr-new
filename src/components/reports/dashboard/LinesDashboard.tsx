@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { 
+import {
   Building2, Search, Award, TrendingUp, PhoneIncoming, PhoneOutgoing, 
   Clock, ShieldAlert, CheckCircle, Download, Users, Tag, Sliders, 
   HelpCircle, ChevronDown, ChevronUp, BarChart2, Star, ArrowUpDown,
@@ -10,6 +10,7 @@ import {
   BarChart as RechartsBarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, 
   ResponsiveContainer, PieChart, Pie, Cell, ComposedChart, Line
 } from 'recharts';
+import { getServerNow } from '../../../utils/serverClock';
 import { TrunkSummaryRow } from './TrunkHealthWidget';
 
 type LinesDashboardProps = {
@@ -272,7 +273,7 @@ export function LinesDashboard({
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `calltracking_lines_analytics_${new Date().toISOString().slice(0, 10)}.csv`;
+    link.download = `calltracking_lines_analytics_${getServerNow().toISOString().slice(0, 10)}.csv`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);

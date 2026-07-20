@@ -79,6 +79,8 @@ import { type LiveTransferResult, type LiveTransferSearchTarget } from './compon
 import { CallTargetSelector, type ConferenceBackendStatus, type ConsultTransferCapabilities } from './components/CallTargetSelector';
 import ActiveCallsTab from './modules/monitoring/tabs/monitoring/ActiveCallsTab';
 import { getLiveCallPopupTitle, normalizeLiveCallBannerPayload } from './utils/liveCallBanner';
+import { useServerClock } from './hooks/useServerClock';
+import { getServerNow } from './utils/serverClock';
 import CommandCenterTab from './modules/monitoring/tabs/monitoring/CommandCenterTab';
 const DbExplorerTab = lazy(() => import('./modules/monitoring/tabs/monitoring/DbExplorerTab'));
 const SecurityTab = lazy(() => import('./modules/monitoring/tabs/monitoring/SecurityTab'));
@@ -334,12 +336,12 @@ const toLocalDateInputValue = (date: Date) => {
 
 const parseDateInputValue = (value: string) => {
   const [year, month, day] = value.split('-').map(Number);
-  if (!year || !month || !day) return new Date();
+  if (!year || !month || !day) return getServerNow();
   return new Date(year, month - 1, day);
 };
 
 const getDefaultStartDate = () => {
-  const date = new Date();
+  const date = getServerNow();
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
   return `${year}-${month}-01`;
@@ -379,7 +381,7 @@ function RussianDatePicker({ value, onChange, ariaLabel }: RussianDatePickerProp
     d.setDate(gridStart.getDate() + index);
     return d;
   });
-  const todayValue = toLocalDateInputValue(new Date());
+  const todayValue = toLocalDateInputValue(getServerNow());
 
   const changeMonth = (offset: number) => {
     setVisibleMonth(prev => new Date(prev.getFullYear(), prev.getMonth() + offset, 1));
@@ -456,7 +458,7 @@ function RussianDatePicker({ value, onChange, ariaLabel }: RussianDatePickerProp
             type="button"
             onClick={() => {
               onChange(todayValue);
-              setVisibleMonth(new Date());
+              setVisibleMonth(getServerNow());
               setIsOpen(false);
             }}
             className="mt-3 w-full rounded-lg bg-slate-50 border border-slate-200 px-2 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
@@ -550,6 +552,9 @@ interface LiveCallBanner {
   phoneMeetingInitiator?: string;
   phoneMeetingParticipants?: string[];
   phoneMeetingParticipantStatuses?: Array<{ number: string; connected: boolean; initiator: boolean }>;
+  connected?: boolean;
+  ringing?: boolean;
+  calls?: LiveCallBanner[];
 };
 
 export default function App() {
@@ -563,6 +568,8 @@ export default function App() {
     }
     return null;
   });
+  const serverClockRevision = useServerClock(session?.token);
+  const serverClockAppliedRef = useRef(false);
   
   const [loginUsername, setLoginUsername] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
@@ -579,13 +586,26 @@ export default function App() {
 
   // Filter bindings
   const [startDate, setStartDate] = useState(getDefaultStartDate);
-  const [endDate, setEndDate] = useState(() => toLocalDateInputValue(new Date()));
+  const [endDate, setEndDate] = useState(() => toLocalDateInputValue(getServerNow()));
   const [startTime, setStartTime] = useState('00:00');
   const [endTime, setEndTime] = useState('23:59');
   const [statusFilter, setStatusFilter] = useState('ALL'); // Default focus on full log
   const [searchQuery, setSearchQuery] = useState('');
   const [numberFilter, setNumberFilter] = useState('');
   const [relatedMissedCallId, setRelatedMissedCallId] = useState('');
+
+  useEffect(() => {
+    if (serverClockRevision === 0 || serverClockAppliedRef.current) return;
+    serverClockAppliedRef.current = true;
+    const browserNow = new Date();
+    const serverNow = getServerNow();
+    const browserToday = toLocalDateInputValue(browserNow);
+    const serverToday = toLocalDateInputValue(serverNow);
+    const browserMonthStart = `${browserNow.getFullYear()}-${String(browserNow.getMonth() + 1).padStart(2, '0')}-01`;
+    const serverMonthStart = `${serverNow.getFullYear()}-${String(serverNow.getMonth() + 1).padStart(2, '0')}-01`;
+    setEndDate(current => current === browserToday ? serverToday : current);
+    setStartDate(current => current === browserMonthStart ? serverMonthStart : current);
+  }, [serverClockRevision]);
 
   // Dashboard Stats
   const [stats, setStats] = useState<DashboardStats | null>(null);
@@ -1234,7 +1254,7 @@ export default function App() {
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.setAttribute("href", url);
-      link.setAttribute("download", `phone_directory_export_${new Date().toISOString().split('T')[0]}.csv`);
+      link.setAttribute("download", `phone_directory_export_${getServerNow().toISOString().split('T')[0]}.csv`);
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -3382,22 +3402,22 @@ export default function App() {
 
   // Date bounds presets
   const applyPeriodPreset = (daysAgo: number) => {
-    const start = new Date();
+    const start = getServerNow();
     start.setDate(start.getDate() - daysAgo);
     
     setStartDate(toLocalDateInputValue(start));
-    setEndDate(toLocalDateInputValue(new Date()));
+    setEndDate(toLocalDateInputValue(getServerNow()));
     setStartTime('00:00');
     setEndTime('23:59');
     setPage(1);
   };
 
   const applyThisMonthPreset = () => {
-    const start = new Date();
+    const start = getServerNow();
     const year = start.getFullYear();
     const month = String(start.getMonth() + 1).padStart(2, '0');
     setStartDate(`${year}-${month}-01`);
-    setEndDate(toLocalDateInputValue(new Date()));
+    setEndDate(toLocalDateInputValue(getServerNow()));
     setStartTime('00:00');
     setEndTime('23:59');
     setPage(1);
@@ -3447,7 +3467,7 @@ export default function App() {
 
   const saveLiveSessionsLog = () => {
     const payload = {
-      createdAt: new Date().toISOString(),
+      createdAt: getServerNow().toISOString(),
       data: liveSessionsData
     };
 
@@ -3456,7 +3476,7 @@ export default function App() {
     const link = document.createElement('a');
 
     link.href = url;
-    link.download = `pbxpuls-live-sessions-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+    link.download = `pbxpuls-live-sessions-${getServerNow().toISOString().replace(/[:.]/g, '-')}.json`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -3476,14 +3496,14 @@ export default function App() {
   const saveLiveSnapshot = async () => {
     try {
       const payload = {
-        createdAt: new Date().toISOString(),
+        createdAt: getServerNow().toISOString(),
         summary: liveSessionsData?.summary || {},
         calls: liveSessionsData?.calls || [],
         sessions: liveSessionsData?.sessions || [],
         raw: liveSessionsData?.raw || {}
       };
 
-      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const stamp = getServerNow().toISOString().replace(/[:.]/g, '-');
       const filename = `pbxpuls-live-snapshot-${stamp}.json`;
 
       const blob = new Blob([JSON.stringify(payload, null, 2)], {
@@ -3593,15 +3613,15 @@ export default function App() {
   const renderMonitoringView = () => {
     const monitoringTitle =
       monitorMode === 'calls' ? 'Активные звонки' :
-      monitorMode === 'tcpdump' ? 'TCPDUMP / SIP-RTP' :
+      monitorMode === 'tcpdump' ? 'TCPDUMP' :
       monitorMode === 'sngrep' ? 'SNGREP' :
       monitorMode === 'cli' ? 'Командный центр' :
       monitorMode === 'db' ? 'DB Explorer' :
-      monitorMode === 'devices' ? 'Карта IP / SIP устройств' :
+      monitorMode === 'devices' ? 'Карта IP' :
       monitorMode === 'quality' ? 'Качество связи' :
       monitorMode === 'health' ? 'Состояние АТС' :
       monitorMode === 'security' ? 'Безопасность' :
-      monitorMode === 'ai-admin' ? 'AI-администратор АТС' :
+      monitorMode === 'ai-admin' ? 'AI-админ' :
       'Мониторинг';
 
     const monitoringSubtitle =
@@ -3786,7 +3806,7 @@ export default function App() {
     const getCallTimelineSteps = (call: any) => {
       const now = liveSessionsData?.summary?.updatedAt
         ? new Date(liveSessionsData.summary.updatedAt).toLocaleTimeString('ru-RU')
-        : new Date().toLocaleTimeString('ru-RU');
+        : getServerNow().toLocaleTimeString('ru-RU');
 
       const channels = call.channels || [];
       const firstDial = channels.find((ch: any) => String(ch.application || '').toLowerCase() === 'dial');
@@ -3879,7 +3899,7 @@ export default function App() {
                   ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
                   : 'bg-white text-slate-600 border-slate-200'}`}
               >
-                TCPDUMP / SIP-RTP
+                TCPDUMP
               </button>
               )}
 
@@ -3923,7 +3943,7 @@ export default function App() {
                   ? 'bg-rose-50 text-rose-700 border-rose-200'
                   : 'bg-white text-slate-600 border-slate-200'}`}
               >
-                Карта IP / SIP устройств
+                Карта IP
               </button>
               )}
 
@@ -3956,7 +3976,7 @@ export default function App() {
                   ? 'bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-950/40 dark:text-violet-300'
                   : 'bg-white text-slate-600 border-slate-200'}`}
               >
-                AI-администратор АТС
+                AI-админ
               </button>
               )}
 
@@ -5488,6 +5508,7 @@ export default function App() {
         const endpointNumber = isIncomingLive
           ? (liveCallBanner.destinationNumber || liveCallBanner.internalNumber)
           : (liveCallBanner.internalCaller || liveCallBanner.sourceNumber || liveCallBanner.callerNumber);
+        const waitingCalls = (liveCallBanner.calls || []).filter(call => call.linkedid !== liveCallBanner.linkedid);
 
         return (
           <div
@@ -5604,6 +5625,43 @@ export default function App() {
                   </div>
                 </div></div>
             </div>
+            {waitingCalls.length > 0 && (
+              <div className="pointer-events-auto relative z-10 mt-2 isolate overflow-hidden rounded-2xl border border-amber-200 bg-white shadow-xl">
+                <div className="flex items-center justify-between border-b border-amber-100 bg-amber-50 px-4 py-2">
+                  <span className="text-xs font-black text-amber-900">Ещё звонков: {waitingCalls.length}</span>
+                  <span className="text-[10px] font-semibold text-amber-700">Текущий разговор остаётся основным</span>
+                </div>
+                <div className="max-h-40 divide-y divide-slate-100 overflow-y-auto">
+                  {waitingCalls.map(call => {
+                    const callNumber = call.displayNumber || call.number || '';
+                    const callDisplay = call.displayName || callNumber || 'Неизвестный номер';
+                    const callTitle = getLiveCallPopupTitle(call.direction, call.phoneMeeting === true);
+                    const callDetails = Array.from(new Set([
+                      call.displayName,
+                      call.company,
+                      call.position,
+                      callNumber,
+                      callTitle,
+                      call.destinationNumber ? `на ${call.destinationNumber}` : ''
+                    ].map(value => String(value || '').trim()).filter(Boolean)));
+                    return (
+                      <div key={call.linkedid || `${call.direction}-${callDisplay}`} className="flex items-center gap-3 px-4 py-2.5">
+                        <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${call.ringing ? 'animate-pulse bg-amber-500' : call.connected ? 'bg-emerald-500' : 'bg-slate-400'}`} />
+                        <div className="min-w-0 flex-1 truncate text-xs font-bold text-slate-800" title={callDetails.join(' · ')}>
+                          {callDetails.map((detail, index) => (
+                            <React.Fragment key={`${detail}-${index}`}>
+                              {index > 0 && <span className="px-1.5 text-slate-300">·</span>}
+                              <span className={index === 0 ? 'font-black text-slate-950' : ''}>{detail}</span>
+                            </React.Fragment>
+                          ))}
+                        </div>
+                        <span className="shrink-0 font-mono text-xs font-black text-slate-700">{call.durationText || '0:00'}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             {liveCallBanner.phoneMeeting && (
               <div className="pointer-events-auto mt-2 rounded-2xl border border-slate-200 bg-white p-3 shadow-xl">
                 <div className="mb-2 flex items-center justify-between gap-3">
@@ -5851,14 +5909,14 @@ export default function App() {
                 <span className="text-[11px] text-slate-550 dark:text-slate-450 font-semibold px-1 select-none">Период:</span>
                 <button
                   onClick={() => {
-                    setStartDate(toLocalDateInputValue(new Date()));
-                    setEndDate(toLocalDateInputValue(new Date()));
+                    setStartDate(toLocalDateInputValue(getServerNow()));
+                    setEndDate(toLocalDateInputValue(getServerNow()));
                     setStartTime('00:00');
                     setEndTime('23:59');
                     setPage(1);
                   }}
                   className={`text-[11px] px-2 py-0.5 rounded font-medium transition-all cursor-pointer ${
-                    startDate === toLocalDateInputValue(new Date()) && endDate === toLocalDateInputValue(new Date()) && startTime === '00:00' && endTime === '23:59'
+                    startDate === toLocalDateInputValue(getServerNow()) && endDate === toLocalDateInputValue(getServerNow()) && startTime === '00:00' && endTime === '23:59'
                       ? 'bg-blue-50 text-red-750 font-bold'
                       : 'bg-white text-slate-600 hover:text-slate-900 border border-transparent hover:border-slate-200'
                   }`}
@@ -5867,7 +5925,7 @@ export default function App() {
                 </button>
                 <button
                   onClick={() => {
-                    const yesterday = new Date();
+                    const yesterday = getServerNow();
                     yesterday.setDate(yesterday.getDate() - 1);
                     const yStr = toLocalDateInputValue(yesterday);
                     setStartDate(yStr);
@@ -5878,7 +5936,7 @@ export default function App() {
                   }}
                   className={`text-[11px] px-2 py-0.5 rounded font-medium transition-all cursor-pointer ${
                     (() => {
-                      const yesterday = new Date();
+                      const yesterday = getServerNow();
                       yesterday.setDate(yesterday.getDate() - 1);
                       const yStr = toLocalDateInputValue(yesterday);
                       return startDate === yStr && endDate === yStr && startTime === '00:00' && endTime === '23:59';
@@ -5893,10 +5951,10 @@ export default function App() {
                   onClick={() => applyPeriodPreset(7)}
                   className={`text-[11px] px-2 py-0.5 rounded font-medium transition-all cursor-pointer ${
                     (() => {
-                      const sev = new Date();
+                      const sev = getServerNow();
                       sev.setDate(sev.getDate() - 7);
                       const sStr = toLocalDateInputValue(sev);
-                      return startDate === sStr && endDate === toLocalDateInputValue(new Date()) && startTime === '00:00' && endTime === '23:59';
+                      return startDate === sStr && endDate === toLocalDateInputValue(getServerNow()) && startTime === '00:00' && endTime === '23:59';
                     })()
                       ? 'bg-blue-50 text-red-750 font-bold'
                       : 'bg-white text-slate-600 hover:text-slate-900 border border-transparent hover:border-slate-200'
@@ -5908,9 +5966,9 @@ export default function App() {
                   onClick={() => applyThisMonthPreset()}
                   className={`text-[11px] px-2 py-0.5 rounded font-medium transition-all cursor-pointer ${
                     (() => {
-                      const d = new Date();
+                      const d = getServerNow();
                       const mStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
-                      return startDate === mStr && endDate === toLocalDateInputValue(new Date()) && startTime === '00:00' && endTime === '23:59';
+                      return startDate === mStr && endDate === toLocalDateInputValue(getServerNow()) && startTime === '00:00' && endTime === '23:59';
                     })()
                       ? 'bg-blue-50 text-red-750 font-bold'
                       : 'bg-white text-slate-600 hover:text-slate-900 border border-transparent hover:border-slate-200'
@@ -6008,7 +6066,7 @@ export default function App() {
               >
                 Обновить
               </button>
-              {(searchQuery || numberFilter || relatedMissedCallId || statusFilter !== 'ALL' || startDate !== getDefaultStartDate() || endDate !== toLocalDateInputValue(new Date()) || startTime !== '00:00' || endTime !== '23:59') && (
+              {(searchQuery || numberFilter || relatedMissedCallId || statusFilter !== 'ALL' || startDate !== getDefaultStartDate() || endDate !== toLocalDateInputValue(getServerNow()) || startTime !== '00:00' || endTime !== '23:59') && (
                 <button
                   onClick={() => {
                     setSearchQuery('');
@@ -6944,10 +7002,9 @@ export default function App() {
                         )}
                       </div>
                       <div className="min-w-0 max-w-full rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                        <h4 className="mb-3 flex min-w-0 items-center gap-2 break-words text-sm font-black text-slate-900"><Clock className="h-4 w-4 shrink-0 text-blue-600" />Записи и KPI</h4>
-                        <div className="grid min-w-0 max-w-full grid-cols-1 gap-3 md:grid-cols-3">
-                          <label className="min-w-0 max-w-full break-words md:col-span-2 text-xs font-bold text-slate-600">Путь к записям<input type="text" value={draftSettings.recordingsPath} onChange={(e) => setDraftSettings({ ...draftSettings, recordingsPath: e.target.value })} className="mt-1 w-full min-w-0 max-w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900" required /></label>
-                          <label className="min-w-0 max-w-full break-words text-xs font-bold text-slate-600">Legacy KPI автообработки, мин<input type="number" min={1} max={1440} value={draftSettings.callbackKpiMinutes ?? 60} onChange={(e) => setDraftSettings({ ...draftSettings, callbackKpiMinutes: parseInt(e.target.value, 10) || 60 })} className="mt-1 w-full min-w-0 max-w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900" /></label></div>
+                        <h4 className="mb-3 flex min-w-0 items-center gap-2 break-words text-sm font-black text-slate-900"><Clock className="h-4 w-4 shrink-0 text-blue-600" />Записи</h4>
+                        <div className="grid min-w-0 max-w-full grid-cols-1 gap-3">
+                          <label className="min-w-0 max-w-full break-words text-xs font-bold text-slate-600">Путь к записям<input type="text" value={draftSettings.recordingsPath} onChange={(e) => setDraftSettings({ ...draftSettings, recordingsPath: e.target.value })} className="mt-1 w-full min-w-0 max-w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900" required /></label></div>
                       </div>
 
                       <div className="min-w-0 max-w-full rounded-2xl border border-slate-200 bg-slate-50 p-4">

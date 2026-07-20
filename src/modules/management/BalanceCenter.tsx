@@ -12,6 +12,7 @@ import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, 
   Tooltip, Legend, BarChart, Bar, Cell 
 } from 'recharts';
+import { getServerNow } from '../../utils/serverClock';
 
 interface BalanceCenterProps {
   session: any;
@@ -362,7 +363,7 @@ export default function BalanceCenter({ session, hasPermission }: BalanceCenterP
         return {
           ...op,
           balance: parseFloat((op.balance + drift).toFixed(2)),
-          lastUpdate: new Date().toISOString().replace('T', ' ').slice(0, 16)
+          lastUpdate: getServerNow().toISOString().replace('T', ' ').slice(0, 16)
         };
       }));
       showNoti('success', 'Балансы провайдеров успешно синхронизированы через API!');
@@ -382,7 +383,7 @@ export default function BalanceCenter({ session, hasPermission }: BalanceCenterP
         return {
           ...op,
           balance: op.balance + amount,
-          lastUpdate: new Date().toISOString().replace('T', ' ').slice(0, 16)
+          lastUpdate: getServerNow().toISOString().replace('T', ' ').slice(0, 16)
         };
       }
       return op;
@@ -426,7 +427,7 @@ export default function BalanceCenter({ session, hasPermission }: BalanceCenterP
             ...op,
             balance: foundValue,
             providerType: importType + ' Импорт',
-            lastUpdate: new Date().toISOString().replace('T', ' ').slice(0, 16)
+            lastUpdate: getServerNow().toISOString().replace('T', ' ').slice(0, 16)
           };
         }
         return op;
@@ -461,7 +462,7 @@ export default function BalanceCenter({ session, hasPermission }: BalanceCenterP
       dailyChange: -avgNum,
       avgSpend: avgNum,
       apiConnected: false,
-      lastUpdate: new Date().toISOString().replace('T', ' ').slice(0, 16),
+      lastUpdate: getServerNow().toISOString().replace('T', ' ').slice(0, 16),
       providerType: 'Ручной ввод'
     };
 
@@ -589,7 +590,7 @@ export default function BalanceCenter({ session, hasPermission }: BalanceCenterP
         content += `"${op.name}","${op.trunkName}",${op.balance},${op.dailyChange},${op.avgSpend},${(op.balance / op.avgSpend).toFixed(1)},"${op.providerType}"\n`;
       });
     } else {
-      content = 'СПЕЦИФИКАЦИЯ БАЛАНСОВ PBXPULS\nСгенерировано: ' + new Date().toLocaleString() + '\n\n';
+      content = 'СПЕЦИФИКАЦИЯ БАЛАНСОВ PBXPULS\nСгенерировано: ' + getServerNow().toLocaleString() + '\n\n';
       content += 'Транк,Провайдер,Баланс,Суточное изменение,Прогноз исчерпания\n';
       operators.forEach(op => {
         content += `${op.trunkName},${op.name},${op.balance} руб.,${op.dailyChange} руб.,${(op.balance / op.avgSpend).toFixed(1)} дней\n`;
@@ -602,7 +603,7 @@ export default function BalanceCenter({ session, hasPermission }: BalanceCenterP
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.setAttribute('href', url);
-    link.setAttribute('download', `pbxpuls_balance_report_${new Date().toISOString().slice(0,10)}.${fileExtension}`);
+    link.setAttribute('download', `pbxpuls_balance_report_${getServerNow().toISOString().slice(0,10)}.${fileExtension}`);
     link.style.visibility = 'hidden';
     document.body.appendChild(link);
     link.click();
@@ -1760,7 +1761,7 @@ export default function BalanceCenter({ session, hasPermission }: BalanceCenterP
 
       logSteps.forEach((step, idx) => {
         setTimeout(() => {
-          setParserLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${step}`]);
+          setParserLogs(prev => [...prev, `[${getServerNow().toLocaleTimeString()}] ${step}`]);
           if (idx === logSteps.length - 1) {
             setIsUrlParsing(false);
             // Slightly tweak the selected operator's tariff
@@ -1890,7 +1891,7 @@ export default function BalanceCenter({ session, hasPermission }: BalanceCenterP
     const registerTariffAnomaly = (cause: string, description: string, risk: 'critical' | 'high' | 'warning') => {
       const newAnom = {
         id: 'anom_gen_' + Date.now(),
-        time: new Date().toISOString().replace('T', ' ').slice(0, 16),
+        time: getServerNow().toISOString().replace('T', ' ').slice(0, 16),
         riskLevel: risk,
         cause: cause,
         description: description,

@@ -25,6 +25,7 @@ import { TrunkLabView } from './trunkLab/TrunkLabView';
 import { operatorTemplates } from './operatorTemplates/operatorTemplatesData';
 import { MANAGEMENT_SECTIONS, ManagementSectionId } from './components/provisioningSections';
 import { ui } from '../../locales/ru';
+import { getServerNow } from '../../utils/serverClock';
 
 interface ProvisioningCenterProps {
   session: any;
@@ -493,7 +494,7 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
 
       setActiveExtensions(data);
       setSelectedExtensionIds(prev => prev.filter(ext => data.some((item: any) => String(item.extension) === ext)));
-      setActiveExtLoadedAt(new Date().toLocaleString());
+      setActiveExtLoadedAt(getServerNow().toLocaleString());
       showNoti('success', `Загружено ${data.length} extensions с АТС`);
     } catch (err: any) {
       const message = err?.message || 'Ошибка загрузки extensions';

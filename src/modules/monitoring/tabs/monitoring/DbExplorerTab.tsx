@@ -31,9 +31,9 @@ import {
   Calendar,
   ChevronRight,
   ExternalLink,
-  BookOpen
 } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend, PieChart, Pie, Cell } from 'recharts';
+import { getServerNow } from '../../../../utils/serverClock';
 
 type Row = Record<string, any>;
 
@@ -222,8 +222,25 @@ export default function DbExplorerTab({ token }: { token: string }) {
   // Tabs config
   const [activeSubTab, setActiveSubTab] = useState<'overview' | 'telephony' | 'analytics' | 'trace' | 'console' | 'diagnostics'>('overview');
 
-  // Database center upper states
-  const [dbState, setDbState] = useState(dbOverviewData.system);
+  // Database center live read-only snapshot
+  const [liveSnapshot, setLiveSnapshot] = useState<any>(null);
+  const [liveError, setLiveError] = useState('');
+  const emptySystem = { version: '—', uptime: '—', threads: 0, slowQueries: 0, connections: 0, responseTime: '—', totalSize: '—', lastBackup: 'Нет данных' };
+  const liveOverview = liveSnapshot?.overview || { databases: [], tables: { asterisk: [], asteriskcdrdb: [], pbxpuls: [] }, system: emptySystem };
+  const dbOverviewData = liveOverview;
+  const mapAsterisk = liveOverview.tables.asterisk || [];
+  const mapCdr = liveOverview.tables.asteriskcdrdb || [];
+  const mapPbxpuls = liveOverview.tables.pbxpuls || [];
+  const mockExtensions = liveSnapshot?.telephony?.extensions || [];
+  const mockSipDevices = liveSnapshot?.telephony?.sipDevices || [];
+  const mockPjsipDevices = liveSnapshot?.telephony?.pjsipDevices || [];
+  const mockQueues = liveSnapshot?.telephony?.queues || [];
+  const mockTrunks = liveSnapshot?.telephony?.trunks || [];
+  const mockRoutes = liveSnapshot?.telephony?.routes || [];
+  const mockCdrStats = liveSnapshot?.analytics || { totalCalls: 0, incoming: 0, outgoing: 0, answered: 0, avgDuration: 0, byHour: [], byOperator: [], byTrunk: [] };
+  const mockDiagnosticsAnomalies = liveSnapshot?.diagnostics?.anomalies || [];
+  const mockChangeLogs = liveSnapshot?.diagnostics?.audit || [];
+  const [dbState, setDbState] = useState<any>(emptySystem);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Search Universal Box
@@ -265,31 +282,31 @@ export default function DbExplorerTab({ token }: { token: string }) {
   const [qbSort, setQbSort] = useState('calldate');
   const [qbSortDir, setQbSortDir] = useState('DESC');
 
-  // Triggering visual refresh
-  const triggerRefresh = () => {
+  const loadLiveSnapshot = async () => {
     setIsRefreshing(true);
-    setTimeout(() => {
+    setLiveError('');
+    try {
+      const response = await fetch('/api/db-explorer/live-snapshot', {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: 'no-store'
+      });
+      const payload = await response.json();
+      if (!response.ok || !payload.success) throw new Error(payload.error || 'Не удалось загрузить live snapshot');
+      setLiveSnapshot(payload);
+      setDbState(payload.overview?.system || emptySystem);
+      if (Array.isArray(payload.errors) && payload.errors.length) setLiveError(payload.errors.join(' · '));
+    } catch (error: any) {
+      setLiveError(error?.message || String(error));
+    } finally {
       setIsRefreshing(false);
-      setDbState(prev => ({
-        ...prev,
-        uptime: '14 дней, 6 часов',
-        responseTime: (1.2 + Math.random() * 0.5).toFixed(2) + ' ms',
-        slowQueries: Math.floor(Math.random() * 6),
-        connections: Math.floor(15 + Math.random() * 8)
-      }));
-    }, 850);
+    }
   };
 
+  const triggerRefresh = () => { void loadLiveSnapshot(); };
+
   useEffect(() => {
-    const timer = setInterval(() => {
-      setDbState(prev => ({
-        ...prev,
-        responseTime: (1.1 + Math.random() * 0.4).toFixed(2) + ' ms',
-        connections: Math.floor(14 + Math.random() * 10)
-      }));
-    }, 5000);
-    return () => clearInterval(timer);
-  }, []);
+    void loadLiveSnapshot();
+  }, [token]);
 
   // Quick SQL templates catalog
   const prebuiltSqlTemplates = useMemo(() => [
@@ -373,7 +390,7 @@ export default function DbExplorerTab({ token }: { token: string }) {
       const historyItem = {
         id: Math.random().toString(36).substring(2, 9),
         sql: activeSql,
-        time: new Date().toLocaleTimeString(),
+        time: getServerNow().toLocaleTimeString(),
         successful: true,
         count: data.count ?? returnedRows.length
       };
@@ -436,7 +453,7 @@ export default function DbExplorerTab({ token }: { token: string }) {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `pbxpuls-db-export-${new Date().toISOString().replace(/[:.]/g, '-')}.${ext}`;
+    link.download = `pbxpuls-db-export-${getServerNow().toISOString().replace(/[:.]/g, '-')}.${ext}`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -444,14 +461,13 @@ export default function DbExplorerTab({ token }: { token: string }) {
   };
 
   // Universal Search Processor
-  const handleUniversalSearch = (e: React.FormEvent) => {
+  const handleUniversalSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!searchQuery.trim()) return;
 
     setIsSearchingUniversal(true);
     const term = searchQuery.trim().toLowerCase();
-
-    setTimeout(() => {
+    try {
       const results: any[] = [];
       
       // Match users / extensions
@@ -475,59 +491,70 @@ export default function DbExplorerTab({ token }: { token: string }) {
         }
       });
 
-      // Match CDR mock entries
       if (/^\+?\d+$/.test(term)) {
-        results.push(
-          { type: 'CDR Call Log (Звонок)', icon: Clock, title: `Входящий звонок от ${term} на DID 74951234567`, details: `Дата: Сегодня 10:14 | Длительность: 2м 34с | Успешно обработан оператором Иван И.` },
-          { type: 'CEL Event (Лог каналов)', icon: Activity, title: `CEL Событие канала PJSIP/MTS-0000ef12`, details: `ID транзакции: 171921342.12450 | Принято очередью 200` }
-        );
-      } else {
-        results.push(
-          { type: 'CDR Call Log (Звонок)', icon: Clock, title: `Входящие вызовы по запросу "${term}"`, details: `Найдено 14 аналогичных вызовов за текущие сутки. Откройте вкладку Аналитика для подробностей.` }
-        );
+        const response = await fetch(`/api/db-explorer/cdr/search?number=${encodeURIComponent(term)}`, {
+          headers: { Authorization: `Bearer ${token}` }, cache: 'no-store'
+        });
+        const payload = await response.json();
+        if (response.ok && payload.success) {
+          (payload.rows || []).slice(0, 25).forEach((call: any) => results.push({
+            type: 'CDR Call Log (Звонок)', icon: Clock,
+            title: `${call.src || '—'} → ${call.dst || '—'} (${call.disposition || '—'})`,
+            details: `${call.calldate || '—'} | ${call.billsec || 0} сек. | LinkedID: ${call.linkedid || call.uniqueid || '—'}`
+          }));
+        }
       }
 
       setUniversalResults(results);
+    } catch (error: any) {
+      setUniversalResults([{ type: 'Ошибка live-поиска', icon: AlertTriangle, title: error?.message || String(error), details: 'Проверьте доступность read-only источника.' }]);
+    } finally {
       setIsSearchingUniversal(false);
-    }, 600);
+    }
   };
 
   // Phone Detective Processor
-  const handlePhoneDetective = () => {
-    if (!detectiveInput.trim()) return;
+  const handlePhoneDetective = async (inputOverride?: string) => {
+    const requestedInput = String(inputOverride || detectiveInput).trim();
+    if (!requestedInput) return;
     setIsDetectiveLoading(true);
-    const term = detectiveInput.trim();
-
-    setTimeout(() => {
-      // Build visual chronology of the call lifecycle from CEL properties
-      const flows = [
-        { title: 'START (Вход на АТС)', desc: 'Вызов поступил через транк MTS_SIP_TRUNK с мобильного ' + (term.length > 5 ? term : '+7 (920) 123-45-67'), time: '10:14:02', badge: 'Сигнализация' },
-        { title: 'INCOMING ROUTE (Оценка маршрута)', desc: 'Система сопоставила входящий DID 74951234567. Приоритет 1. Назначение: голосовое меню.', time: '10:14:03', badge: 'Диалплан' },
-        { title: 'PLAYBACK (Приветствие)', desc: 'Воспроизведение медиа-файла /var/lib/asterisk/sounds/ru/it-welcome.wav', time: '10:14:03', badge: 'IVR АТС' },
-        { title: 'QUEUE ENTER (Вход в очередь 200)', desc: 'Запуск приложения Queue. Сбор агентов очереди (Медианное ожидание в очереди: 5 сек)', time: '10:14:07', badge: 'Очереди' },
-        { title: 'DIAL (Дозвон оператору EXT 101)', desc: 'Вызов направлен на устройство PJSIP/101 (Yealink T31P). Начат звук КПВ звонящему.', time: '10:14:08', badge: 'Абонент' },
-        { title: 'ANSWERED (Ответ абонента)', desc: 'Оператор Иван Иванов (EXT 101) поднял трубку. Соединение сторон.', time: '10:14:12', badge: 'Разговор' },
-        { title: 'RECORDING (Запись разговора)', desc: 'Включена запись. Файл: /var/spool/asterisk/monitor/2026/06/23/q-200-79201234567.wav', time: '10:14:12', badge: 'Медиа' },
-        { title: 'ATTENDED TRANSFER (Перевод на support)', desc: 'Иван Иванов инициировал переадресацию на EXT 107 (Елена Л.). Парковка на удержание.', time: '10:15:20', badge: 'Функции' },
-        { title: 'BRIDGE RESET (Рекомбинация каналов)', desc: 'Создание нового RTP-моста. Соединение звонящего с Еленой Л. (EXT 107).', time: '10:15:35', badge: 'Разговор' },
-        { title: 'HANGUP (Сброс трубки)', desc: 'Инициатор сброса: Внешний абонент (Hangup Cause: 16 - Normal Clearing)', time: '10:16:36', badge: 'Финал вызова' }
-      ];
-
+    const term = requestedInput;
+    try {
+      const isCallId = term.includes('.') || /[^+\d]/.test(term);
+      const cdrUrl = isCallId
+        ? `/api/db-explorer/cdr/by-uid/${encodeURIComponent(term)}`
+        : `/api/db-explorer/cdr/search?number=${encodeURIComponent(term)}`;
+      const cdrResponse = await fetch(cdrUrl, { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' });
+      const cdrPayload = await cdrResponse.json();
+      if (!cdrResponse.ok || !cdrPayload.success || !(cdrPayload.rows || []).length) throw new Error('CDR для указанного номера/ID не найден');
+      const first = cdrPayload.rows[0];
+      const linkedid = String(first.linkedid || first.uniqueid || '').replace(/'/g, "''");
+      const celSql = `SELECT eventtime, eventtype, cid_num, exten, context, channame, appname, appdata, uniqueid, linkedid FROM asteriskcdrdb.cel WHERE linkedid='${linkedid}' OR uniqueid='${linkedid}' ORDER BY eventtime ASC LIMIT 500`;
+      const celResponse = await fetch('/api/db-explorer/query', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ sql: celSql, limit: 500 })
+      });
+      const celPayload = await celResponse.json();
+      const flows = (celPayload.rows || []).map((event: any) => ({
+        title: event.eventtype || 'CEL',
+        desc: [event.channame, event.context, event.appname, event.appdata].filter(Boolean).join(' · '),
+        time: event.eventtime ? new Date(event.eventtime).toLocaleTimeString('ru-RU', { hour12: false }) : '—',
+        badge: event.cid_num || event.exten || 'CEL'
+      }));
       setDetectiveResult({
         main: {
-          caller: term.length > 3 ? term : '79201234567',
-          target: '74951234567 (Главная МСК)',
-          status: 'ОТВЕЧЕН (ANSWERED)',
-          duration: '2м 34с (154 сек)',
-          uniqueid: '171921342.12450',
-          recording: 'q-200-79201234567.wav',
-          score: 'MOS: 4.35 (Отлично)',
-          operator: 'EXT 101 → EXT 107'
+          caller: first.src || first.cnum || '—', target: first.dst || first.did || '—',
+          status: first.disposition || '—', duration: `${first.billsec || 0} сек.`,
+          uniqueid: first.linkedid || first.uniqueid || '—', recording: first.recordingfile || 'Нет записи',
+          score: 'Нет данных MOS в CDR/CEL', operator: first.dstchannel || '—'
         },
         timeline: flows
       });
+    } catch (error: any) {
+      setDetectiveResult({ error: error?.message || String(error), timeline: [] });
+    } finally {
       setIsDetectiveLoading(false);
-    }, 800);
+    }
   };
 
   return (
@@ -568,6 +595,12 @@ export default function DbExplorerTab({ token }: { token: string }) {
           </button>
         </form>
       </div>
+
+      {liveError && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300">
+          Часть live-данных недоступна: {liveError}
+        </div>
+      )}
 
       {/* Universal Search Results Flyout */}
       {searchQuery.trim() && universalResults !== null && (
@@ -612,7 +645,7 @@ export default function DbExplorerTab({ token }: { token: string }) {
         {[
           { label: 'СУБД MariaDB', value: dbState.version, icon: Database, color: 'text-indigo-500 bg-indigo-50 dark:bg-indigo-950/40' },
           { label: 'Общий объем', value: dbState.totalSize, icon: FileSpreadsheet, color: 'text-emerald-500 bg-emerald-50 dark:bg-emerald-950/40' },
-          { label: 'Очередь вызовов CEL', value: '2.95M записей', icon: Activity, color: 'text-rose-500 bg-rose-50 dark:bg-rose-950/40' },
+          { label: 'События CEL', value: `${Number(mapCdr.find((table: any) => table.name === 'cel')?.rows || 0).toLocaleString('ru-RU')} записей`, icon: Activity, color: 'text-rose-500 bg-rose-50 dark:bg-rose-950/40' },
           { label: 'Время ответа АТС', value: dbState.responseTime, icon: Clock, color: 'text-amber-500 bg-amber-50 dark:bg-amber-950/40' },
           { label: 'Активные коннекты', value: dbState.connections, icon: Network, color: 'text-blue-500 bg-blue-50 dark:bg-blue-950/40' },
           { label: 'Медленные запросы', value: `${dbState.slowQueries} шт`, icon: ShieldAlert, color: dbState.slowQueries > 0 ? 'text-red-500 bg-red-50 dark:bg-red-950/40 animate-pulse' : 'text-slate-400 bg-slate-50 dark:bg-slate-900/40' }
@@ -664,7 +697,7 @@ export default function DbExplorerTab({ token }: { token: string }) {
         {activeSubTab === 'overview' && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
             {/* Catalog databases */}
-            <div className="lg:col-span-8 space-y-4">
+            <div className="lg:col-span-12 space-y-4">
               <div className="bg-white dark:bg-slate-800 p-4 rounded-2xl shadow-xs border border-slate-100 dark:border-slate-750">
                 <div className="flex justify-between items-center mb-3">
                   <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-350">
@@ -803,47 +836,6 @@ export default function DbExplorerTab({ token }: { token: string }) {
               </div>
             </div>
 
-            {/* Sidebar quick database information & instructions */}
-            <div className="lg:col-span-4 space-y-4">
-              <div className="bg-gradient-to-br from-indigo-900 to-indigo-950 text-white p-4 rounded-2xl shadow-xs">
-                <div className="flex items-center gap-2 text-indigo-400 mb-2">
-                  <Sparkles className="w-5 h-5" />
-                  <span className="text-xs uppercase tracking-wider font-bold">Почему Центр Баз Данных?</span>
-                </div>
-                <h4 className="text-sm font-bold leading-snug">Ваш интуитивный гид по телефонии АТС</h4>
-                <p className="text-xs text-indigo-200 mt-2 leading-relaxed">
-                  Раньше администрирование Asterisk заставляло писать длинные SQL-запросы или копаться в командной строке Linux.
-                </p>
-                <p className="text-xs text-indigo-200 mt-2 leading-relaxed">
-                  Центр баз данных PBXPULS структурирует всю информацию, вычисляет неисправные очереди, неавторизованные транки, замеряет скорость записи CDR в реальном времени и строит полноценную трассировку по уникальным идентификаторам.
-                </p>
-                <div className="bg-indigo-800/50 p-3 rounded-lg mt-4 text-[11px] border border-indigo-700">
-                  <span className="font-bold">Полезная подсказка:</span> Используйте вкладку <span className="underline">След звонка (CEL Trace)</span>, чтобы досконально проследить поведение IVR, переводы и причину зависания на АТС.
-                </div>
-              </div>
-
-              {/* Simple schema diagram overview */}
-              <div className="bg-white dark:bg-slate-800 p-4 rounded-2xl shadow-xs border border-slate-100 dark:border-slate-750">
-                <div className="flex items-center gap-2 mb-3">
-                  <BookOpen className="w-4 h-4 text-indigo-500" />
-                  <h4 className="text-xs font-bold uppercase">Справочная информация по полям АТС</h4>
-                </div>
-                <div className="text-[11px] text-slate-500 dark:text-slate-400 space-y-3">
-                  <div>
-                    <span className="font-bold font-mono text-indigo-600 dark:text-indigo-400">uniqueid / linkedid</span>
-                    <p className="mt-0.5 leading-normal">Каждый вызов на АТС имеет UniqueID. Переадресации, входящая линия и конечные разговоры объединяются общим LinkedID.</p>
-                  </div>
-                  <div>
-                    <span className="font-bold font-mono text-indigo-600 dark:text-indigo-400">queue_log</span>
-                    <p className="mt-0.5 leading-normal">Логирует действия очередей. События ABANDON, ENTERQUEUE, CONNECT, EXITWITHTIMEOUT показывают SLA очереди.</p>
-                  </div>
-                  <div>
-                    <span className="font-bold font-mono text-indigo-600 dark:text-indigo-400">cel (Channel Event Logging)</span>
-                    <p className="mt-0.5 leading-normal">Трассировочный лог, отслеживающий каждое физическое событие с каналом RTP.</p>
-                  </div>
-                </div>
-              </div>
-            </div>
           </div>
         )}
 
@@ -884,8 +876,8 @@ export default function DbExplorerTab({ token }: { token: string }) {
                       <th className="p-3 text-left">Имя пользователя</th>
                       <th className="p-3 text-left">Группа / Отдел</th>
                       <th className="p-3 text-left">Драйвер</th>
-                      <th className="p-3 text-left">IP-Адрес устройства</th>
-                      <th className="p-3 text-left">Задержка (RTT)</th>
+                      <th className="p-3 text-left">Dial устройства</th>
+                      <th className="p-3 text-left">Описание</th>
                       <th className="p-3 text-left">Контекст (context)</th>
                       <th className="p-3 text-left">Состояние</th>
                       <th className="p-3 text-center">Опции</th>
@@ -898,25 +890,23 @@ export default function DbExplorerTab({ token }: { token: string }) {
                         <td className="p-3 font-semibold text-slate-900 dark:text-white">{e.name}</td>
                         <td className="p-3 text-slate-500 dark:text-slate-400">{e.dept}</td>
                         <td className="p-3"><span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 dark:bg-slate-600">{e.tech}</span></td>
-                        <td className="p-3 font-mono text-[11px]">{e.ip}</td>
-                        <td className="p-3 text-slate-500 font-mono">{e.latency}</td>
+                        <td className="p-3 font-mono text-[11px]">{e.dial || '—'}</td>
+                        <td className="p-3 text-slate-500">{e.description || '—'}</td>
                         <td className="p-3 text-slate-400 font-mono text-[11px]">{e.context}</td>
                         <td className="p-3">
                           <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                            e.status === 'Online' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300' :
-                            e.status === 'Busy' ? 'bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300' :
+                            e.status === 'Настроен' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300' :
                             'bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300'
                           }`}>
                             <span className={`w-1.5 h-1.5 rounded-full ${
-                              e.status === 'Online' ? 'bg-emerald-500' :
-                              e.status === 'Busy' ? 'bg-amber-500' : 'bg-red-500'
+                              e.status === 'Настроен' ? 'bg-emerald-500' : 'bg-red-500'
                             }`} />
                             {e.status}
                           </span>
                         </td>
                         <td className="p-3 text-center">
                           <button
-                            onClick={() => { setDetectiveInput(e.ext); setActiveSubTab('trace'); handlePhoneDetective(); }}
+                            onClick={() => { setDetectiveInput(e.ext); setActiveSubTab('trace'); void handlePhoneDetective(e.ext); }}
                             className="p-1 text-slate-400 hover:text-indigo-600 rounded bg-slate-50 hover:bg-white dark:bg-slate-700 dark:hover:bg-slate-600 shadow-xs text-[10px] font-bold transition"
                             title="Показать полную историю активности"
                           >
@@ -959,7 +949,7 @@ export default function DbExplorerTab({ token }: { token: string }) {
                         <td className="p-3 text-emerald-600 font-bold">{s.qualify}</td>
                         <td className="p-3 text-slate-400">{s.type}</td>
                         <td className="p-3">
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${s.acl === 'Yes' ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-600'}`}>{s.acl}</span>
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-600">{s.acl || '—'}</span>
                         </td>
                         <td className="p-3 font-sans text-slate-700 dark:text-slate-300">{s.callerid}</td>
                         <td className="p-3 font-mono text-[11px] text-slate-500">{s.context}</td>
@@ -980,8 +970,8 @@ export default function DbExplorerTab({ token }: { token: string }) {
                       <th className="p-3 text-left">Служебный транспорт</th>
                       <th className="p-3 text-left">Схема аутентификации</th>
                       <th className="p-3 text-left">Ресурс (AOR)</th>
-                      <th className="p-3 text-left">Текущий IP</th>
-                      <th className="p-3 text-left">User-Agent Оборудования</th>
+                      <th className="p-3 text-left">CallerID</th>
+                      <th className="p-3 text-left">Контекст</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
@@ -991,9 +981,9 @@ export default function DbExplorerTab({ token }: { token: string }) {
                         <td className="p-3 text-slate-500">{p.transport}</td>
                         <td className="p-3 text-slate-400">{p.auth}</td>
                         <td className="p-3 text-blue-600">{p.aor}</td>
-                        <td className="p-3 font-bold text-slate-800 dark:text-slate-200">{p.ip}</td>
-                        <td className="p-3 font-sans text-slate-500 dark:text-slate-400 text-[11px] truncate max-w-xs" title={p.userAgent}>
-                          {p.userAgent}
+                        <td className="p-3 font-sans text-slate-700 dark:text-slate-300">{p.callerid || '—'}</td>
+                        <td className="p-3 font-sans text-slate-500 dark:text-slate-400 text-[11px] truncate max-w-xs" title={p.context}>
+                          {p.context || '—'}
                         </td>
                       </tr>
                     ))}
@@ -1013,9 +1003,9 @@ export default function DbExplorerTab({ token }: { token: string }) {
                       <th className="p-3 text-left">Алгоритм распределения (strategy)</th>
                       <th className="p-3 text-left">Интервал агента (timeout)</th>
                       <th className="p-3 text-left">Список операторов</th>
-                      <th className="p-3 text-left">Показатель SLA</th>
-                      <th className="p-3 text-left">Ожидающих вызовов</th>
-                      <th className="p-3 text-left">Состояние очереди</th>
+                      <th className="p-3 text-left">CONNECT за 24ч</th>
+                      <th className="p-3 text-left">ABANDON/Timeout за 24ч</th>
+                      <th className="p-3 text-left">Состояние конфигурации</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
@@ -1026,13 +1016,13 @@ export default function DbExplorerTab({ token }: { token: string }) {
                         <td className="p-3 font-mono text-slate-500">{q.strategy}</td>
                         <td className="p-3 text-slate-600">{q.timeout}</td>
                         <td className="p-3 font-mono text-[11px] text-slate-500">{q.agents}</td>
-                        <td className="p-3 font-mono font-bold text-emerald-600">{q.sla}</td>
-                        <td className="p-3 font-bold text-rose-500">{q.callsWaiting}</td>
+                        <td className="p-3 font-mono font-bold text-emerald-600">{q.connected24h}</td>
+                        <td className="p-3 font-bold text-rose-500">{q.abandoned24h}</td>
                         <td className="p-3">
                           <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-bold ${
-                            q.agents === '[Нет операторов]' ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700'
+                            q.agents === 'Нет операторов' ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700'
                           }`}>
-                            {q.agents === '[Нет операторов]' ? 'ВНИМАНИЕ (ПУСТАЯ)' : 'АКТИВНА'}
+                            {q.agents === 'Нет операторов' ? 'ВНИМАНИЕ (ПУСТАЯ)' : 'НАСТРОЕНА'}
                           </span>
                         </td>
                       </tr>
@@ -1068,9 +1058,9 @@ export default function DbExplorerTab({ token }: { token: string }) {
                         <td className="p-3 font-bold text-slate-600">{t.channels}</td>
                         <td className="p-3 font-sans">
                           <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
-                            t.status.includes('OK') ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700 animate-pulse'
+                            t.status === 'Настроен' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700 animate-pulse'
                           }`}>
-                            <span className={`w-1.5 h-1.5 rounded-full ${t.status.includes('OK') ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                            <span className={`w-1.5 h-1.5 rounded-full ${t.status === 'Настроен' ? 'bg-emerald-500' : 'bg-rose-500'}`} />
                             {t.status}
                           </span>
                         </td>
@@ -1123,11 +1113,11 @@ export default function DbExplorerTab({ token }: { token: string }) {
             {/* Upper state figures */}
             <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
               {[
-                { label: 'Всего соединений', value: mockCdrStats.totalCalls, icon: Activity, change: '+14% за сутки' },
-                { label: 'Входящие линии', value: mockCdrStats.incoming, icon: Network, change: '63.3% от звонков' },
-                { label: 'Исходящие вызовы', value: mockCdrStats.outgoing, icon: Sliders, change: '28.5% от звонков' },
-                { label: 'Успешно отвечены', value: '10.6k звонков', icon: CheckCircle, change: 'SLA АТС 85.1%' },
-                { label: 'Средний разговор', value: mockCdrStats.avgDuration, icon: Clock, change: 'Норма до 3 минут' }
+                { label: 'Всего соединений', value: mockCdrStats.totalCalls, icon: Activity, change: 'Реальные LinkedID за 24 часа' },
+                { label: 'Входящие линии', value: mockCdrStats.incoming, icon: Network, change: `${mockCdrStats.totalCalls ? (mockCdrStats.incoming / mockCdrStats.totalCalls * 100).toFixed(1) : '0.0'}% от звонков` },
+                { label: 'Исходящие вызовы', value: mockCdrStats.outgoing, icon: Sliders, change: `${mockCdrStats.totalCalls ? (mockCdrStats.outgoing / mockCdrStats.totalCalls * 100).toFixed(1) : '0.0'}% от звонков` },
+                { label: 'Успешно отвечены', value: mockCdrStats.answered, icon: CheckCircle, change: `${mockCdrStats.totalCalls ? (mockCdrStats.answered / mockCdrStats.totalCalls * 100).toFixed(1) : '0.0'}% за 24 часа` },
+                { label: 'Средний разговор', value: `${mockCdrStats.avgDuration || 0} сек.`, icon: Clock, change: 'Среднее по отвеченным за 24 часа' }
               ].map((st, i) => (
                 <div key={i} className="bg-white dark:bg-slate-800 p-4 rounded-xl border border-slate-100 dark:border-slate-700 shadow-xs">
                   <div className="flex justify-between items-center text-slate-400">
@@ -1248,7 +1238,7 @@ export default function DbExplorerTab({ token }: { token: string }) {
                         <span className="w-3 h-3 rounded-full" style={{ backgroundColor: ['#6366f1', '#38bdf8', '#f59e0b'][idx] }} />
                         <div>
                           <p className="text-xs font-bold dark:text-white leading-none">{tr.name}</p>
-                          <p className="text-[10px] text-slate-400 mt-1">{tr.value} звонков ({(tr.value / 12450 * 100).toFixed(1)}%)</p>
+                          <p className="text-[10px] text-slate-400 mt-1">{tr.value} звонков ({(tr.value / Math.max(1, mockCdrStats.byTrunk.reduce((sum: number, item: any) => sum + Number(item.value || 0), 0)) * 100).toFixed(1)}%)</p>
                         </div>
                       </div>
                     ))}
@@ -1284,7 +1274,7 @@ export default function DbExplorerTab({ token }: { token: string }) {
                     className="flex-1 px-3 py-2 text-xs border border-slate-200 dark:border-slate-600 rounded-lg bg-slate-50 dark:bg-slate-700 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-400"
                   />
                   <button
-                    onClick={handlePhoneDetective}
+                    onClick={() => { void handlePhoneDetective(); }}
                     disabled={isDetectiveLoading}
                     className="px-3 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm transition disabled:opacity-40"
                   >
@@ -1293,15 +1283,6 @@ export default function DbExplorerTab({ token }: { token: string }) {
                 </div>
               </div>
 
-              {/* Sample queries links */}
-              <div className="pt-3 border-t dark:border-slate-700">
-                <span className="text-[11px] text-slate-400 font-bold block mb-2 uppercase">Быстрые примеры для проверки:</span>
-                <div className="flex flex-wrap gap-2 text-[11.5px]">
-                  <button onClick={() => { setDetectiveInput('79201234567'); }} className="px-2 py-1 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 rounded">Поиск мобильного (+7920...)</button>
-                  <button onClick={() => { setDetectiveInput('101'); }} className="px-2 py-1 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 rounded">Проверить оператора EXT 101</button>
-                  <button onClick={() => { setDetectiveInput('171921342.12450'); }} className="px-2 py-1 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 rounded">Unique ID звонка</button>
-                </div>
-              </div>
             </div>
 
             {/* Trace Timeline outcome */}
@@ -1311,7 +1292,7 @@ export default function DbExplorerTab({ token }: { token: string }) {
                   <Activity className="w-4 h-4 text-indigo-500" />
                   Полный хронологический профиль
                 </div>
-                {detectiveResult && (
+                {detectiveResult?.main && (
                   <span className="text-[10px] bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300 font-bold px-2 py-0.5 rounded">
                     {detectiveResult.main.status}
                   </span>
@@ -1323,7 +1304,11 @@ export default function DbExplorerTab({ token }: { token: string }) {
                   <div className="w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto" />
                   <div>Синхронизация с журналом CEL, CDR и очередями...</div>
                 </div>
-              ) : detectiveResult ? (
+              ) : detectiveResult?.error ? (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300">
+                  {detectiveResult.error}
+                </div>
+              ) : detectiveResult?.main ? (
                 <div className="space-y-6">
                   {/* Summary key value cards */}
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3 bg-slate-50 dark:bg-slate-700 p-3 rounded-xl border">
@@ -1513,7 +1498,7 @@ export default function DbExplorerTab({ token }: { token: string }) {
                 <div className="bg-white dark:bg-slate-800 p-4 rounded-2xl border border-slate-100 dark:border-slate-705 shadow-sm space-y-3">
                   <div className="flex justify-between items-center">
                     <span className="text-xs font-bold uppercase text-slate-400">Результат выполнения ({rows.length} строк)</span>
-                    <span className="text-[10px] text-slate-400 font-mono">Выполнен в {new Date().toLocaleTimeString()}</span>
+                    <span className="text-[10px] text-slate-400 font-mono">Выполнен в {getServerNow().toLocaleTimeString()}</span>
                   </div>
 
                   <div className="overflow-x-auto max-h-64 rounded-xl border">

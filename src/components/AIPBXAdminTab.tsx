@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { getServerNow } from '../utils/serverClock';
 import { 
   Bot, Send, Sparkles, Terminal, BookOpen, Clock, Settings, FileText, 
   CheckCircle2, AlertTriangle, Play, RefreshCw, Plus, Trash2, HelpCircle, 
@@ -153,7 +154,7 @@ const safeAipbxMessages = (messages: any): any[] => {
 
       const rawDate = m.createdAt || m.timestamp || m.created_at;
       const parsed = rawDate ? Date.parse(rawDate) : NaN;
-      const createdAt = Number.isNaN(parsed) ? new Date().toISOString() : new Date(parsed).toISOString();
+      const createdAt = Number.isNaN(parsed) ? getServerNow().toISOString() : new Date(parsed).toISOString();
 
       return {
         ...m,

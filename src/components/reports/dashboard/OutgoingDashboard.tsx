@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Clock, Download, Info, PhoneCall, PhoneMissed, PhoneOutgoing, Target, Users } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, Cell, ComposedChart, Legend, Line, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { StatsKpiCard } from './StatsKpiCard';
+import { getServerNow } from '../../../utils/serverClock';
 
 type Props={startDate:string;endDate:string;group:string;department:string;employee:string;extensions:string[];emptyDepartmentSelection:boolean;refreshKey:number};
 const colors=['#2563eb','#16a34a','#f59e0b','#ef4444','#8b5cf6','#64748b'];
@@ -42,7 +43,7 @@ export function OutgoingDashboard({startDate,endDate,group,department,employee,e
      <p className="text-xs font-semibold text-slate-500 dark:text-slate-400">Один звонок на связанный набор CDR по linkedid; экспорт учитывает текущий поиск и общие фильтры отчёта</p>
     </div>
     <div className="flex flex-wrap items-center gap-2">
-     <button type="button" disabled={!data?.details?.rows?.length} className="inline-flex h-9 items-center gap-2 rounded-lg bg-emerald-600 px-3 text-xs font-black text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50" onClick={()=>{const rows=data?.details?.rows||[];const escape=(value:any)=>`"${String(value??'').replace(/"/g,'""')}"`;const csv=[['Дата и время','Внутренний номер','Пользователь','Внешний номер','Транк','Результат','Ожидание, сек','Разговор, сек','Попыток по номеру'].map(escape).join(';'),...rows.map((r:any)=>[r.calldate,r.internalExtension,r.user||'',r.externalNumber,r.trunk,r.result,r.waitSeconds??'',r.billsec,r.attemptsForNumber].map(escape).join(';'))].join('\n');const a=document.createElement('a');const url=URL.createObjectURL(new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'}));a.href=url;a.download=`outgoing-calls-${new Date().toISOString().slice(0,10)}.csv`;a.click();URL.revokeObjectURL(url)}}><Download className="h-4 w-4"/>Экспорт CSV</button>
+     <button type="button" disabled={!data?.details?.rows?.length} className="inline-flex h-9 items-center gap-2 rounded-lg bg-emerald-600 px-3 text-xs font-black text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50" onClick={()=>{const rows=data?.details?.rows||[];const escape=(value:any)=>`"${String(value??'').replace(/"/g,'""')}"`;const csv=[['Дата и время','Внутренний номер','Пользователь','Внешний номер','Транк','Результат','Ожидание, сек','Разговор, сек','Попыток по номеру'].map(escape).join(';'),...rows.map((r:any)=>[r.calldate,r.internalExtension,r.user||'',r.externalNumber,r.trunk,r.result,r.waitSeconds??'',r.billsec,r.attemptsForNumber].map(escape).join(';'))].join('\n');const a=document.createElement('a');const url=URL.createObjectURL(new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'}));a.href=url;a.download=`outgoing-calls-${getServerNow().toISOString().slice(0,10)}.csv`;a.click();URL.revokeObjectURL(url)}}><Download className="h-4 w-4"/>Экспорт CSV</button>
     </div>
    </div>
    <div className="overflow-x-auto">

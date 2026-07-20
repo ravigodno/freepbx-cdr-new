@@ -8,6 +8,7 @@ import { TrunkLabFilters } from './TrunkLabFilters';
 import { TrunkLabSummaryCards } from './TrunkLabSummaryCards';
 import { TrunkDiagnostic, TrunkLabResponse, TrunkLabTestResponse, TrunkLabTestResult, TrunkLabTestType } from './trunkLabTypes';
 import { filterTrunkDiagnostics, initialTrunkLabFilters } from './trunkLabUtils';
+import { getServerNow } from '../../../utils/serverClock';
 
 export function TrunkLabView({ token }: { token?: string }) {
   const t = ui.management.trunkLab;
@@ -53,10 +54,10 @@ export function TrunkLabView({ token }: { token?: string }) {
 
   const runTrunkTest = async (testType: TrunkLabTestType, diagnostic: TrunkDiagnostic, extraPayload: Record<string, unknown> = {}) => {
     const res = await fetch('/api/management/trunks/preview', { method: 'POST', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify({ operationType: testType, payload: { operationType: testType, trunkId: diagnostic.trunkid, trunkName: diagnostic.name, ...extraPayload } }) });
-    const data: TrunkLabTestResponse = await res.json().catch(() => ({ success: false, type: testType, generatedAt: new Date().toISOString(), error: t.empty.cliUnavailable } as TrunkLabTestResponse));
+    const data: TrunkLabTestResponse = await res.json().catch(() => ({ success: false, type: testType, generatedAt: getServerNow().toISOString(), error: t.empty.cliUnavailable } as TrunkLabTestResponse));
     if (!res.ok || data.success === false) throw new Error(data.message || data.error || t.empty.cliUnavailable);
     const result = data.result || {};
-    const entry: TrunkLabTestResult = { id: `${Date.now()}-${testType}`, trunkId: diagnostic.trunkid, trunkName: diagnostic.name, testType, timestamp: data.generatedAt || new Date().toISOString(), status: 'ok', riskLevel: result.riskLevel || 'unknown', summary: result.summary || '', problems: data.problems || [], recommendations: data.recommendations || [], raw: data.raw, uniqueid: result.uniqueid, linkedid: result.linkedid, result };
+    const entry: TrunkLabTestResult = { id: `${Date.now()}-${testType}`, trunkId: diagnostic.trunkid, trunkName: diagnostic.name, testType, timestamp: data.generatedAt || getServerNow().toISOString(), status: 'ok', riskLevel: result.riskLevel || 'unknown', summary: result.summary || '', problems: data.problems || [], recommendations: data.recommendations || [], raw: data.raw, uniqueid: result.uniqueid, linkedid: result.linkedid, result };
     setTestHistory(prev => [entry, ...prev].slice(0, 30));
     return entry;
   };

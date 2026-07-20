@@ -8,7 +8,8 @@ export type SipCaptureEvent = {
   status: 'Nominal' | 'Warning' | 'Critical'; seq: number; transport: 'udp' | 'tcp';
 };
 
-type PacketResult = { candidate: boolean; tls: boolean; events: SipCaptureEvent[]; error?: string };
+export type CapturePacket = { time: string; srcIp: string; srcPort: number; dstIp: string; dstPort: number; transport: 'udp' | 'tcp'; length: number };
+export type PacketResult = { candidate: boolean; tls: boolean; events: SipCaptureEvent[]; packet?: CapturePacket; error?: string };
 
 function endpoint(value: string) {
   const clean = value.replace(/:$/, '');
@@ -30,11 +31,16 @@ export function parseTcpdumpPacket(packet: string, tlsPorts = new Set([5061])): 
   const src = endpoint(address[1]);
   const dst = endpoint(address[2]);
   const transport: 'udp' | 'tcp' = /\bUDP\b/i.test(line) ? 'udp' : 'tcp';
+  const packetInfo: CapturePacket = {
+    time: line.match(/\b(\d{2}:\d{2}:\d{2}\.\d+)/)?.[1] || new Date().toISOString().slice(11, 23),
+    srcIp: src.ip, srcPort: src.port, dstIp: dst.ip, dstPort: dst.port, transport,
+    length: Number(line.match(/\blength\s+(\d+)/i)?.[1] || 0)
+  };
   const tls = tlsPorts.has(src.port) || tlsPorts.has(dst.port);
   const payload = packet.slice(packet.indexOf('\n') + 1);
   const startPattern = new RegExp(`(?:${SIP_METHODS.join('|')})\\s+\\S+\\s+SIP/2\\.0|SIP/2\\.0\\s+\\d{3}\\b`, 'ig');
   const starts = [...payload.matchAll(startPattern)];
-  if (!starts.length) return { candidate: false, tls, events: [] };
+  if (!starts.length) return { candidate: false, tls, events: [], packet: packetInfo };
   const events: SipCaptureEvent[] = [];
   starts.forEach((match, index) => {
     const text = payload.slice(match.index!, starts[index + 1]?.index ?? payload.length).replace(/\r/g, '');
@@ -57,7 +63,7 @@ export function parseTcpdumpPacket(packet: string, tlsPorts = new Set([5061])): 
       status: code >= 500 ? 'Critical' : code >= 400 ? 'Warning' : 'Nominal', seq, transport
     });
   });
-  return { candidate: true, tls, events, error: events.length ? undefined : 'SIP start-line найдена, но сообщение не разобрано' };
+  return { candidate: true, tls, events, packet: packetInfo, error: events.length ? undefined : 'SIP start-line найдена, но сообщение не разобрано' };
 }
 
 export class TcpdumpTextStreamParser {

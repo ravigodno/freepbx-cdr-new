@@ -30,6 +30,7 @@ import {
   Wifi,
   Database
 } from 'lucide-react';
+import { getServerNow } from '../../../../utils/serverClock';
 
 type PcapFile = {
   name: string;
@@ -64,11 +65,11 @@ interface RtpStream {
   stream: string;
   port: number;
   packetCount: number;
-  packetLoss: number;
-  jitter: number; // ms
-  rtt: number; // ms
-  mos: number; // 1.0 - 4.5
-  status: 'Excellent' | 'Good' | 'Issues' | 'Critical';
+  packetLoss: number | null;
+  jitter: number | null; // ms
+  rtt: number | null; // ms
+  mos: number | null; // 1.0 - 4.5
+  status: 'Excellent' | 'Good' | 'Issues' | 'Critical' | 'Observed';
 }
 
 interface NetworkDevice {
@@ -123,20 +124,20 @@ export default function TcpdumpTab({
   
   // Troubleshooting scanner state
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [analysisProgress, setAnalysisProgress] = useState(0);
   const [showAnalysisResults, setShowAnalysisResults] = useState(true);
 
   // Raw tcpdump control states
   const [iface, setIface] = useState('any');
-  const [mode, setMode] = useState('sip');
+  const [mode, setMode] = useState('siprtp');
   const [sipPorts, setSipPorts] = useState('5060,5061,5160');
-  const [rtpPorts, setRtpPorts] = useState('25000-40000');
+  const [rtpPorts, setRtpPorts] = useState('10000-20000');
   const [hostFilter, setHostFilter] = useState('');
   const [targetType, setTargetType] = useState('any');
   const [customFilter, setCustomFilter] = useState('');
   const [output, setOutput] = useState('');
   const [message, setMessage] = useState('');
   const [status, setStatus] = useState<any>(null);
+  const [captureSessionId, setCaptureSessionId] = useState('');
   const [files, setFiles] = useState<PcapFile[]>([]);
   const [wiresharkIp, setWiresharkIp] = useState('');
   const [wiresharkPort, setWiresharkPort] = useState('9999');
@@ -255,8 +256,10 @@ export default function TcpdumpTab({
       });
       const data = await res.json();
       setStatus(data);
+      setCaptureSessionId(data.sessionId || '');
+      return data;
     } catch (e) {
-      // Allow fallback
+      return null;
     }
   };
 
@@ -280,9 +283,11 @@ export default function TcpdumpTab({
     } catch (e) {}
   };
 
-  const loadSipEvents = async () => {
+  const loadSipEvents = async (sessionId = '') => {
     try {
-      const res = await fetch('/api/diagnostics/tcpdump/events?limit=2000', { headers: { Authorization: `Bearer ${token}` } });
+      const query = new URLSearchParams({ limit: '2000' });
+      if (sessionId) query.set('sessionId', sessionId);
+      const res = await fetch(`/api/diagnostics/tcpdump/events?${query}`, { headers: { Authorization: `Bearer ${token}` } });
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.error || 'Не удалось загрузить SIP-события');
       setStatus(data);
@@ -292,6 +297,18 @@ export default function TcpdumpTab({
         : (data.events?.find((event: SipMessage) => event.callId)?.callId || ''));
     } catch (error: any) {
       setStatus((current: any) => ({ ...current, apiError: error?.message || 'Не удалось загрузить SIP-события' }));
+    }
+  };
+
+  const loadRtpSessions = async (sessionId = '') => {
+    try {
+      const query = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : '';
+      const res = await fetch(`/api/diagnostics/tcpdump/rtp-sessions${query}`, { headers: { Authorization: `Bearer ${token}` } });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Не удалось загрузить RTP-сессии');
+      setRtpStreams(Array.isArray(data.streams) ? data.streams : []);
+    } catch (error: any) {
+      setStatus((current: any) => ({ ...current, apiError: error?.message || 'Не удалось загрузить RTP-сессии' }));
     }
   };
 
@@ -319,49 +336,6 @@ export default function TcpdumpTab({
       }
     } catch (e) {}
   };
-
-  const parseRtpStreamsFromTcpdump = (outputStr: string): RtpStream[] => {
-    if (!outputStr || outputStr.includes('PCAP файл ещё не создан') || outputStr.includes('Пакетов пока нет')) {
-      return [];
-    }
-    const lines = outputStr.split('\n');
-    const streamsMap: Record<string, RtpStream> = {};
-    
-    for (const line of lines) {
-      const udpMatch = line.match(/(\d{2}:\d{2}:\d{2}\.\d+)\s+IP\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\.(\d+)\s+>\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\.(\d+):\s+UDP,\s+length\s+(\d+)/);
-      if (udpMatch) {
-        const [_, time, srcIp, srcPort, dstIp, dstPort, lenStr] = udpMatch;
-        const length = parseInt(lenStr, 10);
-        const streamKey = `${srcIp}:${srcPort}->${dstIp}:${dstPort}`;
-        
-        if (!streamsMap[streamKey]) {
-          streamsMap[streamKey] = {
-            id: `rtp-stream-${srcIp}-${srcPort}-${dstIp}-${dstPort}`,
-            src: srcIp,
-            dst: dstIp,
-            codec: length === 172 ? 'G.711a (PCMA)' : length === 200 ? 'G.722 (HD)' : 'UDP Stream',
-            stream: `UDP Traffic (${srcPort} ➔ ${dstPort})`,
-            port: parseInt(srcPort, 10),
-            packetCount: 0,
-            packetLoss: 0,
-            jitter: 0,
-            rtt: 0,
-            mos: 4.5,
-            status: 'Excellent'
-          };
-        }
-        streamsMap[streamKey].packetCount++;
-      }
-    }
-    
-    return Object.values(streamsMap);
-  };
-
-  // Effect to parse / auto-generate RTP streams
-  useEffect(() => {
-    const parsedRtp = parseRtpStreamsFromTcpdump(output);
-    setRtpStreams(parsedRtp);
-  }, [output]);
 
   // Effect to generate troubleshooting cases dynamically from real device/network data
   useEffect(() => {
@@ -430,17 +404,15 @@ export default function TcpdumpTab({
   }, [devices]);
 
   useEffect(() => {
-    loadStatus();
+    loadStatus().then(data => { loadSipEvents(data?.sessionId || ''); loadRtpSessions(data?.sessionId || ''); });
     loadFiles();
     loadOutput();
-    loadSipEvents();
     loadNetworkStatus();
     loadDevices();
 
     const t = setInterval(() => {
-      loadStatus();
+      loadStatus().then(data => { loadSipEvents(data?.sessionId || ''); loadRtpSessions(data?.sessionId || ''); });
       loadOutput();
-      loadSipEvents();
       loadNetworkStatus();
       loadDevices();
     }, 3000);
@@ -448,28 +420,38 @@ export default function TcpdumpTab({
     return () => clearInterval(t);
   }, []);
 
-  const startCapture = async () => {
+  const startCapture = async (requestedMode = mode) => {
+    setIsAnalyzing(true);
     setMessage('Запускаю сетевой захват tcpdump...');
     try {
+      const sipFilter = sipPorts.split(',').map(port => port.trim()).filter(Boolean).map(port => `port ${port}`).join(' or ');
+      const requestedFilter = requestedMode === 'siprtp' && !customFilter.trim() ? `((${sipFilter}) or udp portrange ${rtpPorts})` : bpfFilterCalculated;
       const url =
         '/api/diagnostics/tcpdump/start' +
-        '?mode=' + encodeURIComponent(mode) +
+        '?mode=' + encodeURIComponent(requestedMode) +
         '&iface=' + encodeURIComponent(iface) +
         '&ports=' + encodeURIComponent(sipPorts) +
-        '&filter=' + encodeURIComponent(bpfFilterCalculated);
+        '&rtpRange=' + encodeURIComponent(rtpPorts) +
+        '&filter=' + encodeURIComponent(requestedFilter);
 
       const res = await fetch(url, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` }
       });
       const data = await res.json();
-
-      setMessage(data.success ? 'Захват успешно запущен!' : 'Ошибка: ' + (data.error || 'tcpdump'));
-      await loadStatus();
+      if (!res.ok || !data.success || data.status === 'failed') throw new Error(data.error || data.stderr || 'tcpdump не запущен');
+      setCaptureSessionId(data.sessionId || '');
+      setStatus(data);
+      setMode(requestedMode);
+      setMessage(`Захват активен${data.sessionId ? ` · сессия ${data.sessionId.slice(0, 8)}` : ''}`);
+      await Promise.all([loadSipEvents(data.sessionId), loadRtpSessions(data.sessionId)]);
       await loadFiles();
       setTimeout(loadOutput, 1000);
-    } catch (e) {
-      setMessage('Захват запущен в автономном фоновом режиме.');
+    } catch (e: any) {
+      setMessage(`Ошибка запуска: ${e?.message || 'tcpdump не запущен'}`);
+      setStatus((current: any) => ({ ...current, status: 'failed', running: false, error: e?.message || 'Ошибка запуска' }));
+    } finally {
+      setIsAnalyzing(false);
     }
   };
 
@@ -491,23 +473,7 @@ export default function TcpdumpTab({
     }
   };
 
-  const runAutoAnalysis = () => {
-    setIsAnalyzing(true);
-    setAnalysisProgress(0);
-    setShowAnalysisResults(true);
-
-    const interval = setInterval(() => {
-      setAnalysisProgress(prev => {
-        if (prev >= 100) {
-          clearInterval(interval);
-          setIsAnalyzing(false);
-          setMessage('Автоанализатор завершил сканирование сетевого дампа!');
-          return 100;
-        }
-        return prev + 20;
-      });
-    }, 400);
-  };
+  const runAutoAnalysis = () => status?.running ? stopCapture() : startCapture('siprtp');
 
   // Helper Template Pickers
   const applyTemplate = (type: string) => {
@@ -571,7 +537,7 @@ export default function TcpdumpTab({
 
     if (format === 'json') {
       const exportData = {
-        meta: { generatedAt: new Date().toISOString(), system: 'PBXPULS Diagnostics' },
+        meta: { generatedAt: getServerNow().toISOString(), system: 'PBXPULS Diagnostics' },
         sipMessages,
         rtpStreams,
         problems: troublesDiscovered
@@ -586,7 +552,7 @@ export default function TcpdumpTab({
     } else if (format === 'txt') {
       dataStr = `=========================================\n`;
       dataStr += `      PBXPULS VoIP DIAGNOSTICS REPORT    \n`;
-      dataStr += `      Time: ${new Date().toLocaleString()} \n`;
+      dataStr += `      Time: ${getServerNow().toLocaleString()} \n`;
       dataStr += `=========================================\n\n`;
       dataStr += `[SIP Messages Trace]\n`;
       sipMessages.forEach(m => {
@@ -643,7 +609,7 @@ export default function TcpdumpTab({
             ) : (
               <Sliders className="h-3.5 w-3.5" />
             )}
-            Анализ трафика
+            {isAnalyzing ? 'Запуск…' : status?.running ? 'Остановить анализ' : status?.status === 'failed' ? 'Повторить запуск' : 'Запустить анализ'}
           </button>
 
           <button
@@ -712,24 +678,22 @@ export default function TcpdumpTab({
           <span className="text-[10px] uppercase font-bold text-slate-400">Джиттер (Jitter)</span>
           <div className="flex items-baseline justify-between mt-1">
             <span className="text-lg font-black text-slate-800 dark:text-white font-mono">
-              {rtpStreams.length > 0
-                ? (rtpStreams.reduce((sum, r) => sum + r.jitter, 0) / rtpStreams.length).toFixed(1)
-                : '0.0'} <span className="text-[10px]">мс</span>
+              Нет данных
             </span>
             <span className="text-[9px] text-emerald-500 font-bold">LAN</span>
           </div>
         </div>
 
         <div className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col justify-between">
-          <span className="text-[10px] uppercase font-bold text-slate-400">Интерфейс</span>
+          <span className="text-[10px] uppercase font-bold text-slate-400">Интерфейс доступен</span>
           <div className="flex items-baseline justify-between mt-1">
             <span className="text-sm font-black text-slate-800 dark:text-white font-mono truncate">{iface}</span>
-            <span className="text-[9px] font-bold text-slate-400">{status?.running ? 'Listening' : 'Ready'}</span>
+            <span className="text-[9px] font-bold text-slate-400">{status?.interface || iface}</span>
           </div>
         </div>
 
         <div className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col justify-between">
-          <span className="text-[10px] uppercase font-bold text-slate-400">Трафик (Rate)</span>
+          <span className="text-[10px] uppercase font-bold text-slate-400">Фоновый трафик</span>
           <div className="flex items-baseline justify-between mt-1">
             <span className="text-lg font-black text-teal-600 font-mono">
               {(() => {
@@ -742,23 +706,20 @@ export default function TcpdumpTab({
             <span className="text-[9px] text-emerald-500 font-bold">Online</span>
           </div>
         </div>
-      </div>
-
-      {/* 3. Progress Analyzer simulation bar */}
-      {isAnalyzing && (
-        <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-rose-200 dark:border-rose-950/40 shadow-sm animate-pulse">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-bold text-rose-600 flex items-center gap-1.5">
-              <Activity className="h-4 w-4 animate-spin text-rose-500" />
-              Интеллектуальный анализатор парсит сетевые сессии и строит граф SIP Flow...
-            </span>
-            <span className="text-xs font-mono font-black text-rose-600">{analysisProgress}%</span>
-          </div>
-          <div className="w-full bg-slate-100 dark:bg-slate-800 h-2 rounded-full overflow-hidden">
-            <div className="bg-gradient-to-r from-red-500 to-orange-500 h-full transition-all duration-300" style={{ width: `${analysisProgress}%` }}></div>
-          </div>
+        <div className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col justify-between">
+          <span className="text-[10px] uppercase font-bold text-slate-400">Live-захват</span>
+          <span className={`mt-1 text-xs font-black ${status?.running ? 'text-emerald-600' : status?.status === 'failed' ? 'text-red-600' : 'text-slate-500'}`}>
+            {status?.status === 'starting' ? 'Запуск' : status?.running ? 'Активен' : status?.status === 'failed' ? 'Ошибка' : status?.status === 'stopped' ? 'Завершён' : 'Не запущен'}
+          </span>
+          <span className="mt-1 truncate font-mono text-[9px] text-slate-400" title={captureSessionId}>{captureSessionId ? `ID ${captureSessionId.slice(0, 8)}` : 'Сессии нет'}</span>
         </div>
-      )}
+        <div className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col justify-between">
+          <span className="text-[10px] uppercase font-bold text-slate-400">SIP / RTP парсеры</span>
+          <span className="mt-1 text-xs font-black text-slate-600 dark:text-slate-300">
+            {status?.running ? `Работают · ${status?.sipMessagesParsed || 0} / ${status?.rtpPacketsDetected || 0}` : 'Ожидают запуска'}
+          </span>
+        </div>
+      </div>
 
       {/* 4.5 Быстрые переходы к модулям */}
       <div className="bg-slate-50 dark:bg-slate-900/60 p-4 rounded-xl border border-slate-200 dark:border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-xs">
@@ -1105,14 +1066,14 @@ export default function TcpdumpTab({
                       <td className="p-3 text-teal-600 dark:text-teal-400 font-bold">{st.codec}</td>
                       <td className="p-3 text-slate-500">{st.port}</td>
                       <td className="p-3 text-slate-600 dark:text-slate-400">{st.packetCount}</td>
-                      <td className={`p-3 font-bold ${st.packetLoss > 2 ? 'text-red-500' : 'text-slate-500'}`}>
-                        {st.packetLoss.toFixed(2)}%
+                      <td className={`p-3 font-bold ${st.packetLoss != null && st.packetLoss > 2 ? 'text-red-500' : 'text-slate-500'}`}>
+                        {st.packetLoss == null ? 'Нет данных' : `${st.packetLoss.toFixed(2)}%`}
                       </td>
-                      <td className={`p-3 font-bold ${st.jitter > 10 ? 'text-amber-500' : 'text-slate-500'}`}>
-                        {st.jitter} <span className="text-[9px] font-sans">мс</span>
+                      <td className={`p-3 font-bold ${st.jitter != null && st.jitter > 10 ? 'text-amber-500' : 'text-slate-500'}`}>
+                        {st.jitter == null ? 'Нет данных' : <>{st.jitter} <span className="text-[9px] font-sans">мс</span></>}
                       </td>
-                      <td className={`p-3 font-bold ${st.mos < 3 ? 'text-red-600' : st.mos < 4 ? 'text-amber-600' : 'text-emerald-600'}`}>
-                        {st.mos.toFixed(2)}
+                      <td className={`p-3 font-bold ${st.mos == null ? 'text-slate-500' : st.mos < 3 ? 'text-red-600' : st.mos < 4 ? 'text-amber-600' : 'text-emerald-600'}`}>
+                        {st.mos == null ? 'Нет данных' : st.mos.toFixed(2)}
                       </td>
                       <td className="p-3 font-sans">
                         <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
@@ -1122,13 +1083,16 @@ export default function TcpdumpTab({
                             ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300'
                             : st.status === 'Issues'
                             ? 'bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300'
+                            : st.status === 'Observed'
+                            ? 'bg-sky-50 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300'
                             : 'bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300'
                         }`}>
-                          {st.status === 'Excellent' ? 'Отлично' : st.status === 'Good' ? 'Хорошо' : st.status === 'Issues' ? 'Проблемы' : 'Критично'}
+                          {st.status === 'Excellent' ? 'Отлично' : st.status === 'Good' ? 'Хорошо' : st.status === 'Issues' ? 'Проблемы' : st.status === 'Observed' ? 'Обнаружен' : 'Критично'}
                         </span>
                       </td>
                     </tr>
                   ))}
+                  {filteredRtpStreams.length === 0 && <tr><td colSpan={10} className="p-10 text-center font-sans text-slate-500">{status?.running ? 'RTP-пакеты пока не обнаружены. Выполните звонок во время активного захвата.' : 'Захват трафика не запущен'}</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -1384,7 +1348,7 @@ export default function TcpdumpTab({
               <div className="md:col-span-2 flex gap-1.5">
                 {!status?.running ? (
                   <button
-                    onClick={startCapture}
+                    onClick={() => startCapture()}
                     className="w-full px-4 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-black flex items-center justify-center gap-1.5 transition cursor-pointer"
                   >
                     <Play className="h-3.5 w-3.5" />

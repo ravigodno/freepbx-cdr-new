@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Calendar, ChevronLeft, ChevronRight } from 'lucide-react';
+import { getServerNow } from '../../utils/serverClock';
 
 const RU_MONTHS = [
   'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
@@ -14,9 +15,9 @@ export const toLocalDateInputValue = (date: Date) => {
 };
 
 export const parseDateInputValue = (value: string) => {
-  if (!value) return new Date();
+  if (!value) return getServerNow();
   const [year, month, day] = value.split('-').map(Number);
-  if (!year || !month || !day) return new Date();
+  if (!year || !month || !day) return getServerNow();
   return new Date(year, month - 1, day);
 };
 
@@ -72,7 +73,7 @@ export default function RussianDatePicker({ value, onChange, ariaLabel, classNam
     return d;
   });
 
-  const todayValue = toLocalDateInputValue(new Date());
+  const todayValue = toLocalDateInputValue(getServerNow());
 
   const changeMonth = (offset: number) => {
     setVisibleMonth(prev => new Date(prev.getFullYear(), prev.getMonth() + offset, 1));
@@ -159,7 +160,7 @@ export default function RussianDatePicker({ value, onChange, ariaLabel, classNam
               type="button"
               onClick={() => {
                 onChange(todayValue);
-                setVisibleMonth(new Date());
+                setVisibleMonth(getServerNow());
                 setIsOpen(false);
               }}
               className="w-full rounded-lg bg-slate-50 border border-slate-200 px-2 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"

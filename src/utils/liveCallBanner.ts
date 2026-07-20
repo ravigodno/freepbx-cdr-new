@@ -109,3 +109,23 @@ export function getLiveCallPopupTitle(direction: unknown, phoneMeeting = false):
   if (direction === 'outgoing') return 'Исходящий звонок';
   return 'Внутренний звонок';
 }
+
+export function rankLiveCallBanners<T extends Record<string, any>>(calls: T[]): T[] {
+  const score = (call: T): number => {
+    if (call.connected === true) return 400;
+    if (call.ringing === true && call.direction === 'incoming') return 300;
+    if (call.ringing === true) return 200;
+    if (call.direction === 'incoming') return 100;
+    return 0;
+  };
+
+  return calls
+    .map((call, index) => ({ call, index }))
+    .sort((left, right) => {
+      const priority = score(right.call) - score(left.call);
+      if (priority !== 0) return priority;
+      const duration = Number(right.call.durationSec || 0) - Number(left.call.durationSec || 0);
+      return duration !== 0 ? duration : left.index - right.index;
+    })
+    .map(item => item.call);
+}

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import RussianDatePicker, { toLocalDateInputValue } from '../common/RussianDatePicker';
+import { getServerNow } from '../../utils/serverClock';
 
 type Row = Record<string, any>;
 
@@ -49,8 +50,8 @@ export default function DbExplorerTab() {
   };
 
   const setQuickPeriod = (mode) => {
-    const now = new Date();
-    let start = new Date();
+    const now = getServerNow();
+    let start = getServerNow();
 
     if (mode === 'today') {
       start = new Date(now.getFullYear(), now.getMonth(), now.getDate(),0,0,0);
@@ -92,8 +93,8 @@ export default function DbExplorerTab() {
 
   const [uid, setUid] = useState('');
   const [number, setNumber] = useState('');
-  const [fromDate, setFromDate] = useState<Date | null>(new Date(new Date().setHours(0, 0, 0, 0)));
-  const [toDate, setToDate] = useState<Date | null>(new Date());
+  const [fromDate, setFromDate] = useState<Date | null>(() => { const date = getServerNow(); date.setHours(0, 0, 0, 0); return date; });
+  const [toDate, setToDate] = useState<Date | null>(() => getServerNow());
   const [disposition, setDisposition] = useState('');
   const [startTime, setStartTime] = useState('00:00');
   const [endTime, setEndTime] = useState('23:59');
@@ -154,7 +155,7 @@ export default function DbExplorerTab() {
     const a = document.createElement('a');
 
     a.href = url;
-    a.download = 'db-explorer-' + new Date().toISOString().replace(/[:.]/g, '-') + '.csv';
+    a.download = 'db-explorer-' + getServerNow().toISOString().replace(/[:.]/g, '-') + '.csv';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -401,10 +402,10 @@ export default function DbExplorerTab() {
               С даты
               <div className="mt-1 [&>div>button]:h-10 [&>div>button]:w-full [&>div>button]:min-w-0 [&>div>button]:rounded-lg [&>div>button]:px-2.5">
                 <RussianDatePicker
-                  value={toLocalDateInputValue(fromDate || new Date())}
+                  value={toLocalDateInputValue(fromDate || getServerNow())}
                   onChange={(value) => {
                     const [y, m, d] = value.split('-').map(Number);
-                    const prev = fromDate || new Date();
+                    const prev = fromDate || getServerNow();
                     setFromDate(new Date(y, m - 1, d, prev.getHours(), prev.getMinutes(), 0));
                   }}
                   ariaLabel="С даты"
@@ -426,10 +427,10 @@ export default function DbExplorerTab() {
               По дату
               <div className="mt-1 [&>div>button]:h-10 [&>div>button]:w-full [&>div>button]:min-w-0 [&>div>button]:rounded-lg [&>div>button]:px-2.5">
                 <RussianDatePicker
-                  value={toLocalDateInputValue(toDate || new Date())}
+                  value={toLocalDateInputValue(toDate || getServerNow())}
                   onChange={(value) => {
                     const [y, m, d] = value.split('-').map(Number);
-                    const prev = toDate || new Date();
+                    const prev = toDate || getServerNow();
                     setToDate(new Date(y, m - 1, d, prev.getHours(), prev.getMinutes(), 0));
                   }}
                   ariaLabel="По дату"

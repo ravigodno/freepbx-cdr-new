@@ -21,6 +21,8 @@ import {
   Info,
   X
 } from 'lucide-react';
+import { useServerClock } from '../../../../hooks/useServerClock';
+import { getServerNow } from '../../../../utils/serverClock';
 
 // Pure React/SVG charting components to prevent any ResizeObserver, Canvas or React 19 compatibility crashes
 function CustomMiniAreaChart({ 
@@ -442,6 +444,7 @@ function getStoredAuthToken(): string {
 }
 
 export default function QualityTab({ token }: Props) {
+  useServerClock(token);
   const effectiveToken = token && token.trim() ? token.trim() : getStoredAuthToken();
   const authHeaders = effectiveToken ? { Authorization: `Bearer ${effectiveToken}` } : undefined;
 
@@ -509,7 +512,7 @@ export default function QualityTab({ token }: Props) {
         ? 'Asterisk CLI не найден. Укажите ASTERISK_BIN=/usr/sbin/asterisk или проверьте установку Asterisk.'
         : '');
       setCacheWarning(live.qualityCacheAvailable === false ? 'Кэш качества связи недоступен: PBXPuls DB не настроена' : '');
-      setLastUpdated(new Date().toISOString());
+      setLastUpdated(getServerNow().toISOString());
     } catch (err: any) {
       setError('Live-обновление недоступно; показан последний сохранённый срез');
     } finally {
@@ -538,6 +541,11 @@ export default function QualityTab({ token }: Props) {
     return () => window.removeEventListener('keydown', closeOnEscape);
   }, [isDiagnosticsOpen]);
 
+  useEffect(() => {
+    setTerminalOutput('Выберите инструмент диагностики для запуска...');
+    setActiveDiagName('');
+  }, [selectedExt]);
+
   // Handle selected device
   const selectedDevice = useMemo(() => {
     return devices.find(d => d.ext === selectedExt) || devices[0];
@@ -550,7 +558,11 @@ export default function QualityTab({ token }: Props) {
   }, [allHistory, selectedDevice]);
 
   const chartRange = useMemo(() => {
-    const endMs = Date.now();
+    const latestHistoryMs = allHistory.reduce((latest, point) => {
+      const timestampMs = new Date(point.timestamp).getTime();
+      return Number.isFinite(timestampMs) ? Math.max(latest, timestampMs) : latest;
+    }, 0);
+    const endMs = latestHistoryMs || getServerNow().getTime();
     const periodMs = historyPeriod === '1h' ? 60 * 60 * 1000
       : historyPeriod === '24h' ? 24 * 60 * 60 * 1000
         : historyPeriod === '7d' ? 7 * 24 * 60 * 60 * 1000
@@ -811,7 +823,7 @@ export default function QualityTab({ token }: Props) {
 
       let output = `PBXPULS Telephony Core Diagnostic Toolkit v4.1.2\n`;
       output += `Проверка: ${checkType}\nTarget EXT: ${ext} (${dev.name}) / Device IP: ${dev.ip}\n`;
-      output += `Время: ${new Date().toLocaleString()}\n`;
+      output += `Время: ${getServerNow().toLocaleString()}\n`;
       output += `------------------------------------------------------\n`;
 
       if (checkType === 'Проверка DNS') {
@@ -1201,7 +1213,7 @@ export default function QualityTab({ token }: Props) {
                       return (
                         <tr
                           key={dev.ext}
-                          onClick={() => { setSelectedExt(dev.ext); setIsDiagnosticsOpen(true); }}
+                          onClick={() => setSelectedExt(dev.ext)}
                           className={`cursor-pointer transition-all ${
                             isSelected 
                               ? 'bg-blue-50/70 dark:bg-blue-950/10 border-l-4 border-blue-600' 
@@ -1252,22 +1264,22 @@ export default function QualityTab({ token }: Props) {
 
                 {/* Period selectors */}
                 <div className="flex gap-1.5 bg-slate-100 dark:bg-slate-900 rounded-lg p-1">
-                  {(['1h', '24h', '7d', '30d'] as const).map((p) => {
-                    const label = p === '1h' ? '1 Час' : p === '24h' ? '24 Часа' : p === '7d' ? '7 Дней' : '30 Дней';
-                    return (
-                      <button
-                        key={p}
-                        onClick={() => setHistoryPeriod(p)}
-                        className={`px-2.5 py-1 text-[10px] font-black rounded-md ${
-                          historyPeriod === p
-                            ? 'bg-white dark:bg-[#1e293b] text-blue-600 dark:text-white shadow-xs'
-                            : 'text-slate-500 hover:text-slate-800'
-                        }`}
-                      >
-                        {label}
-                      </button>
-                    );
-                  })}
+                    {(['1h', '24h', '7d', '30d'] as const).map((p) => {
+                      const label = p === '1h' ? '1 Час' : p === '24h' ? '24 Часа' : p === '7d' ? '7 Дней' : '30 Дней';
+                      return (
+                        <button
+                          key={p}
+                          onClick={() => setHistoryPeriod(p)}
+                          className={`px-2.5 py-1 text-[10px] font-black rounded-md ${
+                            historyPeriod === p
+                              ? 'bg-white dark:bg-[#1e293b] text-blue-600 dark:text-white shadow-xs'
+                              : 'text-slate-500 hover:text-slate-800'
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      );
+                    })}
                 </div>
               </div>
 

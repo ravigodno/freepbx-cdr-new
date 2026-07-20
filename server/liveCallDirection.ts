@@ -22,6 +22,18 @@ export function selectLiveOutgoingDestination(
     .find(number => isExternal(number) && number !== internalCaller && number !== trunkNumber) || '';
 }
 
+export function selectLiveInternalCounterparty(
+  resolution: LiveCallDirectionResolution,
+  operatorExt: unknown
+): string {
+  const operator = normalizeNumber(String(operatorExt || ''));
+  const caller = normalizeNumber(resolution.internalCaller);
+  const destination = normalizeNumber(resolution.destinationNumber);
+  if (operator && destination === operator && caller && caller !== operator) return caller;
+  if (destination && destination !== operator) return destination;
+  return caller !== operator ? caller : '';
+}
+
 function normalizeNumber(value: string): string {
   let digits = String(value || '').replace(/\D/g, '');
   if (digits.length === 11 && digits.startsWith('8')) digits = `7${digits.slice(1)}`;

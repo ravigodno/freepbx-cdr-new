@@ -30,6 +30,8 @@ import {
   Eye,
   Check
 } from 'lucide-react';
+import { useServerClock } from '../../../../hooks/useServerClock';
+import { getServerNow } from '../../../../utils/serverClock';
 
 interface NetworkInfo {
   mac?: string;
@@ -118,6 +120,7 @@ type DeviceSortKey = 'ext' | 'name' | 'tech' | 'ip' | 'equipment' | 'status' | '
 type DeviceSortDirection = 'asc' | 'desc';
 
 export default function DevicesMapTab({ token }: DevicesMapTabProps) {
+  const serverClockRevision = useServerClock(token);
   // State
   const [devices, setDevices] = useState<Device[]>([]);
   const [allHistory, setAllHistory] = useState<RegistrationHistoryItem[]>([]);
@@ -141,8 +144,15 @@ export default function DevicesMapTab({ token }: DevicesMapTabProps) {
   
   // Historic Date Finder State
   const [historicDate, setHistoricDate] = useState<string>(() => {
-    return new Date().toISOString().split('T')[0];
+    return getServerNow().toISOString().split('T')[0];
   });
+
+  useEffect(() => {
+    if (serverClockRevision === 0) return;
+    const browserToday = new Date().toISOString().split('T')[0];
+    const serverToday = getServerNow().toISOString().split('T')[0];
+    setHistoricDate(current => current === browserToday ? serverToday : current);
+  }, [serverClockRevision]);
   
   // Console terminal states
   const [terminalOutput, setTerminalOutput] = useState<string>('');
@@ -157,16 +167,26 @@ export default function DevicesMapTab({ token }: DevicesMapTabProps) {
     setErrorMessage(null);
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
-
-      const [resDevices, resHistory, resConflicts, resAlerts] = await Promise.all([
-        fetch('/api/devices-map', { headers: { 'Authorization': `Bearer ${token}` }, signal: controller.signal }).then(r => r.json()),
-        fetch('/api/devices-map/history', { headers: { 'Authorization': `Bearer ${token}` }, signal: controller.signal }).then(r => r.json()),
-        fetch('/api/devices-map/conflicts', { headers: { 'Authorization': `Bearer ${token}` }, signal: controller.signal }).then(r => r.json()),
-        fetch('/api/devices-map/alerts', { headers: { 'Authorization': `Bearer ${token}` }, signal: controller.signal }).then(r => r.json())
+      const timeoutId = setTimeout(() => controller.abort(), 20000);
+      const fetchJson = async (url: string) => {
+        const response = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` }, signal: controller.signal });
+        const payload = await response.json();
+        if (!response.ok || payload?.success === false) throw new Error(payload?.error || `${url}: HTTP ${response.status}`);
+        return payload;
+      };
+      const results = await Promise.allSettled([
+        fetchJson('/api/devices-map'),
+        fetchJson('/api/devices-map/history'),
+        fetchJson('/api/devices-map/conflicts'),
+        fetchJson('/api/devices-map/alerts')
       ]);
-
       clearTimeout(timeoutId);
+      const [devicesResult, historyResult, conflictsResult, alertsResult] = results;
+      if (devicesResult.status === 'rejected') throw devicesResult.reason;
+      const resDevices = devicesResult.value;
+      const resHistory = historyResult.status === 'fulfilled' ? historyResult.value : null;
+      const resConflicts = conflictsResult.status === 'fulfilled' ? conflictsResult.value : null;
+      const resAlerts = alertsResult.status === 'fulfilled' ? alertsResult.value : null;
 
       if (resDevices.success) {
         setDevices(resDevices.devices);
@@ -175,9 +195,9 @@ export default function DevicesMapTab({ token }: DevicesMapTabProps) {
           setSelectedDevice(resDevices.devices[0]);
         }
       }
-      if (resHistory.success) setAllHistory(resHistory.history);
-      if (resConflicts.success) setConflicts(resConflicts.conflicts);
-      if (resAlerts.success) setAlerts(resAlerts.alerts);
+      if (resHistory?.success) setAllHistory(resHistory.history);
+      if (resConflicts?.success) setConflicts(resConflicts.conflicts);
+      if (resAlerts?.success) setAlerts(resAlerts.alerts);
     } catch (e: any) {
       console.error('[DEVS MAP] Error fetching data:', e);
       setErrorMessage('Не удалось загрузить карту сетевых устройств с сервера.');
@@ -492,7 +512,7 @@ export default function DevicesMapTab({ token }: DevicesMapTabProps) {
     
     if (historyFilter === 'all') return sorted;
     
-    const now = new Date();
+    const now = getServerNow();
     return sorted.filter(item => {
       const diffTime = Math.abs(now.getTime() - new Date(item.timestamp).getTime());
       const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
@@ -1059,7 +1079,7 @@ export default function DevicesMapTab({ token }: DevicesMapTabProps) {
                           type="date"
                           value={historicDate}
                           onChange={(e) => setHistoricDate(e.target.value)}
-                          max={new Date().toISOString().split('T')[0]}
+                          max={getServerNow().toISOString().split('T')[0]}
                           className="p-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-xs font-bold text-slate-800 dark:text-white"
                         />
                       </div>

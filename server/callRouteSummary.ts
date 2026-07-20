@@ -216,7 +216,7 @@ export function buildCallRouteSummaryFromLivePayload(data: any): CallRouteSummar
     summary.displayNumber = digits(data?.displayNumber || data?.destinationNumber);
   } else {
     summary.scenario = summary.followMeExternalTargets.length ? 'internal_followme' : 'internal';
-    summary.direction = 'internal'; summary.displayNumber = summary.internalDestination;
+    summary.direction = 'internal'; summary.displayNumber = digits(data?.displayNumber) || summary.internalDestination;
   }
   summary.destinationLabel = summary.displayNumber;
   return summary;

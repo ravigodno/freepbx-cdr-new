@@ -8,6 +8,8 @@ import { MarketingKpiCard } from './MarketingKpiCard';
 import { CampaignsReportTable, LostLeadsTable, MetrikaPagesTable, PhoneClicksTable, TrafficSourcesTable } from './MarketingTables';
 import { MarketingEmptyState } from './MarketingEmptyState';
 import { CalltrackingPhoneNumber, CalltrackingReplacementRule, CalltrackingSite, CalltrackingSummaryResponse, MarketingAggregatesResponse, MarketingOverviewSummary, PhoneClickEvent, TrafficSourceSummary, UsedCallQualitySettings, YandexDirectSourceRow, YandexDirectSummary, YandexMetrikaIntegration, YandexMetrikaPageSummary, YandexMetrikaPhoneGoalEventsResponse, YandexMetrikaPhoneGoalEventRow, YandexMetrikaPhoneGoalSummaryResponse, YandexMetrikaSourceSummary, YandexMetrikaSummary } from './types';
+import { useServerClock } from '../../hooks/useServerClock';
+import { getServerNow } from '../../utils/serverClock';
 
 type MarketingTabId = 'overview' | 'phone-clicks' | 'sources' | 'campaigns' | 'pages' | 'utm' | 'lost-leads' | 'analytics' | 'integrations' | 'numbers';
 
@@ -87,7 +89,7 @@ async function readJsonSafe(response: Response): Promise<any> {
 }
 
 function getDefaultMarketingRange() {
-  const today = new Date();
+  const today = getServerNow();
   const endDate = today.toISOString().slice(0, 10);
   const start = new Date(today);
   start.setDate(start.getDate() - 30);
@@ -95,12 +97,13 @@ function getDefaultMarketingRange() {
 }
 
 export default function MarketingTab() {
+  const serverClockRevision = useServerClock(getAuthToken());
   const [activeTab, setActiveTab] = useState<MarketingTabId>(() => getInitialMarketingTab());
   const [summaryData, setSummaryData] = useState<CalltrackingSummaryResponse | null>(null);
   const [phoneClicks, setPhoneClicks] = useState<PhoneClickEvent[]>([]);
   const defaultRange = useMemo(() => getDefaultMarketingRange(), []);
-  const [reportStartDate] = useState(defaultRange.startDate);
-  const [reportEndDate] = useState(defaultRange.endDate);
+  const [reportStartDate, setReportStartDate] = useState(defaultRange.startDate);
+  const [reportEndDate, setReportEndDate] = useState(defaultRange.endDate);
   const [sources, setSources] = useState<TrafficSourceSummary[]>([]);
   const [aggregatesData, setAggregatesData] = useState<MarketingAggregatesResponse | null>(null);
   const [sites, setSites] = useState<CalltrackingSite[]>([]);
@@ -120,6 +123,18 @@ export default function MarketingTab() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (serverClockRevision === 0) return;
+    const browserToday = new Date();
+    const browserEndDate = browserToday.toISOString().slice(0, 10);
+    const browserStart = new Date(browserToday);
+    browserStart.setDate(browserStart.getDate() - 30);
+    const browserStartDate = browserStart.toISOString().slice(0, 10);
+    const serverRange = getDefaultMarketingRange();
+    setReportStartDate(current => current === browserStartDate ? serverRange.startDate : current);
+    setReportEndDate(current => current === browserEndDate ? serverRange.endDate : current);
+  }, [serverClockRevision]);
 
   useEffect(() => {
     let active = true;

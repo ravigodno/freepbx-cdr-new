@@ -9,6 +9,7 @@ import {
   ResponsiveContainer, LineChart, Line, ComposedChart, AreaChart, Area, Cell
 } from 'recharts';
 import { DepartmentSummaryRow } from './ProblemDepartmentsTable';
+import { getServerNow } from '../../../utils/serverClock';
 
 type DepartmentsDashboardProps = {
   departmentSummary: any[];
@@ -234,7 +235,7 @@ export function DepartmentsDashboard({
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `department_analytics_${new Date().toISOString().slice(0, 10)}.csv`;
+    link.download = `department_analytics_${getServerNow().toISOString().slice(0, 10)}.csv`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);

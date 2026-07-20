@@ -43,6 +43,7 @@ import {
   Layers,
   HelpCircle
 } from 'lucide-react';
+import { getServerNow } from '../../../../utils/serverClock';
 
 // Props matching src/App.tsx exactly
 interface Props {
@@ -502,7 +503,7 @@ export default function ActiveCallsTab({ liveSessionsData, liveSearch, setLiveSe
 
       // 3.2 Append cute new AMI logs to the scrolling real-time stream
       if (!isAmiFeedPaused) {
-        const timestamp = new Date().toLocaleTimeString('ru-RU');
+        const timestamp = getServerNow().toLocaleTimeString('ru-RU');
         const eventTemplates = [
           { event: "Newstate", type: "PJSIP/102-00005a1e", body: "ChannelStateDesc: Ringing | CallerIDNum: 102", color: "blue" },
           { event: "DialBegin", type: "PJSIP/102-ext105", body: "Source: PJSIP/102-00005a1e | Destination: PJSIP/105-00005a1f", color: "yellow" },
@@ -583,7 +584,7 @@ export default function ActiveCallsTab({ liveSessionsData, liveSearch, setLiveSe
         id: r.uniqueid || `live-${idx}`,
         callId: `SIP-AMI-ID-${r.uniqueid || idx}@pbx`,
         linkedId: r.linkedid || r.uniqueid || '',
-        startTime: new Date().toLocaleTimeString('ru-RU'),
+        startTime: getServerNow().toLocaleTimeString('ru-RU'),
         type: callType,
         caller: r.callerId || 'Unknown',
         callee: r.exten || '—',
@@ -759,7 +760,7 @@ export default function ActiveCallsTab({ liveSessionsData, liveSearch, setLiveSe
 
   // 6. Exports to CSV, JSON and fake Excel
   const exportData = (format: 'csv' | 'json') => {
-    const filenamePrefix = `pbxpuls-calls-${new Date().toISOString().slice(0, 10)}`;
+    const filenamePrefix = `pbxpuls-calls-${getServerNow().toISOString().slice(0, 10)}`;
     const dataToExport = activeCalls.map((c, i) => ({
       UniqueID: c.id,
       Call_ID: c.callId,
@@ -1158,7 +1159,7 @@ export default function ActiveCallsTab({ liveSessionsData, liveSearch, setLiveSe
                     <button
                       onClick={() => {
                         setIsAmiFeedPaused(false);
-                        const ts = new Date().toLocaleTimeString('ru-RU');
+                        const ts = getServerNow().toLocaleTimeString('ru-RU');
                         setLiveAmiEvents(prev => [
                           { ts, event: 'SNGREP', body: `Запущена интерактивная трассировка SNGREP по Call-ID: ${selectedCall.callId}`, type: 'CLI' },
                           ...prev
@@ -1171,7 +1172,7 @@ export default function ActiveCallsTab({ liveSessionsData, liveSearch, setLiveSe
                     </button>
                     <button
                       onClick={() => {
-                        const ts = new Date().toLocaleTimeString('ru-RU');
+                        const ts = getServerNow().toLocaleTimeString('ru-RU');
                         setLiveAmiEvents(prev => [
                           { ts, event: 'TCPDUMP', body: `Запущен дамп RTP пакетов на порту ${selectedCall.rtp.source.split(':')[1] || '10000'}`, type: 'CLI' },
                           ...prev

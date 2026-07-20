@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { getServerNow } from '../../utils/serverClock';
 
 type CmdItem = {
   cmd: string;
@@ -123,7 +124,7 @@ export default function FreepbxCliTab() {
     const a = document.createElement('a');
 
     a.href = url;
-    a.download = 'freepbx-fwconsole-' + new Date().toISOString().replace(/[:.]/g, '-') + '.txt';
+    a.download = 'freepbx-fwconsole-' + getServerNow().toISOString().replace(/[:.]/g, '-') + '.txt';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);

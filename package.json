@@ -1,7 +1,7 @@
 {
   "name": "freepbx-cdr-new",
   "private": true,
-  "version": "5.6.30",
+  "version": "5.6.31",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
@@ -15,12 +15,16 @@
     "pbxpuls:monitoring:retention": "tsx scripts/pbxpuls-monitoring-retention.ts",
     "test:inbound-caller": "tsx scripts/test-inbound-caller-resolver.ts",
     "test:live-popup-route-summary": "tsx scripts/test-live-popup-route-summary.ts",
+    "test:live-popup-priority": "tsx scripts/test-live-popup-priority.ts",
+    "test:live-popup-parallel-internal": "tsx scripts/test-live-popup-parallel-internal.ts",
+    "test:live-popup-parallel-external": "tsx scripts/test-live-popup-parallel-external.ts",
     "test:live-snapshot-cache": "tsx scripts/test-live-snapshot-cache.ts",
     "test:quality-permission": "tsx scripts/test-quality-permission.ts",
     "test:contact-import-duplicates": "tsx scripts/test-contact-import-duplicates.ts",
     "test:directory-own-contact-permission": "tsx scripts/test-directory-own-contact-permission.ts",
     "test:live-transfer-search": "tsx scripts/test-live-transfer-search.ts"
-    ,"test:security": "tsx scripts/test-security-monitoring.ts"
+    ,"test:security": "tsx scripts/test-security-monitoring.ts",
+    "test:server-clock": "tsx scripts/test-server-clock.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

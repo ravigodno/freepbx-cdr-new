@@ -18,6 +18,7 @@ import dotenv from 'dotenv';
 import net from 'net';
 import { execFile } from 'child_process';
 import { spawn, spawnSync } from 'child_process';
+import { TcpdumpTextStreamParser, type SipCaptureEvent } from './server/sipCaptureParser.js';
 import crypto from 'crypto';
 import http from 'http';
 import https from 'https';
@@ -114,16 +115,18 @@ import {
 } from './server/inboundCallerResolver.js';
 import {
   detectLiveCallDirection,
+  selectLiveInternalCounterparty,
   selectLiveOutgoingDestination,
   stripLiveTechnicalAddresses
 } from './server/liveCallDirection.js';
+import { groupLiveChannelsForOperator, liveChannelGroupHasOperator, preserveLiveCallCandidate } from './server/liveCallGroups.js';
 import {
   buildLiveTransferTargetOptions,
   normalizeLiveTransferDirectoryNumber,
   type LiveTransferTargetType
 } from './server/liveTransferSearch.js';
 import { isExternalDirectoryTransferAllowed } from './server/liveTransferSettings.js';
-import { buildLiveCallBannerDisplay } from './src/utils/liveCallBanner.js';
+import { buildLiveCallBannerDisplay, rankLiveCallBanners } from './src/utils/liveCallBanner.js';
 import {
   buildCallRouteSummaryFromLivePayload,
   buildCallRouteSummaryFromTimeline,
@@ -2175,7 +2178,12 @@ const isIncoming = (c: any): boolean => {
 // На этой АТС в CDR src может быть не внутренний номер, а outbound_cnum/транк,
 // поэтому внутреннего оператора берём из src, cnum или channel.
 const isOutgoing = (c: any): boolean => {
-  return Boolean(getCallerInternalExt(c)) && isExternalNumber(c.dst) && !isIncoming(c);
+  if (typeof c?.registryOutboundEvidence === 'boolean') {
+    return c.registryOutboundEvidence && !isIncoming(c);
+  }
+  const directInternalChannel = getChannelInternalExt(c?.channel);
+  const directInternalContext = String(c?.dcontext || '').toLowerCase().startsWith('from-internal');
+  return Boolean(directInternalChannel) && directInternalContext && isExternalNumber(c.dst) && !isIncoming(c);
 };
 
 // Внутренние = внутренний оператор -> внутренний номер.
@@ -7614,6 +7622,17 @@ app.use((req, res, next) => {
 
 app.use(express.json({ limit: '25mb' }));
 
+app.get('/api/system/time', (_req, res) => {
+  const now = new Date();
+  res.json({
+    success: true,
+    serverTime: now.toISOString(),
+    epochMs: now.getTime(),
+    timeZone: process.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+    utcOffsetMinutes: -now.getTimezoneOffset()
+  });
+});
+
 registerPBXPulsSqlStatusRoutes(app, requireAuth);
 
 app.get('/api/pbxpuls/monitoring-storage-mode', requireAuth(['su', 'admin']), async (_req, res) => {
@@ -12595,6 +12614,9 @@ interface LiveCallBanner {
   destinationLabel?: string;
   followMeExternalTargets?: string[];
   rejectedCandidates?: Array<{ value: string; reason: string }>;
+  connected?: boolean;
+  ringing?: boolean;
+  calls?: LiveCallBanner[];
 }
 
 type AmiBlock = Record<string, string>;
@@ -13121,27 +13143,8 @@ function buildLiveCallBannerFromAmiChannels(channels: AmiBlock[], operatorExt: s
     grouped.get(key)!.push(ch);
   });
 
-  const groupHasOperator = (group: AmiBlock[]) => group.some(ch => {
-    const channel = String(ch.Channel || '');
-    const appData = String(ch.ApplicationData || '');
-    const caller = onlyDigits(ch.CallerIDNum);
-    const connected = onlyDigits(ch.ConnectedLineNum);
-    const exten = onlyDigits(ch.Exten);
-    const endpoint = getLiveChannelEndpointExt(channel);
-
-    return (
-      endpoint === ext ||
-      appData.includes(`SIP/${ext}`) ||
-      appData.includes(`PJSIP/${ext}`) ||
-      appData.includes(`Local/${ext}@`) ||
-      caller === ext ||
-      connected === ext ||
-      exten === ext
-    );
-  });
-
   for (const group of grouped.values()) {
-    if (!groupHasOperator(group)) continue;
+    if (!liveChannelGroupHasOperator(group, ext)) continue;
 
     const directionResolution = detectLiveCallDirection(group, ext);
     const hasInboundSignal = directionResolution.direction === 'incoming';
@@ -13194,7 +13197,7 @@ function buildLiveCallBannerFromAmiChannels(channels: AmiBlock[], operatorExt: s
     } else if (direction === 'outgoing') {
       number = selectLiveOutgoingDestination(directionResolution, externalCandidates);
     } else {
-      number = directionResolution.destinationNumber ||
+      number = selectLiveInternalCounterparty(directionResolution, ext) ||
         internalCandidates.find(num => num !== directionResolution.internalCaller) ||
         group.map(ch => onlyDigits(ch.ConnectedLineNum)).find(num => isInternalExt(num) && num !== ext) ||
         group.map(ch => onlyDigits(ch.Exten)).find(num => isInternalExt(num) && num !== ext) ||
@@ -13203,6 +13206,15 @@ function buildLiveCallBannerFromAmiChannels(channels: AmiBlock[], operatorExt: s
 
     const first = group[0];
     const durationSec = Math.max(...group.map(ch => liveDurationToSeconds(ch.Duration)), 0);
+    const connected = group.some(ch => {
+      if (getLiveChannelEndpointExt(ch.Channel) !== ext) return false;
+      const state = String(ch.ChannelStateDesc || '').toLowerCase();
+      return state === 'up' && Boolean(String(ch.BridgeId || ch.BridgedChannel || '').trim());
+    });
+    const ringing = !connected && group.some(ch =>
+      getLiveChannelEndpointExt(ch.Channel) === ext
+      && /ring/.test(String(ch.ChannelStateDesc || '').toLowerCase())
+    );
     const followMeExternalTargets = Array.from(new Set(group
       .filter(ch => /FMPR-/i.test(String(ch.Channel || '')) || /FMPR-/i.test(String(ch.ApplicationData || '')))
       .flatMap(ch => getLiveAppDataNumberCandidates(ch.ApplicationData))
@@ -13250,12 +13262,42 @@ function buildLiveCallBannerFromAmiChannels(channels: AmiBlock[], operatorExt: s
       linkedid: first?.Linkedid || first?.Uniqueid || '',
       durationSec,
       durationText: liveFormatSeconds(durationSec),
-      startedAt: new Date().toLocaleTimeString('ru-RU', { hour12: false })
+      startedAt: new Date().toLocaleTimeString('ru-RU', { hour12: false }),
+      connected,
+      ringing
     };
     return { ...baseBanner, ...mapRouteSummaryToLivePopup(routeSummary, baseBanner) };
   }
 
   return { active: false };
+}
+
+async function buildLiveCallBannerPayloads(
+  channels: AmiBlock[],
+  operatorExt: string,
+  directory: any[],
+  settings: AppSettings,
+  phoneMeetings: any[] = []
+): Promise<LiveCallBanner[]> {
+  const ext = onlyDigits(operatorExt);
+  if (!ext) return [];
+  const candidates: LiveCallBanner[] = [];
+  for (const group of groupLiveChannelsForOperator(channels, ext)) {
+    const rawBanner = buildLiveCallBannerFromAmiChannels(group, ext, directory, settings);
+    if (!rawBanner.active) continue;
+    let enrichedBanner: LiveCallBanner | null = null;
+    try {
+      enrichedBanner = await buildLiveCallBannerPayload(group, ext, directory, settings, phoneMeetings);
+    } catch (error: any) {
+      console.warn('[LIVE_POPUP] enrichment failed, preserving AMI candidate', {
+        linkedid: rawBanner.linkedid,
+        message: String(error?.message || error || 'unknown error').slice(0, 200)
+      });
+    }
+    const banner = preserveLiveCallCandidate(rawBanner, enrichedBanner);
+    if (banner.active && !candidates.some(item => item.linkedid === banner.linkedid)) candidates.push(banner);
+  }
+  return rankLiveCallBanners(candidates);
 }
 
 const liveCelEvidenceCache = new Map<string, { expiresAt: number; rows: any[] }>();
@@ -13486,22 +13528,16 @@ app.get('/api/live/call-banner', requireAuth(), async (req, res) => {
       res.json(banner);
       return;
     }
-    if (banner.phoneMeeting !== true) {
-      const directoryRuntime = await getLiveDirectoryRuntimeSnapshot(localDb, req);
-      const contact = resolveLiveContact(banner.displayNumber || banner.number || '', directoryRuntime.contacts, localDb.settings);
-      banner = {
-        ...banner,
-        displayName: contact.name || banner.displayName,
-        contactType: contact.type,
-        contactComment: contact.comment,
-        isSpam: contact.isSpam,
-        isBlacklisted: contact.isBlacklisted,
-        company: contact.company,
-        position: contact.position
-      };
-      banner = { ...banner, ...buildLiveCallBannerDisplay(banner as Record<string, any>) };
-    }
-    res.json(banner);
+    const directoryRuntime = await getLiveDirectoryRuntimeSnapshot(localDb, req);
+    const calls = await buildLiveCallBannerPayloads(
+      channels,
+      effectiveOperatorExt,
+      directoryRuntime.contacts,
+      localDb.settings,
+      localDb.phoneMeetings || []
+    );
+    banner = calls[0] || banner;
+    res.json({ ...banner, calls });
   } catch (error: any) {
     res.json({ active: false, error: error.message });
   }
@@ -15081,6 +15117,11 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
       }
 
       const did = routeLeg.did || sorted.find(c => c.did)?.did || "";
+      const registryOutboundEvidence = sorted.some(c =>
+        String(c.dcontext || '').toLowerCase().startsWith('from-internal')
+        && isExternalNumber(c.dst)
+        && Boolean(getChannelInternalExt(c.channel))
+      );
       return {
         ...routeLeg,
         uniqueid: routeLeg.linkedid || routeLeg.uniqueid,
@@ -15093,9 +15134,8 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
         inboundDid: String(did || '').split('→')[0].trim(),
         trunkNumber: String(did || '').split('→')[0].trim(),
         routeDestination: queueLeg?.dst || groupLeg?.dst || routeLeg.dst || '',
-        dst: (String(routeLeg.dcontext || "").toLowerCase() === "from-internal" && isExternalNumber(routeLeg.dst))
-          ? routeLeg.dst
-          : answeredExts.length
+        registryOutboundEvidence,
+        dst: answeredExts.length
             ? answeredExts.join(', ')
             : missedExts.length
               ? missedExts.join(', ')
@@ -15498,6 +15538,11 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
       }
 
       const did = routeLeg.did || sorted.find(c => c.did)?.did || "";
+      const registryOutboundEvidence = sorted.some(c =>
+        String(c.dcontext || '').toLowerCase().startsWith('from-internal')
+        && isExternalNumber(c.dst)
+        && Boolean(getChannelInternalExt(c.channel))
+      );
       return {
         ...routeLeg,
         uniqueid: routeLeg.linkedid || routeLeg.uniqueid,
@@ -15510,9 +15555,8 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
         inboundDid: String(did || '').split('→')[0].trim(),
         trunkNumber: String(did || '').split('→')[0].trim(),
         routeDestination: queueLeg?.dst || groupLeg?.dst || routeLeg.dst || '',
-        dst: (String(routeLeg.dcontext || "").toLowerCase() === "from-internal" && isExternalNumber(routeLeg.dst))
-          ? routeLeg.dst
-          : answeredExts.length
+        registryOutboundEvidence,
+        dst: answeredExts.length
             ? answeredExts.join(', ')
             : missedExts.length
               ? missedExts.join(', ')
@@ -15823,6 +15867,11 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
       }
 
       const did = routeLeg.did || sorted.find(c => c.did)?.did || "";
+      const registryOutboundEvidence = sorted.some(c =>
+        String(c.dcontext || '').toLowerCase().startsWith('from-internal')
+        && isExternalNumber(c.dst)
+        && Boolean(getChannelInternalExt(c.channel))
+      );
       return {
         ...routeLeg,
         uniqueid: routeLeg.linkedid || routeLeg.uniqueid,
@@ -15835,6 +15884,7 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
         inboundDid: String(did || '').split('→')[0].trim(),
         trunkNumber: String(did || '').split('→')[0].trim(),
         routeDestination: queueLeg?.dst || groupLeg?.dst || routeLeg.dst || '',
+        registryOutboundEvidence,
         dst: (String(routeLeg.dcontext || "").toLowerCase() === "from-internal" && isExternalNumber(routeLeg.dst))
           ? routeLeg.dst
           : answeredExts.length
@@ -16446,6 +16496,28 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
     };
 
     const heatmap = buildCallHeatmap24(reportFilteredCalls, lostByUniqueId);
+    const inboundCallDetails = reportFilteredCalls
+      .filter(c => isIncoming(c))
+      .sort((a, b) => new Date(b.calldate).getTime() - new Date(a.calldate).getTime())
+      .map(c => {
+        const responsibleExtension = getResponsibleExtensionForCall(c);
+        const owner = resolveExtensionOwner(ownerMap, responsibleExtension);
+        const answered = String(c.disposition || '').toUpperCase() === 'ANSWERED' && Number(c.billsec || 0) > 0;
+        return {
+          calldate: c.calldate,
+          callerNumber: c.externalCallerNumber || c.src || '',
+          did: c.inboundDid || String(c.did || '').split('→')[0].trim(),
+          destination: c.routeDestination || c.dst || '',
+          internalExtension: responsibleExtension || null,
+          user: owner?.employeeName || getDirectoryNameByExtension(directory, responsibleExtension) || null,
+          result: answered ? 'answered' : String(c.disposition || 'NO ANSWER').toLowerCase().replace(/\s+/g, '_'),
+          waitSeconds: calculateWaitSeconds(c),
+          talkSeconds: answered ? Number(c.billsec || 0) : 0,
+          recordingAvailable: Boolean(c.recordingfile),
+          recordingFile: c.recordingfile || null,
+          technicalId: c.linkedid || c.uniqueid
+        };
+      });
     const clientAnalytics = buildClientAnalytics(calls, reportFilteredCalls, {
       directory,
       settings: localDb.settings,
@@ -16473,6 +16545,7 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
       },
       businessCounters,
       lostCallDetails: reportLostItems.slice(0, 200),
+      inboundCallDetails,
       slaSummary,
       departmentSummary,
       employeeSummary,
@@ -17583,14 +17656,20 @@ let tcpdumpProcess: any = null;
 let tcpdumpInspectorProcess: any = null;
 let tcpdumpFilePath = '';
 let tcpdumpStartedAt = '';
+let tcpdumpStoppedAt: string | null = null;
 let tcpdumpSessionId = '';
 let tcpdumpEvents: SipCaptureEvent[] = [];
+let tcpdumpRtpStreams = new Map<string, any>();
+let tcpdumpCaptureStatus: 'stopped' | 'starting' | 'running' | 'failed' = 'stopped';
+let tcpdumpCaptureError: string | null = null;
+let tcpdumpStopReason: string | null = null;
 const TCPDUMP_EVENT_LIMIT = 2000;
 const tcpdumpDiagnostics: any = {
   capturePacketsRead: 0, captureBytesRead: 0, sipCandidatesDetected: 0, sipMessagesParsed: 0,
   sipParseErrors: 0, sipEventsStored: 0, sipEventsReturnedByApi: 0, lastPacketAt: null,
   lastSipPacketAt: null, lastParseError: null, activeInterface: null, activeCaptureFilter: null,
-  tcpdumpPid: null, tcpdumpRunning: false, tcpdumpExitCode: null, tcpdumpStderrTail: '', tlsTrafficDetected: false
+  tcpdumpPid: null, inspectorPid: null, tcpdumpRunning: false, tcpdumpExitCode: null, tcpdumpStderrTail: '', tlsTrafficDetected: false,
+  rtpPacketsDetected: 0, lastRtpPacketAt: null
 };
 
 function appendTcpdumpStderr(value: string) {
@@ -17599,12 +17678,18 @@ function appendTcpdumpStderr(value: string) {
 }
 
 function tcpdumpStatusPayload() {
+  const running = !!tcpdumpProcess && !!tcpdumpInspectorProcess && tcpdumpCaptureStatus === 'running';
   return {
-    success: true, running: !!tcpdumpProcess && !!tcpdumpInspectorProcess, file: tcpdumpFilePath,
-    startedAt: tcpdumpStartedAt, sessionId: tcpdumpSessionId, totalEvents: tcpdumpEvents.length,
+    success: true, running, status: tcpdumpCaptureStatus, file: tcpdumpFilePath,
+    startedAt: tcpdumpStartedAt || null, stoppedAt: tcpdumpStoppedAt, sessionId: tcpdumpSessionId || null,
+    interface: tcpdumpDiagnostics.activeInterface, filter: tcpdumpDiagnostics.activeCaptureFilter,
+    tcpdumpPid: tcpdumpDiagnostics.tcpdumpPid, packetsRead: tcpdumpDiagnostics.capturePacketsRead,
+    sipMessagesParsed: tcpdumpDiagnostics.sipMessagesParsed, rtpPacketsDetected: tcpdumpDiagnostics.rtpPacketsDetected,
+    error: tcpdumpCaptureError, stopReason: tcpdumpStopReason, totalEvents: tcpdumpEvents.length,
+    totalRtpStreams: tcpdumpRtpStreams.size,
     lastEventAt: tcpdumpEvents.at(-1)?.capturedAt || null,
     trafficDetectedButNoSipParsed: tcpdumpDiagnostics.capturePacketsRead > 0 && tcpdumpDiagnostics.sipMessagesParsed === 0,
-    diagnostics: { ...tcpdumpDiagnostics, tcpdumpRunning: !!tcpdumpProcess && !!tcpdumpInspectorProcess }
+    diagnostics: { ...tcpdumpDiagnostics, tcpdumpRunning: running }
   };
 }
 
@@ -17629,26 +17714,28 @@ app.post('/api/diagnostics/tcpdump/start', requireAuth(), async (req, res) => {
 
     if (tcpdumpProcess || tcpdumpInspectorProcess) {
       return res.json({
-        success: true,
-        running: true,
+        ...tcpdumpStatusPayload(),
         message: 'tcpdump уже запущен',
-        file: tcpdumpFilePath
       });
     }
 
     const mode = String(req.query.mode || 'sip');
     const iface = String(req.query.iface || 'any');
     const sipPorts = String(req.query.ports || '5060,5061,5160').split(',').map(Number).filter(port => Number.isInteger(port) && port > 0 && port <= 65535);
+    const rtpMatch = String(req.query.rtpRange || '10000-20000').match(/^(\d+)-(\d+)$/);
+    const rtpStart = Math.max(1, Number(rtpMatch?.[1] || 10000));
+    const rtpEnd = Math.min(65535, Number(rtpMatch?.[2] || 20000));
+    if (!sipPorts.length || rtpStart > rtpEnd) return res.status(400).json({ success: false, status: 'failed', error: 'Некорректные SIP/RTP порты' });
 
     const sipFilter = `(udp or tcp) and (${sipPorts.map(port => `port ${port}`).join(' or ')})`;
     let filter = sipFilter;
 
     if (mode === 'rtp') {
-      filter = 'udp portrange 20000-40000';
+      filter = `udp portrange ${rtpStart}-${rtpEnd}`;
     }
 
     if (mode === 'siprtp') {
-      filter = `(${sipFilter} or udp portrange 20000-40000)`;
+      filter = `(${sipFilter} or udp portrange ${rtpStart}-${rtpEnd})`;
     }
 
     const customTcpdumpFilter = String(req.query.filter || '').trim();
@@ -17663,13 +17750,19 @@ app.post('/api/diagnostics/tcpdump/start', requireAuth(), async (req, res) => {
     const filename = 'pbxpuls-' + mode + '-' + stamp + '.pcap';
     tcpdumpFilePath = path.join(dir, filename);
     tcpdumpStartedAt = new Date().toISOString();
+    tcpdumpStoppedAt = null;
     tcpdumpSessionId = crypto.randomUUID();
     tcpdumpEvents = [];
+    tcpdumpRtpStreams = new Map();
+    tcpdumpCaptureStatus = 'starting';
+    tcpdumpCaptureError = null;
+    tcpdumpStopReason = null;
     Object.assign(tcpdumpDiagnostics, {
       capturePacketsRead: 0, captureBytesRead: 0, sipCandidatesDetected: 0, sipMessagesParsed: 0,
       sipParseErrors: 0, sipEventsStored: 0, sipEventsReturnedByApi: 0, lastPacketAt: null,
       lastSipPacketAt: null, lastParseError: null, activeInterface: iface, activeCaptureFilter: filter,
-      tcpdumpPid: null, tcpdumpRunning: false, tcpdumpExitCode: null, tcpdumpStderrTail: '', tlsTrafficDetected: false
+      tcpdumpPid: null, inspectorPid: null, tcpdumpRunning: false, tcpdumpExitCode: null, tcpdumpStderrTail: '', tlsTrafficDetected: false,
+      rtpPacketsDetected: 0, lastRtpPacketAt: null
     });
 
     const args = ['-i', iface, '-nn', '-s', '0', '-U', '-w', tcpdumpFilePath, filter];
@@ -17677,6 +17770,10 @@ app.post('/api/diagnostics/tcpdump/start', requireAuth(), async (req, res) => {
 
     tcpdumpProcess = spawn('tcpdump', args, {
       stdio: ['ignore', 'ignore', 'pipe']
+    });
+    tcpdumpDiagnostics.tcpdumpPid = tcpdumpProcess.pid || null;
+    tcpdumpProcess.on('error', (error: any) => {
+      tcpdumpCaptureStatus = 'failed'; tcpdumpCaptureError = String(error?.message || error).slice(0, 300);
     });
 
     let errText = '';
@@ -17689,6 +17786,8 @@ app.post('/api/diagnostics/tcpdump/start', requireAuth(), async (req, res) => {
     tcpdumpProcess.on('exit', (code: number | null) => {
       tcpdumpDiagnostics.tcpdumpExitCode = code;
       tcpdumpProcess = null;
+      tcpdumpStoppedAt = new Date().toISOString();
+      if (code && tcpdumpCaptureStatus !== 'stopped') { tcpdumpCaptureStatus = 'failed'; tcpdumpCaptureError = `tcpdump завершился с кодом ${code}`; }
       if (code && tcpdumpInspectorProcess) tcpdumpInspectorProcess.kill('SIGINT');
     });
 
@@ -17696,10 +17795,27 @@ app.post('/api/diagnostics/tcpdump/start', requireAuth(), async (req, res) => {
       tcpdumpDiagnostics.capturePacketsRead += 1;
       tcpdumpDiagnostics.captureBytesRead += bytes;
       tcpdumpDiagnostics.lastPacketAt = new Date().toISOString();
+      if (tcpdumpDiagnostics.capturePacketsRead === 1) console.info(`[TCPDUMP] first packet session=${tcpdumpSessionId} at=${tcpdumpDiagnostics.lastPacketAt}`);
       if (result.tls && !result.candidate) tcpdumpDiagnostics.tlsTrafficDetected = true;
       if (result.candidate) {
         tcpdumpDiagnostics.sipCandidatesDetected += 1;
         tcpdumpDiagnostics.lastSipPacketAt = new Date().toISOString();
+        if (tcpdumpDiagnostics.sipCandidatesDetected === 1) console.info(`[TCPDUMP] first SIP session=${tcpdumpSessionId} at=${tcpdumpDiagnostics.lastSipPacketAt}`);
+      }
+      const packet = result.packet;
+      if (packet?.transport === 'udp' && ((packet.srcPort >= rtpStart && packet.srcPort <= rtpEnd) || (packet.dstPort >= rtpStart && packet.dstPort <= rtpEnd))) {
+        tcpdumpDiagnostics.rtpPacketsDetected += 1;
+        tcpdumpDiagnostics.lastRtpPacketAt = new Date().toISOString();
+        if (tcpdumpDiagnostics.rtpPacketsDetected === 1) console.info(`[TCPDUMP] first RTP session=${tcpdumpSessionId} at=${tcpdumpDiagnostics.lastRtpPacketAt}`);
+        const key = `${packet.srcIp}:${packet.srcPort}->${packet.dstIp}:${packet.dstPort}`;
+        const stream = tcpdumpRtpStreams.get(key) || {
+          id: crypto.createHash('sha1').update(`${tcpdumpSessionId}|${key}`).digest('hex'), src: packet.srcIp, dst: packet.dstIp,
+          srcPort: packet.srcPort, dstPort: packet.dstPort, port: packet.srcPort, codec: 'RTP/UDP',
+          stream: `RTP ${packet.srcPort} → ${packet.dstPort}`, packetCount: 0, bytes: 0,
+          packetLoss: null, jitter: null, rtt: null, mos: null, status: 'Observed', firstPacketAt: new Date().toISOString(), lastPacketAt: null
+        };
+        stream.packetCount += 1; stream.bytes += packet.length; stream.lastPacketAt = new Date().toISOString();
+        tcpdumpRtpStreams.set(key, stream);
       }
       if (result.error) {
         tcpdumpDiagnostics.sipParseErrors += 1;
@@ -17714,28 +17830,35 @@ app.post('/api/diagnostics/tcpdump/start', requireAuth(), async (req, res) => {
     }, new Set(sipPorts.includes(5061) ? [5061] : []));
 
     tcpdumpInspectorProcess = spawn('tcpdump', inspectorArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
-    tcpdumpDiagnostics.tcpdumpPid = tcpdumpInspectorProcess.pid || tcpdumpProcess.pid || null;
+    tcpdumpDiagnostics.inspectorPid = tcpdumpInspectorProcess.pid || null;
     tcpdumpDiagnostics.tcpdumpRunning = true;
+    tcpdumpCaptureStatus = 'running';
+    console.info(`[TCPDUMP] start session=${tcpdumpSessionId} interface=${iface} pid=${tcpdumpDiagnostics.tcpdumpPid} inspectorPid=${tcpdumpDiagnostics.inspectorPid} filter=${filter}`);
     tcpdumpInspectorProcess.stdout.on('data', (d: Buffer) => parser.push(d.toString('latin1')));
     tcpdumpInspectorProcess.stderr.on('data', (d: Buffer) => appendTcpdumpStderr(d.toString()));
+    tcpdumpInspectorProcess.on('error', (error: any) => {
+      tcpdumpCaptureStatus = 'failed'; tcpdumpCaptureError = String(error?.message || error).slice(0, 300);
+    });
     tcpdumpInspectorProcess.on('exit', (code: number | null) => {
       parser.flush();
       tcpdumpDiagnostics.tcpdumpExitCode = code;
       tcpdumpDiagnostics.tcpdumpRunning = false;
       tcpdumpInspectorProcess = null;
+      tcpdumpStoppedAt = new Date().toISOString();
+      if (tcpdumpCaptureStatus !== 'stopped') {
+        tcpdumpCaptureStatus = 'failed';
+        tcpdumpCaptureError = `Live-инспектор tcpdump завершился с кодом ${code ?? 'unknown'}`;
+        tcpdumpStopReason = 'inspector_exit';
+        tcpdumpProcess?.kill('SIGINT');
+      }
     });
 
     setTimeout(() => {
       res.json({
-        success: true,
-        running: !!tcpdumpProcess && !!tcpdumpInspectorProcess,
+        ...tcpdumpStatusPayload(),
         mode,
-        iface,
-        filter,
-        sessionId: tcpdumpSessionId,
         captureCommand: ['tcpdump', ...args].join(' '),
         inspectorCommand: ['tcpdump', ...inspectorArgs].join(' '),
-        file: tcpdumpFilePath,
         stderr: errText.trim()
       });
     }, 700);
@@ -17764,15 +17887,15 @@ app.post('/api/diagnostics/tcpdump/stop', requireAuth(), async (req, res) => {
 
     tcpdumpProcess?.kill('SIGINT');
     tcpdumpInspectorProcess?.kill('SIGINT');
+    tcpdumpCaptureStatus = 'stopped';
+    tcpdumpStopReason = String(req.query.reason || 'user');
+    tcpdumpStoppedAt = new Date().toISOString();
+    console.info(`[TCPDUMP] stop session=${tcpdumpSessionId} reason=${tcpdumpStopReason}`);
 
     const stoppedFile = tcpdumpFilePath;
 
     setTimeout(() => {
-      res.json({
-        success: true,
-        running: false,
-        file: stoppedFile
-      });
+      res.json({ ...tcpdumpStatusPayload(), file: stoppedFile });
     }, 700);
   } catch (e: any) {
     res.status(500).json({ success: false, error: e.message || String(e) });
@@ -17870,10 +17993,18 @@ app.get('/api/diagnostics/tcpdump/events', requireAuth(), async (req, res) => {
     res.status(403).json({ error: 'Нет прав на TCPDUMP' });
     return;
   }
+  if (req.query.sessionId && String(req.query.sessionId) !== tcpdumpSessionId) return res.status(409).json({ success: false, error: 'Capture session не найдена', sessionId: tcpdumpSessionId || null });
   const limit = Math.min(Math.max(Number(req.query.limit) || 1000, 1), TCPDUMP_EVENT_LIMIT);
   const events = tcpdumpEvents.slice(-limit);
   tcpdumpDiagnostics.sipEventsReturnedByApi += events.length;
   res.json({ ...tcpdumpStatusPayload(), events, returned: events.length });
+});
+
+app.get('/api/diagnostics/tcpdump/rtp-sessions', requireAuth(), async (req, res) => {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_tcpdump !== true) return res.status(403).json({ error: 'Нет прав на TCPDUMP' });
+  if (req.query.sessionId && String(req.query.sessionId) !== tcpdumpSessionId) return res.status(409).json({ success: false, error: 'Capture session не найдена', sessionId: tcpdumpSessionId || null });
+  res.json({ ...tcpdumpStatusPayload(), streams: [...tcpdumpRtpStreams.values()], returned: tcpdumpRtpStreams.size });
 });
 
 
@@ -18153,6 +18284,211 @@ const DB_EXPLORER_PBXPULS_TABLES = [
   'roles', 'role_permissions', 'schema_migrations', 'system_events', 'tools', 'users', 'user_roles'
 ];
 const DB_EXPLORER_PBXPULS_BLOCKED_TABLES = ['settings', 'monitor_settings'];
+
+async function loadDbExplorerLiveSnapshot() {
+  const settings = getDbExplorerSettings();
+  const errors: string[] = [];
+  const freepbxQuery = async (sql: string, params: any[] = []) => {
+    try {
+      return await queryFreePBXCDR(settings, false, sql, params);
+    } catch (error: any) {
+      errors.push(error?.message || String(error));
+      return [];
+    }
+  };
+  const pbxpulsQuery = async (sql: string, params: any[] = []) => {
+    try {
+      return await queryPBXPulsDb(sql, params);
+    } catch (error: any) {
+      errors.push(error?.message || String(error));
+      return [];
+    }
+  };
+
+  const startedAt = Date.now();
+  const [freepbxTableRows, pbxpulsTableRows, systemRows, extensions, sipDevices, pjsipDevices, queues, trunks, inboundRoutes, outboundRoutes, summaryRows, byHour, byOperator, byTrunk, queueProblems, disabledTrunks, auditRows] = await Promise.all([
+    freepbxQuery(`SELECT table_info.TABLE_SCHEMA AS dbName, table_info.TABLE_NAME AS name, table_info.ENGINE AS engine,
+      COALESCE(table_info.TABLE_ROWS, 0) AS rowsCount, COALESCE(table_info.DATA_LENGTH, 0) AS dataBytes,
+      COALESCE(table_info.INDEX_LENGTH, 0) AS indexBytes,
+      (SELECT COUNT(DISTINCT statistic.INDEX_NAME) FROM information_schema.STATISTICS statistic
+        WHERE statistic.TABLE_SCHEMA=table_info.TABLE_SCHEMA
+          AND statistic.TABLE_NAME=table_info.TABLE_NAME) AS indexCount
+      FROM information_schema.TABLES table_info WHERE table_info.TABLE_SCHEMA IN ('asterisk', 'asteriskcdrdb')
+      ORDER BY table_info.TABLE_SCHEMA, table_info.TABLE_NAME`),
+    pbxpulsQuery(`SELECT DATABASE() AS dbName, table_info.TABLE_NAME AS name, table_info.ENGINE AS engine,
+      COALESCE(table_info.TABLE_ROWS, 0) AS rowsCount, COALESCE(table_info.DATA_LENGTH, 0) AS dataBytes,
+      COALESCE(table_info.INDEX_LENGTH, 0) AS indexBytes,
+      (SELECT COUNT(DISTINCT statistic.INDEX_NAME) FROM information_schema.STATISTICS statistic
+        WHERE statistic.TABLE_SCHEMA=table_info.TABLE_SCHEMA
+          AND statistic.TABLE_NAME=table_info.TABLE_NAME) AS indexCount
+      FROM information_schema.TABLES table_info WHERE table_info.TABLE_SCHEMA=DATABASE()
+      ORDER BY table_info.TABLE_NAME`),
+    freepbxQuery(`SELECT @@version AS version,
+      (SELECT VARIABLE_VALUE FROM information_schema.GLOBAL_STATUS WHERE VARIABLE_NAME='UPTIME') AS uptimeSeconds,
+      (SELECT VARIABLE_VALUE FROM information_schema.GLOBAL_STATUS WHERE VARIABLE_NAME='THREADS_CONNECTED') AS connections,
+      (SELECT VARIABLE_VALUE FROM information_schema.GLOBAL_STATUS WHERE VARIABLE_NAME='SLOW_QUERIES') AS slowQueries`),
+    freepbxQuery(`SELECT u.extension AS ext, u.name, '' AS dept, COALESCE(d.tech, '') AS tech,
+      COALESCE(d.description, '') AS description, COALESCE(d.dial, '') AS dial,
+      COALESCE(
+        (SELECT MAX(s.data) FROM asterisk.sip s WHERE s.id=u.extension AND s.keyword='context'),
+        (SELECT MAX(p.data) FROM asterisk.pjsip p WHERE p.id=u.extension AND p.keyword='context'), ''
+      ) AS context,
+      CASE WHEN d.id IS NULL THEN 'Без устройства' ELSE 'Настроен' END AS status
+      FROM asterisk.users u LEFT JOIN asterisk.devices d ON d.id = u.extension
+      ORDER BY CAST(u.extension AS UNSIGNED), u.extension LIMIT 1000`),
+    freepbxQuery(`SELECT id AS ext,
+      MAX(CASE WHEN keyword='host' THEN data END) AS host,
+      MAX(CASE WHEN keyword='port' THEN data END) AS port,
+      MAX(CASE WHEN keyword='qualify' THEN data END) AS qualify,
+      MAX(CASE WHEN keyword='type' THEN data END) AS type,
+      MAX(CASE WHEN keyword='context' THEN data END) AS context,
+      COALESCE(MAX(CASE WHEN keyword='permit' THEN data END), MAX(CASE WHEN keyword='deny' THEN data END), '—') AS acl,
+      MAX(CASE WHEN keyword='callerid' THEN data END) AS callerid
+      FROM asterisk.sip GROUP BY id ORDER BY id LIMIT 1000`),
+    freepbxQuery(`SELECT id AS endpoint,
+      MAX(CASE WHEN keyword='transport' THEN data END) AS transport,
+      MAX(CASE WHEN keyword='auth' THEN data END) AS auth,
+      MAX(CASE WHEN keyword='aors' THEN data END) AS aor,
+      MAX(CASE WHEN keyword='callerid' THEN data END) AS callerid,
+      MAX(CASE WHEN keyword='context' THEN data END) AS context
+      FROM asterisk.pjsip GROUP BY id ORDER BY id LIMIT 1000`),
+    freepbxQuery(`SELECT q.extension AS id, q.descr AS name,
+      MAX(CASE WHEN d.keyword='strategy' THEN d.data END) AS strategy,
+      q.maxwait AS timeout,
+      GROUP_CONCAT(CASE WHEN d.keyword='member' THEN d.data END ORDER BY d.id SEPARATOR ', ') AS agents
+      FROM asterisk.queues_config q LEFT JOIN asterisk.queues_details d ON d.id = q.extension
+      GROUP BY q.extension, q.descr, q.maxwait ORDER BY q.extension LIMIT 500`),
+    freepbxQuery(`SELECT trunkid AS id, name, tech, channelid AS host, usercontext AS context, maxchans,
+      CASE WHEN disabled='on' OR disabled='1' THEN 'Отключен' ELSE 'Настроен' END AS status
+      FROM asterisk.trunks ORDER BY trunkid LIMIT 500`),
+    freepbxQuery(`SELECT 'Inbound' AS type, COALESCE(NULLIF(description,''), extension) AS name,
+      CONCAT(COALESCE(cidnum,''), CASE WHEN cidnum <> '' AND extension <> '' THEN ' / ' ELSE '' END, COALESCE(extension,'')) AS pattern,
+      destination, 0 AS priority FROM asterisk.incoming ORDER BY extension LIMIT 500`),
+    freepbxQuery(`SELECT 'Outbound' AS type, r.name, COALESCE(GROUP_CONCAT(DISTINCT p.match_pattern_prefix ORDER BY p.match_pattern_prefix SEPARATOR ', '), '') AS pattern,
+      COALESCE(GROUP_CONCAT(DISTINCT t.trunk_id ORDER BY t.seq SEPARATOR ', '), r.dest, '') AS destination,
+      r.route_id AS priority FROM asterisk.outbound_routes r
+      LEFT JOIN asterisk.outbound_route_patterns p ON p.route_id=r.route_id
+      LEFT JOIN asterisk.outbound_route_trunks t ON t.route_id=r.route_id
+      GROUP BY r.route_id, r.name, r.dest ORDER BY r.route_id LIMIT 500`),
+    freepbxQuery(`SELECT COUNT(DISTINCT COALESCE(NULLIF(linkedid,''), uniqueid)) AS totalCalls,
+      COUNT(DISTINCT CASE WHEN dcontext LIKE 'from-trunk%' OR dcontext LIKE 'from-pstn%' OR channel LIKE '%-in-%' THEN COALESCE(NULLIF(linkedid,''), uniqueid) END) AS incoming,
+      COUNT(DISTINCT CASE WHEN dcontext='from-internal' AND dst REGEXP '^[0-9]{7,}$' THEN COALESCE(NULLIF(linkedid,''), uniqueid) END) AS outgoing,
+      COUNT(DISTINCT CASE WHEN disposition='ANSWERED' THEN COALESCE(NULLIF(linkedid,''), uniqueid) END) AS answered,
+      ROUND(AVG(CASE WHEN disposition='ANSWERED' THEN billsec END)) AS avgBillsec
+      FROM asteriskcdrdb.cdr WHERE calldate >= NOW() - INTERVAL 24 HOUR`),
+    freepbxQuery(`SELECT DATE_FORMAT(calldate,'%H:00') AS hour,
+      COUNT(DISTINCT CASE WHEN dcontext LIKE 'from-trunk%' OR dcontext LIKE 'from-pstn%' OR channel LIKE '%-in-%' THEN COALESCE(NULLIF(linkedid,''), uniqueid) END) AS incoming,
+      COUNT(DISTINCT CASE WHEN dcontext='from-internal' AND dst REGEXP '^[0-9]{7,}$' THEN COALESCE(NULLIF(linkedid,''), uniqueid) END) AS outgoing,
+      COUNT(DISTINCT CASE WHEN disposition IN ('NO ANSWER','BUSY','FAILED') THEN COALESCE(NULLIF(linkedid,''), uniqueid) END) AS missed
+      FROM asteriskcdrdb.cdr WHERE calldate >= NOW() - INTERVAL 24 HOUR GROUP BY DATE_FORMAT(calldate,'%H') ORDER BY hour`),
+    freepbxQuery(`SELECT COALESCE(NULLIF(SUBSTRING_INDEX(SUBSTRING_INDEX(dstchannel,'-',1),'/',-1),''),'—') AS name,
+      COUNT(DISTINCT COALESCE(NULLIF(linkedid,''), uniqueid)) AS calls
+      FROM asteriskcdrdb.cdr WHERE calldate >= NOW() - INTERVAL 24 HOUR AND disposition='ANSWERED' AND dstchannel <> ''
+      GROUP BY name ORDER BY calls DESC LIMIT 15`),
+    freepbxQuery(`SELECT COALESCE(NULLIF(SUBSTRING_INDEX(SUBSTRING_INDEX(channel,'-',1),'/',-1),''),'—') AS name,
+      COUNT(DISTINCT COALESCE(NULLIF(linkedid,''), uniqueid)) AS value
+      FROM asteriskcdrdb.cdr WHERE calldate >= NOW() - INTERVAL 24 HOUR AND channel LIKE '%-in-%'
+      GROUP BY name ORDER BY value DESC LIMIT 12`),
+    freepbxQuery(`SELECT q.extension, q.descr FROM asterisk.queues_config q
+      LEFT JOIN asterisk.queues_details d ON d.id=q.extension AND d.keyword='member'
+      GROUP BY q.extension, q.descr HAVING COUNT(d.data)=0`),
+    freepbxQuery(`SELECT trunkid, name FROM asterisk.trunks WHERE disabled='on' OR disabled='1'`),
+    pbxpulsQuery(`SELECT created_at AS date, COALESCE(actor_label,'system') AS author,
+      CONCAT(entity_type, ' ', COALESCE(entity_id,'')) AS object, action,
+      '' AS previous, COALESCE(details,'') AS current FROM audit_log ORDER BY created_at DESC LIMIT 50`)
+  ]);
+
+  const tableRows = [...freepbxTableRows, ...pbxpulsTableRows];
+  const queueLogAvailable = tableRows.some((row: any) => row.dbName === 'asteriskcdrdb' && row.name === 'queue_log');
+  const queueMetrics = queueLogAvailable
+    ? await freepbxQuery(`SELECT queuename AS id,
+        SUM(CASE WHEN event='CONNECT' THEN 1 ELSE 0 END) AS connected24h,
+        SUM(CASE WHEN event IN ('ABANDON','EXITWITHTIMEOUT') THEN 1 ELSE 0 END) AS abandoned24h
+        FROM asteriskcdrdb.queue_log WHERE time >= NOW() - INTERVAL 24 HOUR GROUP BY queuename`)
+    : [];
+  const allowedTables = new Set([...DB_EXPLORER_ALLOWED_TABLES, ...DB_EXPLORER_PBXPULS_TABLES, ...DB_EXPLORER_PBXPULS_BLOCKED_TABLES]);
+  const tables = tableRows.filter((row: any) => allowedTables.has(String(row.name)));
+  const databaseDescriptions: Record<string, string> = {
+    asterisk: 'Конфигурация FreePBX, экстеншены и параметры',
+    asteriskcdrdb: 'Детальная история и события звонков CDR/CEL',
+    pbxpuls: 'Рабочие данные, справочник и мониторинг PBXPuls'
+  };
+  const databases = ['asterisk', 'asteriskcdrdb', 'pbxpuls'].map(dbName => {
+    const dbTables = tableRows.filter((row: any) => row.dbName === dbName);
+    const dataBytes = dbTables.reduce((sum: number, row: any) => sum + Number(row.dataBytes || 0), 0);
+    return {
+      name: dbName,
+      size: `${(dataBytes / 1024 / 1024).toFixed(2)} MB`,
+      tables: dbTables.length,
+      rows: dbTables.reduce((sum: number, row: any) => sum + Number(row.rowsCount || 0), 0),
+      indexes: dbTables.reduce((sum: number, row: any) => sum + Number(row.indexCount || 0), 0),
+      desc: databaseDescriptions[dbName]
+    };
+  });
+  const tableMap = (dbName: string) => tables.filter((row: any) => row.dbName === dbName).map((row: any) => ({
+    name: row.name, rows: Number(row.rowsCount || 0), engine: row.engine || '—', desc: `${row.engine || 'SQL'}, ${(Number(row.dataBytes || 0) / 1024 / 1024).toFixed(2)} MB`
+  }));
+  const system = systemRows[0] || {};
+  const uptimeSeconds = Number(system.uptimeSeconds || 0);
+  const analyticsSummary = summaryRows[0] || {};
+  const queueMetricsById = new Map(queueMetrics.map((row: any) => [String(row.id), row]));
+  const anomalies = [
+    ...queueProblems.map((row: any) => ({ type: 'danger', title: 'Очередь без операторов', detail: `Очередь ${row.extension}${row.descr ? ` (${row.descr})` : ''} не содержит участников.`, impact: 'Вызовы могут завершаться без ответа.', rec: 'Проверьте участников очереди в FreePBX.' })),
+    ...disabledTrunks.map((row: any) => ({ type: 'warning', title: 'Транк отключен', detail: `Транк ${row.name || row.trunkid} отключен в конфигурации FreePBX.`, impact: 'Маршруты через этот транк недоступны.', rec: 'Проверьте, ожидаемо ли отключение транка.' })),
+    ...errors.map(message => ({ type: 'warning', title: 'Источник данных недоступен', detail: message.slice(0, 240), impact: 'Часть live-метрик не загружена.', rec: 'Проверьте подключение и права read-only пользователя.' }))
+  ];
+
+  return {
+    generatedAt: new Date().toISOString(), errors,
+    overview: {
+      databases,
+      tables: { asterisk: tableMap('asterisk'), asteriskcdrdb: tableMap('asteriskcdrdb'), pbxpuls: tableMap('pbxpuls') },
+      system: {
+        version: system.version || '—', uptime: uptimeSeconds ? `${Math.floor(uptimeSeconds / 86400)} дн. ${Math.floor((uptimeSeconds % 86400) / 3600)} ч.` : '—',
+        threads: Number(system.connections || 0), slowQueries: Number(system.slowQueries || 0), connections: Number(system.connections || 0),
+        responseTime: `${Date.now() - startedAt} ms`, totalSize: databases.reduce((sum, db) => sum + Number.parseFloat(db.size), 0).toFixed(2) + ' MB', lastBackup: 'Нет данных'
+      }
+    },
+    telephony: {
+      extensions,
+      sipDevices: sipDevices.map((row: any) => ({ ...row, status: row.host === 'dynamic' ? 'Dynamic' : row.host || 'Настроен', ip: row.host || '—', latency: row.qualify || '—' })),
+      pjsipDevices,
+      queues: queues.map((row: any) => {
+        const metrics: any = queueMetricsById.get(String(row.id)) || {};
+        return {
+          ...row,
+          agents: row.agents || 'Нет операторов',
+          connected24h: queueLogAvailable ? Number(metrics.connected24h || 0) : 'Нет данных',
+          abandoned24h: queueLogAvailable ? Number(metrics.abandoned24h || 0) : 'Нет данных'
+        };
+      }),
+      trunks: trunks.map((row: any) => ({ ...row, channels: row.maxchans || '—' })),
+      routes: [...inboundRoutes, ...outboundRoutes]
+    },
+    analytics: {
+      totalCalls: Number(analyticsSummary.totalCalls || 0), incoming: Number(analyticsSummary.incoming || 0), outgoing: Number(analyticsSummary.outgoing || 0),
+      answered: Number(analyticsSummary.answered || 0), avgDuration: Number(analyticsSummary.avgBillsec || 0),
+      byHour: byHour.map((row: any) => ({ hour: row.hour, входящие: Number(row.incoming || 0), исходящие: Number(row.outgoing || 0), пропущенные: Number(row.missed || 0) })),
+      byOperator: byOperator.map((row: any) => ({ name: row.name, вызовов: Number(row.calls || 0) })),
+      byTrunk: byTrunk.map((row: any) => ({ name: row.name, value: Number(row.value || 0) }))
+    },
+    diagnostics: { anomalies, audit: auditRows }
+  };
+}
+
+app.get('/api/db-explorer/live-snapshot', requireAuth(), async (req, res) => {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_cli !== true) {
+    res.status(403).json({ success: false, error: 'Нет прав на CLI / DB Explorer' });
+    return;
+  }
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ success: true, ...(await loadDbExplorerLiveSnapshot()) });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error?.message || String(error) });
+  }
+});
 
 function isSafeSelectSql(sql) {
   const q = String(sql || '').trim();
@@ -20406,6 +20742,31 @@ async function getRealVoIPDevices(settings: AppSettings, warnings?: string[]): P
   return list;
 }
 
+const DEVICES_MAP_LIVE_CACHE_TTL_MS = 30_000;
+let devicesMapLiveCache: { devices: any[]; expiresAt: number } | null = null;
+let devicesMapLiveRefresh: Promise<any[]> | null = null;
+
+async function getCachedRealVoIPDevices(settings: AppSettings): Promise<{ devices: any[]; refreshed: boolean }> {
+  if (devicesMapLiveCache && devicesMapLiveCache.expiresAt > Date.now()) {
+    return { devices: devicesMapLiveCache.devices, refreshed: false };
+  }
+
+  if (devicesMapLiveRefresh) {
+    return { devices: await devicesMapLiveRefresh, refreshed: false };
+  }
+
+  devicesMapLiveRefresh = getRealVoIPDevices(settings)
+    .then(devices => {
+      devicesMapLiveCache = { devices, expiresAt: Date.now() + DEVICES_MAP_LIVE_CACHE_TTL_MS };
+      return devices;
+    })
+    .finally(() => {
+      devicesMapLiveRefresh = null;
+    });
+
+  return { devices: await devicesMapLiveRefresh, refreshed: true };
+}
+
 // --- REST API ENDPOINTS FOR DEVICES MAP ---
 app.get('/api/devices-map', requireAuth(), async (req, res) => {
   try {
@@ -20413,7 +20774,12 @@ app.get('/api/devices-map', requireAuth(), async (req, res) => {
     const settings = localDb.settings;
     const storageMode = await getMonitoringStorageMode();
     if (!isDemoMode(settings)) {
-      const list = await getRealVoIPDevices(settings);
+      const liveResult = await getCachedRealVoIPDevices(settings);
+      const list = liveResult.devices;
+
+      if (!liveResult.refreshed) {
+        return res.json({ success: true, count: list.length, devices: list, source: 'live_cache' });
+      }
 
       const ipToExtsMap = new Map<string, string[]>();
       for (const dev of list) {

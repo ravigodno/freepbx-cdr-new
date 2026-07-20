@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { 
+import {
   Users, Search, Award, TrendingUp, PhoneIncoming, PhoneOutgoing, 
   Clock, ShieldAlert, CheckCircle, Download, UserCheck, Flame, 
   HelpCircle, ChevronDown, ChevronUp, BarChart2, Star, ArrowUpDown
@@ -8,6 +8,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, 
   ResponsiveContainer, LineChart, Line, ComposedChart, AreaChart, Area, Cell
 } from 'recharts';
+import { getServerNow } from '../../../utils/serverClock';
 
 export interface EmployeeSummaryRow {
   extension?: string | null;
@@ -254,7 +255,7 @@ export function EmployeesDashboard({
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `employee_analytics_${new Date().toISOString().slice(0, 10)}.csv`;
+    link.download = `employee_analytics_${getServerNow().toISOString().slice(0, 10)}.csv`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);

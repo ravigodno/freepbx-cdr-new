@@ -7,6 +7,8 @@ const bye = `17:00:01.000000 IP 192.168.1.7.6161 > 192.168.1.14.5160: UDP, lengt
 
 assert.equal(parseTcpdumpPacket(invite).events[0]?.method, 'INVITE');
 assert.equal(parseTcpdumpPacket(invite).events[0]?.callId, 'call-one');
+assert.equal(parseTcpdumpPacket(invite).packet?.srcPort, 6161);
+assert.equal(parseTcpdumpPacket(invite).packet?.dstPort, 5160);
 assert.deepEqual(parseTcpdumpPacket(responses).events.map(event => event.code), [100, 180]);
 assert.deepEqual(parseTcpdumpPacket(bye).events.map(event => event.method), ['ACK', 'BYE']);
 

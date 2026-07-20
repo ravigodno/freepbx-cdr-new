@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { getServerNow } from '../../utils/serverClock';
 
 type PcapFile = {
   name: string;
@@ -144,7 +145,7 @@ export default function TcpdumpTab() {
     const a = document.createElement('a');
 
     a.href = url;
-    a.download = 'tcpdump-output-' + new Date().toISOString().replace(/[:.]/g, '-') + '.txt';
+    a.download = 'tcpdump-output-' + getServerNow().toISOString().replace(/[:.]/g, '-') + '.txt';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);

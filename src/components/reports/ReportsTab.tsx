@@ -125,6 +125,21 @@ interface EmployeeSummaryRow {
   status?: 'ok' | 'warning' | 'problem' | string;
 }
 
+interface InboundCallDetail {
+  calldate: string;
+  callerNumber: string;
+  did?: string | null;
+  destination?: string | null;
+  internalExtension?: string | null;
+  user?: string | null;
+  result: string;
+  waitSeconds?: number | null;
+  talkSeconds: number;
+  recordingAvailable?: boolean;
+  recordingFile?: string | null;
+  technicalId: string;
+}
+
 function safeNumber(value: unknown): number {
   const n = Number(value || 0);
   return Number.isFinite(n) ? n : 0;
@@ -256,6 +271,7 @@ export default function ReportsTab({
   const [usedSettings, setUsedSettings] = useState<UsedCallQualitySettings | null>(null);
   const [departmentSummary, setDepartmentSummary] = useState<DepartmentSummaryRow[]>([]);
   const [employeeSummary, setEmployeeSummary] = useState<EmployeeSummaryRow[]>([]);
+  const [inboundCallDetails, setInboundCallDetails] = useState<InboundCallDetail[]>([]);
   const [trunkSummary, setTrunkSummary] = useState<TrunkSummaryRow[]>([]);
   const [heatmap, setHeatmap] = useState<HeatmapData | null>(null);
   const [clientAnalytics, setClientAnalytics] = useState<ClientAnalyticsData | null>(null);
@@ -309,6 +325,7 @@ export default function ReportsTab({
         setSlaSummary(json.slaSummary || null);
         setDepartmentSummary(Array.isArray(json.departmentSummary) ? json.departmentSummary : []);
         setEmployeeSummary(Array.isArray(json.employeeSummary) ? json.employeeSummary : []);
+        setInboundCallDetails(Array.isArray(json.inboundCallDetails) ? json.inboundCallDetails : []);
         setTrunkSummary(Array.isArray(json.trunkSummary) ? json.trunkSummary : []);
         setHeatmap(json.heatmap || null);
         setClientAnalytics(json.clientAnalytics || null);
@@ -463,6 +480,7 @@ export default function ReportsTab({
           heatmap={heatmap}
           loading={loading}
           effectiveAnswerSlaSeconds={effectiveAnswerSlaSeconds}
+          inboundCallDetails={inboundCallDetails}
         />
       ) : activeTab === 'outgoing' ? (
         <OutgoingDashboard

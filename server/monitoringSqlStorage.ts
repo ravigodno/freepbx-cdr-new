@@ -54,7 +54,13 @@ export async function setMonitoringStorageMode(mode: MonitoringStorageMode): Pro
 export async function readQualityHistoryFromSql(period = '24h', ext = 'all'): Promise<any[]> {
   const params: any[] = [periodStart(period)]; let extSql = '';
   if (ext && ext !== 'all') { extSql = ' AND ext = ?'; params.push(ext); }
-  const rows = await timedQuery(`SELECT ext,name,status,quality_status,latency_ms,jitter_ms,rtp_loss,mos,sampled_at FROM quality_history WHERE sampled_at >= ?${extSql} ORDER BY sampled_at ASC LIMIT ${MAX_READ_ROWS}`, params);
+  const rows = await timedQuery(`SELECT * FROM (
+    SELECT ext,name,status,quality_status,latency_ms,jitter_ms,rtp_loss,mos,sampled_at
+    FROM quality_history
+    WHERE sampled_at >= ?${extSql}
+    ORDER BY sampled_at DESC
+    LIMIT ${MAX_READ_ROWS}
+  ) recent_quality ORDER BY sampled_at ASC`, params);
   return rows.map((r: any) => ({ ext: String(r.ext), name: r.name || '', status: r.status || '', qualityStatus: r.quality_status || '', latency: Number(r.latency_ms || 0), jitter: Number(r.jitter_ms || 0), rtpLoss: Number(r.rtp_loss || 0), mos: Number(r.mos || 0), timestamp: sqlDateToIso(r.sampled_at) }));
 }
 export async function appendQualityHistoryToSql(items: any[]): Promise<void> {

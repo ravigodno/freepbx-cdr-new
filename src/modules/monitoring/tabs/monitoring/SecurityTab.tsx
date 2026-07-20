@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Ban, CheckCircle2, Database, Flame, Globe2, ListFilter, Loader2, LockKeyhole, Network, RefreshCw, Server, Settings, Shield, ShieldAlert, Siren } from 'lucide-react';
 import { activeSecurityThreatFilters, EMPTY_THREAT_FILTERS, resetSecurityThreatFilters } from '../../../../utils/securityThreatFilters';
+import { getServerNow } from '../../../../utils/serverClock';
 
 type TabKey = 'overview'|'threats'|'events'|'sip'|'firewall'|'fail2ban'|'ports'|'checks'|'services'|'changes'|'alerts'|'settings';
 type SecurityNavigationTarget = { tab:TabKey; filters?:{ ports?:number[]; service?:string; category?:string; severity?:string; sourceIp?:string; jail?:string; search?:string; protocol?:string; family?:string; destinationPort?:string } };
@@ -41,7 +42,75 @@ export default function SecurityTab({ token, hasPermission }: Props) {
   const data=dataByTab[tab]||{}; const updatedAt=updatedByTab[tab]||''; const firstLoading=loading&&!dataByTab[tab];
   const endpoint = useMemo(() => {const threatParams=new URLSearchParams();Object.entries(threatFilters).forEach(([key,value])=>{if(value)threatParams.set(key,String(value));});return({overview:'/api/security/overview',threats:`/api/security/threats?${threatParams}`,events:'/api/security/events',sip:'/api/security/sip/summary',firewall:'/api/security/firewall/status',fail2ban:'/api/security/fail2ban/status',ports:'/api/security/ports',checks:'/api/security/checks',services:'/api/security/services',changes:'/api/security/file-changes',alerts:'/api/security/alerts',settings:'/api/security/settings'}[tab]);},[tab,threatFilters]);
   const request = useCallback(async (url:string, signal:AbortSignal, options:RequestInit={}) => { const response=await fetch(url,{...options,signal,headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`,...(options.headers||{})},cache:'no-store'}); const payload=await response.json().catch(()=>({})); if(!response.ok||payload.success===false) throw new Error(payload?.error?.message||payload?.error||'Ошибка Security API'); return payload; },[token]);
-  const load = useCallback(async () => { if(document.visibilityState!=='visible')return;requestRef.current?.abort();const controller=new AbortController();requestRef.current=controller;const sequence=++requestSequenceRef.current;setLoading(true);try { let url=endpoint;if(tab==='events'){const p=new URLSearchParams(Object.entries(eventFilters).filter(([,v])=>v));url+=`?${p}`;}if(tab==='ports'){const p=new URLSearchParams({offset:String(portOffset)});Object.entries(portFilter).forEach(([key,value])=>{if(value)p.set(key,String(value));});url+=`?${p}`;}if(tab==='services'&&serviceFilter)url+=`?service=${encodeURIComponent(serviceFilter)}`;let payload:any;if(tab==='firewall'){const [status,rules]=await Promise.all([request(url,controller.signal),request('/api/security/firewall/rules?limit=500',controller.signal)]);payload={...status,rules:rules.rows||status.rules||[]};}else if(tab==='fail2ban'){const [status,jails]=await Promise.all([request(url,controller.signal),request('/api/security/fail2ban/jails',controller.signal)]);payload={...status,jails:(jails.rows||status.jails||[]).filter((jail:any)=>!jailFilter||String(jail.name||'').toLowerCase().includes(jailFilter.toLowerCase()))};}else if(tab==='ports'&&overviewNavigation?.tab==='ports'&&portFilter.ports){const [ports,diagnostics]=await Promise.all([request(url,controller.signal),request(`/api/security/ports/diagnostics?ports=${encodeURIComponent(portFilter.ports)}`,controller.signal)]);payload={...ports,diagnostics:diagnostics.rows||[]};}else{payload=await request(url,controller.signal);}let whitelist=null;if(tab==='events'&&canViewEvents)whitelist=await request('/api/security/whitelist',controller.signal).catch(()=>null);if(!mountedRef.current||sequence!==requestSequenceRef.current)return;setDataByTab(previous=>({...previous,[tab]:{...payload,whitelist:whitelist?.rows}}));setUpdatedByTab(previous=>({...previous,[tab]:new Date().toISOString()}));setError('');}catch(e:any){if(e?.name!=='AbortError'&&mountedRef.current&&sequence===requestSequenceRef.current)setError(e?.message||String(e));}finally{if(mountedRef.current&&sequence===requestSequenceRef.current){setLoading(false);requestRef.current=null;}}},[canViewEvents,endpoint,eventFilters,jailFilter,overviewNavigation,portFilter,portOffset,request,serviceFilter,tab]);
+  const load = useCallback(async () => {
+    if (document.visibilityState !== 'visible') return;
+    requestRef.current?.abort();
+    const controller = new AbortController();
+    requestRef.current = controller;
+    const sequence = ++requestSequenceRef.current;
+    setLoading(true);
+    try {
+      let url = endpoint;
+      if (tab === 'events') {
+        const params = new URLSearchParams(Object.entries(eventFilters).filter(([, value]) => value));
+        url += `?${params}`;
+      }
+      if (tab === 'ports') {
+        const params = new URLSearchParams({ offset: String(portOffset) });
+        Object.entries(portFilter).forEach(([key, value]) => {
+          if (value) params.set(key, String(value));
+        });
+        url += `?${params}`;
+      }
+      if (tab === 'services' && serviceFilter) url += `?service=${encodeURIComponent(serviceFilter)}`;
+
+      let payload: any;
+      if (tab === 'firewall') {
+        const [status, rules] = await Promise.all([
+          request(url, controller.signal),
+          request('/api/security/firewall/rules?limit=500', controller.signal)
+        ]);
+        payload = { ...status, rules: rules.rows || status.rules || [] };
+      } else if (tab === 'fail2ban') {
+        const [status, jails] = await Promise.all([
+          request(url, controller.signal),
+          request('/api/security/fail2ban/jails', controller.signal)
+        ]);
+        payload = {
+          ...status,
+          jails: (jails.rows || status.jails || []).filter((jail: any) =>
+            !jailFilter || String(jail.name || '').toLowerCase().includes(jailFilter.toLowerCase())
+          )
+        };
+      } else if (tab === 'ports' && overviewNavigation?.tab === 'ports' && portFilter.ports) {
+        const [ports, diagnostics] = await Promise.all([
+          request(url, controller.signal),
+          request(`/api/security/ports/diagnostics?ports=${encodeURIComponent(portFilter.ports)}`, controller.signal)
+        ]);
+        payload = { ...ports, diagnostics: diagnostics.rows || [] };
+      } else {
+        payload = await request(url, controller.signal);
+      }
+
+      let whitelist = null;
+      if (tab === 'events' && canViewEvents) {
+        whitelist = await request('/api/security/whitelist', controller.signal).catch(() => null);
+      }
+      if (!mountedRef.current || sequence !== requestSequenceRef.current) return;
+      setDataByTab(previous => ({ ...previous, [tab]: { ...payload, whitelist: whitelist?.rows } }));
+      setUpdatedByTab(previous => ({ ...previous, [tab]: getServerNow().toISOString() }));
+      setError('');
+    } catch (error: any) {
+      if (error?.name !== 'AbortError' && mountedRef.current && sequence === requestSequenceRef.current) {
+        setError(error?.message || String(error));
+      }
+    } finally {
+      if (mountedRef.current && sequence === requestSequenceRef.current) {
+        setLoading(false);
+        requestRef.current = null;
+      }
+    }
+  }, [canViewEvents, endpoint, eventFilters, jailFilter, overviewNavigation, portFilter, portOffset, request, serviceFilter, tab]);
   useEffect(()=>{localStorage.setItem('pbxpuls_security_tab',tab);void load();const configuredInterval=refreshIntervals[refreshMode][tab];if(!autoRefresh||!configuredInterval)return()=>{requestRef.current?.abort();};const interval=Math.max(5000,configuredInterval);const timer=window.setInterval(()=>{if(document.visibilityState==='visible')void load();},interval);return()=>{window.clearInterval(timer);requestRef.current?.abort();};},[autoRefresh,load,refreshMode,tab]);
   useEffect(()=>{const onVisibility=()=>{if(document.visibilityState==='visible')void load();else requestRef.current?.abort();};document.addEventListener('visibilitychange',onVisibility);return()=>document.removeEventListener('visibilitychange',onVisibility);},[load]);
   useEffect(()=>{mountedRef.current=true;return()=>{mountedRef.current=false;requestRef.current?.abort();};},[]);

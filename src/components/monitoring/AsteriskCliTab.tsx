@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { getServerNow } from '../../utils/serverClock';
 
 type CmdItem = {
   cmd: string;
@@ -164,7 +165,7 @@ export default function AsteriskCliTab() {
     const a = document.createElement('a');
 
     a.href = url;
-    a.download = 'asterisk-cli-' + new Date().toISOString().replace(/[:.]/g, '-') + '.txt';
+    a.download = 'asterisk-cli-' + getServerNow().toISOString().replace(/[:.]/g, '-') + '.txt';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);

@@ -1,5 +1,5 @@
-import React, { useMemo } from 'react';
-import { 
+import React, { useEffect, useMemo, useState } from 'react';
+import {
   Clock, 
   PhoneIncoming, 
   PhoneMissed, 
@@ -13,7 +13,9 @@ import {
   Award,
   Zap,
   Info,
-  MoreVertical
+  MoreVertical,
+  Download,
+  Search
 } from 'lucide-react';
 import { 
   AreaChart, 
@@ -32,6 +34,7 @@ import {
   PieChart,
   Pie
 } from 'recharts';
+import { getServerNow } from '../../../utils/serverClock';
 import { DirectoryEntry, AppSettings } from '../../../types';
 
 interface SlaSummary {
@@ -118,6 +121,22 @@ interface InboundDashboardProps {
   heatmap: HeatmapData | null;
   loading: boolean;
   effectiveAnswerSlaSeconds: number;
+  inboundCallDetails: InboundCallDetail[];
+}
+
+interface InboundCallDetail {
+  calldate: string;
+  callerNumber: string;
+  did?: string | null;
+  destination?: string | null;
+  internalExtension?: string | null;
+  user?: string | null;
+  result: string;
+  waitSeconds?: number | null;
+  talkSeconds: number;
+  recordingAvailable?: boolean;
+  recordingFile?: string | null;
+  technicalId: string;
 }
 
 function safeNumber(value: unknown): number {
@@ -150,8 +169,34 @@ export function InboundDashboard({
   employeeSummary,
   heatmap,
   loading,
-  effectiveAnswerSlaSeconds
+  effectiveAnswerSlaSeconds,
+  inboundCallDetails
 }: InboundDashboardProps) {
+
+  const [detailSearch, setDetailSearch] = useState('');
+  const [detailPage, setDetailPage] = useState(1);
+  const detailPageSize = 25;
+  const filteredInboundDetails = useMemo(() => {
+    const query = detailSearch.trim().toLowerCase();
+    if (!query) return inboundCallDetails;
+    return inboundCallDetails.filter(row => [row.callerNumber, row.did, row.destination, row.internalExtension, row.user, row.result]
+      .some(value => String(value || '').toLowerCase().includes(query)));
+  }, [inboundCallDetails, detailSearch]);
+  const pagedInboundDetails = useMemo(() => filteredInboundDetails.slice((detailPage - 1) * detailPageSize, detailPage * detailPageSize), [filteredInboundDetails, detailPage]);
+  useEffect(() => setDetailPage(1), [detailSearch, inboundCallDetails]);
+
+  const exportInboundCsv = () => {
+    const escape = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+    const header = ['Дата и время', 'Номер абонента', 'DID', 'Назначение', 'Внутренний номер', 'Пользователь', 'Результат', 'Ожидание, сек', 'Разговор, сек'];
+    const lines = filteredInboundDetails.map(row => [row.calldate, row.callerNumber, row.did, row.destination, row.internalExtension, row.user, row.result, row.waitSeconds, row.talkSeconds].map(escape).join(';'));
+    const blob = new Blob([`\uFEFF${header.map(escape).join(';')}\n${lines.join('\n')}`], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `inbound-calls-${getServerNow().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
 
   // 1. KPI calculations
   const totalInbound = slaSummary?.inboundCalls ?? 0;
@@ -844,6 +889,39 @@ export function InboundDashboard({
           </div>
         </div>
 
+      </div>
+
+      <div className="rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900" id="inbound-call-details-card">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-base font-black text-slate-950 dark:text-white">Детализация входящих звонков</h3>
+            <p className="text-xs font-semibold text-slate-500 dark:text-slate-400">Один звонок на связанный набор CDR по linkedid; экспорт учитывает текущий поиск и общие фильтры отчёта</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="relative">
+              <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-slate-400" />
+              <input value={detailSearch} onChange={event => setDetailSearch(event.target.value)} placeholder="Поиск номера, DID, сотрудника" className="h-9 w-64 rounded-lg border border-slate-200 bg-white pl-8 pr-3 text-xs font-semibold outline-none focus:border-blue-500 dark:border-slate-700 dark:bg-slate-950" />
+            </label>
+            <button type="button" onClick={exportInboundCsv} disabled={!filteredInboundDetails.length} className="inline-flex h-9 items-center gap-2 rounded-lg bg-emerald-600 px-3 text-xs font-black text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50">
+              <Download className="h-4 w-4" />Экспорт CSV
+            </button>
+          </div>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[1050px] text-left text-xs">
+            <thead><tr className="border-b border-slate-200 text-[10px] font-black uppercase tracking-wide text-slate-400 dark:border-slate-800">{['Дата и время','Номер абонента','DID','Назначение','Внутренний','Пользователь','Результат','Ожидание','Разговор'].map(label => <th key={label} className="px-2 py-3">{label}</th>)}</tr></thead>
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+              {pagedInboundDetails.map(row => <tr key={row.technicalId} className="hover:bg-slate-50 dark:hover:bg-slate-950/30" title={`ID: ${row.technicalId}`}>
+                <td className="whitespace-nowrap px-2 py-3 font-mono">{row.calldate}</td><td className="px-2 py-3 font-bold">{row.callerNumber || '—'}</td><td className="px-2 py-3">{row.did || '—'}</td><td className="px-2 py-3">{row.destination || '—'}</td><td className="px-2 py-3 font-mono">{row.internalExtension || '—'}</td><td className="px-2 py-3">{row.user || '—'}</td><td className="px-2 py-3">{row.result === 'answered' ? 'Отвечено' : row.result === 'no_answer' ? 'Нет ответа' : row.result}</td><td className="px-2 py-3 font-mono">{row.waitSeconds == null ? '—' : formatDuration(row.waitSeconds)}</td><td className="px-2 py-3 font-mono">{formatDuration(row.talkSeconds)}</td>
+              </tr>)}
+            </tbody>
+          </table>
+          {!pagedInboundDetails.length && <div className="py-12 text-center text-xs font-semibold text-slate-400">Входящие звонки по выбранным фильтрам не найдены</div>}
+        </div>
+        <div className="mt-4 flex items-center justify-between text-xs font-semibold text-slate-500">
+          <span>Найдено: {filteredInboundDetails.length.toLocaleString('ru-RU')}</span>
+          <div className="flex items-center gap-2"><button type="button" disabled={detailPage <= 1} onClick={() => setDetailPage(page => page - 1)} className="h-8 rounded-lg border border-slate-200 px-3 disabled:opacity-40 dark:border-slate-700">Назад</button><span>{detailPage} / {Math.max(1, Math.ceil(filteredInboundDetails.length / detailPageSize))}</span><button type="button" disabled={detailPage * detailPageSize >= filteredInboundDetails.length} onClick={() => setDetailPage(page => page + 1)} className="h-8 rounded-lg border border-slate-200 px-3 disabled:opacity-40 dark:border-slate-700">Далее</button></div>
+        </div>
       </div>
 
     </div>

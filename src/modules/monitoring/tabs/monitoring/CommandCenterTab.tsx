@@ -30,6 +30,7 @@ import {
   ChevronRight,
   Filter
 } from 'lucide-react';
+import { getServerNow } from '../../../../utils/serverClock';
 
 interface CommandCenterTabProps {
   token: string;
@@ -426,12 +427,12 @@ export default function CommandCenterTab({ token, onNavigate }: CommandCenterTab
 
       const outputStr = data.success ? (data.output || '') : (data.error || 'Ошибка выполнения');
       setOutput(outputStr);
-      setExecutedAt(data.executedAt || new Date().toISOString());
+      setExecutedAt(data.executedAt || getServerNow().toISOString());
 
       // Add to history
       addHistoryItem({
         user: 'Администратор',
-        time: new Date().toLocaleTimeString('ru-RU'),
+        time: getServerNow().toLocaleTimeString('ru-RU'),
         timestamp: Date.now(),
         duration,
         command: trimmed,
@@ -443,10 +444,10 @@ export default function CommandCenterTab({ token, onNavigate }: CommandCenterTab
     } catch (e: any) {
       const duration = Date.now() - startTime;
       setOutput(e.message || String(e));
-      setExecutedAt(new Date().toISOString());
+      setExecutedAt(getServerNow().toISOString());
       addHistoryItem({
         user: 'Администратор',
-        time: new Date().toLocaleTimeString('ru-RU'),
+        time: getServerNow().toLocaleTimeString('ru-RU'),
         timestamp: Date.now(),
         duration,
         command: trimmed,
@@ -726,18 +727,18 @@ export default function CommandCenterTab({ token, onNavigate }: CommandCenterTab
   // Export handlers
   const exportData = (format: 'txt' | 'json' | 'csv') => {
     let content = '';
-    let filename = `pbx-command-center-${new Date().toISOString().slice(0, 10)}`;
+    let filename = `pbx-command-center-${getServerNow().toISOString().slice(0, 10)}`;
 
     if (format === 'txt') {
       content = `PBXPULS командный центр\n`;
-      content += `Дата выгрузки: ${new Date().toLocaleString()}\n`;
+      content += `Дата выгрузки: ${getServerNow().toLocaleString()}\n`;
       content += `Выполненная команда: ${cliCommand}\n`;
       content += `==============================================\n\n`;
       content += output || 'Вывод пуст.';
       filename += '.txt';
     } else if (format === 'json') {
       content = JSON.stringify({
-        generatedAt: new Date().toISOString(),
+        generatedAt: getServerNow().toISOString(),
         command: cliCommand,
         results: output,
         stats: stats
@@ -745,7 +746,7 @@ export default function CommandCenterTab({ token, onNavigate }: CommandCenterTab
       filename += '.json';
     } else if (format === 'csv') {
       content = `"Параметр";"Значение"\n`;
-      content += `"Дата выгрузки";"${new Date().toLocaleString()}"\n`;
+      content += `"Дата выгрузки";"${getServerNow().toLocaleString()}"\n`;
       content += `"Команда";"${cliCommand.replace(/"/g, '""')}"\n`;
       content += `"Версия Asterisk";"${stats.asteriskVersion}"\n`;
       content += `"Версия FreePBX";"${stats.freepbxVersion}"\n`;
@@ -785,7 +786,7 @@ export default function CommandCenterTab({ token, onNavigate }: CommandCenterTab
       setLiveLog(prev => [
         {
           id: Math.random().toString(),
-          time: new Date().toLocaleTimeString('ru-RU'),
+          time: getServerNow().toLocaleTimeString('ru-RU'),
           msg: randomMsg.msg,
           flag: randomMsg.flag as any
         },

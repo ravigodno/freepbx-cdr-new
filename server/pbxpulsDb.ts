@@ -3,10 +3,25 @@ import { getPBXPulsDbConfig, getPBXPulsDbConfigLogFields, getPBXPulsDbConnection
 
 const RETRY_AFTER_MS = 60_000;
 const LOG_THROTTLE_MS = 60_000;
+let pool: ReturnType<typeof mysql.createPool> | null = null;
 let unavailableUntil = 0;
 let lastError = '';
 let lastLogAt = 0;
 let lastSuccessfulAt = 0;
+
+function getPool(): ReturnType<typeof mysql.createPool> {
+  if (!pool) {
+    pool = mysql.createPool({
+      ...getPBXPulsDbConnectionOptions(),
+      waitForConnections: true,
+      connectionLimit: 10,
+      maxIdle: 10,
+      idleTimeout: 60_000,
+      queueLimit: 0
+    });
+  }
+  return pool;
+}
 
 function markUnavailable(error: any): void {
   lastError = sanitizePBXPulsDbError(error);
@@ -36,11 +51,8 @@ export async function queryPBXPulsDb(sql: string, params: any[] = []): Promise<a
   const config = getPBXPulsDbConfig();
   if (!config.configured) throw new Error('PBXPuls DB access denied / not configured');
   if (Date.now() < unavailableUntil) throw new Error(lastError || 'PBXPuls DB temporarily unavailable');
-  let connection;
   try {
-    connection = await mysql.createConnection(getPBXPulsDbConnectionOptions());
-
-    const [rows] = await connection.execute(sql, params);
+    const [rows] = await getPool().execute(sql, params);
     unavailableUntil = 0;
     lastError = '';
     lastSuccessfulAt = Date.now();
@@ -48,8 +60,6 @@ export async function queryPBXPulsDb(sql: string, params: any[] = []): Promise<a
   } catch (error) {
     markUnavailable(error);
     throw error;
-  } finally {
-    if (connection) await connection.end();
   }
 }
 

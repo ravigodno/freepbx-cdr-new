@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { getServerNow } from '../utils/serverClock';
 import { 
   Bot, Plus, Search, Trash2, Play, Check, Copy, Settings, Layers, Clock, 
   Activity, Edit3, X, ChevronRight, HelpCircle, AlertCircle, Sparkles, User, 
@@ -429,7 +430,7 @@ export default function AiAssistantTab({ session, hasPermission }: AiAssistantTa
   const startSimulation = () => {
     if (!selectedAssistant) return;
     setSimChat([
-      { sender: 'bot', text: selectedAssistant.greetingText.replace('{company_name}', 'PBXPuls VOIP'), time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }
+      { sender: 'bot', text: selectedAssistant.greetingText.replace('{company_name}', 'PBXPuls VOIP'), time: getServerNow().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }
     ]);
     setActiveSimId(selectedAssistant.id);
     setActiveTab('constructor');
@@ -441,7 +442,7 @@ export default function AiAssistantTab({ session, hasPermission }: AiAssistantTa
 
     const userMsg = simInput;
     setSimInput('');
-    setSimChat(prev => [...prev, { sender: 'user', text: userMsg, time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }]);
+    setSimChat(prev => [...prev, { sender: 'user', text: userMsg, time: getServerNow().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }]);
     setSimIsTyping(true);
 
     try {
@@ -454,7 +455,7 @@ export default function AiAssistantTab({ session, hasPermission }: AiAssistantTa
         const data = await res.json();
         setTimeout(() => {
           setSimIsTyping(false);
-          setSimChat(prev => [...prev, { sender: 'bot', text: data.reply, time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }]);
+          setSimChat(prev => [...prev, { sender: 'bot', text: data.reply, time: getServerNow().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }]);
         }, 1000);
       } else {
         setSimIsTyping(false);
@@ -908,7 +909,7 @@ export default function AiAssistantTab({ session, hasPermission }: AiAssistantTa
                   <button
                     onClick={() => {
                       setSimChat([
-                        { sender: 'bot', text: selectedAssistant.greetingText.replace('{company_name}', 'PBXPuls VOIP'), time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }
+                        { sender: 'bot', text: selectedAssistant.greetingText.replace('{company_name}', 'PBXPuls VOIP'), time: getServerNow().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }
                       ]);
                     }}
                     className="p-1.5 hover:bg-slate-100 rounded text-slate-500"
