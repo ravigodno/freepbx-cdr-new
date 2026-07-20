@@ -2168,7 +2168,7 @@ export default function ProvisioningCenter({ session, hasPermission }: Provision
                       disabled={!canWrite}
                       className="w-full bg-emerald-600 dark:bg-emerald-700 hover:bg-emerald-700 text-white font-extrabold text-xs py-3 rounded-lg flex items-center justify-center gap-2 transition disabled:opacity-50"
                     >
-                      <Play className="w-4 h-4" /> АКТИВИРОВАТЬ ФИЛИАЛ ��ОД КЛЮЧ
+                      <Play className="w-4 h-4" /> АКТИВИРОВАТЬ ФИЛИАЛ ПОД КЛЮЧ
                     </button>
                   </div>
                 )}

@@ -87,6 +87,9 @@ interface RegistrationHistoryItem {
   ip: string;
   port: number;
   userAgent: string;
+  mac?: string;
+  manufacturer?: string;
+  model?: string;
 }
 
 interface DeviceConflict {
@@ -116,7 +119,7 @@ interface DevicesMapTabProps {
   token: string;
 }
 
-type DeviceSortKey = 'ext' | 'name' | 'tech' | 'ip' | 'equipment' | 'status' | 'ipChanges' | 'regCount';
+type DeviceSortKey = 'ext' | 'name' | 'tech' | 'ip' | 'mac' | 'equipment' | 'status' | 'ipChanges' | 'regCount';
 type DeviceSortDirection = 'asc' | 'desc';
 
 export default function DevicesMapTab({ token }: DevicesMapTabProps) {
@@ -138,6 +141,7 @@ export default function DevicesMapTab({ token }: DevicesMapTabProps) {
     direction: 'asc'
   });
   const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
+  const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState<boolean>(false);
   
   // History point filter (Inside selected device detail drawer)
   const [historyFilter, setHistoryFilter] = useState<'today' | '7days' | '30days' | 'all'>('all');
@@ -424,10 +428,11 @@ export default function DevicesMapTab({ token }: DevicesMapTabProps) {
         const extMatch = d.ext.toLowerCase().includes(query);
         const nameMatch = d.name.toLowerCase().includes(query);
         const ipMatch = d.ip.toLowerCase().includes(query);
+        const macMatch = String(d.network?.mac || '').toLowerCase().includes(query);
         const uaMatch = d.userAgent.toLowerCase().includes(query);
         const makerMatch = d.manufacturer.toLowerCase().includes(query);
         const modelMatch = d.model.toLowerCase().includes(query);
-        return extMatch || nameMatch || ipMatch || uaMatch || makerMatch || modelMatch;
+        return extMatch || nameMatch || ipMatch || macMatch || uaMatch || makerMatch || modelMatch;
       }
       return true;
     });
@@ -450,6 +455,7 @@ export default function DevicesMapTab({ token }: DevicesMapTabProps) {
     if (key === 'equipment') return `${device.manufacturer || ''} ${device.model || ''} ${device.userAgent || ''}`.trim();
     if (key === 'status') return getDeviceStatusRank(device.status);
     if (key === 'ip') return device.ip || '';
+    if (key === 'mac') return device.network?.mac || '';
     const value = device[key as keyof Device];
     if (typeof value === 'number') return value;
     return String(value ?? '').trim();
@@ -548,14 +554,15 @@ export default function DevicesMapTab({ token }: DevicesMapTabProps) {
       const devMeta = devices.find(d => d.ext === item.ext);
       uniqueMap[item.ext] = {
         ext: item.ext,
-        name: item.name,
-        tech: item.tech,
+        name: item.name || devMeta?.name || `Абонент ${item.ext}`,
+        tech: item.tech || devMeta?.tech || '—',
         ip: item.ip,
         port: item.port,
         userAgent: item.userAgent,
+        mac: item.mac || devMeta?.network?.mac || '',
         timestamp: item.timestamp,
-        manufacturer: devMeta?.manufacturer || 'Unknown',
-        model: devMeta?.model || 'Unknown'
+        manufacturer: item.manufacturer || devMeta?.manufacturer || 'Unknown',
+        model: item.model || devMeta?.model || 'Unknown'
       };
     });
 
@@ -658,6 +665,17 @@ export default function DevicesMapTab({ token }: DevicesMapTabProps) {
 
         <div className="flex flex-wrap items-center gap-2">
           <button
+            onClick={() => setIsDiagnosticsOpen(current => !current)}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold border transition flex items-center gap-1.5 ${isDiagnosticsOpen
+              ? 'text-rose-700 bg-rose-50 border-rose-200 dark:bg-rose-950/30 dark:text-rose-300 dark:border-rose-900'
+              : 'text-slate-700 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 border-slate-200 dark:border-slate-700'}`}
+            title="Открыть или скрыть панель диагностики выбранного устройства"
+          >
+            <Terminal className="h-3.5 w-3.5" />
+            {isDiagnosticsOpen ? 'Скрыть диагностику' : 'Диагностика'}
+          </button>
+
+          <button
             onClick={createSnapshot}
             className="px-3.5 py-1.5 rounded-lg text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 transition flex items-center gap-1.5"
             title="Зафиксировать моментальную конфигурацию в data/devices-map-snapshot-..."
@@ -712,7 +730,7 @@ export default function DevicesMapTab({ token }: DevicesMapTabProps) {
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         
         {/* Left column (Occupies 2/3 space) containing main functional views */}
-        <div className="xl:col-span-2 space-y-6">
+        <div className={`${isDiagnosticsOpen ? 'xl:col-span-2' : 'xl:col-span-3'} space-y-6`}>
           
           {/* Section Navigation Tabs & Action Bar */}
           <div className="flex flex-col sm:flex-row gap-2 justify-between border-b border-slate-200 dark:border-slate-800 pb-px">
@@ -838,23 +856,28 @@ export default function DevicesMapTab({ token }: DevicesMapTabProps) {
                               <div
                                 key={dev.ext}
                                 onClick={() => setSelectedDevice(dev)}
-                                className={`flex items-center justify-between p-2 rounded-lg text-xs cursor-pointer transition ${selectedDevice?.ext === dev.ext
+                                className={`grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 p-2 rounded-lg text-xs cursor-pointer transition ${selectedDevice?.ext === dev.ext
                                   ? 'bg-rose-50 dark:bg-rose-950/25 border border-rose-100 dark:border-rose-900/40 text-rose-700 dark:text-rose-400 font-bold'
                                   : 'bg-white dark:bg-slate-900/60 border border-slate-100 dark:border-slate-800/60 text-slate-700 dark:text-slate-300 hover:bg-slate-100/60 dark:hover:bg-slate-800/30'}`}
                               >
-                                <div className="flex items-center gap-1.5 font-semibold">
-                                  <span className="font-mono text-center w-7 px-1 text-[10px] uppercase font-bold tracking-wide rounded bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                                <div className="flex min-w-0 items-center gap-1.5 font-semibold">
+                                  <span
+                                    className="min-w-7 max-w-[110px] shrink-0 truncate rounded border border-slate-200 bg-slate-100 px-1.5 py-0.5 text-center font-mono text-[10px] font-bold uppercase tracking-wide dark:border-slate-700 dark:bg-slate-800"
+                                    title={dev.ext}
+                                  >
                                     {dev.ext}
                                   </span>
-                                  <span className="truncate max-w-[120px]">{dev.name}</span>
+                                  {dev.name.trim().toLowerCase() !== dev.ext.trim().toLowerCase() && (
+                                    <span className="min-w-0 truncate" title={dev.name}>{dev.name}</span>
+                                  )}
                                 </div>
 
-                                <div className="flex items-center gap-1.5 text-[11px] font-bold">
-                                  <span className="font-mono text-slate-400 text-[10px]">{dev.ip.split('.').pop()}</span>
-                                  <span className={`text-[10px] px-1.5 py-0.5 rounded ${dev.manufacturer === 'Yealink' ? 'text-sky-600 bg-sky-50 dark:text-sky-400 dark:bg-sky-950/20' : dev.manufacturer === 'Grandstream' ? 'text-teal-600 bg-teal-50 dark:text-teal-400 dark:bg-teal-950/20' : 'text-slate-500 bg-slate-100'}`}>
+                                <div className="flex min-w-0 max-w-[150px] items-center justify-end gap-1.5 text-[11px] font-bold">
+                                  <span className="shrink-0 font-mono text-slate-400 text-[10px]">{dev.ip.split('.').pop()}</span>
+                                  <span title={dev.model} className={`max-w-[100px] truncate text-[10px] px-1.5 py-0.5 rounded ${dev.manufacturer === 'Yealink' ? 'text-sky-600 bg-sky-50 dark:text-sky-400 dark:bg-sky-950/20' : dev.manufacturer === 'Grandstream' ? 'text-teal-600 bg-teal-50 dark:text-teal-400 dark:bg-teal-950/20' : 'text-slate-500 bg-slate-100'}`}>
                                     {dev.model}
                                   </span>
-                                  <span className={`h-2 w-2 rounded-full ${dev.status === 'Online' ? 'bg-emerald-500' : dev.status === 'Conflict' ? 'bg-red-500 animate-ping' : dev.status === 'Warning' ? 'bg-amber-500' : 'bg-slate-400'}`} />
+                                  <span className={`h-2 w-2 shrink-0 rounded-full ${dev.status === 'Online' ? 'bg-emerald-500' : dev.status === 'Conflict' ? 'bg-red-500 animate-ping' : dev.status === 'Warning' ? 'bg-amber-500' : 'bg-slate-400'}`} />
                                 </div>
                               </div>
                             ))}
@@ -915,6 +938,7 @@ export default function DevicesMapTab({ token }: DevicesMapTabProps) {
                             {renderDeviceSortableHeader('name', 'Имя')}
                             {renderDeviceSortableHeader('tech', 'Технология')}
                             {renderDeviceSortableHeader('ip', 'IP Адрес')}
+                            {renderDeviceSortableHeader('mac', 'MAC адрес')}
                             {renderDeviceSortableHeader('equipment', 'Оборудование')}
                             {renderDeviceSortableHeader('status', 'Статус')}
                             {renderDeviceSortableHeader('ipChanges', 'Смены IP', 'right')}
@@ -924,7 +948,7 @@ export default function DevicesMapTab({ token }: DevicesMapTabProps) {
                         <tbody className="divide-y divide-slate-100 dark:divide-slate-800 select-none">
                           {sortedDevices.length === 0 ? (
                             <tr>
-                              <td colSpan={8} className="p-10 text-center text-slate-400">
+                              <td colSpan={9} className="p-10 text-center text-slate-400">
                                 Устройства с выбранными фильтрами не найдены.
                               </td>
                             </tr>
@@ -948,6 +972,9 @@ export default function DevicesMapTab({ token }: DevicesMapTabProps) {
                                 </td>
                                 <td className="p-3 font-mono">
                                   {dev.ip}:{dev.port}
+                                </td>
+                                <td className="p-3 font-mono text-[11px] text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                                  {dev.network?.mac || '—'}
                                 </td>
                                 <td className="p-3">
                                   <div className="flex flex-col">
@@ -1086,7 +1113,7 @@ export default function DevicesMapTab({ token }: DevicesMapTabProps) {
                     </div>
 
                     <div className="text-xs font-bold text-slate-700 dark:text-slate-300">
-                      Список зарегист��ированных устройств за: <span className="text-rose-600 dark:text-rose-400 underline">{historicDate}</span>
+                      Список зарегистрированных устройств за: <span className="text-rose-600 dark:text-rose-400 underline">{historicDate}</span>
                     </div>
 
                     <div className="overflow-x-auto border border-slate-100 dark:border-slate-800 rounded-xl">
@@ -1097,6 +1124,7 @@ export default function DevicesMapTab({ token }: DevicesMapTabProps) {
                             <th className="p-3">Абонент</th>
                             <th className="p-3">Технология</th>
                             <th className="p-3">Сетевой адрес</th>
+                            <th className="p-3">MAC адрес</th>
                             <th className="p-3">Марка оборудования</th>
                             <th className="p-3 text-right">Время метки (UTC)</th>
                           </tr>
@@ -1104,7 +1132,7 @@ export default function DevicesMapTab({ token }: DevicesMapTabProps) {
                         <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                           {historicDateDevices.length === 0 ? (
                             <tr>
-                              <td colSpan={6} className="p-10 text-center text-slate-400">
+                              <td colSpan={7} className="p-10 text-center text-slate-400">
                                 В истории за выбранную дату {historicDate} записи регистраций отсутствуют.
                               </td>
                             </tr>
@@ -1119,6 +1147,7 @@ export default function DevicesMapTab({ token }: DevicesMapTabProps) {
                                   </span>
                                 </td>
                                 <td className="p-3 font-mono">{h.ip}:{h.port}</td>
+                                <td className="p-3 font-mono text-[11px] whitespace-nowrap">{h.mac || '—'}</td>
                                 <td className="p-3">
                                   <div className="flex flex-col">
                                     <span className="font-semibold text-slate-750">{h.manufacturer}</span>
@@ -1192,7 +1221,7 @@ export default function DevicesMapTab({ token }: DevicesMapTabProps) {
         </div>
 
         {/* Right column (Occupies 1/3 space) containing Interactive Diagnostics console & Specs */}
-        <div className="space-y-6">
+        {isDiagnosticsOpen && <div className="space-y-6">
           <div className="bg-slate-900 text-white border border-slate-950 p-4 rounded-xl shadow-md min-h-[500px] flex flex-col justify-between">
             {selectedDevice ? (
               <div className="space-y-6 flex-1 flex flex-col justify-between">
@@ -1358,7 +1387,7 @@ export default function DevicesMapTab({ token }: DevicesMapTabProps) {
               </div>
             )}
           </div>
-        </div>
+        </div>}
 
       </div>
 

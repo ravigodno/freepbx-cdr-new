@@ -84,6 +84,7 @@ import { getServerNow } from './utils/serverClock';
 import CommandCenterTab from './modules/monitoring/tabs/monitoring/CommandCenterTab';
 const DbExplorerTab = lazy(() => import('./modules/monitoring/tabs/monitoring/DbExplorerTab'));
 const SecurityTab = lazy(() => import('./modules/monitoring/tabs/monitoring/SecurityTab'));
+const LogAnalysisTab = lazy(() => import('./modules/monitoring/tabs/monitoring/LogAnalysisTab'));
 import QualityTab from './modules/monitoring/tabs/monitoring/QualityTab';
 import DevicesMapTab from './modules/monitoring/tabs/monitoring/DevicesMapTab';
 import HealthReportTab from './modules/monitoring/tabs/monitoring/HealthReportTab';
@@ -790,8 +791,8 @@ export default function App() {
   const [tcpdumpFiles, setTcpdumpFiles] = useState<any[]>([]);
   const [tcpdumpMessage, setTcpdumpMessage] = useState('');
   const [tcpdumpOutput, setTcpdumpOutput] = useState('');
-  const [monitorMode, setMonitorMode] = useState<'calls' | 'tcpdump' | 'sngrep' | 'cli' | 'freepbx' | 'db' | 'devices' | 'quality' | 'health' | 'ai-admin' | 'security'>(() => {
-    const saved = localStorage.getItem('asterisk_cdr_monitor_mode') as 'calls' | 'tcpdump' | 'sngrep' | 'cli' | 'freepbx' | 'db' | 'devices' | 'quality' | 'security' | null;
+  const [monitorMode, setMonitorMode] = useState<'calls' | 'tcpdump' | 'sngrep' | 'cli' | 'freepbx' | 'db' | 'devices' | 'quality' | 'health' | 'ai-admin' | 'security' | 'log-analysis'>(() => {
+    const saved = localStorage.getItem('asterisk_cdr_monitor_mode') as 'calls' | 'tcpdump' | 'sngrep' | 'cli' | 'freepbx' | 'db' | 'devices' | 'quality' | 'health' | 'ai-admin' | 'security' | 'log-analysis' | null;
     return saved || 'calls';
   });
 
@@ -825,6 +826,7 @@ export default function App() {
       devices: 'view_sip_devices_map',
       quality: 'view_quality',
       security: 'view_security',
+      'log-analysis': 'view_log_analysis',
       health: 'view_cli',
       'ai-admin': 'view_ai_pbx_admin'
     };
@@ -2712,7 +2714,7 @@ export default function App() {
     e.preventDefault();
 
     if (!hasPermission('process_calls')) {
-      alert('Нет ��рав на обработку звонков.');
+      alert('Нет прав на обработку звонков.');
       return;
     }
 
@@ -3621,6 +3623,7 @@ export default function App() {
       monitorMode === 'quality' ? 'Качество связи' :
       monitorMode === 'health' ? 'Состояние АТС' :
       monitorMode === 'security' ? 'Безопасность' :
+      monitorMode === 'log-analysis' ? 'Анализ логов' :
       monitorMode === 'ai-admin' ? 'AI-админ' :
       'Мониторинг';
 
@@ -3635,6 +3638,7 @@ export default function App() {
       monitorMode === 'ai-admin' ? 'AI-консультант администратора для диагностики Asterisk и FreePBX, анализа логов и подготовки команд' :
       monitorMode === 'health' ? 'Health Report сервера FreePBX/Asterisk: железо, диски, сеть, интернет, службы и общее состояние АТС' :
       monitorMode === 'security' ? 'Единый read-only центр Firewall, Fail2Ban, портов, служб и событий безопасности' :
+      monitorMode === 'log-analysis' ? 'Централизованный read-only анализ журналов АТС и операционной системы' :
       '';
     const sessions = liveSessionsData?.sessions || [];
     const q = liveSearch.trim().toLowerCase();
@@ -3990,6 +3994,17 @@ export default function App() {
                 Безопасность
               </button>
               )}
+
+              {hasPermission('view_log_analysis') && (
+              <button
+                onClick={() => setMonitorMode('log-analysis')}
+                className={`px-3 py-2 rounded-lg text-xs font-bold border ${monitorMode === 'log-analysis'
+                  ? 'bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-900'
+                  : 'bg-white text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700'}`}
+              >
+                Анализ логов
+              </button>
+              )}
               </div>
             </div>
 
@@ -4050,6 +4065,12 @@ export default function App() {
           {monitorMode === 'security' && hasPermission('view_security') && (
             <Suspense fallback={<div className="p-8 text-center text-slate-500">Загрузка центра безопасности...</div>}>
               <SecurityTab token={session?.token || ''} hasPermission={hasPermission} />
+            </Suspense>
+          )}
+
+          {monitorMode === 'log-analysis' && hasPermission('view_log_analysis') && (
+            <Suspense fallback={<div className="p-8 text-center text-slate-500">Загрузка анализа журналов...</div>}>
+              <LogAnalysisTab token={session?.token || ''} onNavigate={setMonitorMode} />
             </Suspense>
           )}
 
@@ -6966,7 +6987,7 @@ export default function App() {
                           <label className="min-w-0 max-w-full break-words text-xs font-bold text-slate-600">Порт<input type="number" value={draftSettings.dbPort} onChange={(e) => setDraftSettings({ ...draftSettings, dbPort: parseInt(e.target.value, 10) || 3306 })} className="mt-1 w-full min-w-0 max-w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900" required /></label>
                           <label className="min-w-0 max-w-full break-words text-xs font-bold text-slate-600">База<input type="text" value={draftSettings.dbName} onChange={(e) => setDraftSettings({ ...draftSettings, dbName: e.target.value })} className="mt-1 w-full min-w-0 max-w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900" required /></label>
                           <label className="min-w-0 max-w-full break-words text-xs font-bold text-slate-600">Пользователь<input type="text" value={draftSettings.dbUser} onChange={(e) => setDraftSettings({ ...draftSettings, dbUser: e.target.value })} className="mt-1 w-full min-w-0 max-w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900" required /></label>
-                          <label className="min-w-0 max-w-full break-words text-xs font-bold text-slate-600">Пар��ль<input type="password" value={draftSettings.dbPass} onChange={(e) => setDraftSettings({ ...draftSettings, dbPass: e.target.value })} className="mt-1 w-full min-w-0 max-w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900" /></label></div>
+                          <label className="min-w-0 max-w-full break-words text-xs font-bold text-slate-600">Пароль<input type="password" value={draftSettings.dbPass} onChange={(e) => setDraftSettings({ ...draftSettings, dbPass: e.target.value })} className="mt-1 w-full min-w-0 max-w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900" /></label></div>
                         {dbTestResult && (
                           <div className={`mt-3 p-3.5 border rounded-lg text-xs flex items-start gap-2 ${dbTestResult.success ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-blue-50 border-blue-200 text-blue-700'}`}>
                             <AlertCircle className={`h-4.5 w-4.5 shrink-0 mt-0.5 ${dbTestResult.success ? 'text-emerald-600' : 'text-blue-600'}`} />

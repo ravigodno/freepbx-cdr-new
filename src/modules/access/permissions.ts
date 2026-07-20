@@ -25,6 +25,7 @@ export type PermissionKey =
   | 'view_cli'
   | 'view_sip_devices_map'
   | 'view_security'
+  | 'view_log_analysis'
   | 'view_security_events'
   | 'view_firewall'
   | 'view_fail2ban'
@@ -84,6 +85,7 @@ const PERMISSION_MODULE_MAP: Partial<Record<PermissionKey, OptionalModuleKey>> =
   view_cli: 'monitoring',
   view_sip_devices_map: 'monitoring',
   view_security: 'monitoring',
+  view_log_analysis: 'monitoring',
   view_security_events: 'monitoring',
   view_firewall: 'monitoring',
   view_fail2ban: 'monitoring',

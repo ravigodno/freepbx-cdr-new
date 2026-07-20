@@ -4,7 +4,7 @@ import { maskSecuritySecrets } from './sanitize.js';
 
 const ALLOWED_COMMANDS = new Set([
   'ss', 'netstat', 'nft', 'iptables', 'ip6tables', 'firewall-cmd', 'ufw', 'fail2ban-client',
-  'systemctl', 'service', 'journalctl', 'uname', 'getenforce', 'aa-status', 'openssl', 'ip', 'fwconsole', 'asterisk'
+  'systemctl', 'service', 'journalctl', 'dmesg', 'uname', 'getenforce', 'aa-status', 'openssl', 'ip', 'fwconsole', 'asterisk'
 ]);
 const MAX_OUTPUT = 512 * 1024;
 

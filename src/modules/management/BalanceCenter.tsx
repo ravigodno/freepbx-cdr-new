@@ -1280,7 +1280,7 @@ export default function BalanceCenter({ session, hasPermission }: BalanceCenterP
         <div className="bg-slate-50 dark:bg-[#1a2332] rounded-2xl p-4">
           <h4 className="text-[12px] font-black text-slate-800 dark:text-slate-200 mb-2 flex items-center gap-1.5">
             <AlertTriangle className="h-4 w-4 text-amber-500" />
-            Выявленные системные р��зкие изменения баланса
+            Выявленные системные резкие изменения баланса
           </h4>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
             <div className="p-3 bg-white dark:bg-[#212d3e] rounded-xl border border-slate-100 dark:border-[#334155] flex items-center justify-between">

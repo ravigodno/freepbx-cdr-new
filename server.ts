@@ -143,7 +143,10 @@ import {
 import { startMonitoringRetentionRunner } from './server/monitoringRetention.js';
 import { registerSecurityRoutes } from './server/security/router.js';
 import { startSecurityCollector } from './server/security/service.js';
+import { registerLogAnalysisRoutes } from './server/logAnalysis/router.js';
+import { startLogAnalysisCollector } from './server/logAnalysis/service.js';
 import { registerOutgoingReportRoutes } from './server/outgoingReports.js';
+import { mergeDeviceNetworkIdentity, readIpNeighborMacs } from './server/deviceNetworkIdentity.js';
 
 // Load environment variables
 dotenv.config();
@@ -1577,7 +1580,7 @@ const diagnoseGoogleContacts = async (localDb: any, userId: string): Promise<{ p
       return { provider, ok: false, steps };
     }
   } else {
-    addContactSyncDiagnosticStep(steps, 'refresh', 'Об��овление access token', 'ok', 'Access token действителен');
+    addContactSyncDiagnosticStep(steps, 'refresh', 'Обновление access token', 'ok', 'Access token действителен');
   }
 
   let payload: any = null;
@@ -1965,7 +1968,7 @@ const hasInboundTrunkSignal = (c: any): boolean => {
   const did = onlyDigits(c.did);
 
   // did иногда содержит служебный текст "→ ответил: 200".
-  // DID считаем внешним признаком только если в ��ём есть минимум 6 цифр.
+  // DID считаем внешним признаком только если в нём есть минимум 6 цифр.
   return (
     did.length >= 6 ||
     dctx.includes('from-trunk') ||
@@ -3434,7 +3437,7 @@ const parseDirectoryText = (text: string, settings?: AppSettings): any[] => {
       raw = {
         name: get('fullName','fullname','name','имя','фио','contact','контакт') || cols[0],
         company: get('organization','company','компания','организация'),
-        position: get('position','��олжность','job','title'),
+        position: get('position','должность','job','title'),
         phone1: get('phone','phone1','телефон1','номер1','телефон','номер') || cols[1],
         phone2: get('phone2','телефон2','номер2'),
         phone3: get('phone3','телефон3','номер3'),
@@ -3631,7 +3634,7 @@ function runAMICommand(settings: AppSettings, command: string): Promise<{ succes
 async function syncDirectoryFromConfiguredUrl(localDb: any, req: Request): Promise<{ count: number; added: number; updated: number; source: string; message: string }> {
   const settings = localDb.settings || {};
   const url = String(settings.directoryImportUrl || '').trim();
-  if (!url) throw new Error('URL импорта справо��ника не задан');
+  if (!url) throw new Error('URL импорта справочника не задан');
 
   const text = await fetchTextFromUrl(url);
   const format = settings.directoryImportFormat || (url.toLowerCase().endsWith('.json') ? 'json' : 'csv');
@@ -12375,7 +12378,7 @@ app.delete('/api/directory/:id', requireAuth(), async (req, res) => {
   try {
     const authUser = (req as any).user;
     if (!hasFullDirectoryEditPermission(authUser) && !hasOwnDirectoryEditPermission(authUser)) {
-      res.status(403).json({ error: 'Нет прав на удаление записей ��правочника' });
+      res.status(403).json({ error: 'Нет прав на удаление записей справочника' });
       return;
     }
 
@@ -12461,7 +12464,7 @@ function runAMICallSimulate(log: string[], fromExtension: string, toPhoneNumber:
   log.push(`[AMI-SIMULATOR] Имитируем: подключение к Asterisk AMI...`);
   log.push(`[AMI-SIMULATOR] Asterisk приветствие: "Asterisk Call Manager/5.0.3"`);
   log.push(`[AMI-SIMULATOR] Команда: Login (Username: clicktocall, Secret: ••••••) отправлена`);
-  log.push(`[AMI-SIMULATOR] По��учен ответ: Response: Success (Message: Authentication accepted)`);
+  log.push(`[AMI-SIMULATOR] Получен ответ: Response: Success (Message: Authentication accepted)`);
   log.push(`[AMI-SIMULATOR] Формируем Origin Channel: "${origChannel}"`);
   log.push(`[AMI-SIMULATOR] Команда: Originate (Channel: ${origChannel}, Exten: ${toPhoneNumber}, Context: ${clickToCallContext}, CallerID: "${fromExtension}" <${fromExtension}>) отправлена`);
   log.push(`[AMI-SIMULATOR] Получен ответ: Response: Success (Message: Originate successfully queued)`);
@@ -13149,7 +13152,7 @@ function buildLiveCallBannerFromAmiChannels(channels: AmiBlock[], operatorExt: s
     const directionResolution = detectLiveCallDirection(group, ext);
     const hasInboundSignal = directionResolution.direction === 'incoming';
 
-    // ВАЖНО: не берём произвольные цифры из Channel, иначе суффикс�� каналов
+    // ВАЖНО: не берём произвольные цифры из Channel, иначе суффиксы каналов
     // вроде SIP/100-00000004 могут отображаться как номер 00000004.
     const fieldCandidates = getLiveCallNumberCandidates(
       ...group.flatMap(ch => [ch.CallerIDNum, ch.ConnectedLineNum, ch.Exten])
@@ -15999,7 +16002,7 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
         const dayIndex = d.getDay(); // 0 is Sun, 1 is Mon, ... 6 is Sat
         const daySortKey = dayIndex === 0 ? 7 : dayIndex; // Mon=1, Tue=2, ... Sun=7
         const ruWeekdays = [
-          'Воскресенье', 'Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пят��ица', 'Суббота'
+          'Воскресенье', 'Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота'
         ];
         return { key: ruWeekdays[dayIndex], sortKey: daySortKey };
       }
@@ -20636,7 +20639,7 @@ async function getRealVoIPDevices(settings: AppSettings, warnings?: string[]): P
       rtt: amiInfo.rtt || 0,
       responseTime: amiInfo.responseTime || 'N/A',
       network: {
-        mac: '00:00:00:00:00:00',
+        mac: '',
         vendor: 'Unknown',
         vlan: 'VLAN 1',
         gateway: '192.168.1.1',
@@ -20692,7 +20695,7 @@ async function getRealVoIPDevices(settings: AppSettings, warnings?: string[]): P
         rtt: amiInfo.rtt || 0,
         responseTime: amiInfo.responseTime || 'N/A',
         network: {
-          mac: '00:00:00:00:00:00',
+          mac: '',
           vendor: 'Unknown',
           vlan: 'VLAN 1',
           gateway: '192.168.1.1',
@@ -20739,6 +20742,12 @@ async function getRealVoIPDevices(settings: AppSettings, warnings?: string[]): P
     dev.network.vendor = guessed.manufacturer;
   }
 
+  const neighborMacs = readIpNeighborMacs();
+  for (const dev of list) {
+    dev.network.mac = neighborMacs.get(String(dev.ip || '')) || '';
+    dev.network.macHistory = dev.network.mac ? [dev.network.mac] : [];
+  }
+
   return list;
 }
 
@@ -20776,6 +20785,15 @@ app.get('/api/devices-map', requireAuth(), async (req, res) => {
     if (!isDemoMode(settings)) {
       const liveResult = await getCachedRealVoIPDevices(settings);
       const list = liveResult.devices;
+
+      if (liveResult.refreshed) {
+        const previousDevices = (await readWithMonitoringFallback(
+          readDevicesMapFromSql,
+          () => readLegacyMonitoringFile('devicesMap')
+        )).data;
+        const mergedDevices = mergeDeviceNetworkIdentity(list, previousDevices);
+        list.splice(0, list.length, ...mergedDevices);
+      }
 
       if (!liveResult.refreshed) {
         return res.json({ success: true, count: list.length, devices: list, source: 'live_cache' });
@@ -20848,7 +20866,12 @@ app.get('/api/devices-map', requireAuth(), async (req, res) => {
               ip: dev.ip,
               port: dev.port,
               status: dev.status,
-              userAgent: dev.userAgent
+              userAgent: dev.userAgent,
+              name: dev.name,
+              tech: dev.tech,
+              mac: dev.network?.mac || '',
+              manufacturer: dev.manufacturer,
+              model: dev.model
             });
           }
         }
@@ -21014,7 +21037,13 @@ app.post('/api/devices-map/snapshot', requireAuth(), async (req, res) => {
       readDevicesMapFromSql,
       () => readLegacyMonitoringFile('devicesMap')
     );
-    const mapData = JSON.stringify(stored.data, null, 2);
+    const snapshotDevices = stored.data.map((device: any) => ({
+      ...device,
+      name: String(device.name || `Абонент ${device.ext || ''}`).trim(),
+      tech: String(device.tech || device.type || 'Unknown').toUpperCase(),
+      network: { ...(device.network || {}), mac: device.network?.mac || '' }
+    }));
+    const mapData = JSON.stringify(snapshotDevices, null, 2);
     const snapshotPath = path.join(DATA_DIR, `devices-map-snapshot-${Date.now()}.json`);
     fs.writeFileSync(snapshotPath, mapData, 'utf8');
     res.json({ success: true, source: stored.source, snapshotFile: path.basename(snapshotPath), message: "Снимок сетевой карты устройств успешно сохранен на сервере." });
@@ -21884,6 +21913,7 @@ registerAiPbxAdminRoutes(app, requireAuth, readLocalDb, writeLocalDb);
 
 // REGISTER SECURITY MONITORING CENTER ROUTES
 registerSecurityRoutes(app, requireAuth, checkUserPermission);
+registerLogAnalysisRoutes(app, requireAuth, checkUserPermission);
 registerOutgoingReportRoutes(app, {
   requireAuth,
   checkPermission: checkUserPermission,
@@ -21936,6 +21966,7 @@ async function startServer() {
   await runPBXPulsMigrations();
   startMonitoringRetentionRunner();
   startSecurityCollector();
+  startLogAnalysisCollector();
   startDtmfAmiListener(startupDb.settings).catch((e: any) => console.error('[DTMF] listener start failed:', e.message));
 
   app.listen(parseInt(PORT, 10), '0.0.0.0', () => {

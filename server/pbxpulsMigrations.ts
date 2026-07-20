@@ -548,6 +548,72 @@ const MIGRATIONS: Migration[] = [
     statements: [
       `UPDATE security_event_source_stats SET last_event_at=NULL WHERE last_event_at='1970-01-01 00:00:00'`
     ]
+  },
+  {
+    key: '20260720_021_log_analysis',
+    description: 'Create centralized read-only log analysis storage and permission',
+    statements: [
+      `CREATE TABLE IF NOT EXISTS log_sources (
+        id INT AUTO_INCREMENT PRIMARY KEY, source_key VARCHAR(191) NOT NULL UNIQUE, display_name VARCHAR(191) NOT NULL,
+        category VARCHAR(64) NOT NULL, source_type ENUM('file','journald','database','pm2') NOT NULL,
+        canonical_path VARCHAR(512) NULL, journal_unit VARCHAR(191) NULL, detected TINYINT(1) NOT NULL DEFAULT 0,
+        readable TINYINT(1) NOT NULL DEFAULT 0, active TINYINT(1) NOT NULL DEFAULT 1, status VARCHAR(64) NOT NULL DEFAULT 'unknown',
+        file_size BIGINT NULL, inode_value VARCHAR(100) NULL, modified_at DATETIME NULL, last_read_at DATETIME NULL,
+        last_event_at DATETIME NULL, read_error VARCHAR(500) NULL, parser_key VARCHAR(100) NOT NULL,
+        platform VARCHAR(64) NULL, collector_version VARCHAR(32) NOT NULL,
+        UNIQUE KEY uniq_log_source_identity (source_type,canonical_path(128),journal_unit(64)), INDEX idx_log_sources_status (status,active)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS log_cursors (
+        source_key VARCHAR(191) PRIMARY KEY, inode_value VARCHAR(100) NULL, byte_offset BIGINT NOT NULL DEFAULT 0,
+        file_size BIGINT NOT NULL DEFAULT 0, modified_at DATETIME NULL, journal_cursor VARCHAR(1000) NULL,
+        last_line_hash CHAR(64) NULL, last_read_at DATETIME NULL, collector_version VARCHAR(32) NOT NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS log_event_groups (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, fingerprint CHAR(64) NOT NULL UNIQUE, source_key VARCHAR(191) NOT NULL,
+        category VARCHAR(64) NOT NULL, severity ENUM('critical','error','warning','notice','info','debug') NOT NULL,
+        event_type VARCHAR(100) NOT NULL, title VARCHAR(255) NOT NULL, last_message VARCHAR(2000) NOT NULL,
+        occurrence_count BIGINT NOT NULL DEFAULT 1, first_seen_at DATETIME NOT NULL, last_seen_at DATETIME NOT NULL,
+        affected_ips_json TEXT NULL, affected_extensions_json TEXT NULL, affected_trunks_json TEXT NULL,
+        INDEX idx_log_groups_last_seen (last_seen_at), INDEX idx_log_groups_severity (severity), INDEX idx_log_groups_type (event_type)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS log_events (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, dedup_key CHAR(64) NOT NULL UNIQUE, occurred_at DATETIME NOT NULL, received_at DATETIME NOT NULL,
+        source_key VARCHAR(191) NOT NULL, source_name VARCHAR(191) NOT NULL, category VARCHAR(64) NOT NULL,
+        severity ENUM('critical','error','warning','notice','info','debug') NOT NULL, event_type VARCHAR(100) NOT NULL,
+        title VARCHAR(255) NOT NULL, message VARCHAR(2000) NOT NULL, raw_message VARCHAR(4000) NULL, host VARCHAR(191) NULL,
+        process_name VARCHAR(191) NULL, pid INT NULL, module_name VARCHAR(191) NULL, ip_address VARCHAR(64) NULL, port INT NULL,
+        protocol VARCHAR(32) NULL, username VARCHAR(191) NULL, extension_number VARCHAR(64) NULL, sip_peer VARCHAR(191) NULL,
+        trunk VARCHAR(191) NULL, channel VARCHAR(255) NULL, call_id VARCHAR(255) NULL, uniqueid VARCHAR(191) NULL,
+        linkedid VARCHAR(191) NULL, http_method VARCHAR(16) NULL, http_path VARCHAR(1000) NULL, http_status INT NULL,
+        service VARCHAR(191) NULL, jail VARCHAR(191) NULL, fingerprint CHAR(64) NOT NULL, parser_confidence DECIMAL(4,3) NOT NULL,
+        tags_json TEXT NULL, recommendations_json TEXT NULL, correlation_id VARCHAR(100) NULL, correlation_type VARCHAR(100) NULL,
+        correlation_confidence DECIMAL(4,3) NULL, context_before_json TEXT NULL, context_after_json TEXT NULL,
+        INDEX idx_log_events_occurred (occurred_at), INDEX idx_log_events_severity (severity), INDEX idx_log_events_source (source_key),
+        INDEX idx_log_events_type (event_type), INDEX idx_log_events_fingerprint (fingerprint), INDEX idx_log_events_ip (ip_address),
+        INDEX idx_log_events_extension (extension_number), INDEX idx_log_events_linkedid (linkedid), INDEX idx_log_events_call_id (call_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS log_correlations (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, correlation_key VARCHAR(191) NOT NULL UNIQUE, correlation_type VARCHAR(100) NOT NULL,
+        confidence DECIMAL(4,3) NOT NULL, explanation VARCHAR(500) NOT NULL, event_ids_json TEXT NOT NULL,
+        first_seen_at DATETIME NOT NULL, last_seen_at DATETIME NOT NULL, INDEX idx_log_correlations_last_seen (last_seen_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `INSERT IGNORE INTO permissions (permission_key,name,description,category) VALUES
+        ('view_log_analysis','View log analysis','View centralized masked PBX and OS log analysis','monitoring')`,
+      `INSERT IGNORE INTO role_permissions (role_id,permission_id)
+       SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key='view_log_analysis' WHERE r.role_key IN ('su','admin')`,
+      `INSERT IGNORE INTO settings (setting_key,setting_value,value_type,category,is_secret,description) VALUES
+        ('log_analysis.enabled','1','boolean','log_analysis',0,'Enable centralized log analysis'),
+        ('log_analysis.poll_interval_seconds','5','number','log_analysis',0,'Active tab polling interval'),
+        ('log_analysis.retention_days','30','number','log_analysis',0,'Normalized event retention'),
+        ('log_analysis.group_retention_days','90','number','log_analysis',0,'Event group retention'),
+        ('log_analysis.message_max_length','4000','number','log_analysis',0,'Maximum masked message length'),
+        ('log_analysis.context_lines','5','number','log_analysis',0,'Context lines before and after'),
+        ('log_analysis.correlation_enabled','1','boolean','log_analysis',0,'Enable explainable correlation'),
+        ('log_analysis.grouping_enabled','1','boolean','log_analysis',0,'Enable event grouping'),
+        ('log_analysis.max_history_days','7','number','log_analysis',0,'Maximum history range'),
+        ('log_analysis.max_export_rows','5000','number','log_analysis',0,'Maximum masked export rows'),
+        ('log_analysis.debug_visible','0','boolean','log_analysis',0,'Show debug events')`
+    ]
   }
 ];
 
