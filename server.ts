@@ -149,6 +149,7 @@ import { registerLogAnalysisRoutes } from './server/logAnalysis/router.js';
 import { startLogAnalysisCollector } from './server/logAnalysis/service.js';
 import { registerOutgoingReportRoutes } from './server/outgoingReports.js';
 import { mergeDeviceNetworkIdentity, readIpNeighborMacs } from './server/deviceNetworkIdentity.js';
+import { getLatestRtcpQuality, recordAsteriskRtcpQuality } from './server/rtcpQualityCollector.js';
 
 // Load environment variables
 dotenv.config();
@@ -289,6 +290,10 @@ async function startDtmfAmiListener(settings: AppSettings) {
     let loginSent = false;
     let loginAccepted = false;
     let authFailed = false;
+    const activeMediaChannels = new Set<string>();
+    const pendingRtcpActions = new Map<string, string>();
+    let rtcpActionSequence = 0;
+    let rtcpPollTimer: NodeJS.Timeout | null = null;
 
     const socket = new net.Socket();
     dtmfListenerSocket = socket;
@@ -318,12 +323,42 @@ async function startDtmfAmiListener(settings: AppSettings) {
             loginAccepted = true;
             dtmfReconnectDelayMs = DTMF_RECONNECT_BASE_MS;
             console.log(`[DTMF] AMI listener authenticated to ${host}:${port}`);
+            rtcpPollTimer = setInterval(() => {
+              if (!loginAccepted || socket.destroyed) return;
+              Array.from(activeMediaChannels).slice(0, 50).forEach(channel => {
+                const actionId = `pbxpuls-rtcp-${++rtcpActionSequence}`;
+                pendingRtcpActions.set(actionId, channel);
+                socket.write(`Action: Getvar\r\nActionID: ${actionId}\r\nChannel: ${channel}\r\nVariable: CHANNEL(rtcp,all)\r\n\r\n`);
+              });
+            }, 5000);
           } else {
             authFailed = true;
             const reason = ami.Message || ami.Response || 'Authentication failed';
             console.error(`[DTMF] AMI listener authentication failed: ${reason}`);
             socket.destroy();
             return;
+          }
+        }
+
+        const actionId = ami.ActionID || ami.ActionId || '';
+        if (loginAccepted && actionId && pendingRtcpActions.has(actionId) && response) {
+          const channel = pendingRtcpActions.get(actionId) || '';
+          pendingRtcpActions.delete(actionId);
+          if (response === 'success' && ami.Value) recordAsteriskRtcpQuality(channel, ami.Value);
+        }
+
+        if (loginAccepted && ['Newchannel', 'Newstate', 'DialBegin', 'BridgeEnter'].includes(eventName)) {
+          const channel = ami.Channel || ami.DestChannel || '';
+          if (/^(?:PJSIP|SIP)\//i.test(channel)) activeMediaChannels.add(channel);
+        }
+
+        if (loginAccepted && eventName === 'Hangup') {
+          const channel = ami.Channel || '';
+          if (activeMediaChannels.has(channel) && !socket.destroyed) {
+            const actionId = `pbxpuls-rtcp-${++rtcpActionSequence}`;
+            pendingRtcpActions.set(actionId, channel);
+            socket.write(`Action: Getvar\r\nActionID: ${actionId}\r\nChannel: ${channel}\r\nVariable: CHANNEL(rtcp,all)\r\n\r\n`);
+            setTimeout(() => activeMediaChannels.delete(channel), 2000);
           }
         }
 
@@ -359,6 +394,9 @@ async function startDtmfAmiListener(settings: AppSettings) {
       console.warn(authFailed ? '[DTMF] AMI listener disconnected after authentication failure' : '[DTMF] AMI listener disconnected');
       dtmfListenerSocket = null;
       dtmfListenerStarted = false;
+      if (rtcpPollTimer) clearInterval(rtcpPollTimer);
+      pendingRtcpActions.clear();
+      activeMediaChannels.clear();
 
       const reconnectDelay = dtmfReconnectDelayMs;
       dtmfReconnectDelayMs = Math.min(dtmfReconnectDelayMs * 2, DTMF_RECONNECT_MAX_MS);
@@ -19072,7 +19110,14 @@ function initQualityFiles() {
 async function getRealVoIPQualityDevices(settings: AppSettings, warnings?: string[]): Promise<any[]> {
   const list = await getRealVoIPDevices(settings, warnings);
   return list.map(dev => {
-    const metrics = normalizeQualityMetrics(dev);
+    const rtcp = getLatestRtcpQuality(dev.ext);
+    const metrics = normalizeQualityMetrics(rtcp ? {
+      ...dev,
+      ...rtcp,
+      jitter: rtcp.jitterMs,
+      rtpLoss: rtcp.rtpLossPercent,
+      lastSeenAt: rtcp.measuredAt
+    } : dev);
     const status = metrics.availabilityStatus === 'offline' ? 'Offline' : metrics.availabilityStatus === 'online' ? 'Online' : 'Недостаточно данных';
 
     return {
