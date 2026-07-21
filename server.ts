@@ -21913,7 +21913,12 @@ registerAiPbxAdminRoutes(app, requireAuth, readLocalDb, writeLocalDb);
 
 // REGISTER SECURITY MONITORING CENTER ROUTES
 registerSecurityRoutes(app, requireAuth, checkUserPermission);
-registerLogAnalysisRoutes(app, requireAuth, checkUserPermission);
+registerLogAnalysisRoutes(app, requireAuth, checkUserPermission, {
+  queryCdr: async (sql: string, params: any[]) => {
+    const localDb = await readLocalDb();
+    return queryFreePBXCDR(localDb.settings, isDemoMode(localDb.settings), sql, params);
+  }
+});
 registerOutgoingReportRoutes(app, {
   requireAuth,
   checkPermission: checkUserPermission,
