@@ -70,7 +70,7 @@ import ScriptsTab from './components/ScriptsTab';
 import AiAssistantTab from './components/AiAssistantTab';
 import AIPBXAdminTab from './components/AIPBXAdminTab';
 import packageJson from '../package.json';
-import SngrepTab from './modules/monitoring/tabs/monitoring/SngrepTab';
+import SipDialogsTab from './modules/monitoring/tabs/monitoring/SipDialogsTab';
 import TcpdumpTab from './modules/monitoring/tabs/monitoring/TcpdumpTab';
 import ReportsTab from './components/reports/ReportsTab';
 import MarketingTab from './components/marketing/MarketingTab';
@@ -3613,7 +3613,7 @@ export default function App() {
 
   useEffect(() => {
     if (activeView !== 'monitoring') return;
-    if (monitorMode !== 'tcpdump' && monitorMode !== 'sngrep') return;
+    if (monitorMode !== 'tcpdump') return;
     if (!hasPermission('view_tcpdump')) return;
     const t = setInterval(() => {
       if (document.hidden) return;
@@ -3898,7 +3898,7 @@ export default function App() {
                   ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                   : 'bg-white text-slate-600 border-slate-200'}`}
               >
-                SNGREP
+                SIP-диалоги
               </button>
               )}
 
@@ -4003,12 +4003,9 @@ export default function App() {
           )}
 
           {monitorMode === 'sngrep' && hasPermission('view_sngrep') && (
-            <SngrepTab
-              tcpdumpOutput={tcpdumpOutput}
-              loadTcpdumpOutput={loadTcpdumpOutput}
+            <SipDialogsTab
               token={session?.token || ''}
               onNavigate={setMonitorMode}
-              darkMode={darkMode}
             />
           )}
 

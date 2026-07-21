@@ -19,6 +19,7 @@ import net from 'net';
 import { execFile } from 'child_process';
 import { spawn, spawnSync } from 'child_process';
 import { TcpdumpTextStreamParser, type SipCaptureEvent } from './server/sipCaptureParser.js';
+import { buildSafeSipBpf, buildSipDialogs, redactSipSecrets, SIP_CAPTURE_LIMITS, validateCaptureHost, validateCapturePort } from './server/sipDialogs.js';
 import crypto from 'crypto';
 import http from 'http';
 import https from 'https';
@@ -17698,6 +17699,8 @@ let tcpdumpFilePath = '';
 let tcpdumpStartedAt = '';
 let tcpdumpStoppedAt: string | null = null;
 let tcpdumpSessionId = '';
+let tcpdumpOwnerKey = '';
+let tcpdumpAnalysisEngine: 'PBXPuls SIP parser' | 'TCPDUMP packet parser' = 'TCPDUMP packet parser';
 let tcpdumpSafetyTimer: NodeJS.Timeout | null = null;
 let tcpdumpEvents: SipCaptureEvent[] = [];
 let tcpdumpRtpStreams = new Map<string, any>();
@@ -17730,8 +17733,27 @@ function tcpdumpStatusPayload() {
     totalRtpStreams: tcpdumpRtpStreams.size,
     lastEventAt: tcpdumpEvents.at(-1)?.capturedAt || null,
     trafficDetectedButNoSipParsed: tcpdumpDiagnostics.capturePacketsRead > 0 && tcpdumpDiagnostics.sipMessagesParsed === 0,
+    analysisEngine: tcpdumpAnalysisEngine,
     diagnostics: { ...tcpdumpDiagnostics, tcpdumpRunning: running }
   };
+}
+
+function captureOwnerKey(req: Request): string {
+  const user = (req as any).user || {};
+  return String(user.id || user.username || user.login || user.email || user.role || 'authenticated');
+}
+
+function isCaptureOwner(req: Request): boolean {
+  return !tcpdumpOwnerKey || tcpdumpOwnerKey === captureOwnerKey(req);
+}
+
+function scheduleCaptureFileExpiry(filePath: string) {
+  if (!filePath) return;
+  const captureRoot = path.resolve(process.cwd(), 'data', 'pcap');
+  const candidate = path.resolve(filePath);
+  if (!candidate.startsWith(`${captureRoot}${path.sep}`)) return;
+  const timer = setTimeout(() => { void fs.promises.unlink(candidate).catch(() => undefined); }, SIP_CAPTURE_LIMITS.sessionTtlMs);
+  timer.unref?.();
 }
 
 app.get('/api/diagnostics/tcpdump/status', requireAuth(), requirePermission('view_tcpdump'), async (req, res) => {
@@ -17753,6 +17775,7 @@ app.post('/api/diagnostics/tcpdump/start', requireAuth(), requireCapturePermissi
   }
 
 
+    if ((tcpdumpProcess || tcpdumpInspectorProcess) && !isCaptureOwner(req)) return res.status(409).json({ success: false, error: 'Захват уже выполняется другим пользователем' });
     if (tcpdumpProcess || tcpdumpInspectorProcess) {
       return res.json({
         ...tcpdumpStatusPayload(),
@@ -17765,13 +17788,17 @@ app.post('/api/diagnostics/tcpdump/start', requireAuth(), requireCapturePermissi
     const allowedInterfaces = new Set(['any', ...Object.keys(os.networkInterfaces())]);
     if (!allowedInterfaces.has(iface)) return res.status(400).json({ success: false, status: 'failed', error: 'Сетевой интерфейс недоступен' });
     if (!['sip', 'rtp', 'siprtp'].includes(mode)) return res.status(400).json({ success: false, status: 'failed', error: 'Некорректный режим захвата' });
-    const sipPorts = String(req.query.ports || '5060,5061,5160').split(',').map(Number).filter(port => Number.isInteger(port) && port > 0 && port <= 65535);
+    const requestedPermission = String(req.header('x-pbxpuls-monitoring-permission') || 'view_tcpdump');
+    const sipDialogMode = requestedPermission === 'view_sngrep';
+    const requestedPort = sipDialogMode ? validateCapturePort(req.query.port) : null;
+    const sipPorts = requestedPort ? [requestedPort] : String(req.query.ports || '5060,5061,5160').split(',').map(Number).filter(port => Number.isInteger(port) && port > 0 && port <= 65535);
     const rtpMatch = String(req.query.rtpRange || '10000-20000').match(/^(\d+)-(\d+)$/);
     const rtpStart = Math.max(1, Number(rtpMatch?.[1] || 10000));
     const rtpEnd = Math.min(65535, Number(rtpMatch?.[2] || 20000));
     if (!sipPorts.length || rtpStart > rtpEnd) return res.status(400).json({ success: false, status: 'failed', error: 'Некорректные SIP/RTP порты' });
 
-    const sipFilter = `(udp or tcp) and (${sipPorts.map(port => `port ${port}`).join(' or ')})`;
+    const captureHost = sipDialogMode ? validateCaptureHost(req.query.host) : '';
+    const sipFilter = buildSafeSipBpf(sipPorts, captureHost);
     let filter = sipFilter;
 
     if (mode === 'rtp') {
@@ -17783,6 +17810,7 @@ app.post('/api/diagnostics/tcpdump/start', requireAuth(), requireCapturePermissi
     }
 
     const customTcpdumpFilter = String(req.query.filter || '').trim();
+    if (sipDialogMode && customTcpdumpFilter) return res.status(400).json({ success: false, status: 'failed', error: 'Произвольный BPF запрещён для SIP-диалогов' });
     if (customTcpdumpFilter) {
       if (customTcpdumpFilter.length > 500 || /[\r\n\0]/.test(customTcpdumpFilter)) return res.status(400).json({ success: false, status: 'failed', error: 'Некорректный BPF-фильтр' });
       filter = customTcpdumpFilter;
@@ -17797,6 +17825,8 @@ app.post('/api/diagnostics/tcpdump/start', requireAuth(), requireCapturePermissi
     tcpdumpStartedAt = new Date().toISOString();
     tcpdumpStoppedAt = null;
     tcpdumpSessionId = crypto.randomUUID();
+    tcpdumpOwnerKey = captureOwnerKey(req);
+    tcpdumpAnalysisEngine = sipDialogMode ? 'PBXPuls SIP parser' : 'TCPDUMP packet parser';
     tcpdumpEvents = [];
     tcpdumpRtpStreams = new Map();
     tcpdumpCaptureStatus = 'starting';
@@ -17810,7 +17840,8 @@ app.post('/api/diagnostics/tcpdump/start', requireAuth(), requireCapturePermissi
       rtpPacketsDetected: 0, lastRtpPacketAt: null
     });
 
-    const args = ['-i', iface, '-nn', '-s', '0', '-U', '-w', tcpdumpFilePath, filter];
+    const packetLimit = Math.min(Math.max(Number(req.query.packetLimit) || SIP_CAPTURE_LIMITS.maxPackets, 1), SIP_CAPTURE_LIMITS.maxPackets);
+    const args = ['-i', iface, '-nn', '-s', '0', '-U', '-c', String(packetLimit), '-C', '32', '-W', '1', '-w', tcpdumpFilePath, filter];
     const inspectorArgs = ['-i', iface, '-l', '-nn', '-s', '0', '-A', filter];
 
     tcpdumpProcess = spawn('tcpdump', args, {
@@ -17833,7 +17864,9 @@ app.post('/api/diagnostics/tcpdump/start', requireAuth(), requireCapturePermissi
       tcpdumpProcess = null;
       tcpdumpStoppedAt = new Date().toISOString();
       if (code && tcpdumpCaptureStatus !== 'stopped') { tcpdumpCaptureStatus = 'failed'; tcpdumpCaptureError = `tcpdump завершился с кодом ${code}`; }
-      if (code && tcpdumpInspectorProcess) tcpdumpInspectorProcess.kill('SIGINT');
+      if (code === 0 && tcpdumpCaptureStatus === 'running') { tcpdumpCaptureStatus = 'stopped'; tcpdumpStopReason = 'packet_limit_or_capture_complete'; }
+      if (tcpdumpInspectorProcess) tcpdumpInspectorProcess.kill('SIGINT');
+      scheduleCaptureFileExpiry(tcpdumpFilePath);
     });
 
     const parser = new TcpdumpTextStreamParser((result, bytes) => {
@@ -17899,13 +17932,14 @@ app.post('/api/diagnostics/tcpdump/start', requireAuth(), requireCapturePermissi
     });
 
     if (tcpdumpSafetyTimer) clearTimeout(tcpdumpSafetyTimer);
+    const durationSeconds = Math.min(Math.max(Number(req.query.duration) || 60, SIP_CAPTURE_LIMITS.minDurationSeconds), SIP_CAPTURE_LIMITS.maxDurationSeconds);
     tcpdumpSafetyTimer = setTimeout(() => {
       tcpdumpStopReason = 'safety_timeout';
       tcpdumpCaptureStatus = 'stopped';
       tcpdumpProcess?.kill('SIGINT');
       tcpdumpInspectorProcess?.kill('SIGINT');
       setTimeout(() => { tcpdumpProcess?.kill('SIGKILL'); tcpdumpInspectorProcess?.kill('SIGKILL'); }, 2000);
-    }, 5 * 60 * 1000);
+    }, durationSeconds * 1000);
 
     setTimeout(() => {
       res.json({
@@ -17917,7 +17951,8 @@ app.post('/api/diagnostics/tcpdump/start', requireAuth(), requireCapturePermissi
       });
     }, 700);
   } catch (e: any) {
-    res.status(500).json({ success: false, error: e.message || String(e) });
+    const message = e.message || String(e);
+    res.status(/^Некорректный|^Не указаны/.test(message) ? 400 : 500).json({ success: false, error: message });
   }
 });
 
@@ -17930,6 +17965,7 @@ app.post('/api/diagnostics/tcpdump/stop', requireAuth(), requireCapturePermissio
   }
 
 
+    if (!isCaptureOwner(req)) return res.status(403).json({ success: false, error: 'Нет доступа к чужой capture-сессии' });
     if (!tcpdumpProcess && !tcpdumpInspectorProcess) {
       return res.json({
         success: true,
@@ -17946,6 +17982,7 @@ app.post('/api/diagnostics/tcpdump/stop', requireAuth(), requireCapturePermissio
     tcpdumpCaptureStatus = 'stopped';
     tcpdumpStopReason = String(req.query.reason || 'user');
     tcpdumpStoppedAt = new Date().toISOString();
+    scheduleCaptureFileExpiry(tcpdumpFilePath);
     console.info(`[TCPDUMP] stop session=${tcpdumpSessionId} reason=${tcpdumpStopReason}`);
 
     const stoppedFile = tcpdumpFilePath;
@@ -18051,7 +18088,7 @@ app.get('/api/diagnostics/tcpdump/events', requireAuth(), requirePermission('vie
   }
   if (req.query.sessionId && String(req.query.sessionId) !== tcpdumpSessionId) return res.status(409).json({ success: false, error: 'Capture session не найдена', sessionId: tcpdumpSessionId || null });
   const limit = Math.min(Math.max(Number(req.query.limit) || 1000, 1), TCPDUMP_EVENT_LIMIT);
-  const events = tcpdumpEvents.slice(-limit);
+  const events = tcpdumpEvents.slice(-limit).map(({ raw: _raw, ...event }) => event);
   tcpdumpDiagnostics.sipEventsReturnedByApi += events.length;
   res.json({ ...tcpdumpStatusPayload(), events, returned: events.length });
 });
@@ -18061,6 +18098,73 @@ app.get('/api/diagnostics/tcpdump/rtp-sessions', requireAuth(), requirePermissio
   if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_tcpdump !== true) return res.status(403).json({ error: 'Нет прав на TCPDUMP' });
   if (req.query.sessionId && String(req.query.sessionId) !== tcpdumpSessionId) return res.status(409).json({ success: false, error: 'Capture session не найдена', sessionId: tcpdumpSessionId || null });
   res.json({ ...tcpdumpStatusPayload(), streams: [...tcpdumpRtpStreams.values()], returned: tcpdumpRtpStreams.size });
+});
+
+app.get('/api/diagnostics/sngrep/capabilities', requireAuth(), requirePermission('view_sngrep'), async (_req, res) => {
+  const interfaces = ['any', ...Object.keys(os.networkInterfaces())];
+  execFile('sngrep', ['--help'], { timeout: 3000, maxBuffer: 64 * 1024 }, (error: any, stdout, stderr) => {
+    const help = String(stdout || stderr || '');
+    const installed = error?.code !== 'ENOENT';
+    execFile('sngrep', ['--version'], { timeout: 3000, maxBuffer: 64 * 1024 }, (_versionError: any, versionOut, versionErr) => {
+      res.json({
+        success: true, installed, version: installed ? String(versionOut || versionErr).split('\n')[0].trim().slice(0, 120) : null,
+        offlinePcap: /--input|\-I\b/.test(help), noInterfaceMode: /--no-interface|\-N\b/.test(help),
+        structuredOutput: false, machineReadableOutput: false,
+        engine: 'PBXPuls SIP parser', captureBackend: 'tcpdump',
+        sngrepRole: installed ? 'Совместимый офлайн-просмотр PCAP; структурированный вывод этой версии отсутствует' : 'Не установлен',
+        interfaces, defaultPorts: [5060, 5160], limits: SIP_CAPTURE_LIMITS
+      });
+    });
+  });
+});
+
+app.get('/api/diagnostics/sngrep/session', requireAuth(), requirePermission('view_sngrep'), async (req, res) => {
+  if (!isCaptureOwner(req)) return res.status(403).json({ success: false, error: 'Нет доступа к чужой capture-сессии' });
+  const fileSize = tcpdumpFilePath ? await fs.promises.stat(tcpdumpFilePath).then(st => st.size).catch(() => 0) : 0;
+  const status = tcpdumpStatusPayload();
+  const sessionStatus = status.running ? 'running' : tcpdumpCaptureStatus === 'failed' ? 'failed' : tcpdumpEvents.length ? 'completed' : tcpdumpStartedAt ? 'no_traffic' : 'stopped';
+  res.json({ ...status, status: sessionStatus, pcapSize: fileSize, packetLimit: SIP_CAPTURE_LIMITS.maxPackets, pcapLimit: SIP_CAPTURE_LIMITS.maxPcapBytes });
+});
+
+app.get('/api/diagnostics/sngrep/dialogs', requireAuth(), requirePermission('view_sngrep'), async (req, res) => {
+  if (!isCaptureOwner(req)) return res.status(403).json({ success: false, error: 'Нет доступа к чужой capture-сессии' });
+  const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), SIP_CAPTURE_LIMITS.maxDialogs);
+  const offset = Math.max(Number(req.query.offset) || 0, 0);
+  const search = String(req.query.search || '').trim().toLowerCase().slice(0, 200);
+  const method = String(req.query.method || '').trim().toUpperCase().slice(0, 20);
+  const all = buildSipDialogs(tcpdumpEvents).filter(dialog => {
+    const messages = tcpdumpEvents.filter(event => (event.callId || '').toLowerCase() === dialog.callId.toLowerCase());
+    if (method && method !== 'ALL' && !messages.some(event => event.requestMethod === method || String(event.code) === method)) return false;
+    if (!search) return true;
+    return [dialog.callId, dialog.from, dialog.to, dialog.requestUri, dialog.source, dialog.destination, dialog.userAgent].some(value => value.toLowerCase().includes(search));
+  });
+  res.json({ ...tcpdumpStatusPayload(), engine: 'PBXPuls SIP parser', dialogs: all.slice(offset, offset + limit), total: all.length, offset, limit });
+});
+
+app.get('/api/diagnostics/sngrep/dialogs/:dialogId/messages', requireAuth(), requirePermission('view_sngrep'), async (req, res) => {
+  if (!isCaptureOwner(req)) return res.status(403).json({ success: false, error: 'Нет доступа к чужой capture-сессии' });
+  const dialog = buildSipDialogs(tcpdumpEvents).find(item => item.id === req.params.dialogId);
+  if (!dialog) return res.status(404).json({ success: false, error: 'SIP-диалог не найден' });
+  const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), SIP_CAPTURE_LIMITS.maxMessagesPerPage);
+  const offset = Math.max(Number(req.query.offset) || 0, 0);
+  const messages = tcpdumpEvents.filter(event => event.callId === dialog.callId).map(({ raw: _raw, ...event }) => event);
+  res.json({ success: true, engine: 'PBXPuls SIP parser', dialog, messages: messages.slice(offset, offset + limit), total: messages.length, offset, limit });
+});
+
+app.get('/api/diagnostics/sngrep/messages/:messageId/raw', requireAuth(), requirePermission('view_sngrep'), async (req, res) => {
+  if (!isCaptureOwner(req)) return res.status(403).json({ success: false, error: 'Нет доступа к чужой capture-сессии' });
+  const event = tcpdumpEvents.find(item => item.id === req.params.messageId);
+  if (!event) return res.status(404).json({ success: false, error: 'SIP-сообщение не найдено' });
+  res.json({ success: true, id: event.id, raw: redactSipSecrets(event.raw).slice(0, 16 * 1024) });
+});
+
+app.get('/api/diagnostics/sngrep/session/pcap', requireAuth(), requirePermission('view_sngrep'), async (req, res) => {
+  if (!isCaptureOwner(req)) return res.status(403).send('Нет доступа к чужой capture-сессии');
+  if (!tcpdumpFilePath) return res.status(404).send('PCAP не найден');
+  const captureRoot = path.resolve(process.cwd(), 'data', 'pcap');
+  const canonical = await fs.promises.realpath(tcpdumpFilePath).catch(() => '');
+  if (!canonical || (canonical !== captureRoot && !canonical.startsWith(`${captureRoot}${path.sep}`))) return res.status(404).send('PCAP не найден');
+  res.download(canonical, path.basename(canonical));
 });
 
 

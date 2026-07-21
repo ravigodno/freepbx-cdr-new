@@ -21,7 +21,8 @@
     "test:live-snapshot-cache": "tsx scripts/test-live-snapshot-cache.ts",
     "test:quality-permission": "tsx scripts/test-quality-permission.ts",
     "test:monitoring-permissions": "tsx scripts/test-monitoring-tab-permissions.ts",
-    "test:monitoring-full-audit": "tsx scripts/test-monitoring-full-audit.ts",
+    "test:monitoring-full-audit": "tsx scripts/test-monitoring-full-audit.ts && npm run test:sngrep",
+    "test:sngrep": "tsx scripts/test-sngrep.ts",
     "test:contact-import-duplicates": "tsx scripts/test-contact-import-duplicates.ts",
     "test:directory-own-contact-permission": "tsx scripts/test-directory-own-contact-permission.ts",
     "test:live-transfer-search": "tsx scripts/test-live-transfer-search.ts"

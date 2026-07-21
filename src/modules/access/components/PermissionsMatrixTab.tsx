@@ -109,7 +109,7 @@ const GROUPS: PermissionGroup[] = [
       { key: 'view_active_calls', label: 'Активные звонки', kind: 'tab', hint: 'Показывает live-сессии Asterisk' },
       { key: 'view_quality', label: 'Качество связи', kind: 'tab', hint: 'Показывает IP/RTP-телеметрию, MOS, джиттер, RTT и потери пакетов' },
       { key: 'view_tcpdump', label: 'TCPDUMP / SIP-RTP', kind: 'tab', hint: 'Показывает tcpdump и SIP/RTP диагностику' },
-      { key: 'view_sngrep', label: 'SNGREP', kind: 'tab', hint: 'Показывает SIP flow' },
+      { key: 'view_sngrep', label: 'SIP-диалоги', kind: 'tab', hint: 'Реальный SIP flow из ограниченного PCAP; ключ сохранён для совместимости' },
       { key: 'view_cli', label: 'Командный центр', kind: 'tab', hint: 'Диагностика, Asterisk CLI и справочная информация' },
       { key: 'view_db_explorer', label: 'DB Explorer', kind: 'tab', hint: 'Показывает read-only просмотр CDR/CEL и таблиц' },
       { key: 'view_health', label: 'Состояние АТС', kind: 'tab', hint: 'Показывает Health Report сервера и служб' },

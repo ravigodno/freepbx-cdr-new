@@ -40,7 +40,7 @@ check('fwconsole-no-shell', !/spawnSync\(command,\s*\{\s*shell:\s*true/.test(ser
 check('quality-production-no-simulation', server.includes('if (!isDemo) return;') && server.includes("status = dev.status === 'Offline' ? 'Offline' : 'Недостаточно данных'"), 'production quality requires measured RTP/RTCP data');
 check('quality-ui-empty-state', quality.includes('Недостаточно данных'), 'quality UI exposes unavailable measurement state');
 check('db-explorer-ui-read-only', dbExplorer.includes('Только чтение · SELECT') && !dbExplorer.includes('allowWriters:'), 'write controls are absent');
-check('monitoring-polling-active-tab', app.includes("monitorMode !== 'calls'") && app.includes("monitorMode !== 'tcpdump' && monitorMode !== 'sngrep'") && app.includes('document.hidden'), 'global monitoring polling is tab and visibility aware');
+check('monitoring-polling-active-tab', app.includes("monitorMode !== 'calls'") && app.includes("monitorMode !== 'tcpdump'") && app.includes('document.hidden'), 'global monitoring polling is tab and visibility aware; SIP dialogs own their cancellable polling');
 
 const productionFiles = [
   'server.ts', 'src/App.tsx',
