@@ -328,7 +328,7 @@ async function callOpenAIChatViaCurlSafe(endpoint: string, key: string, payload:
   throw new Error('OpenAI API error via curl after retries: ' + sanitizeAiProviderError(lastError?.message || lastError || 'OpenAI curl failed'));
 }
 
-async function generateAIResponse(params: {
+export async function generateAIResponse(params: {
   provider: string;
   model: string;
   temperature: number;

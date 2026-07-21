@@ -4069,7 +4069,7 @@ export default function App() {
           )}
           {monitorMode === 'call-intelligence' && hasPermission('view_call_intelligence') && (
             <Suspense fallback={<div className="p-8 text-center text-slate-500">Загрузка карточки звонка...</div>}>
-              <CallIntelligencePanel token={session?.token || ''} />
+              <CallIntelligencePanel token={session?.token || ''} canUseAi={hasPermission('view_ai_pbx_admin')} />
             </Suspense>
           )}
 

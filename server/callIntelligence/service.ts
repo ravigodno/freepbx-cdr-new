@@ -6,6 +6,12 @@ import { diagnoseCall, type CallDiagnosis } from './diagnosis.js';
 export interface CallIntelligenceDeps extends CallTraceDeps {
   getLiveChannels?: () => Promise<any[]>;
   getSipDialogs?: () => { dialogs: any[]; events: any[]; engine: string; session: any };
+  getAiSettings?: () => Promise<any>;
+  completeAi?: (params: {
+    provider: string; model: string; temperature: number; systemPrompt: string;
+    messages: Array<{ role: 'user' | 'assistant'; text: string }>;
+    responseType?: 'json' | 'text'; apiKey?: string; baseUrl?: string;
+  }) => Promise<string>;
 }
 
 export interface IntelligenceInput {

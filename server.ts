@@ -27,7 +27,7 @@ import https from 'https';
 import { CallEntry, MissedCallStatus, AppSettings, DashboardStats, UserRole, WebUser } from './src/types.js';
 import os from 'os';
 import { registerManagementRoutes } from './server-management.js';
-import { registerAiPbxAdminRoutes } from './server/aiPbxAdmin.js';
+import { generateAIResponse, registerAiPbxAdminRoutes } from './server/aiPbxAdmin.js';
 import { resolveAsteriskCli, runAsteriskCliCommand } from './server/asteriskCli.js';
 import { createConferenceFromActiveCall, createNewPhoneMeeting, getConferenceBackendStatus, startPhoneMeetingRecording, validateConferenceParticipants } from './server/conferenceService.js';
 import {
@@ -22095,7 +22095,9 @@ registerCallIntelligenceRoutes(app, requireAuth, checkUserPermission, {
     events: tcpdumpEvents,
     engine: 'PBXPuls SIP parser',
     session: tcpdumpStatusPayload()
-  })
+  }),
+  getAiSettings: async () => (await readLocalDb()).ai_pbx_settings || {},
+  completeAi: generateAIResponse
 });
 registerOutgoingReportRoutes(app, {
   requireAuth,

@@ -10,7 +10,7 @@ import {
   ShieldAlert,
 } from "lucide-react";
 
-type Props = { token: string; initialQuery?: string };
+type Props = { token: string; initialQuery?: string; canUseAi?: boolean };
 type Tab =
   | "overview"
   | "timeline"
@@ -44,12 +44,16 @@ const duration = (seconds: any) =>
 export default function CallIntelligencePanel({
   token,
   initialQuery = "",
+  canUseAi = false,
 }: Props) {
   const [query, setQuery] = useState(initialQuery),
     [period, setPeriod] = useState("7d"),
     [candidates, setCandidates] = useState<any[]>([]),
     [core, setCore] = useState<any>(null),
     [diagnosis, setDiagnosis] = useState<any>(null),
+    [aiCall, setAiCall] = useState<any>(null),
+    [aiReport, setAiReport] = useState<any>(null),
+    [aiLoading, setAiLoading] = useState(""),
     [tab, setTab] = useState<Tab>("overview"),
     [lazy, setLazy] = useState<Record<string, any>>({}),
     [loading, setLoading] = useState(false),
@@ -73,11 +77,12 @@ export default function CallIntelligencePanel({
       from = new Date(to.getTime() - intervalMs);
     return { from: from.toISOString(), to: to.toISOString() };
   };
-  const request = async (key: string, path: string) => {
+  const request = async (key: string, path: string, method = "GET") => {
     controllers.current.get(key)?.abort();
     const controller = new AbortController();
     controllers.current.set(key, controller);
     const response = await fetch(path, {
+      method,
       headers: { Authorization: `Bearer ${token}` },
       signal: controller.signal,
     });
@@ -100,8 +105,9 @@ export default function CallIntelligencePanel({
     setError("");
     setCore(null);
     setDiagnosis(null);
+    setAiCall(null);
+    setAiReport(null);
     setLazy({});
-    setDiagnosis(null);
     try {
       const data = await request(
         "candidates",
@@ -176,10 +182,24 @@ export default function CallIntelligencePanel({
     }
   };
   const loadReport = async (type: string) => {
-    setReportType(type); setLazyLoading("reports");
+    setReportType(type); setAiReport(null); setLazyLoading("reports");
     try { const data = await request(`reports:${type}`, `/api/monitoring/call-intelligence/reports/${type}`); setLazy(value => ({ ...value, reports: data })); }
     catch (e: any) { if (e.name !== "AbortError") setError(e.message); }
     finally { setLazyLoading(""); }
+  };
+  const explainCurrentCall = async () => {
+    if (!core || aiLoading) return;
+    setAiLoading("call"); setError("");
+    try { setAiCall(await request("ai:call", `/api/monitoring/call-intelligence/ai/explain-call/${encodeURIComponent(core.summary.id)}?${params(core.summary.id)}`, "POST")); }
+    catch (e: any) { if (e.name !== "AbortError") setError(e.message); }
+    finally { setAiLoading(""); }
+  };
+  const explainCurrentReport = async () => {
+    if (!lazy.reports || aiLoading || reportType === "management") return;
+    setAiLoading("report"); setError("");
+    try { setAiReport(await request(`ai:report:${reportType}`, `/api/monitoring/call-intelligence/ai/explain-report/${reportType}`, "POST")); }
+    catch (e: any) { if (e.name !== "AbortError") setError(e.message); }
+    finally { setAiLoading(""); }
   };
   const download = async () => {
     if (!core) return;
@@ -462,6 +482,15 @@ export default function CallIntelligencePanel({
                     ))}</div>}
                     {!diagnosis.quality?.available && <p className="mt-3 text-[10px] text-slate-400">Качество: недостаточно данных — RTCP отсутствует. Это не считается проблемой звонка.</p>}
                     {diagnosis.route?.length > 0 && <div className="mt-3 text-[10px] text-slate-500">Маршрут: {diagnosis.route.map((item: any) => item.label).join(" → ")}</div>}
+                    {canUseAi && <button className="btn mt-4" disabled={aiLoading === "call"} onClick={explainCurrentCall}>{aiLoading === "call" ? "AI объясняет…" : "Объяснить звонок"}</button>}
+                    {aiCall && <div className="mt-3 rounded-lg border border-indigo-200 bg-indigo-50 p-3 text-xs text-indigo-950 dark:border-indigo-900 dark:bg-indigo-950/30 dark:text-indigo-100">
+                      <div className="flex items-center justify-between gap-2"><b>AI-анализ</b><span className="text-[9px] uppercase">{aiCall.provider} · кэш {aiCall.cached ? "да" : "нет"}</span></div>
+                      <p className="mt-2 whitespace-pre-wrap">{aiCall.explanation}</p>
+                      <div className="mt-3 text-[10px] font-bold uppercase">Уверенность: {aiCall.confidence}</div>
+                      {aiCall.facts?.length > 0 && <div className="mt-2 space-y-1">{aiCall.facts.map((fact: any, index: number) => <div key={index}>✓ {fact.source}: {fact.message}</div>)}</div>}
+                      {aiCall.recommendations?.map((item: string) => <div key={item} className="mt-2 font-medium">Рекомендация: {item}</div>)}
+                      <p className="mt-3 text-[9px] text-indigo-600 dark:text-indigo-300">AI объясняет детерминированный диагноз PBXPuls и не выполняет самостоятельный поиск.</p>
+                    </div>}
                   </>
                 )}
               </section>
@@ -697,7 +726,8 @@ export default function CallIntelligencePanel({
                 <div className="grid gap-4 lg:grid-cols-2"><div className="rounded-lg border p-3"><h4 className="font-black">SLA 20 секунд</h4>{lazy.reports.sla.available?<div className="mt-2 text-xs">Среднее ожидание: {lazy.reports.sla.averageWaitSeconds} сек.<br/>Ответ в SLA: {lazy.reports.sla.answeredWithinTargetPercent}%<br/>Статус: {lazy.reports.sla.status.toUpperCase()}</div>:<p className="mt-2 text-xs text-slate-500">Недостаточно подтверждённых queue-данных.</p>}</div><div className="rounded-lg border p-3"><h4 className="font-black">Качество RTCP</h4>{lazy.reports.quality.available?<div className="mt-2 text-xs">MOS: {lazy.reports.quality.averageMos}<br/>Jitter: {lazy.reports.quality.averageJitterMs} мс<br/>Loss: {lazy.reports.quality.averageLossPercent}%</div>:<p className="mt-2 text-xs text-slate-500">Недостаточно реальных RTCP-данных.</p>}</div></div>
                 <div><h4 className="font-black">Основные проблемы</h4><div className="mt-2 space-y-2">{lazy.reports.problems.length?lazy.reports.problems.map((item:any)=><div key={`${item.type}:${item.affectedObjects?.[0]?.name}`} className="rounded-lg border p-3 text-xs"><b>{item.title}</b> · {item.count}<div className="text-slate-500">{item.affectedObjects?.map((o:any)=>`${o.type}: ${o.name}`).join(", ")||"Объект не определён"}</div></div>):<p className="text-xs text-slate-500">Подтверждённые проблемы не найдены.</p>}</div></div>
                 <div><h4 className="font-black">Рекомендации</h4><div className="mt-2 space-y-2">{lazy.reports.recommendations.map((item:any)=><div key={`${item.source}:${item.text}`} className="rounded bg-indigo-50 p-3 text-xs text-indigo-800"><b>{item.text}</b><div className="mt-1">Основание: {item.reason} · {item.confidence}</div></div>)}</div></div>
-                <button className="btn" onClick={downloadReport}><Download className="h-4 w-4"/>JSON export</button>
+                <div className="flex flex-wrap gap-2"><button className="btn" onClick={downloadReport}><Download className="h-4 w-4"/>JSON export</button>{canUseAi && reportType !== "management" && <button className="btn" disabled={aiLoading === "report"} onClick={explainCurrentReport}>{aiLoading === "report" ? "AI объясняет…" : "Объяснить отчёт"}</button>}</div>
+                {aiReport && <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-4 text-xs text-indigo-950 dark:border-indigo-900 dark:bg-indigo-950/30 dark:text-indigo-100"><div className="flex justify-between gap-2"><b>AI-анализ отчёта</b><span className="text-[9px] uppercase">{aiReport.provider} · кэш {aiReport.cached ? "да" : "нет"}</span></div><p className="mt-2 whitespace-pre-wrap">{aiReport.explanation}</p><div className="mt-3 text-[10px] font-bold uppercase">Уверенность: {aiReport.confidence}</div>{aiReport.facts?.map((fact:any,index:number)=><div key={index} className="mt-1">✓ {fact.source}: {fact.message}</div>)}</div>}
               </>:<p className="text-xs text-slate-500">Формирование отчёта…</p>}
             </section>
           )}

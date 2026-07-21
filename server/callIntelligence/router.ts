@@ -2,6 +2,7 @@ import type { Express, NextFunction, Request, Response } from 'express';
 import { buildCallIntelligenceCore, buildCallIntelligenceDiagnosis, buildCallIntelligenceLogs, buildCallIntelligenceQuality, buildCallIntelligenceSecurity, buildCallIntelligenceSip, getCallIntelligenceCandidates, type CallIntelligenceDeps } from './service.js';
 import { buildCallIntelligenceInsights, normalizeInsightPeriod } from './insights.js';
 import { buildCallIntelligenceReport, normalizeReportType } from './reports.js';
+import { explainCall, explainReport } from './aiAnalyst.js';
 
 type Checker = (req: Request, permission: string) => Promise<boolean>;
 const fail = (res: Response, status: number, message: string) => res.status(status).json({ success: false, error: message });
@@ -13,6 +14,11 @@ export function registerCallIntelligenceRoutes(app: Express, requireAuth: any, c
     next();
   };
   const view = [requireAuth(), permit];
+  const aiPermit = async (req: Request, res: Response, next: NextFunction) => {
+    if (!(await check(req, 'view_ai_pbx_admin'))) return fail(res, 403, 'Недостаточно прав для AI-анализа');
+    next();
+  };
+  const aiView = [requireAuth(), permit, aiPermit];
   const route = (path: string, worker: (deps: CallIntelligenceDeps, value: any) => Promise<any>) => app.get(path, ...view, async (req, res) => {
     const controller = new AbortController(); req.once('aborted', () => controller.abort());
     try { res.json({ success: true, data: await worker(deps, input(req, controller.signal)) }); }
@@ -56,6 +62,21 @@ export function registerCallIntelligenceRoutes(app: Express, requireAuth: any, c
       if (!value.query || value.query.length > 255) return fail(res, 400, 'Некорректный идентификатор звонка');
       res.json({ success: true, data: await buildCallIntelligenceDiagnosis(deps, value) });
     } catch (error: any) { fail(res, error?.name === 'AbortError' ? 499 : 400, error?.message || 'Ошибка диагностики звонка'); }
+  });
+  app.post('/api/monitoring/call-intelligence/ai/explain-call/:id', ...aiView, async (req, res) => {
+    const controller = new AbortController(); req.once('aborted', () => controller.abort());
+    try {
+      const value = { ...input(req, controller.signal), query: String(req.params.id || '').trim() };
+      if (!value.query || value.query.length > 255) return fail(res, 400, 'Некорректный идентификатор звонка');
+      res.json({ success: true, data: await explainCall(deps, value) });
+    } catch (error: any) { fail(res, error?.statusCode || (error?.name === 'AbortError' ? 499 : 502), error?.message || 'AI-анализ недоступен'); }
+  });
+  app.post('/api/monitoring/call-intelligence/ai/explain-report/:type', ...aiView, async (req, res) => {
+    try {
+      const type = normalizeReportType(req.params.type);
+      if (type !== req.params.type || type === 'management') return fail(res, 400, 'AI-объяснение доступно для daily, weekly и technical отчётов');
+      res.json({ success: true, data: await explainReport(deps, type) });
+    } catch (error: any) { fail(res, error?.statusCode || 502, error?.message || 'AI-анализ отчёта недоступен'); }
   });
   app.get('/api/monitoring/call-intelligence/export', ...view, async (req, res) => {
     const controller = new AbortController(); req.once('aborted', () => controller.abort());
