@@ -1,69 +1,57 @@
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { runSecurityCommand } from '../security/executor.js';
-import type { DetectedLogSource, LogCategory, LogSourceDefinition } from './types.js';
+import type { DetectedLogSource,LogCategory,LogSourceDefinition,LogSourceGroup } from './types.js';
 
-const VERSION = '1';
-const FILE_SPECS: Array<[string,string,LogCategory,string]> = [
-  ['/var/log/asterisk/full','Asterisk full','asterisk','asterisk'], ['/var/log/asterisk/messages','Asterisk messages','asterisk','asterisk'],
-  ['/var/log/asterisk/security','Asterisk security','security','asterisk_security'], ['/var/log/asterisk/freepbx.log','FreePBX','asterisk','freepbx'],
-  ['/var/log/asterisk/queue_log','Asterisk queue','asterisk','asterisk'], ['/var/log/asterisk/fail2ban','Asterisk Fail2Ban','fail2ban','fail2ban'],
-  ['/var/log/auth.log','Auth / SSH','security','auth'], ['/var/log/secure','Secure / SSH','security','auth'],
-  ['/var/log/fail2ban.log','Fail2Ban','fail2ban','fail2ban'], ['/var/log/syslog','Syslog','system','syslog'],
-  ['/var/log/messages','System messages','system','syslog'], ['/var/log/kern.log','Kernel','system','syslog'],
-  ['/var/log/nginx/access.log','Nginx access','web','nginx'], ['/var/log/nginx/error.log','Nginx error','web','nginx'],
-  ['/var/log/apache2/access.log','Apache access','web','apache'], ['/var/log/apache2/error.log','Apache error','web','apache'],
-  ['/var/log/httpd/access_log','HTTPD access','web','apache'], ['/var/log/httpd/error_log','HTTPD error','web','apache'],
-  ['/root/.pm2/logs/asterisk-cdr-panel-out.log','PBXPuls PM2 stdout','pbxpuls','pm2'],
-  ['/root/.pm2/logs/asterisk-cdr-panel-error.log','PBXPuls PM2 stderr','pbxpuls','pm2']
+const VERSION='2';
+const FIELDS=['severity','ip','extension','phone','callId','uniqueid','linkedid','channel','context','application'];
+type FileSpec=[string,string,LogCategory,string,LogSourceGroup,('normal'|'sensitive'|'high')?];
+const FILE_SPECS:FileSpec[]=[
+ ['/var/log/asterisk/full','Asterisk — полный журнал','asterisk','asterisk','Asterisk'],['/var/log/asterisk/messages','Asterisk — сообщения','asterisk','asterisk','Asterisk'],
+ ['/var/log/asterisk/security','Asterisk — безопасность','security','asterisk_security','Безопасность','high'],['/var/log/asterisk/freepbx_security.log','FreePBX — безопасность','security','freepbx','Безопасность','high'],
+ ['/var/log/asterisk/freepbx.log','FreePBX — основной журнал','asterisk','freepbx','FreePBX'],['/var/log/asterisk/queue_log','Asterisk — очереди','asterisk','asterisk','Очереди'],
+ ['/var/log/asterisk/fail2ban','Asterisk — Fail2Ban','fail2ban','fail2ban','Безопасность','sensitive'],['/var/log/asterisk/firewall.log','FreePBX — Firewall','security','syslog','Безопасность','sensitive'],
+ ['/var/log/asterisk/gql_api_error.log','FreePBX — GraphQL API','asterisk','freepbx','FreePBX'],['/var/log/secure','SSH и авторизация','security','auth','Безопасность','high'],
+ ['/var/log/auth.log','SSH и авторизация (Debian)','security','auth','Безопасность','high'],['/var/log/fail2ban.log','Fail2Ban','fail2ban','fail2ban','Безопасность','sensitive'],
+ ['/var/log/messages','Системные сообщения','system','syslog','Система'],['/var/log/syslog','Syslog','system','syslog','Система'],['/var/log/kern.log','Kernel','system','syslog','Система'],
+ ['/var/log/daemon.log','Системные службы','system','syslog','Система'],['/var/log/cron','Cron','system','syslog','Система'],['/var/log/cron.log','Cron (Debian)','system','syslog','Система'],
+ ['/var/log/dmesg','Kernel dmesg','system','syslog','Система'],['/var/log/audit/audit.log','Linux Audit','security','syslog','Безопасность','high'],
+ ['/var/log/firewalld','Firewalld','security','syslog','Безопасность','sensitive'],['/var/log/ufw.log','UFW','security','syslog','Безопасность','sensitive'],
+ ['/var/log/httpd/access_log','HTTPD access','web','apache','Веб-сервер','sensitive'],['/var/log/httpd/error_log','HTTPD error','web','apache','Веб-сервер'],
+ ['/var/log/httpd/ssl_access_log','HTTPD SSL access','web','apache','Веб-сервер','sensitive'],['/var/log/httpd/ssl_error_log','HTTPD SSL error','web','apache','Веб-сервер'],
+ ['/var/log/nginx/access.log','Nginx access','web','nginx','Веб-сервер','sensitive'],['/var/log/nginx/error.log','Nginx error','web','nginx','Веб-сервер'],
+ ['/var/log/apache2/access.log','Apache access','web','apache','Веб-сервер','sensitive'],['/var/log/apache2/error.log','Apache error','web','apache','Веб-сервер'],
+ ['/var/log/mariadb/mariadb.log','MariaDB','system','syslog','База данных','sensitive']
 ];
-const JOURNAL_SPECS: Array<[string,string,LogCategory,string]> = [
-  ['asterisk','Asterisk journald','asterisk','journald'], ['freepbx','FreePBX journald','asterisk','journald'],
-  ['ssh','SSH journald','security','auth_journald'], ['sshd','SSHD journald','security','auth_journald'],
-  ['fail2ban','Fail2Ban journald','fail2ban','fail2ban_journald'], ['nginx','Nginx journald','web','nginx_journald'],
-  ['apache2','Apache journald','web','apache_journald'], ['httpd','HTTPD journald','web','apache_journald'],
-  ['mariadb','MariaDB journald','system','journald'], ['mysql','MySQL journald','system','journald']
+const ROOTS:Array<[string,LogSourceGroup,LogCategory,string]>=[
+ ['/var/log/asterisk','Asterisk','asterisk','asterisk'],['/var/log/freepbx','FreePBX','asterisk','freepbx'],['/var/log/nginx','Веб-сервер','web','nginx'],
+ ['/var/log/httpd','Веб-сервер','web','apache'],['/var/log/apache2','Веб-сервер','web','apache'],['/var/log/php-fpm','PHP','web','syslog'],
+ ['/var/log/mariadb','База данных','system','syslog'],['/var/log/mysql','База данных','system','syslog']
 ];
+const JOURNAL_SPECS:Array<[string,string,LogCategory,string,LogSourceGroup]>=[
+ ['asterisk','Asterisk journald','asterisk','journald','Asterisk'],['freepbx','FreePBX journald','asterisk','journald','FreePBX'],['sshd','SSHD journald','security','auth_journald','Безопасность'],['ssh','SSH journald','security','auth_journald','Безопасность'],
+ ['fail2ban','Fail2Ban journald','fail2ban','fail2ban_journald','Безопасность'],['firewalld','Firewalld journald','security','journald','Безопасность'],['httpd','HTTPD journald','web','apache_journald','Веб-сервер'],['apache2','Apache journald','web','apache_journald','Веб-сервер'],
+ ['nginx','Nginx journald','web','nginx_journald','Веб-сервер'],['php-fpm','PHP-FPM journald','web','journald','PHP'],['mariadb','MariaDB journald','system','journald','База данных'],['mysql','MySQL journald','system','journald','База данных'],['crond','Cron journald','system','journald','Система'],['cron','Cron journald (Debian)','system','journald','Система']
+];
+let cachedDefinitions:LogSourceDefinition[]=[];
+const key=(type:string,identity:string)=>`${type}:${identity}`;
+const inside=(candidate:string,root:string)=>candidate===root||candidate.startsWith(root+path.sep);
+export const isApprovedLogPath=(candidate:string)=>{const resolved=path.resolve(candidate);if(FILE_SPECS.some(spec=>path.resolve(spec[0])===resolved))return true;return [...ROOTS.map(x=>x[0]),'/var/log/audit',path.join(os.homedir(),'.pm2','logs')].some(root=>inside(resolved,path.resolve(root)));};
+const fileDefinition=(spec:FileSpec):LogSourceDefinition=>{const [file,name,category,parserKey,group,sensitivity='normal']=spec;const type=file.includes('/.pm2/')?'pm2':'file';return{sourceKey:key(type,file),displayName:name,category,sourceType:type,canonicalPath:file,parserKey,group,sensitivity,supportedFields:FIELDS,supportsLogrotate:true,platform:'linux',collectorVersion:VERSION};};
+const rotatedBase=(file:string)=>file.replace(/(?:\.\d+|[-.]\d{8}|-\d{6,14})(?:\.gz)?$/,'');
+const logLike=(name:string)=>!/(?:\.php|\.key|\.pem|\.crt|\.p12|\.conf|\.cnf|\.sql|\.db|\.sqlite|\.stats)$/i.test(name)&&/(?:\.log(?:\.\d+)?(?:\.gz)?$|_(?:out|err)\.log$|^(?:full|messages|security|queue_log|fail2ban|access_log|error_log|ssl_access_log|ssl_error_log)(?:[-.]\d+|\.gz)?$)/i.test(name);
 
-function key(type: string, identity: string) { return `${type}:${identity}`; }
-function fileDefinition(file: string, name: string, category: LogCategory, parserKey: string): LogSourceDefinition {
-  return { sourceKey:key(file.includes('/.pm2/')?'pm2':'file',file),displayName:name,category,sourceType:file.includes('/.pm2/')?'pm2':'file',canonicalPath:file,parserKey,platform:'linux',collectorVersion:VERSION };
-}
+async function discoverFiles():Promise<LogSourceDefinition[]>{const known=new Set(FILE_SPECS.map(x=>x[0]));const found:LogSourceDefinition[]=[];for(const [root,group,category,parserKey] of ROOTS){let entries:fs.Dirent[]=[];try{entries=await fs.promises.readdir(root,{withFileTypes:true});}catch{continue}for(const entry of entries){if(!entry.isFile()&&!entry.isSymbolicLink())continue;if(!logLike(entry.name))continue;const candidate=path.join(root,entry.name);let real:string;try{real=await fs.promises.realpath(candidate)}catch{continue}if(!isApprovedLogPath(real)||known.has(real)||rotatedBase(real)!==real)continue;found.push({sourceKey:key('file',real),displayName:`${group} — ${entry.name}`,category,sourceType:'file',canonicalPath:real,parserKey,group,sensitivity:category==='security'?'high':'normal',supportedFields:FIELDS,supportsLogrotate:true,discovered:true,platform:'linux',collectorVersion:VERSION});}}
+ const pm2Root=path.join(os.homedir(),'.pm2','logs');try{for(const entry of await fs.promises.readdir(pm2Root,{withFileTypes:true})){if(!entry.isFile()||!entry.name.startsWith('asterisk-cdr-panel-')||!entry.name.endsWith('.log'))continue;const file=path.join(pm2Root,entry.name);found.push({sourceKey:key('pm2',file),displayName:`PBXPuls PM2 — ${entry.name.includes('error')?'stderr':'stdout'}`,category:'pbxpuls',sourceType:'pm2',canonicalPath:file,parserKey:'pm2',group:'PBXPuls',sensitivity:'sensitive',supportedFields:FIELDS,supportsLogrotate:true,platform:'pm2',collectorVersion:VERSION});}}catch{}return found;}
 
-export function getLogSourceDefinitions(): LogSourceDefinition[] {
-  return [
-    ...FILE_SPECS.map(spec => fileDefinition(...spec)),
-    ...JOURNAL_SPECS.map(([unit,name,category,parserKey]) => ({sourceKey:key('journald',unit),displayName:name,category,sourceType:'journald' as const,journalUnit:unit,parserKey,platform:'systemd',collectorVersion:VERSION})),
-    {sourceKey:'database:system_events',displayName:'PBXPuls system_events',category:'pbxpuls',sourceType:'database',parserKey:'pbxpuls_database',platform:'pbxpuls',collectorVersion:VERSION},
-    {sourceKey:'database:audit_log',displayName:'PBXPuls audit_log',category:'pbxpuls',sourceType:'database',parserKey:'pbxpuls_database',platform:'pbxpuls',collectorVersion:VERSION}
-  ];
-}
+export async function getLogSourceDefinitionsAsync(){const staticFiles=FILE_SPECS.map(fileDefinition);const dynamic=await discoverFiles();const journals=JOURNAL_SPECS.map(([unit,name,category,parserKey,group])=>({sourceKey:key('journald',unit),displayName:name,category,sourceType:'journald' as const,journalUnit:unit,parserKey,group,sensitivity:'sensitive' as const,supportedFields:FIELDS,supportsLogrotate:false,platform:'systemd',collectorVersion:VERSION}));const directories=ROOTS.map(([root,group,category,parserKey])=>({sourceKey:key('directory',root),displayName:`${group} — каталог журналов`,category,sourceType:'directory' as const,canonicalPath:root,parserKey,group,sensitivity:'normal' as const,supportedFields:[],supportsLogrotate:false,platform:'linux',collectorVersion:VERSION}));cachedDefinitions=[...staticFiles,...dynamic,...journals,...directories,{sourceKey:'database:system_events',displayName:'PBXPuls system_events',category:'pbxpuls',sourceType:'database',parserKey:'pbxpuls_database',group:'PBXPuls',sensitivity:'sensitive',supportedFields:FIELDS,supportsLogrotate:false,platform:'pbxpuls',collectorVersion:VERSION},{sourceKey:'database:audit_log',displayName:'PBXPuls audit_log',category:'pbxpuls',sourceType:'database',parserKey:'pbxpuls_database',group:'PBXPuls',sensitivity:'high',supportedFields:FIELDS,supportsLogrotate:false,platform:'pbxpuls',collectorVersion:VERSION}];return cachedDefinitions;}
+export function getLogSourceDefinitions(){return cachedDefinitions.length?cachedDefinitions:FILE_SPECS.map(fileDefinition);}
+export function resolveLogSource(sourceKey:string){return getLogSourceDefinitions().find(source=>source.sourceKey===sourceKey)||null;}
 
-export function resolveLogSource(sourceKey: string): LogSourceDefinition | null {
-  return getLogSourceDefinitions().find(source => source.sourceKey === sourceKey) || null;
-}
-
-export async function detectLogSources(): Promise<DetectedLogSource[]> {
-  const result: DetectedLogSource[] = [];
-  for (const source of getLogSourceDefinitions()) {
-    if ((source.sourceType === 'file' || source.sourceType === 'pm2') && source.canonicalPath) {
-      try {
-        const real = await fs.promises.realpath(source.canonicalPath); const expected = path.resolve(source.canonicalPath);
-        if (real !== expected && !getLogSourceDefinitions().some(item => item.canonicalPath === real)) throw Object.assign(new Error('Симлинк ведёт за пределы allowlist'), { code:'EACCES' });
-        const stat = await fs.promises.stat(real); await fs.promises.access(real, fs.constants.R_OK);
-        result.push({...source,canonicalPath:real,detected:true,readable:stat.isFile(),active:stat.isFile(),fileSize:stat.size,inode:String(stat.ino),modifiedAt:stat.mtime.toISOString(),readError:null});
-      } catch (error:any) { result.push({...source,detected:error?.code!=='ENOENT',readable:false,active:false,modifiedAt:null,readError:error?.code==='ENOENT'?null:error?.code==='EACCES'?'Нет прав чтения':String(error?.message||error).slice(0,300)}); }
-    } else if (source.sourceType === 'journald') {
-      const unit = source.journalUnit || '';
-      // FreePBX Distro and older CentOS systemctl versions do not support --value.
-      const service = await runSecurityCommand('systemctl',['show',`${unit}.service`,'--property=LoadState'],3000);
-      const loadState = service.stdout.match(/^LoadState=(.+)$/m)?.[1]?.trim();
-      const detected = service.ok && Boolean(loadState) && loadState !== 'not-found';
-      if (!detected) { result.push({...source,detected:false,readable:false,active:false,readError:null}); continue; }
-      const probe = await runSecurityCommand('journalctl',['-u',unit,'-n','1','--no-pager','-o','json'],4000);
-      result.push({...source,detected:true,readable:probe.ok,active:probe.ok,readError:probe.ok?null:(probe.stderr||'journald недоступен').slice(0,300)});
-    } else result.push({...source,detected:true,readable:true,active:true,readError:null});
-  }
-  const identities = new Set<string>();
-  return result.filter(source => { const identity = `${source.sourceType}:${source.canonicalPath||source.journalUnit||source.sourceKey}`; if(identities.has(identity))return false;identities.add(identity);return true; });
-}
+const reason=(error:any)=>error?.code==='ENOENT'?'Файл или каталог отсутствует':error?.code==='EACCES'?'Недостаточно прав':error?.code==='ELOOP'?'Битый симлинк':String(error?.message||error).slice(0,300);
+export async function probeJournalSource(source:LogSourceDefinition,runner:typeof runSecurityCommand=runSecurityCommand):Promise<DetectedLogSource>{const unit=source.journalUnit||'';const service=await runner('systemctl',['show',`${unit}.service`,'--property=LoadState'],3000);const loadState=service.stdout.match(/^LoadState=(.+)$/m)?.[1]?.trim();const detected=service.ok&&Boolean(loadState)&&loadState!=='not-found';if(!detected)return{...source,detected:false,readable:false,active:false,readError:null,unavailableReason:service.timedOut?'Timeout systemctl':service.unavailable?'Команда systemctl отсутствует':'Unit не найден'};const probe=await runner('journalctl',['-u',unit,'-n','1','--no-pager','-o','json'],4000);return{...source,detected:true,readable:probe.ok,active:probe.ok&&Boolean(probe.stdout.trim()),readError:probe.ok?null:(probe.stderr||'journald недоступен').slice(0,300),unavailableReason:probe.ok&&!probe.stdout.trim()?'Журнал unit пуст':probe.ok?null:(probe.timedOut?'Timeout journalctl':probe.unavailable?'Команда journalctl отсутствует':'journald недоступен')};}
+export async function detectLogSources():Promise<DetectedLogSource[]>{const definitions=await getLogSourceDefinitionsAsync();const result:DetectedLogSource[]=[];for(const source of definitions){if(['file','pm2','directory'].includes(source.sourceType)&&source.canonicalPath){try{const expected=path.resolve(source.canonicalPath);const real=await fs.promises.realpath(expected);if(!isApprovedLogPath(real))throw Object.assign(new Error('Симлинк ведёт за пределы разрешённых каталогов'),{code:'EACCES'});const stat=await fs.promises.stat(real);await fs.promises.access(real,fs.constants.R_OK);const rotatedPaths:string[]=[];if(stat.isFile()&&source.supportsLogrotate){const dir=path.dirname(expected),base=path.basename(expected);try{for(const name of await fs.promises.readdir(dir)){if(name!==base&&rotatedBase(path.join(dir,name))===expected){const rotatedReal=await fs.promises.realpath(path.join(dir,name));if(isApprovedLogPath(rotatedReal))rotatedPaths.push(rotatedReal);}}}catch{}}
+ result.push({...source,canonicalPath:real,detected:true,readable:true,active:stat.isFile()&&stat.size>0,fileSize:stat.size,inode:String(stat.ino),modifiedAt:stat.mtime.toISOString(),readError:null,unavailableReason:stat.size===0&&stat.isFile()?'Источник пуст':null,rotatedPaths:rotatedPaths.sort()});}catch(error:any){result.push({...source,detected:error?.code!=='ENOENT',readable:false,active:false,modifiedAt:null,readError:error?.code==='ENOENT'?null:reason(error),unavailableReason:reason(error),rotatedPaths:[]});}}
+ else if(source.sourceType==='journald')result.push(await probeJournalSource(source));
+ else result.push({...source,detected:true,readable:true,active:true,readError:null,unavailableReason:null});}const identities=new Set<string>();return result.filter(source=>{const identity=`${source.sourceType}:${source.canonicalPath||source.journalUnit||source.sourceKey}`;if(identities.has(identity))return false;identities.add(identity);return true});}

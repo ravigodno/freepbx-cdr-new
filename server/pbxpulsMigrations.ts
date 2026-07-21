@@ -614,6 +614,23 @@ const MIGRATIONS: Migration[] = [
         ('log_analysis.max_export_rows','5000','number','log_analysis',0,'Maximum masked export rows'),
         ('log_analysis.debug_visible','0','boolean','log_analysis',0,'Show debug events')`
     ]
+  },
+  {
+    key: '20260721_022_log_source_audit',
+    description: 'Extend centralized log source diagnostics and discovery metadata',
+    statements: [
+      `ALTER TABLE log_sources MODIFY source_type ENUM('file','directory','journald','database','pm2') NOT NULL`,
+      `ALTER TABLE log_sources ADD COLUMN group_name VARCHAR(100) NULL AFTER category`,
+      `ALTER TABLE log_sources ADD COLUMN supports_logrotate TINYINT(1) NOT NULL DEFAULT 0 AFTER active`,
+      `ALTER TABLE log_sources ADD COLUMN sensitivity VARCHAR(32) NOT NULL DEFAULT 'normal' AFTER parser_key`,
+      `ALTER TABLE log_sources ADD COLUMN supported_fields_json TEXT NULL AFTER sensitivity`,
+      `ALTER TABLE log_sources ADD COLUMN rotated_paths_json TEXT NULL AFTER supported_fields_json`,
+      `ALTER TABLE log_sources ADD COLUMN unavailable_reason VARCHAR(500) NULL AFTER read_error`,
+      `ALTER TABLE log_events ADD COLUMN phone_number VARCHAR(64) NULL AFTER extension_number`,
+      `ALTER TABLE log_events ADD COLUMN dialplan_context VARCHAR(191) NULL AFTER channel`,
+      `ALTER TABLE log_events ADD COLUMN application_name VARCHAR(100) NULL AFTER dialplan_context`,
+      `ALTER TABLE log_events ADD INDEX idx_log_events_phone (phone_number)`
+    ]
   }
 ];
 

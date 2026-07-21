@@ -15,12 +15,15 @@ const RULES: Record<string, Rule[]> = {
     { re: /registered\b|added contact/i, type: 'sip_registered', title: 'SIP-устройство зарегистрировано', severity: 'info' },
     { re: /registration.*(?:timeout|timed out)|no response.*(?:sip|provider)|request timeout|retransmission timeout/i, type: 'sip_registration_timeout', title: 'Таймаут SIP-регистрации', severity: 'error', recommendations: DIAG.sip },
     { re: /(?:pjsip|chan_sip).*(?:auth.*fail|forbidden|unauthorized|reject)|failed to authenticate/i, type: 'sip_authentication_failed', title: 'Ошибка SIP-аутентификации', severity: 'warning', recommendations: DIAG.auth },
+    { re: /peer\s+'[^']+'.*(?:unreachable|lagged)|contact.*unavailable/i, type: 'sip_peer_unreachable', title: 'SIP-узел недоступен', severity: 'warning', recommendations: DIAG.sip },
+    { re: /peer\s+'[^']+'.*(?:reachable)|contact.*available/i, type: 'sip_peer_reachable', title: 'SIP-узел доступен', severity: 'info' },
     { re: /rtp.*(?:timeout|no audio)|one.way audio/i, type: 'rtp_timeout', title: 'Проблема RTP/аудио', severity: 'warning', recommendations: DIAG.sip },
     { re: /agi.*(?:error|failed|exception|exit status)/i, type: 'agi_error', title: 'Ошибка AGI', severity: 'error' },
     { re: /(?:no route|route not found|extension not found|invalid extension)/i, type: 'dialplan_route_missing', title: 'Маршрут dialplan не найден', severity: 'error' },
     { re: /(?:congestion|channel unavailable|all circuits are busy)/i, type: 'channel_unavailable', title: 'Канал недоступен', severity: 'error' },
     { re: /(?:module.*(?:load|loading).*fail|error loading module)/i, type: 'module_load_failed', title: 'Ошибка загрузки модуля Asterisk', severity: 'critical' },
     { re: /(?:recording|mixmonitor).*(?:error|failed|permission denied)/i, type: 'recording_failed', title: 'Ошибка записи разговора', severity: 'error' },
+    { re: /(?:reload|reloading|asterisk.*(?:started|restart))/i, type: 'asterisk_lifecycle', title: 'Asterisk reload/restart', severity: 'notice' },
     { re: /\bERROR\b/i, type: 'asterisk_error', title: 'Ошибка Asterisk', severity: 'error' },
     { re: /\bWARNING\b/i, type: 'asterisk_warning', title: 'Предупреждение Asterisk', severity: 'warning' },
     { re: /\bNOTICE\b/i, type: 'asterisk_notice', title: 'Уведомление Asterisk', severity: 'notice' },
@@ -90,20 +93,24 @@ export function parseLogLine(line: string, source: LogSourceDefinition, continua
   const severity: LogSeverity = rule?.severity || (/\berror|failed|fatal\b/i.test(rawMessage) ? 'error' : /\bwarn/i.test(rawMessage) ? 'warning' : 'info');
   const eventType = rule?.type || 'unclassified_log'; const title = rule?.title || 'Событие журнала';
   const ip = rawMessage.match(/(?<![\d:])(?:\d{1,3}\.){3}\d{1,3}(?![\d:])/g)?.[0];
-  const extension = rawMessage.match(/(?:extension|endpoint|peer|accountid|ext)[=: /"']+([A-Za-z0-9_.-]{1,64})/i)?.[1];
+  const extension = rawMessage.match(/(?:extension|endpoint|peer|accountid|ext)[=: /"']+([A-Za-z0-9_.-]{1,64})/i)?.[1]||rawMessage.match(/Peer\s+'([^']+)'/i)?.[1];
   const callId = rawMessage.match(/(?:call-id|callid)[=: ]+([^\s,;]+)/i)?.[1];
   const uniqueid = rawMessage.match(/uniqueid[=: ]+([\w.-]+)/i)?.[1]; const linkedid = rawMessage.match(/linkedid[=: ]+([\w.-]+)/i)?.[1];
   const http = rawMessage.match(/"(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+([^\s"]+)[^"]*"\s+(\d{3})/i);
   const username = rawMessage.match(/(?:user(?:name)?|invalid user|for)\s*[=: ]+([A-Za-z0-9_.@-]+)/i)?.[1];
   const jail = rawMessage.match(/\[([^\]]+)\].*\b(?:Ban|Unban|Found)\b/i)?.[1];
   const processMatch = rawMessage.match(/\b([A-Za-z0-9_.@/-]+)\[(\d+)\]:/);
+  const channel = rawMessage.match(/\b((?:PJSIP|SIP|Local|IAX2|DAHDI)\/[A-Za-z0-9_.@:+-]+(?:-[A-Za-z0-9]+)?)/i)?.[1];
+  const dialplanContext = rawMessage.match(/(?:context|@)([A-Za-z0-9_.-]{1,191})/i)?.[1];
+  const application = rawMessage.match(/\b(Dial|Queue|Bridge|Hangup|MixMonitor|Playback|AGI)\s*\(/i)?.[1];
+  const phone = rawMessage.match(/(?:callerid|from|to|number)[=: /"']+(\+?\d{7,16})\b/i)?.[1];
   const occurredAt = timestamp(rawMessage); const normalized = normalizeFingerprintMessage(rawMessage);
   const fingerprint = buildLogFingerprint([source.sourceKey, eventType, severity, normalized, ip, extension, callId, linkedid, http?.[2], http?.[3], jail]);
   const dedupKey = buildLogFingerprint([source.sourceKey, rawMessage, occurredAt]);
   return { occurredAt, receivedAt: new Date().toISOString(), sourceKey: source.sourceKey, sourceName: source.displayName,
     category: source.category as LogCategory, severity, eventType, title, message: rawMessage.split('\n')[0].slice(0,1000), rawMessage,
     host: os.hostname(), process: processMatch?.[1], pid: processMatch ? Number(processMatch[2]) : undefined, ip, username, extension,
-    sipPeer: extension, callId, uniqueid, linkedid, httpMethod: http?.[1]?.toUpperCase(), httpPath: http?.[2], httpStatus: http ? Number(http[3]) : undefined,
+    sipPeer: extension,phone,channel,dialplanContext,application,callId, uniqueid, linkedid, httpMethod: http?.[1]?.toUpperCase(), httpPath: http?.[2], httpStatus: http ? Number(http[3]) : undefined,
     service: family === 'system' ? processMatch?.[1] : undefined, jail, fingerprint, dedupKey, count: 1, firstSeenAt: occurredAt,
     lastSeenAt: occurredAt, parserConfidence: rule ? 0.9 : 0.35, tags: [family, ...(rule?.tags || [])], recommendedActions: rule?.recommendations || [] };
 }

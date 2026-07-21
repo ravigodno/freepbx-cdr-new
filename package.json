@@ -26,7 +26,8 @@
     ,"test:security": "tsx scripts/test-security-monitoring.ts",
     "test:server-clock": "tsx scripts/test-server-clock.ts"
     ,"test:device-network-identity": "tsx scripts/test-device-network-identity.ts",
-    "test:log-analysis": "tsx scripts/test-log-analysis.ts"
+    "test:log-analysis": "tsx scripts/test-log-analysis.ts",
+    "test:log-source-audit": "tsx scripts/test-log-source-audit.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
