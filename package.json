@@ -20,6 +20,7 @@
     "test:live-popup-parallel-external": "tsx scripts/test-live-popup-parallel-external.ts",
     "test:live-snapshot-cache": "tsx scripts/test-live-snapshot-cache.ts",
     "test:quality-permission": "tsx scripts/test-quality-permission.ts",
+    "test:quality": "tsx scripts/test-quality.ts",
     "test:monitoring-permissions": "tsx scripts/test-monitoring-tab-permissions.ts",
     "test:monitoring-full-audit": "tsx scripts/test-monitoring-full-audit.ts && npm run test:sngrep",
     "test:sngrep": "tsx scripts/test-sngrep.ts",

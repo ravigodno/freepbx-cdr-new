@@ -20,6 +20,7 @@ import { execFile } from 'child_process';
 import { spawn, spawnSync } from 'child_process';
 import { TcpdumpTextStreamParser, type SipCaptureEvent } from './server/sipCaptureParser.js';
 import { buildSafeSipBpf, buildSipDialogs, redactSipSecrets, SIP_CAPTURE_LIMITS, validateCaptureHost, validateCapturePort } from './server/sipDialogs.js';
+import { normalizeQualityMetrics } from './server/qualityMetrics.js';
 import crypto from 'crypto';
 import http from 'http';
 import https from 'https';
@@ -19071,15 +19072,12 @@ function initQualityFiles() {
 async function getRealVoIPQualityDevices(settings: AppSettings, warnings?: string[]): Promise<any[]> {
   const list = await getRealVoIPDevices(settings, warnings);
   return list.map(dev => {
-    const signalingRtt = Number(dev.rtt || 0) || null;
-    const rtpReceivedPackets = Math.max(0, Number(dev.rtpReceivedPackets || dev.rtp_received_packets || 0) || 0);
-    const rtpLostPackets = Math.max(0, Number(dev.rtpLostPackets || dev.rtp_lost_packets || 0) || 0);
-    const metricsAvailable = rtpReceivedPackets + rtpLostPackets > 0;
-    const rtpLoss = metricsAvailable ? calculateRtpLossPercent(rtpReceivedPackets, rtpLostPackets) : null;
-    const status = dev.status === 'Offline' ? 'Offline' : 'Недостаточно данных';
+    const metrics = normalizeQualityMetrics(dev);
+    const status = metrics.availabilityStatus === 'offline' ? 'Offline' : metrics.availabilityStatus === 'online' ? 'Online' : 'Недостаточно данных';
 
     return {
       ...dev,
+      ...metrics,
       ext: dev.ext,
       name: dev.name,
       ip: dev.ip,
@@ -19087,7 +19085,7 @@ async function getRealVoIPQualityDevices(settings: AppSettings, warnings?: strin
       type: dev.tech || dev.type || 'PJSIP',
       tech: dev.tech || dev.type || 'PJSIP',
       deviceStatus: dev.status || '',
-      qualityStatus: status,
+      qualityStatusLabel: metrics.qualityStatus === 'insufficient_data' ? 'Недостаточно данных' : metrics.qualityStatus,
       userAgent: dev.userAgent,
       manufacturer: dev.manufacturer || '',
       model: dev.model || '',
@@ -19100,15 +19098,13 @@ async function getRealVoIPQualityDevices(settings: AppSettings, warnings?: strin
       pingMs: dev.pingMs || dev.ping_ms || 0,
       operationalStatus: dev.operationalStatus || dev.operational_status || '',
       network: dev.network,
-      latency: signalingRtt,
-      signalingRtt,
-      jitter: null,
-      rtpLoss,
-      rtpReceivedPackets,
-      rtpLostPackets,
-      mos: null,
-      metricsAvailable,
-      measurementSource: metricsAvailable ? 'rtp_counters' : 'sip_qualify_only',
+      latency: metrics.sipRttMs,
+      signalingRtt: metrics.sipRttMs,
+      jitter: metrics.jitterMs,
+      rtpLoss: metrics.rtpLossPercent,
+      rtpReceivedPackets: Number(dev.rtpReceivedPackets ?? dev.rtp_received_packets ?? 0),
+      rtpLostPackets: Number(dev.rtpLostPackets ?? dev.rtp_lost_packets ?? 0),
+      measurementSource: metrics.metricsSource,
       status,
       lastCheck: new Date().toISOString()
     };

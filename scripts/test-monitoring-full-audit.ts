@@ -37,8 +37,8 @@ for (const permission of requiredPermissions) {
 
 check('db-explorer-read-only', !/allowWriters|writeType/.test(server.slice(server.indexOf("app.post('/api/db-explorer/query'"), server.indexOf("app.get('/api/db-explorer/cdr/by-uid"))), 'write flags are absent from query endpoint');
 check('fwconsole-no-shell', !/spawnSync\(command,\s*\{\s*shell:\s*true/.test(server), 'fwconsole is executed without a shell');
-check('quality-production-no-simulation', server.includes('if (!isDemo) return;') && server.includes("status = dev.status === 'Offline' ? 'Offline' : 'Недостаточно данных'"), 'production quality requires measured RTP/RTCP data');
-check('quality-ui-empty-state', quality.includes('Недостаточно данных'), 'quality UI exposes unavailable measurement state');
+check('quality-production-no-simulation', server.includes('if (!isDemo) return;') && server.includes('normalizeQualityMetrics(dev)'), 'production quality requires measured RTP/RTCP data and separates endpoint availability');
+check('quality-ui-empty-state', quality.includes('Нет RTCP'), 'quality UI exposes unavailable RTCP measurement state');
 check('db-explorer-ui-read-only', dbExplorer.includes('Только чтение · SELECT') && !dbExplorer.includes('allowWriters:'), 'write controls are absent');
 check('monitoring-polling-active-tab', app.includes("monitorMode !== 'calls'") && app.includes("monitorMode !== 'tcpdump'") && app.includes('document.hidden'), 'global monitoring polling is tab and visibility aware; SIP dialogs own their cancellable polling');
 

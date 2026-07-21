@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { useServerClock } from '../../../../hooks/useServerClock';
 import { getServerNow } from '../../../../utils/serverClock';
+import { averageMetric, availabilityLabel, compareNullableMetrics, formatMetric, qualityLabel, type AvailabilityStatus, type QualityStatus } from '../../qualityPresentation';
 
 // Pure React/SVG charting components to prevent any ResizeObserver, Canvas or React 19 compatibility crashes
 function CustomMiniAreaChart({ 
@@ -43,7 +44,8 @@ function CustomMiniAreaChart({
   rangeEndMs: number
 }) {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
-  const vals = data.map(d => d[dataKey] || 0);
+  const validData = data.filter(d => typeof d[dataKey] === 'number' && Number.isFinite(d[dataKey]));
+  const vals = validData.map(d => d[dataKey]);
   const minVal = yDomain ? yDomain[0] : Math.min(...vals, 0);
   const maxVal = yDomain ? yDomain[1] : Math.max(...vals, 1) * 1.15;
   const range = maxVal - minVal || 1;
@@ -55,7 +57,7 @@ function CustomMiniAreaChart({
   const chartWidth = width - padding.left - padding.right;
   const chartHeight = height - padding.top - padding.bottom;
 
-  const points = data.map((d, idx) => {
+  const points = validData.map((d) => {
     const timestampMs = new Date(d.timestamp).getTime();
     const x = padding.left + ((timestampMs - rangeStartMs) / Math.max(1, rangeEndMs - rangeStartMs)) * chartWidth;
     const rawValue = Number(d[dataKey] ?? 0);
@@ -172,12 +174,12 @@ function CustomMiniAreaChart({
         ))}
       </svg>
 
-      {hoveredIndex !== null && data[hoveredIndex] && (
+      {hoveredIndex !== null && validData[hoveredIndex] && (
         <div className="absolute top-2 right-2 bg-slate-900 border border-slate-700/50 text-white text-[10px] p-2 rounded-lg font-mono z-10 shadow-sm leading-tight">
-          <div className="text-slate-450 font-sans font-bold">{data[hoveredIndex].formattedTime}</div>
+          <div className="text-slate-450 font-sans font-bold">{validData[hoveredIndex].formattedTime}</div>
           <div className="mt-1 flex items-center gap-1 font-bold">
             <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: strokeColor }} />
-            <span>Значение: {data[hoveredIndex][dataKey]}</span>
+            <span>Значение: {validData[hoveredIndex][dataKey]}</span>
           </div>
         </div>
       )}
@@ -202,7 +204,7 @@ function CustomMiniLineChart({
 }) {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   
-  const allVals = data.flatMap(d => keys.map(k => d[k] || 0));
+  const allVals = data.flatMap(d => keys.map(k => d[k])).filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
   const minVal = 0;
   const maxVal = Math.max(...allVals, 1) * 1.15;
   const range = maxVal - minVal || 1;
@@ -215,10 +217,10 @@ function CustomMiniLineChart({
   const chartHeight = height - padding.top - padding.bottom;
 
   const linePoints = keys.map((key) => {
-    return data.map((d, idx) => {
+    return data.filter(d => typeof d[key] === 'number' && Number.isFinite(d[key])).map((d) => {
       const timestampMs = new Date(d.timestamp).getTime();
       const x = padding.left + ((timestampMs - rangeStartMs) / Math.max(1, rangeEndMs - rangeStartMs)) * chartWidth;
-      const y = padding.top + chartHeight - (((d[key] || 0) - minVal) / range) * chartHeight;
+      const y = padding.top + chartHeight - ((d[key] - minVal) / range) * chartHeight;
       return { x, y, val: d[key] };
     });
   });
@@ -374,7 +376,18 @@ interface QualityDevice {
   rtpLostPackets?: number;
   mos: number | null;
   metricsAvailable?: boolean;
-  status: 'Отлично' | 'Хорошо' | 'Предупреждение' | 'Критично' | 'Offline' | 'Недостаточно данных';
+  registrationStatus?: 'registered' | 'unregistered' | 'unknown';
+  isRegistered?: boolean;
+  availabilityStatus?: AvailabilityStatus;
+  qualityStatus?: QualityStatus;
+  sipRttMs?: number | null;
+  jitterMs?: number | null;
+  rtpLossPercent?: number | null;
+  rtcpAvailable?: boolean;
+  metricsSource?: 'rtcp' | 'sip_rtt' | 'unknown';
+  statusReason?: string;
+  lastSeenAt?: string | null;
+  status: 'Отлично' | 'Хорошо' | 'Предупреждение' | 'Критично' | 'Online' | 'Offline' | 'Недостаточно данных';
   lastCheck: string;
   network: {
     mac: string;
@@ -395,10 +408,11 @@ interface TelemetryPoint {
   ext: string;
   timestamp: string;
   status?: string;
-  latency: number;
-  jitter: number;
-  rtpLoss: number;
-  mos: number;
+  latency: number | null;
+  jitter: number | null;
+  rtpLoss: number | null;
+  mos: number | null;
+  metricsSource?: 'rtcp' | 'sip_rtt' | 'synthetic_legacy' | 'unknown';
 }
 
 interface TelemetryAlert {
@@ -414,7 +428,7 @@ interface TelemetryAlert {
 
 type QualitySortKey = 'ext' | 'name' | 'ip' | 'type' | 'userAgent' | 'latency' | 'jitter' | 'rtpLoss' | 'mos' | 'status';
 type QualitySortDirection = 'asc' | 'desc';
-type QualityStatusFilter = 'ALL' | QualityDevice['status'];
+type QualityStatusFilter = 'ALL' | 'online' | 'offline' | QualityStatus;
 
 function calculateRtpLossPercent(receivedPackets: unknown, lostPackets: unknown): number {
   const received = Math.max(0, Number(receivedPackets) || 0);
@@ -576,6 +590,7 @@ export default function QualityTab({ token }: Props) {
   const filteredHistoryData = useMemo(() => {
     if (!deviceHistory.length) return [];
     return deviceHistory
+      .filter(pt => pt.metricsSource !== 'synthetic_legacy' && pt.metricsSource !== 'unknown')
       .filter(pt => new Date(pt.timestamp).getTime() >= chartRange.startMs && new Date(pt.timestamp).getTime() <= chartRange.endMs)
       .map(pt => ({
         ...pt,
@@ -588,69 +603,44 @@ export default function QualityTab({ token }: Props) {
       .sort((a,b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
   }, [deviceHistory, historyPeriod, chartRange]);
 
+  const rtcpHistoryData = useMemo(() => filteredHistoryData.filter(point => point.metricsSource === 'rtcp'), [filteredHistoryData]);
+  const rtcpJitterLossHistory = useMemo(() => rtcpHistoryData.filter(point => point.jitter !== null && point.rtpLoss !== null), [rtcpHistoryData]);
+  const sipRttHistoryData = useMemo(() => filteredHistoryData.filter(point => point.latency !== null && (point.metricsSource === 'sip_rtt' || point.metricsSource === 'rtcp')), [filteredHistoryData]);
+
   // Calculate history period summaries
   const historySummaries = useMemo(() => {
-    if (!filteredHistoryData.length) return { maxLat: 0, minLat: 0, avgLat: 0, peakJitter: 0, avgLoss: 0, mosMin: 4.4, mosMax: 4.4 };
-    let sumLat = 0;
-    let maxLat = 0;
-    let minLat = 9999;
-    let peakJitter = 0;
-    let sumLoss = 0;
-    let minMos = 5.0;
-    let maxMos = 0.0;
-
-    filteredHistoryData.forEach(pt => {
-      sumLat += pt.latency;
-      if (pt.latency > maxLat) maxLat = pt.latency;
-      if (pt.latency < minLat) minLat = pt.latency;
-      if (pt.jitter > peakJitter) peakJitter = pt.jitter;
-      sumLoss += pt.rtpLoss;
-      if (pt.mos < minMos) minMos = pt.mos;
-      if (pt.mos > maxMos) maxMos = pt.mos;
-    });
+    const latencies = sipRttHistoryData.map(point => point.latency).filter((value): value is number => value !== null);
+    const jitters = rtcpHistoryData.map(point => point.jitter).filter((value): value is number => value !== null);
+    const losses = rtcpHistoryData.map(point => point.rtpLoss).filter((value): value is number => value !== null);
+    const mosValues = rtcpHistoryData.map(point => point.mos).filter((value): value is number => value !== null);
 
     return {
-      maxLat,
-      minLat: minLat === 9999 ? 0 : minLat,
-      avgLat: Math.round(sumLat / filteredHistoryData.length),
-      peakJitter,
-      avgLoss: parseFloat((sumLoss / filteredHistoryData.length).toFixed(2)),
-      mosMin: minMos,
-      mosMax: maxMos
+      maxLat: latencies.length ? Math.max(...latencies) : null,
+      minLat: latencies.length ? Math.min(...latencies) : null,
+      avgLat: latencies.length ? Math.round(latencies.reduce((sum,value)=>sum+value,0)/latencies.length) : null,
+      peakJitter: jitters.length ? Math.max(...jitters) : null,
+      avgLoss: losses.length ? Number((losses.reduce((sum,value)=>sum+value,0)/losses.length).toFixed(2)) : null,
+      mosMin: mosValues.length ? Math.min(...mosValues) : null,
+      mosMax: mosValues.length ? Math.max(...mosValues) : null
     };
-  }, [filteredHistoryData]);
+  }, [rtcpHistoryData, sipRttHistoryData]);
 
   // Overall counts for SUMMARY CARDS
   const totals = useMemo(() => {
     if (!devices.length) return { online: 0, problems: 0, avgLat: null, avgJit: null, avgLoss: null, avgMos: null, measured: 0 };
-    const measured = devices.filter(device => device.metricsAvailable);
-    let online = devices.length;
-    let problems = 0;
-    let sumLat = 0;
-    let sumJit = 0;
-    let sumLoss = 0;
-    let sumMos = 0;
-
-    devices.forEach(d => {
-      if (d.status === 'Критично' || d.status === 'Предупреждение') {
-        problems++;
-      }
-      if (d.metricsAvailable) {
-        sumLat += Number(d.latency || 0);
-        sumJit += Number(d.jitter || 0);
-        sumLoss += Number(d.rtpLoss || 0);
-        sumMos += Number(d.mos || 0);
-      }
-    });
+    const measured = devices.filter(device => device.rtcpAvailable === true || device.metricsAvailable === true);
+    const online = devices.filter(device => (device.availabilityStatus || (device.status === 'Offline' ? 'offline' : 'online')) === 'online').length;
+    const problems = devices.filter(device => device.qualityStatus === 'warning' || device.qualityStatus === 'critical').length;
 
     return {
       online,
       problems,
-      avgLat: measured.length ? Math.round(sumLat / measured.length) : null,
-      avgJit: measured.length ? parseFloat((sumJit / measured.length).toFixed(1)) : null,
-      avgLoss: measured.length ? parseFloat((sumLoss / measured.length).toFixed(2)) : null,
-      avgMos: measured.length ? parseFloat((sumMos / measured.length).toFixed(2)) : null,
-      measured: measured.length
+      avgLat: averageMetric(devices, device => device.sipRttMs ?? device.latency, 0),
+      avgJit: averageMetric(measured, device => device.jitterMs ?? device.jitter, 1),
+      avgLoss: averageMetric(measured, device => device.rtpLossPercent ?? device.rtpLoss, 2),
+      avgMos: averageMetric(measured, device => device.mos, 2),
+      measured: measured.length,
+      withoutRtcp: devices.filter(device => (device.availabilityStatus || (device.status === 'Offline' ? 'offline' : 'online')) === 'online' && device.rtcpAvailable !== true && device.metricsAvailable !== true).length
     };
   }, [devices]);
 
@@ -666,9 +656,9 @@ export default function QualityTab({ token }: Props) {
         d.ip.includes(q) ||
         d.userAgent.toLowerCase().includes(q);
 
-      const matchesStatus =
-        qualityStatusFilter === 'ALL' ||
-        d.status === qualityStatusFilter;
+      const availability = d.availabilityStatus || (d.status === 'Offline' ? 'offline' : 'online');
+      const quality = d.qualityStatus || 'insufficient_data';
+      const matchesStatus = qualityStatusFilter === 'ALL' || availability === qualityStatusFilter || quality === qualityStatusFilter;
 
       return matchesSearch && matchesStatus;
     });
@@ -687,17 +677,17 @@ export default function QualityTab({ token }: Props) {
     sensitivity: 'base'
   }), []);
 
-  const getQualityStatusRank = (status: QualityDevice['status']) => {
-    if (status === 'Отлично') return 1;
-    if (status === 'Хорошо') return 2;
-    if (status === 'Предупреждение') return 3;
-    if (status === 'Критично') return 4;
-    if (status === 'Offline') return 5;
-    return 99;
+  const getQualityStatusRank = (device: QualityDevice) => {
+    const availability = device.availabilityStatus || (device.status === 'Offline' ? 'offline' : 'online');
+    if (availability === 'offline') return 5;
+    if (device.qualityStatus === 'critical') return 4;
+    if (device.qualityStatus === 'warning') return 3;
+    if (device.qualityStatus === 'insufficient_data') return 2;
+    return 1;
   };
 
   const getQualitySortValue = (device: QualityDevice, key: QualitySortKey): string | number => {
-    if (key === 'status') return getQualityStatusRank(device.status);
+    if (key === 'status') return getQualityStatusRank(device);
     const value = device[key];
     if (typeof value === 'number') return value;
     return String(value ?? '').trim();
@@ -739,7 +729,10 @@ export default function QualityTab({ token }: Props) {
 
       let result = 0;
 
-      if (typeof aValue === 'number' && typeof bValue === 'number') {
+      if (['latency','jitter','rtpLoss','mos'].includes(qualitySort.key)) {
+        result = compareNullableMetrics(aValue, bValue, qualitySort.direction);
+        return result;
+      } else if (typeof aValue === 'number' && typeof bValue === 'number') {
         result = aValue - bValue;
       } else {
         result = qualitySortCollator.compare(String(aValue), String(bValue));
@@ -1022,7 +1015,7 @@ export default function QualityTab({ token }: Props) {
       )}
 
       {/* ОБЩАЯ СВОДКА (Summary Cards) */}
-      <div className="grid grid-cols-2 xl:grid-cols-7 gap-3">
+      <div className="grid grid-cols-2 xl:grid-cols-8 gap-3">
         <div className="bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-[#334155] rounded-xl p-3">
           <div className="text-[10px] uppercase tracking-wider font-extrabold text-slate-400">Всего онлайн</div>
           <div className="mt-1 flex items-baseline gap-1.5">
@@ -1041,6 +1034,11 @@ export default function QualityTab({ token }: Props) {
           </div>
         </div>
 
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-[#334155] dark:bg-slate-900/30">
+          <div className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400">Без RTCP</div>
+          <div className="mt-1 text-xl font-black font-mono text-slate-800 dark:text-white">{totals.withoutRtcp}</div>
+        </div>
+
         <div className="bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-[#334155] rounded-xl p-3">
           <div className="text-[10px] uppercase tracking-wider font-extrabold text-slate-400">Ср. задержка</div>
           <div className="mt-1 flex items-baseline gap-1">
@@ -1052,7 +1050,7 @@ export default function QualityTab({ token }: Props) {
         <div className="bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-[#334155] rounded-xl p-3">
           <div className="text-[10px] uppercase tracking-wider font-extrabold text-slate-400">Ср. джиттер</div>
           <div className="mt-1 flex items-baseline gap-1">
-            <span className="text-xl font-black text-slate-800 dark:text-white font-mono">{totals.avgJit ?? 'Недостаточно данных'}</span>
+            <span className="text-xl font-black text-slate-800 dark:text-white font-mono">{totals.avgJit ?? 'Нет RTCP'}</span>
             {totals.avgJit !== null && <span className="text-xs font-bold text-slate-400">мс</span>}
           </div>
         </div>
@@ -1060,7 +1058,7 @@ export default function QualityTab({ token }: Props) {
         <div className="bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-[#334155] rounded-xl p-3">
           <div className="text-[10px] uppercase tracking-wider font-extrabold text-slate-400">Ср. потери RTP</div>
           <div className="mt-1 flex items-baseline gap-1">
-            <span className="text-xl font-black text-slate-800 dark:text-white font-mono">{totals.avgLoss ?? 'Недостаточно данных'}</span>
+            <span className="text-xl font-black text-slate-800 dark:text-white font-mono">{totals.avgLoss ?? 'Нет RTCP'}</span>
             {totals.avgLoss !== null && <span className="text-xs font-bold text-slate-400">%</span>}
           </div>
         </div>
@@ -1068,7 +1066,7 @@ export default function QualityTab({ token }: Props) {
         <div className="bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-[#334155] rounded-xl p-3">
           <div className="text-[10px] uppercase tracking-wider font-extrabold text-slate-400">Средний MOS</div>
           <div className="mt-1 flex items-baseline gap-1">
-            <span className="text-xl font-black text-emerald-600 dark:text-emerald-400 font-mono">{totals.avgMos ?? 'Недостаточно данных'}</span>
+            <span className="text-xl font-black text-emerald-600 dark:text-emerald-400 font-mono">{totals.avgMos ?? 'Нет RTCP'}</span>
             {totals.avgMos !== null && <span className="text-xs font-bold text-slate-400">/ 4.5</span>}
           </div>
         </div>
@@ -1119,11 +1117,12 @@ export default function QualityTab({ token }: Props) {
                   title="Фильтр по статусу устройства"
                 >
                   <option value="ALL">Все статусы</option>
-                  <option value="Отлично">Отлично</option>
-                  <option value="Хорошо">Хорошо</option>
-                  <option value="Предупреждение">Предупреждение</option>
-                  <option value="Критично">Критично</option>
-                  <option value="Offline">Offline</option>
+                  <option value="online">Online</option>
+                  <option value="offline">Offline</option>
+                  <option value="good">Качество: хорошо</option>
+                  <option value="warning">Качество: предупреждение</option>
+                  <option value="critical">Проблемы качества</option>
+                  <option value="insufficient_data">Нет RTCP</option>
                 </select>
 
                 <div className="relative">
@@ -1206,9 +1205,9 @@ export default function QualityTab({ token }: Props) {
                       
                       // Status colors
                       let statusBadge = "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/20 dark:text-emerald-400";
-                      if (dev.status === 'Хорошо') statusBadge = "bg-blue-50 text-blue-700 dark:bg-blue-950/20 dark:text-blue-400";
-                      if (dev.status === 'Предупреждение') statusBadge = "bg-amber-50 text-amber-700 dark:bg-amber-950/20 dark:text-amber-400";
-                      if (dev.status === 'Критично') statusBadge = "bg-red-50 text-red-700 dark:bg-red-950/20 dark:text-red-400";
+                      if (dev.availabilityStatus === 'offline' || dev.status === 'Offline') statusBadge = "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300";
+                      else if (dev.qualityStatus === 'warning') statusBadge = "bg-amber-50 text-amber-700 dark:bg-amber-950/20 dark:text-amber-400";
+                      else if (dev.qualityStatus === 'critical') statusBadge = "bg-red-50 text-red-700 dark:bg-red-950/20 dark:text-red-400";
 
                       // Metric dynamic coloring helpers
                       const latColor = Number(dev.latency) > 150 ? 'text-red-600 font-bold' : Number(dev.latency) > 100 ? 'text-amber-600 font-bold' : 'text-slate-600 dark:text-slate-300';
@@ -1237,14 +1236,15 @@ export default function QualityTab({ token }: Props) {
                           <td className="px-4 py-3 text-slate-400 font-mono text-[10px] truncate max-w-[150px]" title={dev.userAgent}>
                             {dev.userAgent}
                           </td>
-                          <td className={`px-4 py-3 font-mono ${latColor}`}>{dev.latency === null ? '—' : `${dev.latency} мс (SIP RTT)`}</td>
-                          <td className={`px-4 py-3 font-mono ${jitColor}`}>{dev.jitter === null ? 'Недостаточно данных' : `${dev.jitter} мс`}</td>
-                          <td className={`px-4 py-3 font-mono ${lossColor}`}>{dev.rtpLoss === null ? 'Недостаточно данных' : `${dev.rtpLoss}%`}</td>
-                          <td className={`px-4 py-3 font-mono ${mosColor}`}>{dev.mos ?? 'Недостаточно данных'}</td>
+                          <td className={`px-4 py-3 font-mono ${latColor}`}>{formatMetric(dev.sipRttMs ?? dev.latency, ' мс (SIP RTT)', '—')}</td>
+                          <td className={`px-4 py-3 font-mono ${jitColor}`} title={dev.jitterMs == null && dev.jitter == null ? 'АТС не предоставила RTCP-метрики для этого устройства или звонка.' : undefined}>{formatMetric(dev.jitterMs ?? dev.jitter, ' мс')}</td>
+                          <td className={`px-4 py-3 font-mono ${lossColor}`} title={dev.rtpLossPercent == null && dev.rtpLoss == null ? 'АТС не предоставила RTCP-метрики для этого устройства или звонка.' : undefined}>{formatMetric(dev.rtpLossPercent ?? dev.rtpLoss, ' %')}</td>
+                          <td className={`px-4 py-3 font-mono ${mosColor}`} title={dev.mos === null ? 'MOS нельзя достоверно рассчитать без RTP/RTCP jitter и packet loss' : undefined}>{formatMetric(dev.mos, '', 'Нет RTCP', 2)}</td>
                           <td className="px-4 py-3">
-                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${statusBadge}`}>
-                              {dev.status}
-                            </span>
+                            <div className={`inline-flex flex-col rounded-lg px-2 py-1 text-[10px] font-black ${statusBadge}`} title={dev.statusReason === 'rtcp_unavailable' ? 'Устройство зарегистрировано; оценка RTP-качества недоступна.' : undefined}>
+                              <span>{availabilityLabel(dev.availabilityStatus || (dev.status === 'Offline' ? 'offline' : 'online'))}</span>
+                              <span className="font-medium opacity-75">{qualityLabel(dev.qualityStatus || 'insufficient_data')}</span>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -1321,7 +1321,7 @@ export default function QualityTab({ token }: Props) {
                     <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">RTT Сетевая задержка (мсек)</div>
                     <div className="h-48">
                       <CustomMiniAreaChart 
-                        data={filteredHistoryData} 
+                        data={sipRttHistoryData}
                         dataKey="latency" 
                         strokeColor="#3b82f6" 
                         fillColor="#3b82f6" 
@@ -1335,14 +1335,15 @@ export default function QualityTab({ token }: Props) {
                   <div className="space-y-1">
                     <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Джиттер (мс) и Потери RTP (%)</div>
                     <div className="h-48">
+                      {!rtcpJitterLossHistory.length ? <div className="flex h-full items-center justify-center rounded-lg border border-dashed text-xs text-slate-400">За выбранный период реальных RTCP-метрик нет</div> :
                       <CustomMiniLineChart 
-                        data={filteredHistoryData} 
+                        data={rtcpJitterLossHistory}
                         keys={['jitter', 'rtpLoss']} 
                         colors={['#f59e0b', '#ef4444']} 
                         labels={['Джиттер (мс)', 'Потери RTP (%)']} 
                         rangeStartMs={chartRange.startMs}
                         rangeEndMs={chartRange.endMs}
-                      />
+                      />}
                     </div>
                   </div>
 
@@ -1350,15 +1351,16 @@ export default function QualityTab({ token }: Props) {
                   <div className="space-y-1">
                     <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Динамика MOS (Акустическая оценка)</div>
                     <div className="h-48">
+                      {!rtcpHistoryData.length ? <div className="flex h-full items-center justify-center rounded-lg border border-dashed text-xs text-slate-400">За выбранный период реальных RTCP-метрик нет</div> :
                       <CustomMiniAreaChart 
-                        data={filteredHistoryData} 
+                        data={rtcpHistoryData}
                         dataKey="mos" 
                         strokeColor="#10b981" 
                         fillColor="#10b981" 
                         yDomain={[1.0, 4.5]} 
                         rangeStartMs={chartRange.startMs}
                         rangeEndMs={chartRange.endMs}
-                      />
+                      />}
                     </div>
                   </div>
 
@@ -1368,27 +1370,27 @@ export default function QualityTab({ token }: Props) {
                       <div className="text-[10px] uppercase font-black tracking-wider text-slate-400">Сводные показатели за выбранный период:</div>
                       <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mt-2 text-xs">
                         <div className="p-2 border rounded-lg bg-white dark:bg-slate-800 text-slate-500 font-bold border-slate-200">
-                          Макс задержка: <span className="font-extrabold text-slate-800 dark:text-white font-mono ml-1">{historySummaries.maxLat} мс</span>
+                          Макс задержка: <span className="font-extrabold text-slate-800 dark:text-white font-mono ml-1">{historySummaries.maxLat === null ? 'Нет данных' : `${historySummaries.maxLat} мс`}</span>
                         </div>
                         <div className="p-2 border rounded-lg bg-white dark:bg-slate-800 text-slate-500 font-bold border-slate-200">
-                          Мин задержка: <span className="font-extrabold text-slate-800 dark:text-white font-mono ml-1">{historySummaries.minLat} мс</span>
+                          Мин задержка: <span className="font-extrabold text-slate-800 dark:text-white font-mono ml-1">{historySummaries.minLat === null ? 'Нет данных' : `${historySummaries.minLat} мс`}</span>
                         </div>
                         <div className="p-2 border rounded-lg bg-white dark:bg-slate-800 text-slate-500 font-bold border-slate-200">
-                          Ср. задержка: <span className="font-extrabold text-slate-800 dark:text-white font-mono ml-1">{historySummaries.avgLat} мс</span>
+                          Ср. задержка: <span className="font-extrabold text-slate-800 dark:text-white font-mono ml-1">{historySummaries.avgLat === null ? 'Нет данных' : `${historySummaries.avgLat} мс`}</span>
                         </div>
                         <div className="p-2 border rounded-lg bg-white dark:bg-slate-800 text-slate-500 font-bold border-slate-200">
-                          Пик джиттера: <span className="font-extrabold text-slate-800 dark:text-white font-mono ml-1">{historySummaries.peakJitter} мс</span>
+                          Пик джиттера: <span className="font-extrabold text-slate-800 dark:text-white font-mono ml-1">{historySummaries.peakJitter === null ? 'Нет RTCP' : `${historySummaries.peakJitter} мс`}</span>
                         </div>
                         <div className="p-2 border rounded-lg bg-white dark:bg-slate-800 text-slate-500 font-bold border-slate-200">
-                          Ср. потери RTP: <span className="font-extrabold text-slate-800 dark:text-white font-mono ml-1">{historySummaries.avgLoss}%</span>
+                          Ср. потери RTP: <span className="font-extrabold text-slate-800 dark:text-white font-mono ml-1">{historySummaries.avgLoss === null ? 'Нет RTCP' : `${historySummaries.avgLoss}%`}</span>
                         </div>
                         <div className="p-2 border rounded-lg bg-white dark:bg-slate-800 text-slate-500 font-bold border-slate-200">
-                          Коридор MOS: <span className="font-extrabold text-emerald-600 font-mono ml-1">{historySummaries.mosMin} - {historySummaries.mosMax}</span>
+                          Коридор MOS: <span className="font-extrabold text-emerald-600 font-mono ml-1">{historySummaries.mosMin === null ? 'Нет RTCP' : `${historySummaries.mosMin} - ${historySummaries.mosMax}`}</span>
                         </div>
                       </div>
                     </div>
                     <div className="text-[10px] text-slate-400 mt-2 font-semibold">
-                      * Данные генерируются внутренним инспектором Asterisk на основе RTCP receiver-side отчетов абонента.
+                      * Отображаются только метрики с подтверждённым источником RTCP. SIP RTT показан отдельно.
                     </div>
                   </div>
 
