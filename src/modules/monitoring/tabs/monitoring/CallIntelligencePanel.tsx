@@ -21,6 +21,7 @@ type Tab =
   | "logs"
   | "security"
   | "insights"
+  | "reports"
   | "export";
 const labels: Record<Tab, string> = {
   overview: "Обзор",
@@ -32,6 +33,7 @@ const labels: Record<Tab, string> = {
   logs: "Логи",
   security: "Безопасность",
   insights: "Аналитика проблем",
+  reports: "Отчёты",
   export: "Экспорт",
 };
 const fmt = (value: any) =>
@@ -52,6 +54,7 @@ export default function CallIntelligencePanel({
     [lazy, setLazy] = useState<Record<string, any>>({}),
     [loading, setLoading] = useState(false),
     [lazyLoading, setLazyLoading] = useState(""),
+    [reportType, setReportType] = useState("daily"),
     [recordingUrls, setRecordingUrls] = useState<Record<string, string>>({}),
     [error, setError] = useState("");
   const controllers = useRef(new Map<string, AbortController>()),
@@ -156,14 +159,14 @@ export default function CallIntelligencePanel({
     if (
       !core ||
       lazy[next] ||
-      !["logs", "sip", "quality", "security", "insights"].includes(next)
+      !["logs", "sip", "quality", "security", "insights", "reports"].includes(next)
     )
       return;
     setLazyLoading(next);
     try {
       const data = await request(
         next,
-        next === "insights" ? `/api/monitoring/call-intelligence/insights?period=${encodeURIComponent(period)}` : `/api/monitoring/call-intelligence/${next}?${params(core.summary.id)}`,
+        next === "insights" ? `/api/monitoring/call-intelligence/insights?period=${encodeURIComponent(period)}` : next === "reports" ? `/api/monitoring/call-intelligence/reports/${reportType}` : `/api/monitoring/call-intelligence/${next}?${params(core.summary.id)}`,
       );
       setLazy((value) => ({ ...value, [next]: data }));
     } catch (e: any) {
@@ -171,6 +174,12 @@ export default function CallIntelligencePanel({
     } finally {
       setLazyLoading("");
     }
+  };
+  const loadReport = async (type: string) => {
+    setReportType(type); setLazyLoading("reports");
+    try { const data = await request(`reports:${type}`, `/api/monitoring/call-intelligence/reports/${type}`); setLazy(value => ({ ...value, reports: data })); }
+    catch (e: any) { if (e.name !== "AbortError") setError(e.message); }
+    finally { setLazyLoading(""); }
   };
   const download = async () => {
     if (!core) return;
@@ -186,6 +195,12 @@ export default function CallIntelligencePanel({
     a.download = `pbxpuls-call-${core.summary.id}.json`;
     a.click();
     URL.revokeObjectURL(url);
+  };
+  const downloadReport = async () => {
+    const response = await fetch(`/api/monitoring/call-intelligence/reports/${reportType}/export`, { headers: { Authorization: `Bearer ${token}` } });
+    if (!response.ok) return setError(`Экспорт отчёта: HTTP ${response.status}`);
+    const blob = await response.blob(), url = URL.createObjectURL(blob), a = document.createElement("a");
+    a.href = url; a.download = `pbxpuls-${reportType}-report.json`; a.click(); URL.revokeObjectURL(url);
   };
   const loadRecording = async (filename: string) => {
     if (recordingUrls[filename]) return;
@@ -670,6 +685,20 @@ export default function CallIntelligencePanel({
                   {item.recommendations?.[0] && <div className="mt-2 rounded bg-indigo-50 p-2 text-indigo-800 dark:bg-indigo-950/30 dark:text-indigo-200"><b>Рекомендация:</b> {item.recommendations[0].text}<div className="mt-1 text-[10px]">Основание: {item.recommendations[0].reason}</div></div>}
                 </article>
               ))}</div> : lazy.insights ? <p className="text-xs text-slate-500">За выбранный период повторяющиеся подтверждённые проблемы не найдены.</p> : <p className="text-xs text-slate-500">Откройте раздел, чтобы загрузить агрегированную аналитику.</p>}
+            </section>
+          )}
+          {tab === "reports" && (
+            <section className="space-y-4 rounded-xl border bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+              <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="font-black dark:text-white">Call Intelligence Reports</h3><p className="text-xs text-slate-500">Автоматический детерминированный отчёт состояния телефонии</p></div>{lazy.reports?.profile&&<span className="text-[10px] text-slate-400">{lazy.reports.profile.durationMs} мс · кэш {lazy.reports.profile.cacheHit?"да":"нет"}</span>}</div>
+              <div className="flex flex-wrap gap-2">{[["daily","Сегодня"],["weekly","Неделя"],["technical","Технический"],["management","Руководитель"]].map(([type,label])=><button key={type} onClick={()=>loadReport(type)} className={`rounded-lg border px-3 py-2 text-xs font-bold ${reportType===type?"border-indigo-300 bg-indigo-50 text-indigo-700":""}`}>{label}</button>)}</div>
+              {lazy.reports ? <>
+                <div className={`rounded-lg border p-4 ${lazy.reports.summary.state==="critical"?"border-red-300 bg-red-50":lazy.reports.summary.state==="good"?"border-emerald-300 bg-emerald-50":"border-amber-200 bg-amber-50"}`}><div className="text-[10px] uppercase text-slate-500">Состояние</div><div className="mt-1 text-lg font-black">{lazy.reports.summary.title}</div><p className="mt-1 text-xs">{lazy.reports.summary.description}</p></div>
+                <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-6">{[["Звонков",lazy.reports.calls.total],["Отвечено",lazy.reports.calls.answered],["Пропущено",lazy.reports.calls.missed],["Failed",lazy.reports.calls.failed],["Входящие",lazy.reports.calls.incoming],["Проблемы",lazy.reports.calls.problemRate==null?"—":`${lazy.reports.calls.problemRate}%`]].map(([label,value])=><div key={label} className="rounded-lg border p-3"><div className="text-[9px] uppercase text-slate-400">{label}</div><b className="text-lg">{value}</b></div>)}</div>
+                <div className="grid gap-4 lg:grid-cols-2"><div className="rounded-lg border p-3"><h4 className="font-black">SLA 20 секунд</h4>{lazy.reports.sla.available?<div className="mt-2 text-xs">Среднее ожидание: {lazy.reports.sla.averageWaitSeconds} сек.<br/>Ответ в SLA: {lazy.reports.sla.answeredWithinTargetPercent}%<br/>Статус: {lazy.reports.sla.status.toUpperCase()}</div>:<p className="mt-2 text-xs text-slate-500">Недостаточно подтверждённых queue-данных.</p>}</div><div className="rounded-lg border p-3"><h4 className="font-black">Качество RTCP</h4>{lazy.reports.quality.available?<div className="mt-2 text-xs">MOS: {lazy.reports.quality.averageMos}<br/>Jitter: {lazy.reports.quality.averageJitterMs} мс<br/>Loss: {lazy.reports.quality.averageLossPercent}%</div>:<p className="mt-2 text-xs text-slate-500">Недостаточно реальных RTCP-данных.</p>}</div></div>
+                <div><h4 className="font-black">Основные проблемы</h4><div className="mt-2 space-y-2">{lazy.reports.problems.length?lazy.reports.problems.map((item:any)=><div key={`${item.type}:${item.affectedObjects?.[0]?.name}`} className="rounded-lg border p-3 text-xs"><b>{item.title}</b> · {item.count}<div className="text-slate-500">{item.affectedObjects?.map((o:any)=>`${o.type}: ${o.name}`).join(", ")||"Объект не определён"}</div></div>):<p className="text-xs text-slate-500">Подтверждённые проблемы не найдены.</p>}</div></div>
+                <div><h4 className="font-black">Рекомендации</h4><div className="mt-2 space-y-2">{lazy.reports.recommendations.map((item:any)=><div key={`${item.source}:${item.text}`} className="rounded bg-indigo-50 p-3 text-xs text-indigo-800"><b>{item.text}</b><div className="mt-1">Основание: {item.reason} · {item.confidence}</div></div>)}</div></div>
+                <button className="btn" onClick={downloadReport}><Download className="h-4 w-4"/>JSON export</button>
+              </>:<p className="text-xs text-slate-500">Формирование отчёта…</p>}
             </section>
           )}
           {tab === "export" && (

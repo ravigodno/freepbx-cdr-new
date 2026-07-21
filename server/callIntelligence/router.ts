@@ -1,6 +1,7 @@
 import type { Express, NextFunction, Request, Response } from 'express';
 import { buildCallIntelligenceCore, buildCallIntelligenceDiagnosis, buildCallIntelligenceLogs, buildCallIntelligenceQuality, buildCallIntelligenceSecurity, buildCallIntelligenceSip, getCallIntelligenceCandidates, type CallIntelligenceDeps } from './service.js';
 import { buildCallIntelligenceInsights, normalizeInsightPeriod } from './insights.js';
+import { buildCallIntelligenceReport, normalizeReportType } from './reports.js';
 
 type Checker = (req: Request, permission: string) => Promise<boolean>;
 const fail = (res: Response, status: number, message: string) => res.status(status).json({ success: false, error: message });
@@ -46,6 +47,8 @@ export function registerCallIntelligenceRoutes(app: Express, requireAuth: any, c
     try { const data = await buildCallIntelligenceInsights(deps, normalizeInsightPeriod(req.query.period)); res.json({ success: true, data: { period: data.period, rows: data.insights.map(({ type, title, count, previousCount, changePercent, trend, affectedObjects }) => ({ type, title, count, previousCount, changePercent, trend, affectedObjects })), partial: data.partial } }); }
     catch (error: any) { fail(res, 500, error?.message || 'Ошибка трендов'); }
   });
+  for (const reportType of ['daily','weekly','technical','management'] as const) app.get(`/api/monitoring/call-intelligence/reports/${reportType}`, ...view, async (_req,res)=>{try{res.json({success:true,data:await buildCallIntelligenceReport(deps,reportType)})}catch(error:any){fail(res,500,error?.message||'Ошибка формирования отчёта')}});
+  app.get('/api/monitoring/call-intelligence/reports/:type/export',...view,async(req,res)=>{try{const type=normalizeReportType(req.params.type);if(type!==req.params.type)return fail(res,400,'Некорректный тип отчёта');const report=await buildCallIntelligenceReport(deps,type);res.setHeader('Content-Disposition',`attachment; filename="pbxpuls-${type}-report.json"`);res.json({success:true,report})}catch(error:any){fail(res,500,error?.message||'Ошибка экспорта отчёта')}});
   app.get('/api/monitoring/call-intelligence/diagnosis/:id', ...view, async (req, res) => {
     const controller = new AbortController(); req.once('aborted', () => controller.abort());
     try {

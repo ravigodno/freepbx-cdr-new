@@ -36,6 +36,7 @@ const ui=fs.readFileSync('src/modules/monitoring/tabs/monitoring/CallIntelligenc
 const migrations=fs.readFileSync('server/pbxpulsMigrations.ts','utf8');
 assert(router.includes("check(req, 'view_call_intelligence')"));
 for(const endpoint of ['candidates','core','logs','sip','quality','security','export','diagnosis','insights','problem-history','problem/:type','trends'])assert(router.includes(`/call-intelligence/${endpoint}`));
+for(const report of ['daily','weekly','technical','management'])assert(router.includes(`'${report}'`));
 assert(migrations.includes('20260721_025_call_intelligence_permission'));
 assert(ui.includes('AbortController'));
 assert(ui.includes('PBXPuls SIP parser'));
