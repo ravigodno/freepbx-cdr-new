@@ -1,6 +1,7 @@
 import { queryPBXPulsDb } from '../pbxpulsDb.js';
 import { buildCoreCallTrace, buildLogEnrichment, findCallTraceCandidates, maskTraceForReport, type CallTraceDeps } from '../logAnalysis/callTrace.js';
 import { listLogEvents } from '../logAnalysis/storage.js';
+import { diagnoseCall, type CallDiagnosis } from './diagnosis.js';
 
 export interface CallIntelligenceDeps extends CallTraceDeps {
   getLiveChannels?: () => Promise<any[]>;
@@ -14,6 +15,20 @@ export interface IntelligenceInput {
   to?: string;
   limit?: number;
   signal?: AbortSignal;
+}
+
+const DIAGNOSIS_TTL = 5 * 60_000, DIAGNOSIS_CACHE_MAX = 100;
+const diagnosisCache = new Map<string, { createdAt: number; value: CallDiagnosis }>();
+const diagnosisKey = (input: IntelligenceInput) => `1|${safeText(input.query, 255)}|${safeText(input.queryType || 'auto', 32)}|${safeText(input.from, 40)}|${safeText(input.to, 40)}`;
+function diagnosisCacheGet(key: string) {
+  const row = diagnosisCache.get(key);
+  if (!row || Date.now() - row.createdAt > DIAGNOSIS_TTL) { if (row) diagnosisCache.delete(key); return null; }
+  diagnosisCache.delete(key); diagnosisCache.set(key, row);
+  return { ...row.value, profile: { ...row.value.profile, cacheHit: true, cacheAgeMs: Date.now() - row.createdAt, ttlMs: DIAGNOSIS_TTL } };
+}
+function diagnosisCacheSet(key: string, value: CallDiagnosis) {
+  diagnosisCache.set(key, { createdAt: Date.now(), value });
+  while (diagnosisCache.size > DIAGNOSIS_CACHE_MAX) diagnosisCache.delete(diagnosisCache.keys().next().value!);
 }
 
 const safeText = (value: unknown, max = 255) => String(value || '').trim().slice(0, max);
@@ -121,4 +136,20 @@ export async function buildCallIntelligenceSecurity(deps: CallIntelligenceDeps, 
     return security && related;
   });
   return maskTraceForReport({ rows, total: rows.length });
+}
+
+export async function buildCallIntelligenceDiagnosis(deps: CallIntelligenceDeps, input: IntelligenceInput) {
+  const key = diagnosisKey(input), hit = diagnosisCacheGet(key);
+  if (hit) return hit;
+  const started = Date.now();
+  const core = await buildCallIntelligenceCore(deps, input);
+  const [sip, quality, security] = await Promise.all([
+    buildCallIntelligenceSip(deps, input),
+    buildCallIntelligenceQuality(deps, input),
+    buildCallIntelligenceSecurity(deps, input)
+  ]);
+  const value = diagnoseCall({ core, sip, quality, security });
+  value.profile = { ...value.profile, durationMs: Date.now() - started, cacheHit: false, cacheAgeMs: 0, ttlMs: DIAGNOSIS_TTL };
+  diagnosisCacheSet(key, value);
+  return value;
 }

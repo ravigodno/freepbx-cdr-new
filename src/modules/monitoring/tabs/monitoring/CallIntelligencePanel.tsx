@@ -45,6 +45,7 @@ export default function CallIntelligencePanel({
     [period, setPeriod] = useState("7d"),
     [candidates, setCandidates] = useState<any[]>([]),
     [core, setCore] = useState<any>(null),
+    [diagnosis, setDiagnosis] = useState<any>(null),
     [tab, setTab] = useState<Tab>("overview"),
     [lazy, setLazy] = useState<Record<string, any>>({}),
     [loading, setLoading] = useState(false),
@@ -93,7 +94,9 @@ export default function CallIntelligencePanel({
     setLoading(true);
     setError("");
     setCore(null);
+    setDiagnosis(null);
     setLazy({});
+    setDiagnosis(null);
     try {
       const data = await request(
         "candidates",
@@ -109,6 +112,7 @@ export default function CallIntelligencePanel({
     }
   };
   const open = async (id: string) => {
+    const queryParams = params(id).toString();
     activeId.current = id;
     controllers.current.forEach((controller) => controller.abort());
     setLoading(true);
@@ -117,12 +121,21 @@ export default function CallIntelligencePanel({
     try {
       const data = await request(
         "core",
-        `/api/monitoring/call-intelligence/core?${params(id)}`,
+        `/api/monitoring/call-intelligence/core?${queryParams}`,
       );
       if (activeId.current !== id) return;
       setCore(data);
       setCandidates([]);
       setTab("overview");
+      void request(
+        "diagnosis",
+        `/api/monitoring/call-intelligence/diagnosis/${encodeURIComponent(id)}?${queryParams}`,
+      ).then((result) => {
+        if (activeId.current === id) setDiagnosis(result);
+      }).catch((diagnosisError: any) => {
+        if (diagnosisError.name !== "AbortError" && activeId.current === id)
+          setError(diagnosisError.message);
+      });
     } catch (e: any) {
       if (e.name !== "AbortError") setError(e.message);
     } finally {
@@ -408,20 +421,31 @@ export default function CallIntelligencePanel({
                 </dl>
               </section>
               <section className="rounded-xl border bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
-                <h3 className="font-black dark:text-white">Анализ</h3>
-                <div className="mt-3 text-xs uppercase text-slate-400">
-                  {core.diagnosis?.certainty || "данных недостаточно"}
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="font-black dark:text-white">Диагностика звонка</h3>
+                  {diagnosis?.profile && <span className="text-[10px] text-slate-400">{diagnosis.profile.durationMs} мс · кэш {diagnosis.profile.cacheHit ? "да" : "нет"}</span>}
                 </div>
-                <div className="mt-1 font-black dark:text-white">
-                  {core.diagnosis?.title}
-                </div>
-                <p className="mt-2 text-xs text-slate-500">
-                  {core.diagnosis?.details}
-                </p>
-                <div className="mt-3 text-[10px] text-slate-400">
-                  Основание: CDR disposition, CEL и подтверждённые события
-                  трассировки.
-                </div>
+                {!diagnosis ? (
+                  <p className="mt-3 text-xs text-slate-500">Выполняется детерминированная диагностика…</p>
+                ) : (
+                  <>
+                    <div className={`mt-3 inline-flex rounded-full px-2 py-1 text-[10px] font-black uppercase ${diagnosis.status === "problem_found" ? "bg-amber-100 text-amber-800" : diagnosis.status === "no_problem" ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-600"}`}>
+                      {diagnosis.status === "problem_found" ? "Обнаружена проблема" : diagnosis.status === "no_problem" ? "Проблем не обнаружено" : "Недостаточно данных"}
+                    </div>
+                    <div className="mt-2 font-black dark:text-white">{diagnosis.summary}</div>
+                    <div className="mt-1 text-[10px] uppercase text-slate-400">Уверенность: {({ confirmed: "подтверждено", high: "высокая", medium: "средняя", low: "низкая" } as any)[diagnosis.confidence] || diagnosis.confidence}</div>
+                    {diagnosis.problems?.length > 0 && <div className="mt-3 space-y-2">{diagnosis.problems.map((problem: any) => (
+                      <div key={`${problem.code}:${problem.title}`} className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs dark:border-amber-900 dark:bg-amber-950/20">
+                        <b>{problem.title}</b>
+                        <div className="mt-1 text-[10px] uppercase text-amber-700">{problem.severity} · {problem.confidence}</div>
+                        {problem.evidence?.map((item: any, index: number) => <div key={index} className="mt-2 text-slate-600 dark:text-slate-300">Основание: {item.time ? `${fmt(item.time)} · ` : ""}{item.source.toUpperCase()} · {item.message}</div>)}
+                        {problem.recommendations?.map((item: string) => <div key={item} className="mt-2 font-medium text-indigo-700 dark:text-indigo-300">Рекомендация: {item}</div>)}
+                      </div>
+                    ))}</div>}
+                    {!diagnosis.quality?.available && <p className="mt-3 text-[10px] text-slate-400">Качество: недостаточно данных — RTCP отсутствует. Это не считается проблемой звонка.</p>}
+                    {diagnosis.route?.length > 0 && <div className="mt-3 text-[10px] text-slate-500">Маршрут: {diagnosis.route.map((item: any) => item.label).join(" → ")}</div>}
+                  </>
+                )}
               </section>
             </div>
           )}

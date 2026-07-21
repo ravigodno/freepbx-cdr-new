@@ -1,5 +1,5 @@
 import type { Express, NextFunction, Request, Response } from 'express';
-import { buildCallIntelligenceCore, buildCallIntelligenceLogs, buildCallIntelligenceQuality, buildCallIntelligenceSecurity, buildCallIntelligenceSip, getCallIntelligenceCandidates, type CallIntelligenceDeps } from './service.js';
+import { buildCallIntelligenceCore, buildCallIntelligenceDiagnosis, buildCallIntelligenceLogs, buildCallIntelligenceQuality, buildCallIntelligenceSecurity, buildCallIntelligenceSip, getCallIntelligenceCandidates, type CallIntelligenceDeps } from './service.js';
 
 type Checker = (req: Request, permission: string) => Promise<boolean>;
 const fail = (res: Response, status: number, message: string) => res.status(status).json({ success: false, error: message });
@@ -22,6 +22,14 @@ export function registerCallIntelligenceRoutes(app: Express, requireAuth: any, c
   route('/api/monitoring/call-intelligence/sip', buildCallIntelligenceSip);
   route('/api/monitoring/call-intelligence/quality', buildCallIntelligenceQuality);
   route('/api/monitoring/call-intelligence/security', buildCallIntelligenceSecurity);
+  app.get('/api/monitoring/call-intelligence/diagnosis/:id', ...view, async (req, res) => {
+    const controller = new AbortController(); req.once('aborted', () => controller.abort());
+    try {
+      const value = { ...input(req, controller.signal), query: String(req.params.id || '').trim() };
+      if (!value.query || value.query.length > 255) return fail(res, 400, 'Некорректный идентификатор звонка');
+      res.json({ success: true, data: await buildCallIntelligenceDiagnosis(deps, value) });
+    } catch (error: any) { fail(res, error?.name === 'AbortError' ? 499 : 400, error?.message || 'Ошибка диагностики звонка'); }
+  });
   app.get('/api/monitoring/call-intelligence/export', ...view, async (req, res) => {
     const controller = new AbortController(); req.once('aborted', () => controller.abort());
     try {
