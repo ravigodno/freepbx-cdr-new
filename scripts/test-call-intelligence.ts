@@ -35,7 +35,7 @@ const router=fs.readFileSync('server/callIntelligence/router.ts','utf8');
 const ui=fs.readFileSync('src/modules/monitoring/tabs/monitoring/CallIntelligencePanel.tsx','utf8');
 const migrations=fs.readFileSync('server/pbxpulsMigrations.ts','utf8');
 assert(router.includes("check(req, 'view_call_intelligence')"));
-for(const endpoint of ['candidates','core','logs','sip','quality','security','export','diagnosis'])assert(router.includes(`/call-intelligence/${endpoint}`));
+for(const endpoint of ['candidates','core','logs','sip','quality','security','export','diagnosis','insights','problem-history','problem/:type','trends'])assert(router.includes(`/call-intelligence/${endpoint}`));
 assert(migrations.includes('20260721_025_call_intelligence_permission'));
 assert(ui.includes('AbortController'));
 assert(ui.includes('PBXPuls SIP parser'));

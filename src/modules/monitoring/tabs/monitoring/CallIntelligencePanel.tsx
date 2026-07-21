@@ -20,6 +20,7 @@ type Tab =
   | "recording"
   | "logs"
   | "security"
+  | "insights"
   | "export";
 const labels: Record<Tab, string> = {
   overview: "Обзор",
@@ -30,6 +31,7 @@ const labels: Record<Tab, string> = {
   recording: "Запись",
   logs: "Логи",
   security: "Безопасность",
+  insights: "Аналитика проблем",
   export: "Экспорт",
 };
 const fmt = (value: any) =>
@@ -63,9 +65,9 @@ export default function CallIntelligencePanel({
     [],
   );
   const range = () => {
-    const days = period === "24h" ? 1 : period === "30d" ? 30 : 7,
+    const intervalMs = period === "1h" ? 3600000 : period === "24h" ? 86400000 : period === "30d" ? 30 * 86400000 : 7 * 86400000,
       to = new Date(),
-      from = new Date(to.getTime() - days * 86400000);
+      from = new Date(to.getTime() - intervalMs);
     return { from: from.toISOString(), to: to.toISOString() };
   };
   const request = async (key: string, path: string) => {
@@ -154,14 +156,14 @@ export default function CallIntelligencePanel({
     if (
       !core ||
       lazy[next] ||
-      !["logs", "sip", "quality", "security"].includes(next)
+      !["logs", "sip", "quality", "security", "insights"].includes(next)
     )
       return;
     setLazyLoading(next);
     try {
       const data = await request(
         next,
-        `/api/monitoring/call-intelligence/${next}?${params(core.summary.id)}`,
+        next === "insights" ? `/api/monitoring/call-intelligence/insights?period=${encodeURIComponent(period)}` : `/api/monitoring/call-intelligence/${next}?${params(core.summary.id)}`,
       );
       setLazy((value) => ({ ...value, [next]: data }));
     } catch (e: any) {
@@ -266,6 +268,7 @@ export default function CallIntelligencePanel({
             value={period}
             onChange={(event) => setPeriod(event.target.value)}
           >
+            <option value="1h">1 час</option>
             <option value="24h">24 часа</option>
             <option value="7d">7 дней</option>
             <option value="30d">30 дней</option>
@@ -645,6 +648,28 @@ export default function CallIntelligencePanel({
                   Связанных событий безопасности нет.
                 </p>
               )}
+            </section>
+          )}
+          {tab === "insights" && (
+            <section className="space-y-4 rounded-xl border bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 className="font-black dark:text-white">Аналитика повторяющихся проблем</h3>
+                  <p className="mt-1 text-xs text-slate-500">Детерминированная агрегация CDR, SIP, очередей, RTCP и безопасности</p>
+                </div>
+                {lazy.insights?.profile && <div className="text-[10px] text-slate-400">{lazy.insights.profile.durationMs} мс · кэш {lazy.insights.profile.cacheHit ? "да" : "нет"}</div>}
+              </div>
+              {lazy.insights?.partial && <div className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">Частичный результат: недоступны {lazy.insights.unavailableSources?.join(", ")}</div>}
+              <div className="grid gap-3 sm:grid-cols-3">
+                {[["Всего звонков", lazy.insights?.totalCalls ?? "—"], ["Проблемных звонков", lazy.insights?.problemCalls ?? "—"], ["Событий проблем", lazy.insights?.totalProblems ?? "—"]].map(([label, value]) => <div key={label} className="rounded-lg border p-3"><div className="text-[10px] uppercase text-slate-400">{label}</div><div className="mt-1 text-xl font-black">{value}</div></div>)}
+              </div>
+              {lazy.insights?.insights?.length ? <div className="space-y-2">{lazy.insights.insights.map((item: any) => (
+                <article key={`${item.type}:${item.affectedObjects?.[0]?.type}:${item.affectedObjects?.[0]?.name}`} className="rounded-lg border p-3 text-xs dark:border-slate-700">
+                  <div className="flex flex-wrap items-start justify-between gap-2"><div><b>{item.title}</b><div className="mt-1 text-[10px] uppercase text-slate-400">{item.category} · {item.confidence} · {item.severity}</div></div><div className="text-right"><div className="text-lg font-black">{item.count}</div><div className={item.trend === "rising" || item.trend === "new" ? "text-red-600" : item.trend === "falling" ? "text-emerald-600" : "text-slate-500"}>{item.trend === "rising" ? "↑ Рост" : item.trend === "falling" ? "↓ Снижение" : item.trend === "new" ? "Новая" : "Стабильно"}{item.changePercent !== null ? ` · ${item.changePercent > 0 ? "+" : ""}${item.changePercent}%` : ""}</div></div></div>
+                  <div className="mt-2 text-slate-500">Объект: {item.affectedObjects?.map((value: any) => `${value.type}: ${value.name}`).join(", ") || "не определён"}</div>
+                  {item.recommendations?.[0] && <div className="mt-2 rounded bg-indigo-50 p-2 text-indigo-800 dark:bg-indigo-950/30 dark:text-indigo-200"><b>Рекомендация:</b> {item.recommendations[0].text}<div className="mt-1 text-[10px]">Основание: {item.recommendations[0].reason}</div></div>}
+                </article>
+              ))}</div> : lazy.insights ? <p className="text-xs text-slate-500">За выбранный период повторяющиеся подтверждённые проблемы не найдены.</p> : <p className="text-xs text-slate-500">Откройте раздел, чтобы загрузить агрегированную аналитику.</p>}
             </section>
           )}
           {tab === "export" && (
