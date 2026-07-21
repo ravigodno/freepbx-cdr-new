@@ -651,6 +651,11 @@ export default function App() {
   const hasPermission = (perm: PermissionKey) => {
     return hasUserPermission(session, settings, perm);
   };
+  const hasAnyMonitoringTabPermission = () => ([
+    'view_active_calls', 'view_tcpdump', 'view_sngrep', 'view_cli', 'view_db_explorer',
+    'view_sip_devices_map', 'view_quality', 'view_health', 'view_ai_pbx_admin',
+    'view_security', 'view_log_analysis'
+  ] as PermissionKey[]).some(hasPermission);
 
   const isAdminRole = (role?: string | null) => role === 'admin' || role === 'su';
   const isDirectoryContactImportEnabled = () => settings?.directoryImportEnabled !== false;
@@ -822,12 +827,12 @@ export default function App() {
       tcpdump: 'view_tcpdump',
       sngrep: 'view_sngrep',
       cli: 'view_cli',
-      db: 'view_cli',
+      db: 'view_db_explorer',
       devices: 'view_sip_devices_map',
       quality: 'view_quality',
       security: 'view_security',
       'log-analysis': 'view_log_analysis',
-      health: 'view_cli',
+      health: 'view_health',
       'ai-admin': 'view_ai_pbx_admin'
     };
     if (hasPermission(permissionByMode[monitorMode] || 'view_monitoring')) return;
@@ -3288,7 +3293,7 @@ export default function App() {
     if (hasPermission('view_directory')) return 'directory';
     if (hasPermission('view_reports')) return 'reports';
     if (hasPermission('view_marketing')) return 'marketing';
-    if (hasPermission('view_monitoring')) return 'monitoring';
+    if (hasAnyMonitoringTabPermission()) return 'monitoring';
     if (hasPermission('view_management')) return 'management';
     if (hasPermission('view_balance')) return 'balance';
     if (hasPermission('view_scripts')) return 'scripts';
@@ -3306,7 +3311,7 @@ export default function App() {
     if (view === 'directory') return hasPermission('view_directory');
     if (view === 'reports') return hasPermission('view_reports');
     if (view === 'marketing') return hasPermission('view_marketing');
-    if (view === 'monitoring') return hasPermission('view_monitoring');
+    if (view === 'monitoring') return hasAnyMonitoringTabPermission();
     if (view === 'management') return hasPermission('view_management');
     if (view === 'balance') return hasPermission('view_balance');
     if (view === 'scripts') return hasPermission('view_scripts');
@@ -3487,13 +3492,14 @@ export default function App() {
 
   useEffect(() => {
     if (activeView !== 'monitoring') return;
+    if (!hasPermission('view_active_calls')) return;
     if (isLiveMonitoringPaused) return;
 
     loadLiveSessions();
     const timer = setInterval(loadLiveSessions, 2000);
 
     return () => clearInterval(timer);
-  }, [activeView, isLiveMonitoringPaused]);
+  }, [activeView, isLiveMonitoringPaused, session?.permissions, settings]);
 
   const saveLiveSnapshot = async () => {
     try {
@@ -3605,12 +3611,13 @@ export default function App() {
 
   useEffect(() => {
     if (activeView !== 'monitoring') return;
+    if (!hasPermission('view_tcpdump')) return;
     const t = setInterval(() => {
       loadTcpdumpStatus();
       loadTcpdumpOutput();
     }, 2000);
     return () => clearInterval(t);
-  }, [activeView]);
+  }, [activeView, session?.permissions, settings]);
 
   const renderMonitoringView = () => {
     const sessions = liveSessionsData?.sessions || [];
@@ -3902,7 +3909,7 @@ export default function App() {
               </button>
               )}
 
-              {hasPermission('view_cli') && (
+              {hasPermission('view_db_explorer') && (
               <button
                 onClick={() => setMonitorMode('db')}
                 className={`px-3 py-2 rounded-lg text-xs font-bold border ${monitorMode === 'db'
@@ -3935,7 +3942,7 @@ export default function App() {
               </button>
               )}
 
-              {hasPermission('view_cli') && (
+              {hasPermission('view_health') && (
               <button
                 onClick={() => setMonitorMode('health')}
                 className={`px-3 py-2 rounded-lg text-xs font-bold border ${monitorMode === 'health'
@@ -4005,7 +4012,7 @@ export default function App() {
             <CommandCenterTab token={session?.token || ''} onNavigate={setMonitorMode} />
           )}
 
-          {monitorMode === 'db' && hasPermission('view_cli') && (
+          {monitorMode === 'db' && hasPermission('view_db_explorer') && (
             <Suspense fallback={<div className="p-8 text-center text-slate-500 font-bold bg-white dark:bg-slate-800 rounded-2xl border border-slate-100 dark:border-slate-700">Загрузка базы данных...</div>}>
               <DbExplorerTab token={session?.token || ''} />
             </Suspense>
@@ -4015,7 +4022,7 @@ export default function App() {
             <QualityTab token={session?.token || ''} />
           )}
 
-          {monitorMode === 'health' && hasPermission('view_cli') && (
+          {monitorMode === 'health' && hasPermission('view_health') && (
             <HealthReportTab token={session?.token || ''} />
           )}
 
@@ -5096,7 +5103,7 @@ export default function App() {
             )}
 
               {/* SIDEBAR_MONITORING */}
-              {hasPermission('view_monitoring') && (
+              {hasAnyMonitoringTabPermission() && (
                 <button
                   onClick={() => setActiveView('monitoring')}
                   className={`flex items-center ${isSidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl transition-all relative group cursor-pointer ${
@@ -6859,7 +6866,7 @@ export default function App() {
 
     {activeView === 'marketing' && hasPermission('view_marketing') && <MarketingTab />}
 
-    {activeView === 'monitoring' && hasPermission('view_monitoring') && renderMonitoringView()}
+    {activeView === 'monitoring' && hasAnyMonitoringTabPermission() && renderMonitoringView()}
 
     {activeView === 'management' && (
       <ProvisioningCenter session={session} hasPermission={hasPermission} />

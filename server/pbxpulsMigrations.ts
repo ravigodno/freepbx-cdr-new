@@ -631,8 +631,57 @@ const MIGRATIONS: Migration[] = [
       `ALTER TABLE log_events ADD COLUMN application_name VARCHAR(100) NULL AFTER dialplan_context`,
       `ALTER TABLE log_events ADD INDEX idx_log_events_phone (phone_number)`
     ]
+  },
+  {
+    key: '20260721_023_monitoring_tab_permissions',
+    description: 'Register and enforce independent permissions for every monitoring tab',
+    statements: [
+      `INSERT IGNORE INTO permissions (permission_key,name,description,category) VALUES
+        ('view_active_calls','View active calls','Open active Asterisk calls','monitoring'),
+        ('view_tcpdump','View TCPDUMP','Open TCPDUMP and SIP-RTP diagnostics','monitoring'),
+        ('view_sngrep','View SNGREP','Open SNGREP SIP diagnostics','monitoring'),
+        ('view_cli','View command center','Open Asterisk and FreePBX command center','monitoring'),
+        ('view_db_explorer','View DB Explorer','Open read-only PBXPuls DB Explorer','monitoring'),
+        ('view_sip_devices_map','View IP SIP devices map','Open IP and SIP devices map','monitoring'),
+        ('view_quality','View call quality','Open RTP and call quality monitoring','monitoring'),
+        ('view_health','View PBX health','Open PBX and server health report','monitoring'),
+        ('view_ai_pbx_admin','View AI PBX admin','Open AI PBX administrator','monitoring'),
+        ('view_security','View security','Open security monitoring','monitoring'),
+        ('view_log_analysis','View log analysis','Open log analysis and call trace','monitoring')`,
+      `INSERT IGNORE INTO role_permissions (role_id,permission_id)
+       SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key IN
+       ('view_active_calls','view_tcpdump','view_sngrep','view_cli','view_db_explorer','view_sip_devices_map','view_quality','view_health','view_ai_pbx_admin','view_security','view_log_analysis')
+       WHERE r.role_key IN ('su','admin')`
+    ],
+    seed: seedLegacyMonitoringTabPermissions
   }
 ];
+
+async function seedLegacyMonitoringTabPermissions(): Promise<void> {
+  const legacyPath = path.join(process.cwd(), 'data', 'db.json');
+  if (!fs.existsSync(legacyPath)) return;
+  const db = JSON.parse(fs.readFileSync(legacyPath, 'utf8'));
+  if (!Array.isArray(db.roles)) return;
+  const permissions = [
+    'view_active_calls', 'view_tcpdump', 'view_sngrep', 'view_cli', 'view_db_explorer',
+    'view_sip_devices_map', 'view_quality', 'view_health', 'view_ai_pbx_admin',
+    'view_security', 'view_log_analysis'
+  ];
+  let changed = false;
+  for (const role of db.roles) {
+    if (!['su', 'admin'].includes(String(role?.id || ''))) continue;
+    role.permissions = role.permissions && typeof role.permissions === 'object' ? role.permissions : {};
+    for (const permission of permissions) {
+      if (role.permissions[permission] === true) continue;
+      role.permissions[permission] = true;
+      changed = true;
+    }
+  }
+  if (!changed) return;
+  const temporaryPath = `${legacyPath}.monitoring-permissions.tmp`;
+  fs.writeFileSync(temporaryPath, JSON.stringify(db, null, 2), 'utf8');
+  fs.renameSync(temporaryPath, legacyPath);
+}
 
 async function ensureQualityHistoryUniqueKey(connection: Connection): Promise<void> {
   const [rows] = await connection.query("SHOW INDEX FROM quality_history WHERE Key_name = 'uniq_quality_history_ext_time'");

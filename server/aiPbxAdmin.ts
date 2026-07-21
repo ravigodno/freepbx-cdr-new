@@ -542,15 +542,19 @@ function maskSecretsInText(text: string): string {
 export function registerAiPbxAdminRoutes(
   app: Express,
   requireAuth: any,
+  checkPermission: (req: Request, permission: string) => Promise<boolean>,
   readLocalDb: () => Promise<any>,
   writeLocalDb: (data: any) => Promise<void>
 ) {
-  // TEMP: AI PBX Admin auth bypass for internal PBXPuls panel.
-  // TODO: replace with correct shared token auth after UI auth storage is normalized.
-  const aiPbxAuth = (req: Request, res: Response, next: any) => next();
+  const aiPbxAuth = [requireAuth(), async (req: Request, res: Response, next: any) => {
+    if (!(await checkPermission(req, 'view_ai_pbx_admin'))) {
+      return res.status(403).json({ error: 'Access denied: insufficient permissions' });
+    }
+    next();
+  }];
 
   // 1. Get Sessions
-  app.get('/api/ai-pbx-admin/sessions', aiPbxAuth, async (req: Request, res: Response) => {
+  app.get('/api/ai-pbx-admin/sessions', ...aiPbxAuth, async (req: Request, res: Response) => {
     try {
       const db = await readLocalDb();
       if (!Array.isArray(db.ai_pbx_sessions)) {
@@ -563,7 +567,7 @@ export function registerAiPbxAdminRoutes(
   });
 
   // 2. Get Session by ID
-  app.get('/api/ai-pbx-admin/sessions/:id', aiPbxAuth, async (req: Request, res: Response) => {
+  app.get('/api/ai-pbx-admin/sessions/:id', ...aiPbxAuth, async (req: Request, res: Response) => {
     try {
       const db = await readLocalDb();
       const session = (db.ai_pbx_sessions || []).find((s: any) => s.id === req.params.id);
@@ -577,7 +581,7 @@ export function registerAiPbxAdminRoutes(
   });
 
   // 3. Create Session
-  app.post('/api/ai-pbx-admin/sessions', aiPbxAuth, async (req: Request, res: Response) => {
+  app.post('/api/ai-pbx-admin/sessions', ...aiPbxAuth, async (req: Request, res: Response) => {
     try {
       const { title, category } = req.body;
       const db = await readLocalDb();
@@ -605,7 +609,7 @@ export function registerAiPbxAdminRoutes(
   });
 
   // 4. Update Session status or details
-  app.put('/api/ai-pbx-admin/sessions/:id', aiPbxAuth, async (req: Request, res: Response) => {
+  app.put('/api/ai-pbx-admin/sessions/:id', ...aiPbxAuth, async (req: Request, res: Response) => {
     try {
       const { title, category, status } = req.body;
       const db = await readLocalDb();
@@ -627,7 +631,7 @@ export function registerAiPbxAdminRoutes(
   });
 
   // 5. Delete Session
-  app.delete('/api/ai-pbx-admin/sessions/:id', aiPbxAuth, async (req: Request, res: Response) => {
+  app.delete('/api/ai-pbx-admin/sessions/:id', ...aiPbxAuth, async (req: Request, res: Response) => {
     try {
       const db = await readLocalDb();
       if (!Array.isArray(db.ai_pbx_sessions)) {
@@ -649,7 +653,7 @@ export function registerAiPbxAdminRoutes(
   });
 
   // 6. Post message and get AI reply (multi-provider support)
-  app.post('/api/ai-pbx-admin/sessions/:id/messages', aiPbxAuth, async (req: Request, res: Response) => {
+  app.post('/api/ai-pbx-admin/sessions/:id/messages', ...aiPbxAuth, async (req: Request, res: Response) => {
     try {
       const text = String(req.body?.text || '').trim();
       const attachments = Array.isArray(req.body?.attachments) ? req.body.attachments : [];
@@ -748,7 +752,7 @@ export function registerAiPbxAdminRoutes(
 
 
   // 7. Add raw file/log attachment to session
-  app.post('/api/ai-pbx-admin/sessions/:id/attachments', requireAuth, async (req: Request, res: Response) => {
+  app.post('/api/ai-pbx-admin/sessions/:id/attachments', ...aiPbxAuth, async (req: Request, res: Response) => {
     try {
       const { name, type, content } = req.body;
       if (!name || !content) {
@@ -784,7 +788,7 @@ export function registerAiPbxAdminRoutes(
   });
 
   // 8. Suggest terminal diagnostic commands
-  app.post("/api/ai-pbx-admin/diagnostics/suggest", aiPbxAuth, async (req: Request, res: Response) => {
+  app.post("/api/ai-pbx-admin/diagnostics/suggest", ...aiPbxAuth, async (req: Request, res: Response) => {
     try {
       const category = String(req.body?.category || "").toLowerCase();
       const problem = String(req.body?.customProblem || "").toLowerCase();
@@ -811,7 +815,7 @@ export function registerAiPbxAdminRoutes(
   });
 
   // 9. Execute secure diagnostic commands on the server!
-  app.post('/api/ai-pbx-admin/diagnostics/collect-safe', aiPbxAuth, async (req: Request, res: Response) => {
+  app.post('/api/ai-pbx-admin/diagnostics/collect-safe', ...aiPbxAuth, async (req: Request, res: Response) => {
     try {
       const { command } = req.body;
       if (!command) {
@@ -840,7 +844,7 @@ export function registerAiPbxAdminRoutes(
   });
 
   // 10. AI analysis of logs / diagnostics
-  app.post('/api/ai-pbx-admin/diagnostics/analyze', aiPbxAuth, async (req: Request, res: Response) => {
+  app.post('/api/ai-pbx-admin/diagnostics/analyze', ...aiPbxAuth, async (req: Request, res: Response) => {
     try {
       const { sourceTitle, content } = req.body;
       if (!content) {
@@ -880,7 +884,7 @@ ${maskSecretsInText(content)}
   });
 
   // 11. Get Knowledge Base Articles
-  app.get('/api/ai-pbx-admin/knowledge', aiPbxAuth, async (req: Request, res: Response) => {
+  app.get('/api/ai-pbx-admin/knowledge', ...aiPbxAuth, async (req: Request, res: Response) => {
     try {
       const db = await readLocalDb();
       if (!Array.isArray(db.ai_pbx_knowledge)) {
@@ -912,7 +916,7 @@ ${maskSecretsInText(content)}
   });
 
   // 12. Create Knowledge Base Article
-  app.post('/api/ai-pbx-admin/knowledge', aiPbxAuth, async (req: Request, res: Response) => {
+  app.post('/api/ai-pbx-admin/knowledge', ...aiPbxAuth, async (req: Request, res: Response) => {
     try {
       const { title, category, content } = req.body;
       if (!title || !content) {
@@ -942,7 +946,7 @@ ${maskSecretsInText(content)}
   });
 
   // 13. Update Knowledge Base Article
-  app.put('/api/ai-pbx-admin/knowledge/:id', aiPbxAuth, async (req: Request, res: Response) => {
+  app.put('/api/ai-pbx-admin/knowledge/:id', ...aiPbxAuth, async (req: Request, res: Response) => {
     try {
       const { title, category, content } = req.body;
       const db = await readLocalDb();
@@ -964,7 +968,7 @@ ${maskSecretsInText(content)}
   });
 
   // 14. Delete Knowledge Base Article
-  app.delete('/api/ai-pbx-admin/knowledge/:id', aiPbxAuth, async (req: Request, res: Response) => {
+  app.delete('/api/ai-pbx-admin/knowledge/:id', ...aiPbxAuth, async (req: Request, res: Response) => {
     try {
       const db = await readLocalDb();
       if (!Array.isArray(db.ai_pbx_knowledge)) {
@@ -986,7 +990,7 @@ ${maskSecretsInText(content)}
   });
 
   // 15. Create Article from support session dialog!
-  app.post('/api/ai-pbx-admin/knowledge/from-session/:sessionId', aiPbxAuth, async (req: Request, res: Response) => {
+  app.post('/api/ai-pbx-admin/knowledge/from-session/:sessionId', ...aiPbxAuth, async (req: Request, res: Response) => {
     try {
       const db = await readLocalDb();
       const session = (db.ai_pbx_sessions || []).find((s: any) => s.id === req.params.sessionId);
@@ -1045,7 +1049,7 @@ ${history}
 
 
   // 16. Get AIPBXAdmin Settings
-  app.get('/api/ai-pbx-admin/settings', aiPbxAuth, async (req: Request, res: Response) => {
+  app.get('/api/ai-pbx-admin/settings', ...aiPbxAuth, async (req: Request, res: Response) => {
     try {
       const db = await readLocalDb();
       const settings = db.ai_pbx_settings || {
@@ -1073,7 +1077,7 @@ ${history}
   });
 
   // 17. Put AIPBXAdmin Settings
-  app.put('/api/ai-pbx-admin/settings', aiPbxAuth, async (req: Request, res: Response) => {
+  app.put('/api/ai-pbx-admin/settings', ...aiPbxAuth, async (req: Request, res: Response) => {
     try {
       console.log('[AIPBXAdmin] PUT settings request received');
 
@@ -1119,7 +1123,7 @@ ${history}
   });
 
   // 18. Refresh provider model list
-  app.post('/api/ai-pbx-admin/settings/models', aiPbxAuth, async (req: Request, res: Response) => {
+  app.post('/api/ai-pbx-admin/settings/models', ...aiPbxAuth, async (req: Request, res: Response) => {
     try {
       const db = await readLocalDb();
       const savedSettings = db.ai_pbx_settings || {};
@@ -1152,7 +1156,7 @@ ${history}
   });
 
   // 19. Test Connection
-  app.post('/api/ai-pbx-admin/settings/test-provider', aiPbxAuth, async (req: Request, res: Response) => {
+  app.post('/api/ai-pbx-admin/settings/test-provider', ...aiPbxAuth, async (req: Request, res: Response) => {
     try {
       const db = await readLocalDb();
       const savedSettings = db.ai_pbx_settings || {
@@ -1183,4 +1187,3 @@ ${history}
     }
   });
 }
-

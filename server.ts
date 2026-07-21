@@ -3674,6 +3674,11 @@ function getDefaultAccessRoles() {
         view_tcpdump: true,
         view_sngrep: true,
         view_cli: true,
+        view_db_explorer: true,
+        view_health: true,
+        view_sip_devices_map: true,
+        view_log_analysis: true,
+        view_ai_pbx_admin: true,
         view_security: true,
         view_security_events: true,
         view_firewall: true,
@@ -3719,6 +3724,11 @@ function getDefaultAccessRoles() {
         view_tcpdump: true,
         view_sngrep: true,
         view_cli: true,
+        view_db_explorer: true,
+        view_health: true,
+        view_sip_devices_map: true,
+        view_log_analysis: true,
+        view_ai_pbx_admin: true,
         view_security: true,
         view_security_events: true,
         view_firewall: true,
@@ -3889,7 +3899,11 @@ const PERMISSION_MODULE_MAP: Record<string, OptionalModuleKey> = {
   view_tcpdump: 'monitoring',
   view_sngrep: 'monitoring',
   view_cli: 'monitoring',
+  view_db_explorer: 'monitoring',
+  view_health: 'monitoring',
   view_sip_devices_map: 'monitoring',
+  view_security: 'monitoring',
+  view_log_analysis: 'monitoring',
 
   view_management: 'management',
   dangerous_pbx_write: 'management',
@@ -5056,6 +5070,22 @@ async function checkUserPermission(req: Request, perm: string): Promise<boolean>
   } catch (e) {
     return false;
   }
+}
+
+function requirePermission(permission: string) {
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    if (!(await checkUserPermission(req, permission))) {
+      res.status(403).json({ error: 'Access denied: insufficient permissions' });
+      return;
+    }
+    next();
+  };
+}
+
+function requireCapturePermission(req: Request, res: Response, next: NextFunction): void {
+  const requested = String(req.header('x-pbxpuls-monitoring-permission') || 'view_tcpdump');
+  const permission = requested === 'view_sngrep' ? 'view_sngrep' : 'view_tcpdump';
+  void requirePermission(permission)(req, res, next);
 }
 
 function getEffectiveOperatorExt(localDb: any, req: Request, requestedExt: string): string {
@@ -16721,7 +16751,8 @@ app.get('/api/recordings/:filename', (req, _res, next) => {
 
 
 // --- PBXPULS HEALTH REPORT API ---
-app.get('/api/health-report', requireAuth(['su', 'admin']), async (req, res) => {
+app.get('/api/health-report', requireAuth(), requirePermission('view_health'), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_health'))) return res.status(403).json({ error: 'Нет прав на просмотр состояния АТС' });
   const run = (cmd: string, args: string[] = [], timeoutMs = 5000) => {
     try {
       const r = spawnSync(cmd, args, {
@@ -17190,7 +17221,8 @@ setTimeout(() => {
   setInterval(updateHealthHistory, HEALTH_HISTORY_INTERVAL_MS);
 }, 10000);
 
-app.get('/api/health-report/history', requireAuth(['su', 'admin']), async (req, res) => {
+app.get('/api/health-report/history', requireAuth(), requirePermission('view_health'), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_health'))) return res.status(403).json({ error: 'Нет прав на просмотр состояния АТС' });
   try {
     const period = String(req.query.period || '24h');
     const stored = await readWithMonitoringFallback(() => readHealthHistoryFromSql(period), readHealthHistory);
@@ -17266,7 +17298,7 @@ function parseCoreShowChannelsConcise(raw: string): any[] {
     });
 }
 
-app.get('/api/live-sessions', requireAuth(), async (req, res) => {
+app.get('/api/live-sessions', requireAuth(), requirePermission('view_active_calls'), async (req, res) => {
   try {
   const authUser = (req as any).user;
   if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_active_calls !== true) {
@@ -17328,7 +17360,7 @@ app.get('/api/live-sessions', requireAuth(), async (req, res) => {
 });
 
 
-app.post('/api/live-sessions/save-log', requireAuth(), async (req, res) => {
+app.post('/api/live-sessions/save-log', requireAuth(), requirePermission('view_active_calls'), async (req, res) => {
   try {
   const authUser = (req as any).user;
   if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_active_calls !== true) {
@@ -17404,7 +17436,7 @@ function parseLiveConciseOutput(raw: string): any[] {
     });
 }
 
-app.get('/api/live-sessions-test', requireAuth(), async (req, res) => {
+app.get('/api/live-sessions-test', requireAuth(), requirePermission('view_active_calls'), async (req, res) => {
   try {
   const authUser = (req as any).user;
   if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_active_calls !== true) {
@@ -17453,7 +17485,7 @@ app.get('/api/live-sessions-test', requireAuth(), async (req, res) => {
 });
 
 
-app.post('/api/live-sessions/snapshot', requireAuth(), async (req, res) => {
+app.post('/api/live-sessions/snapshot', requireAuth(), requirePermission('view_active_calls'), async (req, res) => {
   try {
   const authUser = (req as any).user;
   if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_active_calls !== true) {
@@ -17498,7 +17530,7 @@ app.post('/api/live-sessions/snapshot', requireAuth(), async (req, res) => {
 });
 
 
-app.get('/api/diagnostics/network-status', requireAuth(), async (req, res) => {
+app.get('/api/diagnostics/network-status', requireAuth(), requirePermission('view_tcpdump'), async (req, res) => {
   try {
     const authUser = (req as any).user;
     if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_tcpdump !== true) {
@@ -17696,7 +17728,7 @@ function tcpdumpStatusPayload() {
   };
 }
 
-app.get('/api/diagnostics/tcpdump/status', requireAuth(), async (req, res) => {
+app.get('/api/diagnostics/tcpdump/status', requireAuth(), requirePermission('view_tcpdump'), async (req, res) => {
   const authUser = (req as any).user;
   if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_tcpdump !== true) {
     res.status(403).json({ error: 'Нет прав на TCPDUMP' });
@@ -17706,10 +17738,10 @@ app.get('/api/diagnostics/tcpdump/status', requireAuth(), async (req, res) => {
   res.json(tcpdumpStatusPayload());
 });
 
-app.post('/api/diagnostics/tcpdump/start', requireAuth(), async (req, res) => {
+app.post('/api/diagnostics/tcpdump/start', requireAuth(), requireCapturePermission, async (req, res) => {
   try {
   const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_tcpdump !== true) {
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_tcpdump !== true && authUser?.permissions?.view_sngrep !== true) {
     res.status(403).json({ error: 'Нет прав на TCPDUMP' });
     return;
   }
@@ -17870,10 +17902,10 @@ app.post('/api/diagnostics/tcpdump/start', requireAuth(), async (req, res) => {
   }
 });
 
-app.post('/api/diagnostics/tcpdump/stop', requireAuth(), async (req, res) => {
+app.post('/api/diagnostics/tcpdump/stop', requireAuth(), requireCapturePermission, async (req, res) => {
   try {
   const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_tcpdump !== true) {
+  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_tcpdump !== true && authUser?.permissions?.view_sngrep !== true) {
     res.status(403).json({ error: 'Нет прав на TCPDUMP' });
     return;
   }
@@ -17905,7 +17937,7 @@ app.post('/api/diagnostics/tcpdump/stop', requireAuth(), async (req, res) => {
   }
 });
 
-app.get('/api/diagnostics/tcpdump/files', requireAuth(), async (req, res) => {
+app.get('/api/diagnostics/tcpdump/files', requireAuth(), requirePermission('view_tcpdump'), async (req, res) => {
   try {
   const authUser = (req as any).user;
   if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_tcpdump !== true) {
@@ -17936,7 +17968,7 @@ app.get('/api/diagnostics/tcpdump/files', requireAuth(), async (req, res) => {
   }
 });
 
-app.get('/api/diagnostics/tcpdump/download/:filename', requireAuth(), async (req, res) => {
+app.get('/api/diagnostics/tcpdump/download/:filename', requireAuth(), requirePermission('view_tcpdump'), async (req, res) => {
   try {
   const authUser = (req as any).user;
   if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_tcpdump !== true) {
@@ -17959,7 +17991,7 @@ app.get('/api/diagnostics/tcpdump/download/:filename', requireAuth(), async (req
 });
 
 
-app.get('/api/diagnostics/tcpdump/output', requireAuth(), async (req, res) => {
+app.get('/api/diagnostics/tcpdump/output', requireAuth(), requirePermission('view_tcpdump'), async (req, res) => {
   try {
   const authUser = (req as any).user;
   if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_tcpdump !== true) {
@@ -17990,7 +18022,7 @@ app.get('/api/diagnostics/tcpdump/output', requireAuth(), async (req, res) => {
   }
 });
 
-app.get('/api/diagnostics/tcpdump/events', requireAuth(), async (req, res) => {
+app.get('/api/diagnostics/tcpdump/events', requireAuth(), requirePermission('view_tcpdump'), async (req, res) => {
   const authUser = (req as any).user;
   if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_tcpdump !== true) {
     res.status(403).json({ error: 'Нет прав на TCPDUMP' });
@@ -18003,7 +18035,7 @@ app.get('/api/diagnostics/tcpdump/events', requireAuth(), async (req, res) => {
   res.json({ ...tcpdumpStatusPayload(), events, returned: events.length });
 });
 
-app.get('/api/diagnostics/tcpdump/rtp-sessions', requireAuth(), async (req, res) => {
+app.get('/api/diagnostics/tcpdump/rtp-sessions', requireAuth(), requirePermission('view_tcpdump'), async (req, res) => {
   const authUser = (req as any).user;
   if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_tcpdump !== true) return res.status(403).json({ error: 'Нет прав на TCPDUMP' });
   if (req.query.sessionId && String(req.query.sessionId) !== tcpdumpSessionId) return res.status(409).json({ success: false, error: 'Capture session не найдена', sessionId: tcpdumpSessionId || null });
@@ -18091,7 +18123,7 @@ const allowedAsteriskCliCommands = [
   'database showkey'
 ]
 
-app.post('/api/asterisk/cli', requireAuth(), async (req, res) => {
+app.post('/api/asterisk/cli', requireAuth(), requirePermission('view_cli'), async (req, res) => {
   try {
   const authUser = (req as any).user;
   if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_cli !== true) {
@@ -18133,7 +18165,7 @@ app.post('/api/asterisk/cli', requireAuth(), async (req, res) => {
   }
 });
 
-app.get('/api/asterisk/cli/commands', requireAuth(), async (req, res) => {
+app.get('/api/asterisk/cli/commands', requireAuth(), requirePermission('view_cli'), async (req, res) => {
   const authUser = (req as any).user;
   if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_cli !== true) {
     res.status(403).json({ error: 'Нет прав на CLI / DB Explorer' });
@@ -18183,7 +18215,7 @@ const dangerousFwconsoleCommands = [
   'fwconsole restore'
 ];
 
-app.post('/api/freepbx/fwconsole', requireAuth(), async (req, res) => {
+app.post('/api/freepbx/fwconsole', requireAuth(), requirePermission('view_cli'), async (req, res) => {
   try {
   const authUser = (req as any).user;
   if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_cli !== true) {
@@ -18244,7 +18276,7 @@ app.post('/api/freepbx/fwconsole', requireAuth(), async (req, res) => {
   }
 });
 
-app.get('/api/freepbx/fwconsole/commands', requireAuth(), async (req, res) => {
+app.get('/api/freepbx/fwconsole/commands', requireAuth(), requirePermission('view_cli'), async (req, res) => {
   const authUser = (req as any).user;
   if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_cli !== true) {
     res.status(403).json({ error: 'Нет прав на CLI / DB Explorer' });
@@ -18479,10 +18511,10 @@ async function loadDbExplorerLiveSnapshot() {
   };
 }
 
-app.get('/api/db-explorer/live-snapshot', requireAuth(), async (req, res) => {
+app.get('/api/db-explorer/live-snapshot', requireAuth(), requirePermission('view_db_explorer'), async (req, res) => {
   const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_cli !== true) {
-    res.status(403).json({ success: false, error: 'Нет прав на CLI / DB Explorer' });
+  if (!(await checkUserPermission(req, 'view_db_explorer'))) {
+    res.status(403).json({ success: false, error: 'Нет прав на DB Explorer' });
     return;
   }
   try {
@@ -18501,11 +18533,10 @@ function isSafeSelectSql(sql) {
   return true;
 }
 
-app.get('/api/db-explorer/tables', requireAuth(), async (req, res) => {
+app.get('/api/db-explorer/tables', requireAuth(), requirePermission('view_db_explorer'), async (req, res) => {
   try {
-  const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_cli !== true) {
-    res.status(403).json({ error: 'Нет прав на CLI / DB Explorer' });
+  if (!(await checkUserPermission(req, 'view_db_explorer'))) {
+    res.status(403).json({ error: 'Нет прав на DB Explorer' });
     return;
   }
 
@@ -18535,11 +18566,10 @@ app.get('/api/db-explorer/tables', requireAuth(), async (req, res) => {
   }
 });
 
-app.get('/api/db-explorer/columns', requireAuth(), async (req, res) => {
+app.get('/api/db-explorer/columns', requireAuth(), requirePermission('view_db_explorer'), async (req, res) => {
   try {
-  const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_cli !== true) {
-    res.status(403).json({ error: 'Нет прав на CLI / DB Explorer' });
+  if (!(await checkUserPermission(req, 'view_db_explorer'))) {
+    res.status(403).json({ error: 'Нет прав на DB Explorer' });
     return;
   }
 
@@ -18576,11 +18606,10 @@ app.get('/api/db-explorer/columns', requireAuth(), async (req, res) => {
   }
 });
 
-app.post('/api/db-explorer/query', requireAuth(), async (req, res) => {
+app.post('/api/db-explorer/query', requireAuth(), requirePermission('view_db_explorer'), async (req, res) => {
   try {
-    const authUser = (req as any).user;
-    if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_cli !== true) {
-      res.status(403).json({ error: 'Нет прав на CLI / DB Explorer' });
+    if (!(await checkUserPermission(req, 'view_db_explorer'))) {
+      res.status(403).json({ error: 'Нет прав на DB Explorer' });
       return;
     }
 
@@ -18678,11 +18707,10 @@ app.post('/api/db-explorer/query', requireAuth(), async (req, res) => {
   }
 });
 
-app.get('/api/db-explorer/cdr/by-uid/:uid', requireAuth(), async (req, res) => {
+app.get('/api/db-explorer/cdr/by-uid/:uid', requireAuth(), requirePermission('view_db_explorer'), async (req, res) => {
   try {
-  const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_cli !== true) {
-    res.status(403).json({ error: 'Нет прав на CLI / DB Explorer' });
+  if (!(await checkUserPermission(req, 'view_db_explorer'))) {
+    res.status(403).json({ error: 'Нет прав на DB Explorer' });
     return;
   }
 
@@ -18703,11 +18731,10 @@ app.get('/api/db-explorer/cdr/by-uid/:uid', requireAuth(), async (req, res) => {
   }
 });
 
-app.get('/api/db-explorer/cdr/search', requireAuth(), async (req, res) => {
+app.get('/api/db-explorer/cdr/search', requireAuth(), requirePermission('view_db_explorer'), async (req, res) => {
   try {
-  const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.role !== 'admin' && authUser?.permissions?.view_cli !== true) {
-    res.status(403).json({ error: 'Нет прав на CLI / DB Explorer' });
+  if (!(await checkUserPermission(req, 'view_db_explorer'))) {
+    res.status(403).json({ error: 'Нет прав на DB Explorer' });
     return;
   }
 
@@ -20777,7 +20804,7 @@ async function getCachedRealVoIPDevices(settings: AppSettings): Promise<{ device
 }
 
 // --- REST API ENDPOINTS FOR DEVICES MAP ---
-app.get('/api/devices-map', requireAuth(), async (req, res) => {
+app.get('/api/devices-map', requireAuth(), requirePermission('view_sip_devices_map'), async (req, res) => {
   try {
     const localDb = await readLocalDb();
     const settings = localDb.settings;
@@ -20905,7 +20932,7 @@ app.get('/api/devices-map', requireAuth(), async (req, res) => {
   }
 });
 
-app.get('/api/devices-map/history', requireAuth(), async (req, res) => {
+app.get('/api/devices-map/history', requireAuth(), requirePermission('view_sip_devices_map'), async (req, res) => {
   try {
     const localDb = await readLocalDb();
     if (isDemoMode(localDb.settings) && await getMonitoringStorageMode() !== 'sql') {
@@ -20918,7 +20945,7 @@ app.get('/api/devices-map/history', requireAuth(), async (req, res) => {
   }
 });
 
-app.get('/api/devices-map/conflicts', requireAuth(), async (req, res) => {
+app.get('/api/devices-map/conflicts', requireAuth(), requirePermission('view_sip_devices_map'), async (req, res) => {
   try {
     const localDb = await readLocalDb();
     if (isDemoMode(localDb.settings) && await getMonitoringStorageMode() !== 'sql') {
@@ -20931,7 +20958,7 @@ app.get('/api/devices-map/conflicts', requireAuth(), async (req, res) => {
   }
 });
 
-app.get('/api/devices-map/alerts', requireAuth(), async (req, res) => {
+app.get('/api/devices-map/alerts', requireAuth(), requirePermission('view_sip_devices_map'), async (req, res) => {
   try {
     const localDb = await readLocalDb();
     if (isDemoMode(localDb.settings) && await getMonitoringStorageMode() !== 'sql') {
@@ -20944,7 +20971,7 @@ app.get('/api/devices-map/alerts', requireAuth(), async (req, res) => {
   }
 });
 
-app.get('/api/devices-map/device/:ext', requireAuth(), async (req, res) => {
+app.get('/api/devices-map/device/:ext', requireAuth(), requirePermission('view_sip_devices_map'), async (req, res) => {
   try {
     if (await getMonitoringStorageMode() !== 'sql') initDevicesMapFiles();
     const ext = String(req.params.ext);
@@ -20962,7 +20989,7 @@ app.get('/api/devices-map/device/:ext', requireAuth(), async (req, res) => {
   }
 });
 
-app.post('/api/devices-map/ping/:ext', requireAuth(), async (req, res) => {
+app.post('/api/devices-map/ping/:ext', requireAuth(), requirePermission('view_sip_devices_map'), async (req, res) => {
   try {
     const ext = String(req.params.ext);
     if (await getMonitoringStorageMode() !== 'sql') initDevicesMapFiles();
@@ -21000,7 +21027,7 @@ app.post('/api/devices-map/ping/:ext', requireAuth(), async (req, res) => {
   }
 });
 
-app.post('/api/devices-map/traceroute/:ext', requireAuth(), async (req, res) => {
+app.post('/api/devices-map/traceroute/:ext', requireAuth(), requirePermission('view_sip_devices_map'), async (req, res) => {
   try {
     const ext = String(req.params.ext);
     if (await getMonitoringStorageMode() !== 'sql') initDevicesMapFiles();
@@ -21030,7 +21057,7 @@ app.post('/api/devices-map/traceroute/:ext', requireAuth(), async (req, res) => 
   }
 });
 
-app.post('/api/devices-map/snapshot', requireAuth(), async (req, res) => {
+app.post('/api/devices-map/snapshot', requireAuth(), requirePermission('view_sip_devices_map'), async (req, res) => {
   try {
     if (await getMonitoringStorageMode() !== 'sql') initDevicesMapFiles();
     const stored = await readWithMonitoringFallback(
@@ -21909,7 +21936,7 @@ app.post('/api/ai-providers/test-tts', requireAuth, async (req, res) => {
 registerManagementRoutes(app, requireAuth);
 
 // REGISTER AI PBX ADMIN ROUTES
-registerAiPbxAdminRoutes(app, requireAuth, readLocalDb, writeLocalDb);
+registerAiPbxAdminRoutes(app, requireAuth, checkUserPermission, readLocalDb, writeLocalDb);
 
 // REGISTER SECURITY MONITORING CENTER ROUTES
 registerSecurityRoutes(app, requireAuth, checkUserPermission);

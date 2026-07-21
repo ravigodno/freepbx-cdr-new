@@ -13,7 +13,9 @@ const structuredError = (res:Response, status:number, code:string, message:strin
 
 export function registerSecurityRoutes(app: Express, requireAuth: any, checkPermission: PermissionChecker) {
   const permit = (permission:string) => async (req:Request,res:Response,next:NextFunction) => {
-    if (!(await checkPermission(req, permission))) return structuredError(res, 403, 'permission_denied', 'Недостаточно прав для этого раздела безопасности');
+    if (!(await checkPermission(req, 'view_security')) || (permission !== 'view_security' && !(await checkPermission(req, permission)))) {
+      return structuredError(res, 403, 'permission_denied', 'Недостаточно прав для этого раздела безопасности');
+    }
     next();
   };
   const view = [requireAuth(), permit('view_security')];

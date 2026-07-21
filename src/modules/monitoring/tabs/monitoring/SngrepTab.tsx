@@ -202,7 +202,7 @@ export default function SngrepTab({ tcpdumpOutput, loadTcpdumpOutput, token, onN
     try {
       const res = await fetch(`/api/diagnostics/tcpdump/start?mode=${mode}&iface=any`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` }
+        headers: { Authorization: `Bearer ${token}`, 'X-PBXPuls-Monitoring-Permission': 'view_sngrep' }
       });
       const data = await res.json();
       if (data.success) {
@@ -222,7 +222,7 @@ export default function SngrepTab({ tcpdumpOutput, loadTcpdumpOutput, token, onN
     try {
       await fetch('/api/diagnostics/tcpdump/stop', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` }
+        headers: { Authorization: `Bearer ${token}`, 'X-PBXPuls-Monitoring-Permission': 'view_sngrep' }
       });
       setUiMessage('Захват остановлен. Анализируем сохраненный трафик.');
     } catch (e: any) {

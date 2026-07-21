@@ -23,6 +23,8 @@ export type PermissionKey =
   | 'view_tcpdump'
   | 'view_sngrep'
   | 'view_cli'
+  | 'view_db_explorer'
+  | 'view_health'
   | 'view_sip_devices_map'
   | 'view_security'
   | 'view_log_analysis'
@@ -83,6 +85,8 @@ const PERMISSION_MODULE_MAP: Partial<Record<PermissionKey, OptionalModuleKey>> =
   view_tcpdump: 'monitoring',
   view_sngrep: 'monitoring',
   view_cli: 'monitoring',
+  view_db_explorer: 'monitoring',
+  view_health: 'monitoring',
   view_sip_devices_map: 'monitoring',
   view_security: 'monitoring',
   view_log_analysis: 'monitoring',
