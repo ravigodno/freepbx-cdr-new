@@ -17,7 +17,7 @@ assert.equal(full.displayName,'Asterisk — полный журнал');
 assert.ok((full.rotatedPaths?.length||0)>0,'Rotated Asterisk full files must be linked');
 assert.equal(resolveLogSource(full.sourceKey)?.canonicalPath,'/var/log/asterisk/full');
 
-const history=await searchAllowedLogSource(full.sourceKey,{from:new Date(Date.now()-7*86400000).toISOString(),limit:20,maxBytes:1024*1024,includeRotated:true});
+const history=await searchAllowedLogSource(full.sourceKey,{from:new Date(Date.now()-7*86400000).toISOString(),to:new Date(Date.now()-86400000).toISOString(),limit:20,maxBytes:1024*1024,includeRotated:true});
 assert.ok(history.rows.length>0);
 assert.ok(history.rows.some(row=>row.rotated));
 assert.ok(history.rows.every(row=>row.sourceName==='Asterisk — полный журнал'));
