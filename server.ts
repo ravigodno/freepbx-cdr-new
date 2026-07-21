@@ -19339,7 +19339,22 @@ app.get('/api/quality/cache', requireAuth(), requireQualityAccess, async (req, r
     const localDb = await readLocalDb();
     if (!isDemoMode(localDb.settings)) {
       const devices = await getRealVoIPQualityDevices(localDb.settings);
-      return res.json({ success: true, cached: false, devices, history: [], alerts: [], source: 'live_asterisk', historyCount: 0, lastHistoryPoint: null, lastUpdated: new Date().toISOString(), period, ext, measurementAvailable: false, message: 'Недостаточно реальных RTP/RTCP-данных для истории качества', ...getPBXPulsDbRuntimeStatus() });
+      const historyStored = await readWithMonitoringFallback(
+        () => readQualityHistoryFromSql(period, ext),
+        () => filterAndSampleQualityHistory(readQualityJsonFile(QUALITY_HISTORY_FILE), { ext, period })
+          .map((point: any) => ({ ...point, metricsSource: 'synthetic_legacy', metricsAvailable: false, rtcpAvailable: false }))
+      );
+      const history = filterAndSampleQualityHistory(historyStored.data, { ext, period });
+      return res.json({
+        success: true, cached: true, devices, history, alerts: [], source: historyStored.source,
+        historyCount: history.length, lastHistoryPoint: history[history.length - 1]?.timestamp || null,
+        lastUpdated: new Date().toISOString(), period, ext, measurementAvailable: false,
+        legacyCalculatedHistory: history.length > 0,
+        message: history.length
+          ? 'История восстановлена из SQL и помечена как архивная расчётная; реальные RTCP-метрики сейчас недоступны'
+          : 'Недостаточно реальных RTP/RTCP-данных для истории качества',
+        ...getPBXPulsDbRuntimeStatus()
+      });
     }
     const historyStored = await readWithMonitoringFallback(() => readQualityHistoryFromSql(period, ext), () => filterAndSampleQualityHistory(readQualityJsonFile(QUALITY_HISTORY_FILE), { ext, period }));
     const alertsStored = await readWithMonitoringFallback(readQualityAlertsFromSql, () => readQualityJsonFile(QUALITY_ALERTS_FILE));
@@ -19433,12 +19448,13 @@ app.get('/api/quality/history', requireAuth(), requireQualityAccess, async (req,
   try {
     const ext = String(req.query.ext || '').trim();
     const period = String(req.query.period || req.query.range || '').trim();
-    const localDb = await readLocalDb();
-    if (!isDemoMode(localDb.settings)) {
-      return res.json({ success: true, count: 0, source: 'rtcp_unavailable', measurementAvailable: false, message: 'Недостаточно реальных RTP/RTCP-данных для оценки', filters: { ext: ext || 'all', period: period || null, from: req.query.from || null, to: req.query.to || null }, history: [] });
-    }
     const stored = await readWithMonitoringFallback(() => readQualityHistoryFromSql(period || '30d', ext || 'all'), () => readQualityJsonFile(QUALITY_HISTORY_FILE));
-    let history: any[] = stored.data;
+    let history: any[] = stored.data.map((point: any) => ({
+      ...point,
+      metricsSource: point.metricsSource || 'synthetic_legacy',
+      metricsAvailable: point.metricsSource === 'rtcp',
+      rtcpAvailable: point.metricsSource === 'rtcp'
+    }));
 
     const from = String(req.query.from || '').trim();
     const to = String(req.query.to || '').trim();
@@ -19452,6 +19468,8 @@ app.get('/api/quality/history', requireAuth(), requireQualityAccess, async (req,
       success: true,
       count: history.length,
       source: stored.source,
+      measurementAvailable: history.some(point => point.metricsSource === 'rtcp'),
+      legacyCalculatedHistory: history.some(point => point.metricsSource === 'synthetic_legacy'),
       filters: {
         ext: ext || 'all',
         period: period || null,

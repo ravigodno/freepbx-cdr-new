@@ -17,7 +17,10 @@ const TABLES = ['quality_current', 'quality_history', 'monitoring_health_history
   'monitoring_devices_history', 'monitoring_devices_alerts', 'monitoring_devices_conflicts', 'monitoring_devices_map'] as const;
 export const MONITORING_DIRECT_LEGACY_READS_REMAINING: string[] = [];
 const SQL_TIMEOUT_MS = 8000;
-const MAX_READ_ROWS = 10000;
+// A single endpoint sampled every minute can exceed 10k rows over the supported 30-day
+// window. The API downsamples before responding; this read ceiling only prevents the
+// SQL reader from truncating the beginning of a selected endpoint's history.
+const MAX_READ_ROWS = 25000;
 let lastWriteStatus: any = null;
 let fallbackUsed = false;
 
@@ -61,7 +64,14 @@ export async function readQualityHistoryFromSql(period = '24h', ext = 'all'): Pr
     ORDER BY sampled_at DESC
     LIMIT ${MAX_READ_ROWS}
   ) recent_quality ORDER BY sampled_at ASC`, params);
-  return rows.map((r: any) => ({ ext: String(r.ext), name: r.name || '', status: r.status || '', qualityStatus: r.quality_status || '', latency: Number(r.latency_ms || 0), jitter: Number(r.jitter_ms || 0), rtpLoss: Number(r.rtp_loss || 0), mos: Number(r.mos || 0), timestamp: sqlDateToIso(r.sampled_at) }));
+  return rows.map((r: any) => ({
+    ext: String(r.ext), name: r.name || '', status: r.status || '', qualityStatus: r.quality_status || '',
+    latency: Number(r.latency_ms || 0), jitter: Number(r.jitter_ms || 0), rtpLoss: Number(r.rtp_loss || 0),
+    mos: Number(r.mos || 0), timestamp: sqlDateToIso(r.sampled_at),
+    // The legacy schema has no provenance column. These rows were written by the old
+    // calculated quality collector, so they must never be presented as measured RTCP.
+    metricsSource: 'synthetic_legacy', metricsAvailable: false, rtcpAvailable: false
+  }));
 }
 export async function appendQualityHistoryToSql(items: any[]): Promise<void> {
   if (!items.length) return; try { for (const p of items) { const at = dateValue(p.timestamp || p.sampled_at); if (!at) continue; const ext = text(p.ext || p.deviceId || p.endpoint || p.name, 'unknown') || 'unknown'; await timedQuery(`INSERT IGNORE INTO quality_history (ext,name,status,quality_status,latency_ms,jitter_ms,rtp_loss,mos,sampled_at) VALUES (?,?,?,?,?,?,?,?,?)`, [ext,text(p.name),text(p.status),text(p.qualityStatus || p.quality_status),num(p.latency ?? p.latency_ms) || 0,num(p.jitter ?? p.jitter_ms) || 0,num(p.rtpLoss ?? p.rtp_loss) || 0,num(p.mos) || 0,at]); } markWrite('quality_history', true); } catch (e) { markWrite('quality_history', false, e); throw e; }

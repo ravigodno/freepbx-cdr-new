@@ -45,7 +45,9 @@ assert(compareNullableMetrics(10,2,'desc')<0);
 const server=fs.readFileSync('server.ts','utf8');
 const ui=fs.readFileSync('src/modules/monitoring/tabs/monitoring/QualityTab.tsx','utf8');
 for(const field of ['registrationStatus','isRegistered','availabilityStatus','qualityStatus','sipRttMs','jitterMs','rtpLossPercent','rtcpAvailable','metricsAvailable','metricsSource','statusReason','lastSeenAt']) assert(server.includes(field)||fs.readFileSync('server/qualityMetrics.ts','utf8').includes(field),`DTO field missing: ${field}`);
-assert(ui.includes("metricsSource !== 'synthetic_legacy'"),'synthetic legacy history must be excluded');
+assert(ui.includes("point.metricsSource === 'synthetic_legacy'"),'synthetic legacy history must be isolated');
+assert(ui.includes('Архивный расчётный MOS — не RTCP'),'legacy calculated history must be clearly labelled');
+assert(server.includes('legacyCalculatedHistory'),'quality API must expose legacy provenance explicitly');
 assert(ui.includes('За выбранный период реальных RTCP-метрик нет'),'RTCP chart empty state missing');
 assert(!server.includes('calculatedMos = 4.41')||server.includes('if (!isDemo) return'),'production MOS must not be calculated from SIP RTT');
 

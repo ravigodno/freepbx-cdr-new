@@ -590,7 +590,6 @@ export default function QualityTab({ token }: Props) {
   const filteredHistoryData = useMemo(() => {
     if (!deviceHistory.length) return [];
     return deviceHistory
-      .filter(pt => pt.metricsSource !== 'synthetic_legacy' && pt.metricsSource !== 'unknown')
       .filter(pt => new Date(pt.timestamp).getTime() >= chartRange.startMs && new Date(pt.timestamp).getTime() <= chartRange.endMs)
       .map(pt => ({
         ...pt,
@@ -606,6 +605,7 @@ export default function QualityTab({ token }: Props) {
   const rtcpHistoryData = useMemo(() => filteredHistoryData.filter(point => point.metricsSource === 'rtcp'), [filteredHistoryData]);
   const rtcpJitterLossHistory = useMemo(() => rtcpHistoryData.filter(point => point.jitter !== null && point.rtpLoss !== null), [rtcpHistoryData]);
   const sipRttHistoryData = useMemo(() => filteredHistoryData.filter(point => point.latency !== null && (point.metricsSource === 'sip_rtt' || point.metricsSource === 'rtcp')), [filteredHistoryData]);
+  const legacyCalculatedHistory = useMemo(() => filteredHistoryData.filter(point => point.metricsSource === 'synthetic_legacy'), [filteredHistoryData]);
 
   // Calculate history period summaries
   const historySummaries = useMemo(() => {
@@ -1318,10 +1318,12 @@ export default function QualityTab({ token }: Props) {
 
                   {/* LATENCY CHART */}
                   <div className="space-y-1">
-                    <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">RTT Сетевая задержка (мсек)</div>
+                    <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
+                      {sipRttHistoryData.length ? 'RTT Сетевая задержка (мсек)' : legacyCalculatedHistory.length ? 'Архивная расчётная задержка — не RTCP' : 'RTT Сетевая задержка (мсек)'}
+                    </div>
                     <div className="h-48">
                       <CustomMiniAreaChart 
-                        data={sipRttHistoryData}
+                        data={sipRttHistoryData.length ? sipRttHistoryData : legacyCalculatedHistory}
                         dataKey="latency" 
                         strokeColor="#3b82f6" 
                         fillColor="#3b82f6" 
@@ -1333,11 +1335,13 @@ export default function QualityTab({ token }: Props) {
 
                   {/* JITTER & LOSS CHART */}
                   <div className="space-y-1">
-                    <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Джиттер (мс) и Потери RTP (%)</div>
+                    <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
+                      {rtcpJitterLossHistory.length ? 'Джиттер (мс) и Потери RTP (%)' : legacyCalculatedHistory.length ? 'Архивные расчётные jitter/loss — не RTCP' : 'Джиттер (мс) и Потери RTP (%)'}
+                    </div>
                     <div className="h-48">
-                      {!rtcpJitterLossHistory.length ? <div className="flex h-full items-center justify-center rounded-lg border border-dashed text-xs text-slate-400">За выбранный период реальных RTCP-метрик нет</div> :
+                      {!rtcpJitterLossHistory.length && !legacyCalculatedHistory.length ? <div className="flex h-full items-center justify-center rounded-lg border border-dashed text-xs text-slate-400">За выбранный период реальных RTCP-метрик нет</div> :
                       <CustomMiniLineChart 
-                        data={rtcpJitterLossHistory}
+                        data={rtcpJitterLossHistory.length ? rtcpJitterLossHistory : legacyCalculatedHistory}
                         keys={['jitter', 'rtpLoss']} 
                         colors={['#f59e0b', '#ef4444']} 
                         labels={['Джиттер (мс)', 'Потери RTP (%)']} 
@@ -1349,11 +1353,13 @@ export default function QualityTab({ token }: Props) {
 
                   {/* MOS CHART */}
                   <div className="space-y-1">
-                    <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Динамика MOS (Акустическая оценка)</div>
+                    <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
+                      {rtcpHistoryData.length ? 'Динамика MOS (Акустическая оценка)' : legacyCalculatedHistory.length ? 'Архивный расчётный MOS — не RTCP' : 'Динамика MOS (Акустическая оценка)'}
+                    </div>
                     <div className="h-48">
-                      {!rtcpHistoryData.length ? <div className="flex h-full items-center justify-center rounded-lg border border-dashed text-xs text-slate-400">За выбранный период реальных RTCP-метрик нет</div> :
+                      {!rtcpHistoryData.length && !legacyCalculatedHistory.length ? <div className="flex h-full items-center justify-center rounded-lg border border-dashed text-xs text-slate-400">За выбранный период реальных RTCP-метрик нет</div> :
                       <CustomMiniAreaChart 
-                        data={rtcpHistoryData}
+                        data={rtcpHistoryData.length ? rtcpHistoryData : legacyCalculatedHistory}
                         dataKey="mos" 
                         strokeColor="#10b981" 
                         fillColor="#10b981" 
@@ -1390,7 +1396,7 @@ export default function QualityTab({ token }: Props) {
                       </div>
                     </div>
                     <div className="text-[10px] text-slate-400 mt-2 font-semibold">
-                      * Отображаются только метрики с подтверждённым источником RTCP. SIP RTT показан отдельно.
+                      * Текущие значения берутся только из подтверждённых источников. Архивные расчётные значения SQL показаны отдельно и не считаются RTCP.
                     </div>
                   </div>
 
