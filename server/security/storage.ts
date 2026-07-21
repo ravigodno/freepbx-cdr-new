@@ -11,6 +11,12 @@ export const SECURITY_DEFAULT_SETTINGS: Record<string, boolean | number> = {
   'security.notification_cooldown_minutes': 30, 'security.fail2ban_actions_enabled': false
 };
 
+export function toSecuritySqlDate(value: unknown): string | null {
+  const parsed = value instanceof Date ? value : new Date(String(value || ''));
+  if (!Number.isFinite(parsed.getTime())) return null;
+  return parsed.toISOString().slice(0, 19).replace('T', ' ');
+}
+
 export async function getSecuritySettings() {
   const stored = await getPBXPulsSettingsByCategory('security');
   return { ...SECURITY_DEFAULT_SETTINGS, ...stored, 'security.fail2ban_actions_enabled': stored['security.fail2ban_actions_enabled'] === true };
@@ -44,11 +50,11 @@ export async function upsertSecurityEvent(event: SecurityEventInput):Promise<'cr
     VALUES (?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
     ON DUPLICATE KEY UPDATE occurrence_count=occurrence_count+1, last_seen_at=VALUES(last_seen_at),
       severity=VALUES(severity), description=VALUES(description), raw_excerpt=VALUES(raw_excerpt), metadata_json=VALUES(metadata_json)`, [
-    event.occurredAt, event.severity, event.category, event.source, event.sourceFile || null, event.sourceIp || null,
+    toSecuritySqlDate(event.occurredAt), event.severity, event.category, event.source, event.sourceFile || null, event.sourceIp || null,
     event.sourcePort || null, event.destinationIp || null, event.destinationPort || null, event.protocol || null,
     event.extension || null, event.username || null, event.jail || null, event.service || null, event.action || null,
     event.result || 'unknown', event.title.slice(0, 255), event.description.slice(0, 2000), fingerprint,
-    event.occurredAt, event.occurredAt, event.sourceIp ? (isPrivateSecurityIp(event.sourceIp) ? 1 : 0) : 0,
+    toSecuritySqlDate(event.occurredAt), toSecuritySqlDate(event.occurredAt), event.sourceIp ? (isPrivateSecurityIp(event.sourceIp) ? 1 : 0) : 0,
     raw, event.metadata ? maskSecuritySecrets(JSON.stringify(event.metadata), 8000) : null
   ]);return Number(result?.affectedRows)===1?'created':'updated';
 }
@@ -79,7 +85,7 @@ export async function saveSecurityChecks(checks: SecurityCheckResult[]) {
     ON DUPLICATE KEY UPDATE check_group=VALUES(check_group), title=VALUES(title), status=VALUES(status), severity=VALUES(severity),
       summary=VALUES(summary), details=VALUES(details), recommendation=VALUES(recommendation), evidence_json=VALUES(evidence_json), checked_at=VALUES(checked_at)`,
     [check.id, check.group, check.title, check.status, check.severity, check.summary, check.details || null, check.recommendation || null,
-      check.evidence ? maskSecuritySecrets(JSON.stringify(check.evidence), 8000) : null, check.checkedAt]);
+      check.evidence ? maskSecuritySecrets(JSON.stringify(check.evidence), 8000) : null, toSecuritySqlDate(check.checkedAt)]);
 }
 
 export async function listWhitelist() { return queryPBXPulsDb('SELECT id, ip_address, comment, created_by, created_at FROM security_ip_whitelist ORDER BY created_at DESC'); }

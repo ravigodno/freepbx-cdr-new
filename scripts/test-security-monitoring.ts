@@ -8,8 +8,10 @@ import { buildSecurityChecks, classifyListeningPortExposure, normalizeServiceMet
 import { analyzePortFirewall, filterAndSortPorts, groupPortSockets, parsePortQuery, parsePortRanges } from '../server/security/portDiagnostics.js';
 import { buildThreatWhere, calculateThreatActivityStatus, getThreatStreamState, groupThreatsByIp, mergeCanonicalSourceRows, normalizeThreatRow, summarizeRecentThreatRows } from '../server/security/threatActivity.js';
 import { activeSecurityThreatFilters, resetSecurityThreatFilters } from '../src/utils/securityThreatFilters.js';
+import { toSecuritySqlDate } from '../server/security/storage.js';
 
 const fixture = (name:string) => fs.readFileSync(path.join(process.cwd(),'scripts/fixtures/security',name),'utf8').trim();
+assert.equal(toSecuritySqlDate('2026-07-21T13:24:43.824Z'),'2026-07-21 13:24:43');assert.equal(toSecuritySqlDate('invalid'),null);
 assert.equal(isValidSecurityIp('192.0.2.10'),true); assert.equal(isValidSecurityIp('2001:db8::1'),true); assert.equal(isValidSecurityIp('1.2.3.4;rm -rf /'),false);
 assert.equal(isLoopbackIp('127.0.0.1'),true); assert.equal(isLoopbackIp('::1'),true); assert.equal(isPrivateSecurityIp('192.168.1.10'),true);
 assert.equal(isValidJailName('asterisk-custom'),true); assert.equal(isValidJailName('asterisk;id'),false);

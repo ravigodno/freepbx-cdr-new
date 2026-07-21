@@ -1,7 +1,7 @@
 import { queryPBXPulsDb, sanitizePBXPulsDbError } from '../pbxpulsDb.js';
 import { writePBXPulsSystemEvent } from '../pbxpulsEvents.js';
 import { buildOverview, buildSecurityChecks, classifyListeningPortExposure, collectFail2Ban, collectFirewall, collectListeningPorts, collectOsDiscovery, collectRecentLogEvents, collectServices, securityLogSourceKey } from './collectors.js';
-import { cleanupSecurityRetention, getSecuritySettings, saveSecurityChecks, upsertSecurityEvent } from './storage.js';
+import { cleanupSecurityRetention, getSecuritySettings, saveSecurityChecks, toSecuritySqlDate, upsertSecurityEvent } from './storage.js';
 import { listThreatActivity } from './threatActivity.js';
 
 type Snapshot = any;
@@ -36,7 +36,7 @@ export async function collectSecuritySnapshot(force = false): Promise<Snapshot> 
     if(Array.isArray(ports.ports))ports.ports=classifyListeningPortExposure(ports.ports,firewall);
     const services = await collectServices(ports.ports || []).catch(() => ({ status:'unknown',services:[] }));
     const checks = buildSecurityChecks({ firewall, fail2ban, ports: ports.ports || [], services: services.services || [] });
-    try { await saveSecurityChecks(checks); } catch (error:any) { runtime.lastErrors.database = sanitizePBXPulsDbError(error); }
+    try { await saveSecurityChecks(checks); delete runtime.lastErrors.database; } catch (error:any) { runtime.lastErrors.database = sanitizePBXPulsDbError(error); }
     const snapshot = { generatedAt, discovery, ports, firewall, fail2ban, services, checks, ...(await counts24h()) };
     cached = { expiresAt: Date.now() + 15_000, value: snapshot };
     runtime.lastSuccessfulRuns.snapshot = generatedAt; runtime.activeJobs = [];
@@ -69,7 +69,7 @@ async function collectEventsJob() {
         (source_id,bucket_start,lines_read,events_parsed,events_created,events_updated,last_event_at)
         VALUES (?,DATE_FORMAT(NOW(),'%Y-%m-%d %H:00:00'),?,?,?,?,?)
         ON DUPLICATE KEY UPDATE lines_read=lines_read+VALUES(lines_read),events_parsed=events_parsed+VALUES(events_parsed),events_created=events_created+VALUES(events_created),events_updated=events_updated+VALUES(events_updated),last_event_at=CASE WHEN VALUES(last_event_at) IS NULL THEN last_event_at WHEN last_event_at IS NULL THEN VALUES(last_event_at) ELSE GREATEST(last_event_at,VALUES(last_event_at)) END`,
-        [sourceId,Number(source.linesRead||0),Number(source.linesParsed||0),outcome.created,outcome.updated,source.lastEventAt||null]);
+        [sourceId,Number(source.linesRead||0),Number(source.linesParsed||0),outcome.created,outcome.updated,toSecuritySqlDate(source.lastEventAt)]);
     }
     runtime.lastSuccessfulRuns.events = new Date().toISOString();
   } catch (error:any) { runtime.lastErrors.events = sanitizePBXPulsDbError(error); }
