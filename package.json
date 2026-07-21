@@ -1,7 +1,7 @@
 {
   "name": "freepbx-cdr-new",
   "private": true,
-  "version": "5.6.31",
+  "version": "5.6.32",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
