@@ -85,6 +85,7 @@ import CommandCenterTab from './modules/monitoring/tabs/monitoring/CommandCenter
 const DbExplorerTab = lazy(() => import('./modules/monitoring/tabs/monitoring/DbExplorerTab'));
 const SecurityTab = lazy(() => import('./modules/monitoring/tabs/monitoring/SecurityTab'));
 const LogAnalysisTab = lazy(() => import('./modules/monitoring/tabs/monitoring/LogAnalysisTab'));
+const CallIntelligencePanel = lazy(() => import('./modules/monitoring/tabs/monitoring/CallIntelligencePanel'));
 import QualityTab from './modules/monitoring/tabs/monitoring/QualityTab';
 import DevicesMapTab from './modules/monitoring/tabs/monitoring/DevicesMapTab';
 import HealthReportTab from './modules/monitoring/tabs/monitoring/HealthReportTab';
@@ -654,7 +655,7 @@ export default function App() {
   const hasAnyMonitoringTabPermission = () => ([
     'view_active_calls', 'view_tcpdump', 'view_sngrep', 'view_cli', 'view_db_explorer',
     'view_sip_devices_map', 'view_quality', 'view_health', 'view_ai_pbx_admin',
-    'view_security', 'view_log_analysis'
+    'view_security', 'view_log_analysis', 'view_call_intelligence'
   ] as PermissionKey[]).some(hasPermission);
 
   const isAdminRole = (role?: string | null) => role === 'admin' || role === 'su';
@@ -796,8 +797,8 @@ export default function App() {
   const [tcpdumpFiles, setTcpdumpFiles] = useState<any[]>([]);
   const [tcpdumpMessage, setTcpdumpMessage] = useState('');
   const [tcpdumpOutput, setTcpdumpOutput] = useState('');
-  const [monitorMode, setMonitorMode] = useState<'calls' | 'tcpdump' | 'sngrep' | 'cli' | 'freepbx' | 'db' | 'devices' | 'quality' | 'health' | 'ai-admin' | 'security' | 'log-analysis'>(() => {
-    const saved = localStorage.getItem('asterisk_cdr_monitor_mode') as 'calls' | 'tcpdump' | 'sngrep' | 'cli' | 'freepbx' | 'db' | 'devices' | 'quality' | 'health' | 'ai-admin' | 'security' | 'log-analysis' | null;
+  const [monitorMode, setMonitorMode] = useState<'calls' | 'tcpdump' | 'sngrep' | 'cli' | 'freepbx' | 'db' | 'devices' | 'quality' | 'health' | 'ai-admin' | 'security' | 'log-analysis' | 'call-intelligence'>(() => {
+    const saved = localStorage.getItem('asterisk_cdr_monitor_mode') as 'calls' | 'tcpdump' | 'sngrep' | 'cli' | 'freepbx' | 'db' | 'devices' | 'quality' | 'health' | 'ai-admin' | 'security' | 'log-analysis' | 'call-intelligence' | null;
     return saved || 'calls';
   });
 
@@ -821,6 +822,15 @@ export default function App() {
   }, [monitorMode]);
 
   useEffect(() => {
+    const openCallIntelligence = () => {
+      setActiveView('monitoring');
+      setMonitorMode('call-intelligence');
+    };
+    window.addEventListener('pbxpuls:call-intelligence', openCallIntelligence);
+    return () => window.removeEventListener('pbxpuls:call-intelligence', openCallIntelligence);
+  }, []);
+
+  useEffect(() => {
     if (activeView !== 'monitoring') return;
     const permissionByMode: Record<string, PermissionKey> = {
       calls: 'view_active_calls',
@@ -832,6 +842,7 @@ export default function App() {
       quality: 'view_quality',
       security: 'view_security',
       'log-analysis': 'view_log_analysis',
+      'call-intelligence': 'view_call_intelligence',
       health: 'view_health',
       'ai-admin': 'view_ai_pbx_admin'
     };
@@ -3989,6 +4000,16 @@ export default function App() {
                 Анализ логов
               </button>
               )}
+              {hasPermission('view_call_intelligence') && (
+              <button
+                onClick={() => setMonitorMode('call-intelligence')}
+                className={`px-3 py-2 rounded-lg text-xs font-bold border ${monitorMode === 'call-intelligence'
+                  ? 'bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-950/40 dark:text-indigo-300 dark:border-indigo-900'
+                  : 'bg-white text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700'}`}
+              >
+                Карточка звонка
+              </button>
+              )}
               </div>
             </div>
 
@@ -4044,6 +4065,11 @@ export default function App() {
           {monitorMode === 'log-analysis' && hasPermission('view_log_analysis') && (
             <Suspense fallback={<div className="p-8 text-center text-slate-500">Загрузка анализа журналов...</div>}>
               <LogAnalysisTab token={session?.token || ''} onNavigate={setMonitorMode} />
+            </Suspense>
+          )}
+          {monitorMode === 'call-intelligence' && hasPermission('view_call_intelligence') && (
+            <Suspense fallback={<div className="p-8 text-center text-slate-500">Загрузка карточки звонка...</div>}>
+              <CallIntelligencePanel token={session?.token || ''} />
             </Suspense>
           )}
 

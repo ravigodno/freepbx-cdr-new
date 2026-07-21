@@ -21,6 +21,7 @@ export const ROLE_PERMISSIONS: Partial<Record<UserRole, PermissionKey[]>> = {
     'view_sip_devices_map',
     'view_security',
     'view_log_analysis',
+    'view_call_intelligence',
     'view_security_events',
     'view_firewall',
     'view_fail2ban',

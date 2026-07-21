@@ -676,6 +676,18 @@ const MIGRATIONS: Migration[] = [
         INDEX idx_quality_rtcp_ext_time (ext, sampled_at)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
     ]
+  },
+  {
+    key: '20260721_025_call_intelligence_permission',
+    description: 'Register independent read-only access to the Call Intelligence monitoring card',
+    statements: [
+      `INSERT IGNORE INTO permissions (permission_key,name,description,category) VALUES
+        ('view_call_intelligence','View Call Intelligence','Open the unified read-only call diagnostics card','monitoring')`,
+      `INSERT IGNORE INTO role_permissions (role_id,permission_id)
+       SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key='view_call_intelligence'
+       WHERE r.role_key IN ('su','admin')`
+    ],
+    seed: seedLegacyMonitoringTabPermissions
   }
 ];
 
@@ -687,7 +699,7 @@ async function seedLegacyMonitoringTabPermissions(): Promise<void> {
   const permissions = [
     'view_active_calls', 'view_tcpdump', 'view_sngrep', 'view_cli', 'view_db_explorer',
     'view_sip_devices_map', 'view_quality', 'view_health', 'view_ai_pbx_admin',
-    'view_security', 'view_log_analysis'
+    'view_security', 'view_log_analysis', 'view_call_intelligence'
   ];
   let changed = false;
   for (const role of db.roles) {

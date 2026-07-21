@@ -146,6 +146,7 @@ import { startMonitoringRetentionRunner } from './server/monitoringRetention.js'
 import { registerSecurityRoutes } from './server/security/router.js';
 import { startSecurityCollector } from './server/security/service.js';
 import { registerLogAnalysisRoutes } from './server/logAnalysis/router.js';
+import { registerCallIntelligenceRoutes } from './server/callIntelligence/router.js';
 import { startLogAnalysisCollector } from './server/logAnalysis/service.js';
 import { registerOutgoingReportRoutes } from './server/outgoingReports.js';
 import { mergeDeviceNetworkIdentity, readIpNeighborMacs } from './server/deviceNetworkIdentity.js';
@@ -3722,6 +3723,7 @@ function getDefaultAccessRoles() {
         view_health: true,
         view_sip_devices_map: true,
         view_log_analysis: true,
+        view_call_intelligence: true,
         view_ai_pbx_admin: true,
         view_security: true,
         view_security_events: true,
@@ -3772,6 +3774,7 @@ function getDefaultAccessRoles() {
         view_health: true,
         view_sip_devices_map: true,
         view_log_analysis: true,
+        view_call_intelligence: true,
         view_ai_pbx_admin: true,
         view_security: true,
         view_security_events: true,
@@ -3948,6 +3951,7 @@ const PERMISSION_MODULE_MAP: Record<string, OptionalModuleKey> = {
   view_sip_devices_map: 'monitoring',
   view_security: 'monitoring',
   view_log_analysis: 'monitoring',
+  view_call_intelligence: 'monitoring',
 
   view_management: 'management',
   dangerous_pbx_write: 'management',
@@ -22076,6 +22080,22 @@ registerLogAnalysisRoutes(app, requireAuth, checkUserPermission, {
     const localDb = await readLocalDb();
     return queryFreePBXCDR(localDb.settings, isDemoMode(localDb.settings), sql, params);
   }
+});
+registerCallIntelligenceRoutes(app, requireAuth, checkUserPermission, {
+  queryCdr: async (sql: string, params: any[]) => {
+    const localDb = await readLocalDb();
+    return queryFreePBXCDR(localDb.settings, isDemoMode(localDb.settings), sql, params);
+  },
+  getLiveChannels: async () => {
+    const localDb = await readLocalDb();
+    return runAmiCoreShowChannels(localDb.settings);
+  },
+  getSipDialogs: () => ({
+    dialogs: buildSipDialogs(tcpdumpEvents),
+    events: tcpdumpEvents,
+    engine: 'PBXPuls SIP parser',
+    session: tcpdumpStatusPayload()
+  })
 });
 registerOutgoingReportRoutes(app, {
   requireAuth,

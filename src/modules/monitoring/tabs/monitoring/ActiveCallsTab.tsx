@@ -721,6 +721,15 @@ export default function ActiveCallsTab({ liveSessionsData, liveSearch, setLiveSe
 
                   {/* Operational diagnostics buttons toolbar */}
                   <div className="px-4 py-2.5 bg-slate-900 border-b border-slate-800 flex flex-wrap items-center gap-2">
+                    <button
+                      onClick={() => {
+                        localStorage.setItem('pbxpuls_call_intelligence_query', selectedCall.linkedId || selectedCall.id || selectedCall.callId);
+                        window.dispatchEvent(new CustomEvent('pbxpuls:call-intelligence'));
+                      }}
+                      className="px-2.5 py-1 text-[10px] font-black bg-indigo-950/40 hover:bg-indigo-900/40 text-indigo-200 border border-indigo-800 rounded transition flex items-center gap-1"
+                    >
+                      Открыть карточку звонка
+                    </button>
                     {[
                       { label: 'Trace Call', command: 'cel show uniqueid' },
                       { label: 'SIP Debug', command: 'pjsip set logger on' },

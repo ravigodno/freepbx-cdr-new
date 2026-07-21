@@ -9,7 +9,7 @@ const checks: Array<{ name: string; ok: boolean; detail: unknown }> = [];
 const requiredPermissions = [
   'view_active_calls', 'view_tcpdump', 'view_sngrep', 'view_cli', 'view_db_explorer',
   'view_sip_devices_map', 'view_quality', 'view_health', 'view_ai_pbx_admin',
-  'view_security', 'view_log_analysis'
+  'view_security', 'view_log_analysis', 'view_call_intelligence'
 ];
 
 function check(name: string, ok: boolean, detail: unknown) {

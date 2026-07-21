@@ -50,6 +50,17 @@ export function CDRRowActions({
           Log
         </button>
       )}
+      {(session?.role === 'su' || session?.role === 'admin' || session?.permissions?.view_call_intelligence === true) && (
+        <button
+          onClick={() => {
+            localStorage.setItem('pbxpuls_call_intelligence_query', String(call.linkedid || call.uniqueid || ''));
+            window.dispatchEvent(new CustomEvent('pbxpuls:call-intelligence'));
+          }}
+          className="ml-2 px-2 py-1 bg-indigo-50 text-indigo-700 rounded text-xs"
+        >
+          Карточка звонка
+        </button>
+      )}
     </>
   );
 }

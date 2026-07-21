@@ -115,6 +115,7 @@ const GROUPS: PermissionGroup[] = [
       { key: 'view_health', label: 'Состояние АТС', kind: 'tab', hint: 'Показывает Health Report сервера и служб' },
       { key: 'view_sip_devices_map', label: 'Карта IP / SIP устройств', kind: 'tab', hint: 'Показывает SIP/PJSIP регистрации, IP-адреса, User-Agent и конфликтующие устройства' },
       { key: 'view_log_analysis', label: 'Анализ логов', kind: 'tab', hint: 'Открывает централизованный анализ журналов и трассировку звонка' },
+      { key: 'view_call_intelligence', label: 'Карточка звонка', kind: 'tab', hint: 'Объединяет CDR, CEL, SIP, RTCP, логи, записи и события безопасности' },
       { key: 'view_security', label: 'Безопасность', kind: 'tab', hint: 'Открывает центр мониторинга безопасности' },
       { key: 'view_security_events', label: 'События безопасности', kind: 'feature', hint: 'Просмотр событий и внешних IP' },
       { key: 'view_firewall', label: 'Firewall и порты', kind: 'feature', hint: 'Просмотр Firewall и сетевых сервисов' },
