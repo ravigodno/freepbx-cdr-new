@@ -3613,33 +3613,6 @@ export default function App() {
   }, [activeView]);
 
   const renderMonitoringView = () => {
-    const monitoringTitle =
-      monitorMode === 'calls' ? 'Активные звонки' :
-      monitorMode === 'tcpdump' ? 'TCPDUMP' :
-      monitorMode === 'sngrep' ? 'SNGREP' :
-      monitorMode === 'cli' ? 'Командный центр' :
-      monitorMode === 'db' ? 'DB Explorer' :
-      monitorMode === 'devices' ? 'Карта IP' :
-      monitorMode === 'quality' ? 'Качество связи' :
-      monitorMode === 'health' ? 'Состояние АТС' :
-      monitorMode === 'security' ? 'Безопасность' :
-      monitorMode === 'log-analysis' ? 'Анализ логов' :
-      monitorMode === 'ai-admin' ? 'AI-админ' :
-      'Мониторинг';
-
-    const monitoringSubtitle =
-      monitorMode === 'calls' ? 'Источник: AMI → core show channels concise / verbose / queue show' :
-      monitorMode === 'tcpdump' ? 'Захват и анализ сетевого трафика SIP/RTP через tcpdump' :
-      monitorMode === 'sngrep' ? 'Анализ SIP-диалогов и событий сигнализации' :
-      monitorMode === 'cli' ? 'Единое пространство диагностики, администрирования и справочной информации Asterisk & FreePBX' :
-      monitorMode === 'db' ? 'Просмотр CDR/CEL и таблиц FreePBX/Asterisk' :
-      monitorMode === 'devices' ? 'Карта регистраций SIP/PJSIP, IP-адресов и конфликтующих устройств' :
-      monitorMode === 'quality' ? 'Интегрированная IP/RTP-телеметрия качества связи Asterisk,\nдиагностика джиттера, RTT, потерь пакетов и MOS' :
-      monitorMode === 'ai-admin' ? 'AI-консультант администратора для диагностики Asterisk и FreePBX, анализа логов и подготовки команд' :
-      monitorMode === 'health' ? 'Health Report сервера FreePBX/Asterisk: железо, диски, сеть, интернет, службы и общее состояние АТС' :
-      monitorMode === 'security' ? 'Единый read-only центр Firewall, Fail2Ban, портов, служб и событий безопасности' :
-      monitorMode === 'log-analysis' ? 'Централизованный read-only анализ журналов АТС и операционной системы' :
-      '';
     const sessions = liveSessionsData?.sessions || [];
     const q = liveSearch.trim().toLowerCase();
 
@@ -4008,14 +3981,6 @@ export default function App() {
               </div>
             </div>
 
-            <div className="min-w-0">
-              <div className="text-sm font-black text-slate-900 dark:text-white text-left xl:text-right">
-                {monitoringTitle}
-              </div>
-              <div className="mt-1 text-xs text-slate-500 dark:text-slate-400 text-left xl:text-right whitespace-pre-line">
-                {monitoringSubtitle}
-              </div>
-            </div>
           </div>
         </div>
 
