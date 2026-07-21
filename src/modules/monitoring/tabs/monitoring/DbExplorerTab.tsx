@@ -37,180 +37,6 @@ import { getServerNow } from '../../../../utils/serverClock';
 
 type Row = Record<string, any>;
 
-// Mock data structures representing a deep, realistic FreePBX & Asterisk environment
-const dbOverviewData = {
-  databases: [
-    { name: 'asterisk', size: '12.4 MB', tables: 54, rows: 24500, indexes: 78, desc: 'Конфигурация FreePBX, экстеншены и параметры' },
-    { name: 'asteriskcdrdb', size: '452.8 MB', tables: 4, rows: 1240500, indexes: 12, desc: 'Хранилище детальной истории звонков (CDR & CEL)' },
-    { name: 'pbxpuls', size: 'SQL', tables: 22, rows: 0, indexes: 0, desc: 'Рабочие данные, справочник и мониторинг PBXPuls' },
-    { name: 'mysql', size: '2.1 MB', tables: 31, rows: 4500, indexes: 41, desc: 'Системные привилегии и служебные пользователи' },
-    { name: 'performance_schema', size: '0.0 MB', tables: 82, rows: 0, indexes: 0, desc: 'Метрики производительности СУБД в памяти' }
-  ],
-  system: {
-    version: '10.6.12-MariaDB-log',
-    uptime: '14 дней, 6 часов',
-    threads: 12,
-    slowQueries: 5,
-    connections: 18,
-    responseTime: '1.4 ms',
-    totalSize: '467.3 MB',
-    lastBackup: 'Вчера 03:00'
-  }
-};
-
-const mapAsterisk = [
-  { name: 'users', rows: 142, engine: 'InnoDB', desc: 'Профили внутренних абонентов (Extensions)' },
-  { name: 'devices', rows: 142, engine: 'InnoDB', desc: 'Устройства, привязанные к пользователям' },
-  { name: 'sip', rows: 32, engine: 'InnoDB', desc: 'Учетные записи устаревшего драйвера SIP' },
-  { name: 'ps_endpoints', rows: 110, engine: 'InnoDB', desc: 'Основные endpoints драйвера PJSIP' },
-  { name: 'ps_contacts', rows: 110, engine: 'InnoDB', desc: 'Регистрационные контакты PJSIP с IP-адресами' },
-  { name: 'ps_auths', rows: 110, engine: 'InnoDB', desc: 'Данные авторизации PJSIP (логины/пароли)' },
-  { name: 'ps_aors', rows: 110, engine: 'InnoDB', desc: 'Ресурсы адресации PJSIP (AOR)' },
-  { name: 'queues_config', rows: 8, engine: 'InnoDB', desc: 'Базовые параметры очередей вызовов' },
-  { name: 'queues_details', rows: 32, engine: 'InnoDB', desc: 'Агенты и детальные настройки очередей' },
-  { name: 'trunks', rows: 6, engine: 'InnoDB', desc: 'Настройки SIP и PJSIP транков операторов' },
-  { name: 'incoming', rows: 14, engine: 'InnoDB', desc: 'Входящая маршрутизация (DID/CID)' },
-  { name: 'outbound_routes', rows: 5, engine: 'InnoDB', desc: 'Исходящая маршрутизация по префиксам' },
-  { name: 'extensions', rows: 1845, engine: 'MyISAM', desc: 'Сгенерированный диалплан Asterisk' }
-];
-
-const mapCdr = [
-  { name: 'cdr', rows: 940321, engine: 'Aria', desc: 'История вызовов Asterisk CDR' },
-  { name: 'cel', rows: 2950114, engine: 'Aria', desc: 'События жизненного цикла каналов CEL' },
-  { name: 'queue_log', rows: 43210, engine: 'InnoDB', desc: 'Логи распределения вызовов очередями' },
-  { name: 'recordings', rows: 120400, engine: 'InnoDB', desc: 'Индексы и пути к аудиофайлам записей' }
-];
-
-const mapPbxpuls = [
-  { name: 'directory_contacts', rows: 0, engine: 'InnoDB', desc: 'Контакты справочника PBXPuls' },
-  { name: 'directory_contact_metadata', rows: 0, engine: 'InnoDB', desc: 'Дополнительные поля контактов' },
-  { name: 'directory_custom_fields', rows: 0, engine: 'InnoDB', desc: 'Схема пользовательских полей' },
-  { name: 'users', rows: 0, engine: 'InnoDB', desc: 'Пользователи PBXPuls (секреты скрываются)' },
-  { name: 'roles', rows: 0, engine: 'InnoDB', desc: 'Роли доступа' },
-  { name: 'permissions', rows: 0, engine: 'InnoDB', desc: 'Матрица разрешений' },
-  { name: 'system_events', rows: 0, engine: 'InnoDB', desc: 'Системные события' },
-  { name: 'quality_current', rows: 0, engine: 'InnoDB', desc: 'Текущее качество связи' },
-  { name: 'quality_history', rows: 0, engine: 'InnoDB', desc: 'История качества связи' },
-  { name: 'monitoring_health_history', rows: 0, engine: 'InnoDB', desc: 'История состояния АТС' },
-  { name: 'monitoring_quality_alerts', rows: 0, engine: 'InnoDB', desc: 'Оповещения качества' },
-  { name: 'schema_migrations', rows: 0, engine: 'InnoDB', desc: 'История миграций' }
-];
-
-const mockExtensions = [
-  { ext: '101', name: 'Иван Иванов', dept: 'Отдел продаж - МСК', tech: 'PJSIP', status: 'Online', ip: '192.168.1.50', latency: '12ms', context: 'from-internal' },
-  { ext: '102', name: 'Анна Кузнецова', dept: 'Отдел продаж - СПБ', tech: 'SIP', status: 'Online', ip: '192.168.1.51', latency: '45ms', context: 'from-internal' },
-  { ext: '103', name: 'Сергей Смирнов', dept: 'Бухгалтерия', tech: 'PJSIP', status: 'Offline', ip: '[Unregistered]', latency: '-', context: 'from-internal' },
-  { ext: '104', name: 'Мария Петрова', dept: 'Секретарь', tech: 'SIP', status: 'Online', ip: '192.168.1.53', latency: '23ms', context: 'from-internal' },
-  { ext: '105', name: 'Александр Козлов', dept: 'ИТ и Разработка', tech: 'PJSIP', status: 'Online', ip: '192.168.1.54', latency: '4ms', context: 'from-internal' },
-  { ext: '106', name: 'Дмитрий Соколов', dept: 'Маркетинг', tech: 'PJSIP', status: 'Busy', ip: '192.168.1.60', latency: '18ms', context: 'from-internal' },
-  { ext: '107', name: 'Елена Лебедева', dept: 'Поддержка клиентов', tech: 'PJSIP', status: 'Online', ip: '192.168.1.61', latency: '32ms', context: 'from-internal' },
-  { ext: '108', name: 'Михаил Морозов', dept: 'Поддержка клиентов', tech: 'PJSIP', status: 'Online', ip: '192.168.1.62', latency: '29ms', context: 'from-internal' }
-];
-
-const mockSipDevices = [
-  { ext: '102', host: '192.168.1.51', port: 5060, qualify: '45ms', type: 'Friend', context: 'from-internal', acl: 'Yes', callerid: 'Анна Кузнецова <102>' },
-  { ext: '104', host: '192.168.1.53', port: 5060, qualify: '23ms', type: 'Friend', context: 'from-internal', acl: 'Yes', callerid: 'Мария Петрова <104>' },
-  { ext: '110', host: '192.168.5.12', port: 5062, qualify: '85ms', type: 'Peer', context: 'from-internal', acl: 'No', callerid: 'Тест Кабинет <110>' }
-];
-
-const mockPjsipDevices = [
-  { endpoint: '101', transport: 'transport-udp', auth: 'auth_101', aor: '101', ip: '192.168.1.50', userAgent: 'Yealink SIP-T31P 124.86.0.40' },
-  { endpoint: '103', transport: 'transport-udp', auth: 'auth_103', aor: '103', ip: '[Not registered]', userAgent: '-' },
-  { endpoint: '105', transport: 'transport-tcp', auth: 'auth_105', aor: '105', ip: '192.168.1.54', userAgent: 'PhonerLite v3.11' },
-  { endpoint: '106', transport: 'transport-udp', auth: 'auth_106', aor: '106', ip: '192.168.1.60', userAgent: 'Yealink SIP-T46S 66.85.0.5' },
-  { endpoint: '107', transport: 'transport-udp', auth: 'auth_107', aor: '107', ip: '192.168.1.61', userAgent: 'Yealink SIP-T30 124.86.0.40' },
-  { endpoint: '108', transport: 'transport-udp', auth: 'auth_108', aor: '108', ip: '192.168.1.62', userAgent: 'Yealink SIP-T30 124.86.0.40' }
-];
-
-const mockQueues = [
-  { id: '200', name: 'Очередь продаж', strategy: 'leastrecent', timeout: '15 сек', agents: '101, 102, 106', sla: '94%', callsWaiting: 0 },
-  { id: '300', name: 'Группа поддержки', strategy: 'ringall', timeout: '20 сек', agents: '107, 108', sla: '88%', callsWaiting: 1 },
-  { id: '400', name: 'VIP Обслуживание', strategy: 'random', timeout: '10 сек', agents: '[Нет операторов]', sla: '0%', callsWaiting: 0 }
-];
-
-const mockTrunks = [
-  { id: '1', name: 'MTS_SIP_TRUNK', tech: 'SIP', host: '185.45.12.34', context: 'from-trunk', status: 'Online (OK)', channels: '12/30' },
-  { id: '2', name: 'Rostelecom_PJSIP', tech: 'PJSIP', host: 'sip.rt.ru', context: 'from-trunk', status: 'Online (OK)', channels: '4/10' },
-  { id: '3', name: 'Zadarma_Out', tech: 'SIP', host: 'sip.zadarma.com', context: 'from-trunk', status: 'Auth Error (Forbidden)', channels: '0/5' }
-];
-
-const mockRoutes = [
-  { type: 'Inbound', name: 'Главная линия МСК', pattern: '74951234567', priority: 1, destination: 'IVR - Главное меню' },
-  { type: 'Inbound', name: 'Линия Секретаря', pattern: '74959876543', priority: 2, destination: 'EXT - 104' },
-  { type: 'Outbound', name: 'Моб. телефоны РФ', pattern: '89XXXXXXXXX', priority: 1, destination: 'Trunk: MTS_SIP_TRUNK' },
-  { type: 'Outbound', name: 'Межгород РФ', pattern: '8[2-9]XXXXXXXXX', priority: 2, destination: 'Trunk: Rostelecom_PJSIP' }
-];
-
-const mockCdrStats = {
-  totalCalls: 12450,
-  incoming: 7890,
-  outgoing: 3560,
-  internal: 1000,
-  missed: 1850,
-  avgDuration: '2м 15с',
-  byHour: [
-    { hour: '09:00', входящие: 120, исходящие: 40, пропущенные: 10 },
-    { hour: '10:00', входящие: 340, исходящие: 90, пропущенные: 25 },
-    { hour: '11:00', входящие: 520, исходящие: 180, пропущенные: 40 },
-    { hour: '12:00', входящие: 410, исходящие: 150, пропущенные: 35 },
-    { hour: '13:00', входящие: 280, исходящие: 110, пропущенные: 15 },
-    { hour: '14:00', входящие: 390, исходящие: 130, пропущенные: 20 },
-    { hour: '15:00', входящие: 480, исходящие: 160, пропущенные: 30 },
-    { hour: '16:00', входящие: 550, исходящие: 190, пропущенные: 45 },
-    { hour: '17:00', входящие: 380, исходящие: 140, пропущенные: 20 },
-    { hour: '18:00', входящие: 180, исходящие: 60, пропущенные: 12 }
-  ],
-  byDay: [
-    { day: 'Пн',Calls: 1450, Missed: 180 },
-    { day: 'Вт', Calls: 1620, Missed: 210 },
-    { day: 'Ср', Calls: 1750, Missed: 190 },
-    { day: 'Чт', Calls: 1580, Missed: 150 },
-    { day: 'Пт', Calls: 1420, Missed: 130 },
-    { day: 'Сб', Calls: 450, Missed: 40 },
-    { day: 'Вс', Calls: 220, Missed: 25 }
-  ],
-  byOperator: [
-    { name: 'Иван И. (101)', вызовов: 420 },
-    { name: 'Анна К. (102)', вызовов: 390 },
-    { name: 'Мария П. (104)', вызовов: 280 },
-    { name: 'Дмитрий С. (106)', вызовов: 310 },
-    { name: 'ИТ Отдел (105)', вызовов: 95 }
-  ],
-  byTrunk: [
-    { name: 'MTS_TRUNK', value: 7200 },
-    { name: 'Rostelecom', value: 4250 },
-    { name: 'Zadarma', value: 1000 }
-  ]
-};
-
-const mockCelLogs = [
-  { id: 1, eventtime: '2026-06-23 10:14:02', eventtype: 'CHAN_START', cid_num: '79201234567', exten: '74951234567', context: 'from-trunk', channame: 'PJSIP/MTS-0000ef12', appname: '', uniqueid: '171921342.12450', linkedid: '171921342.12450' },
-  { id: 2, eventtime: '2026-06-23 10:14:03', eventtype: 'ANSWER', cid_num: '79201234567', exten: '74951234567', context: 'from-trunk', channame: 'PJSIP/MTS-0000ef12', appname: 'Playback', uniqueid: '171921342.12450', linkedid: '171921342.12450' },
-  { id: 3, eventtime: '2026-06-23 10:14:07', eventtype: 'APP_START', cid_num: '79201234567', exten: '200', context: 'ext-queues', channame: 'PJSIP/MTS-0000ef12', appname: 'Queue', uniqueid: '171921342.12450', linkedid: '171921342.12450' },
-  { id: 4, eventtime: '2026-06-23 10:14:08', eventtype: 'CHAN_START', cid_num: '101', exten: 's', context: 'from-internal', channame: 'PJSIP/101-0000ef13', appname: '', uniqueid: '171921342.12451', linkedid: '171921342.12450' },
-  { id: 5, eventtime: '2026-06-23 10:14:12', eventtype: 'ANSWER', cid_num: '101', exten: 's', context: 'from-internal', channame: 'PJSIP/101-0000ef13', appname: '', uniqueid: '171921342.12451', linkedid: '171921342.12450' },
-  { id: 6, eventtime: '2026-06-23 10:14:12', eventtype: 'BRIDGE_ENTER', cid_num: '79201234567', exten: '200', context: 'ext-queues', channame: 'PJSIP/MTS-0000ef12', appname: 'Queue', uniqueid: '171921342.12450', linkedid: '171921342.12450' },
-  { id: 7, eventtime: '2026-06-23 10:14:12', eventtype: 'BRIDGE_ENTER', cid_num: '101', exten: 's', context: 'from-internal', channame: 'PJSIP/101-0000ef13', appname: '', uniqueid: '171921342.12451', linkedid: '171921342.12450' },
-  { id: 8, eventtime: '2026-06-23 10:16:35', eventtype: 'BRIDGE_EXIT', cid_num: '101', exten: 's', context: 'from-internal', channame: 'PJSIP/101-0000ef13', appname: '', uniqueid: '171921342.12451', linkedid: '171921342.12450' },
-  { id: 9, eventtime: '2026-06-23 10:16:35', eventtype: 'CHAN_END', cid_num: '101', exten: 's', context: 'from-internal', channame: 'PJSIP/101-0000ef13', appname: '', uniqueid: '171921342.12451', linkedid: '171921342.12450' },
-  { id: 10, eventtime: '2026-06-23 10:16:36', eventtype: 'HANGUP', cid_num: '79201234567', exten: '200', context: 'ext-queues', channame: 'PJSIP/MTS-0000ef12', appname: 'Queue', uniqueid: '171921342.12450', linkedid: '171921342.12450' }
-];
-
-const mockDiagnosticsAnomalies = [
-  { type: 'danger', title: 'Очередь без операторов', detail: 'Очередь вызовов 400 (VIP Обслуживание) не содержит ни одного назначенного или зарегистрированного оператора.', impact: 'Входящие звонки на данный номер будут висеть до тайм-аута и сбрасываться.', rec: 'Добавьте операторов в настройках Queues в FreePBX или подкючите статические внутренние номера.' },
-  { type: 'warning', title: 'Транк авторизован с ошибкой', detail: 'Транк Zadarma_Out возвращает статус Auth Error (Forbidden 403).', impact: 'Исходящие звонки по запасному маршруту Zadarma не смогут быть инициированы.', rec: 'Проверьте логин, пароль и адрес SIP-сервера в параметрах транка.' },
-  { type: 'warning', title: 'Неиспользуемые внутренние номера', detail: 'Внутренний номер 103 (Сергей Смирнов) отсутствует в сети (Unregistered) более 14 дней.', impact: 'Неиспользуемая лицензия / занятый диапазон экстеншенов.', rec: 'Заблокируйте номер или восстановите регистрацию оборудования.' },
-  { type: 'danger', title: 'Отсутствующие индексы БД', detail: 'Таблица asteriskcdrdb.cdr выросла до 940k строк, но индекс по полю "disposition" отсутствует.', impact: 'Высокая нагрузка при поиске по статусам, замедление формирования отчетов.', rec: 'Создайте индекс: CREATE INDEX idx_cdr_disposition ON asteriskcdrdb.cdr(disposition);' },
-  { type: 'info', title: 'Дублирующиеся DID маршруты', detail: 'Маршрут 74951234567 настроен как на "Главная линия МСК", так и на архивный скрытый диалплан.', impact: 'Возможен непредсказуемый роутинг звонков в зависимости от сортировки в БД.', rec: 'Удалите конфликтующий входящий маршрут в FreePBX.' }
-];
-
-const mockChangeLogs = [
-  { id: 1, date: '2026-06-22 17:45:10', author: 'admin', object: 'Extension 101', action: 'Update CallerID', previous: 'Иванов Иван', current: 'Иван Иванов (Отдел продаж)' },
-  { id: 2, date: '2026-06-22 16:30:12', author: 'admin', object: 'Queue 200', action: 'Add Member', previous: '101, 102', current: '101, 102, 106' },
-  { id: 3, date: '2026-06-21 11:20:05', author: 'su', object: 'Inbound Route', action: 'Change Route Target', previous: 'Queue 200', current: 'IVR - Главное меню' },
-  { id: 4, date: '2026-06-20 14:15:30', author: 'admin', object: 'Trunk MTS', action: 'Update IP Register Host', previous: '185.45.12.30', current: '185.45.12.34' }
-];
-
 const reportsTemplates = [
   { title: 'Топ операторов по обработке входящих', sql: 'SELECT dstchannel as operator, COUNT(*) as calls, SUM(billsec) as seconds FROM asteriskcdrdb.cdr WHERE disposition="ANSWERED" AND dstchannel LIKE "PJSIP/%" GROUP BY dstchannel ORDER BY calls DESC' },
   { title: 'Статистика потерянных вызовов по очередям', sql: 'SELECT queuename, event, COUNT(*) as count FROM asteriskcdrdb.queue_log WHERE event IN ("ABANDON", "EXITWITHTIMEOUT") GROUP BY queuename, event' },
@@ -261,9 +87,6 @@ export default function DbExplorerTab({ token }: { token: string }) {
   const [rows, setRows] = useState<Row[]>([]);
   const [columns, setColumns] = useState<string[]>([]);
   const [consoleMessage, setConsoleMessage] = useState('');
-  const [allowInsert, setAllowInsert] = useState(false);
-  const [allowUpdate, setAllowUpdate] = useState(false);
-  const [allowDelete, setAllowDelete] = useState(false);
   const [selectedTemplate, setSelectedTemplate] = useState('');
   const [customTemplateName, setCustomTemplateName] = useState('');
   const [sqlHistory, setSqlHistory] = useState<any[]>(() => {
@@ -344,22 +167,6 @@ export default function DbExplorerTab({ token }: { token: string }) {
     setRows([]);
     setColumns([]);
 
-    // Determine write mode parameters
-    let allowWrites = false;
-    let writeType = '';
-    const upperSql = activeSql.trim().toUpperCase();
-
-    if (upperSql.startsWith('INSERT ')) {
-      allowWrites = allowInsert;
-      writeType = 'insert';
-    } else if (upperSql.startsWith('UPDATE ')) {
-      allowWrites = allowUpdate;
-      writeType = 'update';
-    } else if (upperSql.startsWith('DELETE ')) {
-      allowWrites = allowDelete;
-      writeType = 'delete';
-    }
-
     try {
       const res = await fetch('/api/db-explorer/query', {
         method: 'POST',
@@ -369,9 +176,7 @@ export default function DbExplorerTab({ token }: { token: string }) {
         },
         body: JSON.stringify({
           sql: activeSql,
-          limit: 300,
-          allowWriters: allowWrites,
-          writeType
+          limit: 300
         })
       });
 
@@ -1361,7 +1166,7 @@ export default function DbExplorerTab({ token }: { token: string }) {
                     </div>
                     <div className="text-xs leading-normal space-y-1 text-slate-700 dark:text-slate-300">
                       <p>✓ Звонок был доставлен и завершен штатно. Код завершения <span className="font-mono">16 (Normal Clearing)</span> означает спокойный сброс трубки клиентом.</p>
-                      <p className="mt-1">✓ <span className="font-bold">Анализ сети:</span> Вызов перераспределен без прерывания RTP-потока. Оценка связи <span className="text-emerald-600 dark:text-emerald-400 font-bold">MOS 4.35</span> показывает отсутствие потерь пакетов на мосту EXT 101 → EXT 107.</p>
+                      <p className="mt-1"><span className="font-bold">Анализ сети:</span> CDR/CEL не содержат достоверных RTP/RTCP-метрик. Для оценки MOS, потерь и джиттера нужны реальные данные сетевого захвата.</p>
                     </div>
                   </div>
                 </div>
@@ -1414,22 +1219,7 @@ export default function DbExplorerTab({ token }: { token: string }) {
                     <span className="text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-350">Терминал ручных SQL-запросов</span>
                   </div>
 
-                  {/* Security checkboxes write operations */}
-                  <div className="flex items-center gap-3 bg-slate-50 dark:bg-slate-700 px-3 py-1 rounded-lg border">
-                    <span className="text-[10px] uppercase font-bold text-slate-400">Доступ на запись:</span>
-                    <label className="flex items-center gap-1 text-[10px] font-bold text-rose-500 select-none cursor-pointer">
-                      <input type="checkbox" checked={allowInsert} onChange={e => setAllowInsert(e.target.checked)} className="rounded" />
-                      INSERT
-                    </label>
-                    <label className="flex items-center gap-1 text-[10px] font-bold text-amber-500 select-none cursor-pointer">
-                      <input type="checkbox" checked={allowUpdate} onChange={e => setAllowUpdate(e.target.checked)} className="rounded" />
-                      UPDATE
-                    </label>
-                    <label className="flex items-center gap-1 text-[10px] font-bold text-red-500 select-none cursor-pointer">
-                      <input type="checkbox" checked={allowDelete} onChange={e => setAllowDelete(e.target.checked)} className="rounded" />
-                      DELETE
-                    </label>
-                  </div>
+                  <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1 text-[10px] font-bold uppercase text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300">Только чтение · SELECT</div>
                 </div>
 
                 <div className="relative">

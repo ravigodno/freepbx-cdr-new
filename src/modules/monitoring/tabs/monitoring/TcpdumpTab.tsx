@@ -392,8 +392,8 @@ export default function TcpdumpTab({
         id: 'dyn-tr-nominal',
         title: 'Сетевые аномалии не обнаружены',
         severity: 'medium',
-        detected: 'Все зарегистрированные SIP-устройства отвечают на запросы OPTIONS вовремя. Потерь пакетов RTP не зафиксировано.',
-        reason: 'Сетевая инфраструктура функционирует в штатном режиме, NAT-таблицы стабильны.',
+        detected: 'По доступным данным устройств сетевые аномалии не обнаружены.',
+        reason: 'Это состояние основано на SIP OPTIONS/регистрации. Без активного RTP-захвата потери и джиттер оценить нельзя.',
         recommendation: [
           'Периодически запускайте tcpdump-мониторинг для контроля качества проходящих медиа-потоков в часы пиковой нагрузки.'
         ]
@@ -1141,7 +1141,7 @@ export default function TcpdumpTab({
                   <div className="text-[11px] leading-relaxed">
                     <div className="font-bold text-amber-800 dark:text-amber-400">Превышение джиттера (Wi-Fi абонент)</div>
                     <div className="text-slate-500 dark:text-slate-400 mt-0.5">
-                      Устройство Yeastar (101) Jitter превысил 22.1 мс. Рекомендуется QoS приоритет CoS=5 или Ethernet кабель.
+                      Недостаточно данных. Предупреждения о джиттере появляются только после фактического RTP-захвата.
                     </div>
                   </div>
                 </div>
@@ -1149,7 +1149,7 @@ export default function TcpdumpTab({
             </div>
 
             <div className="border-t border-slate-100 dark:border-slate-800 pt-3 text-[11px] text-slate-450 leading-relaxed font-sans">
-              <b>Примечание:</b> Оценка MOS (Mean Opinion Score) рассчитывается в реальном времени на основе потерь пакетов, задержки и кодека (G.711 / G.729 / Opus).
+              <b>Примечание:</b> MOS отображается только при наличии измеренных RTP/RTCP-показателей; SIP OPTIONS RTT не является оценкой качества аудио.
             </div>
           </div>
         </div>

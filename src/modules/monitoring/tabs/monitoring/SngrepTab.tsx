@@ -235,7 +235,7 @@ export default function SngrepTab({ tcpdumpOutput, loadTcpdumpOutput, token, onN
   useEffect(() => {
     loadTcpdumpOutput();
     const interval = setInterval(() => {
-      if (isCapturing) {
+      if (isCapturing && !document.hidden) {
         loadTcpdumpOutput();
       }
     }, 3000);
@@ -244,11 +244,6 @@ export default function SngrepTab({ tcpdumpOutput, loadTcpdumpOutput, token, onN
 
   // Clean raw headers
   const getCleanText = (s: string) => s.replace(/[^\x20-\x7E\r\nА-Яа-я:\/]/g, ' ');
-
-  // Live simulation & seeding database
-  const mockDialogs: SipDialog[] = useMemo(() => {
-    return [];
-  }, []);
 
   // Parse actual tcpdump output if loaded
   const parsedDialogsFromTcpdump = useMemo(() => {
@@ -347,21 +342,20 @@ export default function SngrepTab({ tcpdumpOutput, loadTcpdumpOutput, token, onN
         fromNum: first.raw.match(/From:\s*<sip:([^@>]+)/i)?.[1] || first.src,
         toNum: first.raw.match(/To:\s*<sip:([^@>]+)/i)?.[1] || first.dst,
         userAgent,
-        trunk: first.raw.includes('Trunk') ? 'MTT_Trunk' : '—',
-        codec: 'G.711 alaw',
+        trunk: '—',
+        codec: first.raw.match(/a=rtpmap:\d+\s+([^\s/]+)/i)?.[1] || '—',
         did: '—'
       } as SipDialog;
     });
   }, [tcpdumpOutput]);
 
-  // Combine live/simulated and parsed tcpdump dialogs for maximum depth
+  // Dialogs are built only from the current real tcpdump capture.
   const allDialogs = useMemo(() => {
     const dialogsMap = new Map<string, SipDialog>();
-    mockDialogs.forEach(d => dialogsMap.set(d.id, d));
     parsedDialogsFromTcpdump.forEach(d => dialogsMap.set(d.id, d));
     
     return Array.from(dialogsMap.values()).sort((a,b) => b.first.time.localeCompare(a.first.time));
-  }, [mockDialogs, parsedDialogsFromTcpdump]);
+  }, [parsedDialogsFromTcpdump]);
 
   // Default selected dialog
   useEffect(() => {

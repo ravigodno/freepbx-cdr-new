@@ -765,36 +765,12 @@ export default function CommandCenterTab({ token, onNavigate }: CommandCenterTab
     URL.revokeObjectURL(url);
   };
 
-  // Live monitor updates simulation
+  // Live monitor is intentionally empty until a real server event stream is connected.
   const [liveMonitorActive, setLiveMonitorActive] = useState(false);
   const [liveLog, setLiveLog] = useState<{ id: string; time: string; msg: string; flag: 'info' | 'success' | 'warn' | 'error' }[]>([]);
 
   useEffect(() => {
-    if (!liveMonitorActive) return;
-
-    // generate a cool real-time system event log every 4 seconds
-    const interval = setInterval(() => {
-      const msgs = [
-        { msg: 'Peer 102 changed status to: REACHABLE (ping 24ms)', flag: 'success' },
-        { msg: 'Asterisk task scheduler executed cron: fwconsole setting', flag: 'info' },
-        { msg: 'Call from SIP/MTT-0000a312 routed to queue 10815', flag: 'info' },
-        { msg: 'AMI accepted connection from index.js on 127.0.0.1', flag: 'success' },
-        { msg: 'PJSIP registration with MTT-Trunk completed successfully', flag: 'success' },
-        { msg: 'AMI heartbeat received, latency: 1.2ms', flag: 'success' }
-      ];
-      const randomMsg = msgs[Math.floor(Math.random() * msgs.length)];
-      setLiveLog(prev => [
-        {
-          id: Math.random().toString(),
-          time: getServerNow().toLocaleTimeString('ru-RU'),
-          msg: randomMsg.msg,
-          flag: randomMsg.flag as any
-        },
-        ...prev
-      ].slice(0, 15));
-    }, 4000);
-
-    return () => clearInterval(interval);
+    setLiveLog([]);
   }, [liveMonitorActive]);
 
   // Command knowledge guide filter

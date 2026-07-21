@@ -145,7 +145,6 @@ function durationFmt(sec: number) {
 
 export default function ActiveCallsTab({ liveSessionsData, liveSearch, setLiveSearch }: Props) {
   // 1. Core State
-  const [isSimulatorMode, setIsSimulatorMode] = useState<boolean>(false);
   const [selectedCallId, setSelectedCallId] = useState<string | null>(null);
   const [activeSubTab, setActiveSubTab] = useState<'trace' | 'sip_rtp' | 'queue_transfer' | 'problems' | 'cel_cdr'>('trace');
   const [typeFilter, setTypeFilter] = useState<'All' | 'Inbound' | 'Outbound' | 'Internal'>('All');
@@ -210,337 +209,6 @@ export default function ActiveCallsTab({ liveSessionsData, liveSearch, setLiveSe
   const [liveAmiEvents, setLiveAmiEvents] = useState<{ ts: string; event: string; body: string; type: string }[]>([]);
   const [isAmiFeedPaused, setIsAmiFeedPaused] = useState<boolean>(false);
 
-  // 2. Mock scenario base templates (The "Golden troubleshooting Sandbox" as requested)
-  const [simulatedCalls, setSimulatedCalls] = useState<ActiveCall[]>([
-    {
-      id: "1719220001.234",
-      callId: "sip-rx0129-9134-mango-did@185.14.28.11",
-      linkedId: "1719220001.234",
-      startTime: "23:18:14",
-      type: "Inbound",
-      caller: "+79201112233",
-      callerName: "Иван Петров (Премиум)",
-      callee: "Очередь 801 (Support)",
-      did: "74959998877",
-      trunk: "Mango-Trunk-Out",
-      queue: "801 (Support Queue)",
-      operator: "—",
-      status: "Queue",
-      duration: 145,
-      priority: "1",
-      application: "Queue",
-      appData: "801,t,,,300",
-      channel: "PJSIP/mango-in-000021c1",
-      bridgedChannel: "",
-      rtp: {
-        source: "185.14.28.11:10002",
-        destination: "192.168.10.2:14032",
-        codec: "G.711 alaw (G.711a)",
-        packetCount: 7250,
-        packetLoss: 14.2, // Red flag!
-        jitter: 31, // Red flag!
-        rtt: 112,
-        mos: 2.1 // Terrible
-      },
-      sip: {
-        from: "\"Customer\" <sip:+79201112233@185.14.28.11>",
-        to: "<sip:74959998877@195.122.33.44>",
-        contact: "<sip:+79201112233@185.14.28.11:5060;transport=udp>",
-        via: "SIP/2.0/UDP 185.14.28.11:5060;branch=z9hG4bK80a2df3d",
-        sdp: "v=0\no=root 202611 202611 IN IP4 185.14.28.11\ns=Asterisk-Puls\nc=IN IP4 185.14.28.11\nt=0 0\nm=audio 10002 RTP/AVP 8 0 101\na=rtpmap:8 PCMA/8000\na=rtpmap:0 PCMU/8000\na=rtpmap:101 telephone-event/8000",
-        userAgent: "Mango SIP Server v5.9a",
-        codecNegotiation: "G.711a Preferred By Server (No transcoder)"
-      },
-      problems: [
-        {
-          type: "One-Way Audio (Односторонний звук)",
-          level: "error",
-          cause: "Отсутствует входящий RTP поток по порту 14032. Нарушена трансляция адресов NAT со стороны Asterisk.",
-          time: "23:19:10",
-          recommendation: "Проверьте параметр 'NAT Mode' для PJSIP транка. Измените на 'yes' (force_rport, comedia) и добавьте локальные подсети в Settings → Asterisk SIP Settings."
-        },
-        {
-          type: "Критический Jitter и Потеря пакетов",
-          level: "warning",
-          cause: "Джиттер 31мс превышает норму 15мс. Обнаружены потери пакетов 14.2% на канале провайдера.",
-          time: "23:18:30",
-          recommendation: "Проверьте входящую полосу интернет-канала. Настройте QoS на сетевом шлюзе для приоритезации SIP/RTP трафика."
-        }
-      ],
-      trace: [
-        { time: "23:18:14", event: "NewChannel", description: "Создан входящий канал PJSIP/mango-in-000021c1 для +79201112233", tag: "NewChannel" },
-        { time: "23:18:15", event: "Newstate", description: "Канал перешел в состояние Ringing", tag: "Info" },
-        { time: "23:18:15", event: "DID Match", description: "Найдено соответствие DID 74959998877 (Входящий маршрут: МСК Офис)", tag: "Routing" },
-        { time: "23:18:16", event: "Answer", description: "АТС ответила на вызов (Состояние: UP)", tag: "Info" },
-        { time: "23:18:16", event: "QueueCallerJoin", description: "Вызов помещён в очередь 801 (Support Queue) под номером 1", tag: "Queue" },
-        { time: "23:18:25", event: "Playback", description: "Проигрывание аудиофайла 'Все-операторы-заняты'", tag: "Info" },
-        { time: "23:19:10", event: "RTP Warning", description: "Обнаружено отсутствие исходящего RTP от клиента (Типичный NAT)", tag: "Info" }
-      ],
-      transferInfo: undefined
-    },
-    {
-      id: "1719220085.122",
-      callId: "sip-tx5301da-ext104-mtt@192.168.10.104",
-      linkedId: "1719220085.122",
-      startTime: "23:22:45",
-      type: "Outbound",
-      caller: "104",
-      callerName: "Константин Иванов (Продажи)",
-      callee: "79114445566",
-      calleeName: "ООО Спектр (Клиент)",
-      did: "—",
-      trunk: "Trunk-MTT-Main",
-      queue: "—",
-      operator: "—",
-      status: "Bridged",
-      duration: 208,
-      priority: "2",
-      application: "Dial",
-      appData: "PJSIP/Trunk-MTT-Main/79114445566,60,T",
-      channel: "PJSIP/104-00003aa1",
-      bridgedChannel: "PJSIP/Trunk-MTT-Main-00003aa2",
-      rtp: {
-        source: "192.168.10.104:11840",
-        destination: "80.75.130.130:16222",
-        codec: "G.711 alaw (G.711a)",
-        packetCount: 20800,
-        packetLoss: 0.1,
-        jitter: 1,
-        rtt: 14,
-        mos: 4.4 // Excellent
-      },
-      sip: {
-        from: "\"Константин Иванов\" <sip:104@192.168.10.2>",
-        to: "<sip:79114445566@80.75.130.130>",
-        contact: "<sip:104@192.168.10.104:5060;transport=udp>",
-        via: "SIP/2.0/UDP 192.168.10.2:5060;branch=z9hG4bKybe9aa82",
-        sdp: "v=0\no=104 202611 202611 IN IP4 192.168.10.104\ns=Yealink SIP-T31P\nc=IN IP4 192.168.10.104\nt=0 0\nm=audio 11840 RTP/AVP 8 101\na=rtpmap:8 PCMA/8000\na=rtpmap:101 telephone-event/8000",
-        userAgent: "Yealink SIP-T31P 124.86.0.40",
-        codecNegotiation: "G.711a Preferred By Caller"
-      },
-      problems: [],
-      trace: [
-        { time: "23:22:45", event: "NewChannel", description: "Создан исходящий канал PJSIP/104-00003aa1 от внутреннего абонента 104", tag: "NewChannel" },
-        { time: "23:22:46", event: "DialBegin", description: "Начался вызов внешней линии 79114445566", tag: "DialBegin" },
-        { time: "23:22:46", event: "RoutingMatch", description: "Обнаружен соответствующий Outbound Route 'По России через МТТ'", tag: "Routing" },
-        { time: "23:22:47", event: "TrunkSelect", description: "Маршрутизация вызова в транк Trunk-MTT-Main", tag: "Routing" },
-        { time: "23:22:48", event: "NewChannel", description: "Создан плечевой канал Trunk-MTT-Main-00003aa2 для связи с провайдером", tag: "NewChannel" },
-        { time: "23:22:52", event: "Ringing", description: "Получен ответ 180 Ringing от МТТ", tag: "Info" },
-        { time: "23:22:56", event: "Answer", description: "Получен ответ 200 OK. Вызов отвечен абонентом", tag: "Info" },
-        { time: "23:22:56", event: "BridgeEnter", description: "Каналы 104 и МТТ объединены в аудио-мост (BridgeId: br-mtt-991)", tag: "BridgeEnter" }
-      ],
-      transferInfo: undefined
-    },
-    {
-      id: "1719220199.554",
-      callId: "sip-attended-txa77-ext101-303@192.168.10.101",
-      linkedId: "1719220199.501",
-      startTime: "23:24:10",
-      type: "Internal",
-      caller: "101",
-      callerName: "Анна Мельникова (Секретарь)",
-      callee: "103",
-      calleeName: "Сергей Семенов (Директор)",
-      did: "—",
-      trunk: "—",
-      queue: "—",
-      operator: "—",
-      status: "Transfer",
-      duration: 62,
-      priority: "3",
-      application: "AttendedTransfer",
-      appData: "Bridge: PJSIP/101-00004b21 <=> PJSIP/103-00004b23",
-      channel: "PJSIP/101-00004b21",
-      bridgedChannel: "PJSIP/103-00004b23",
-      rtp: {
-        source: "192.168.10.101:11522",
-        destination: "192.168.10.103:12004",
-        codec: "G.729 (High CPU Transcode)", // Problem!
-        packetCount: 6200,
-        packetLoss: 1.1,
-        jitter: 8,
-        rtt: 2,
-        mos: 3.4 // Lowish due to transcoding transcoding
-      },
-      sip: {
-        from: "\"Анна Мельникова\" <sip:101@192.168.10.2>",
-        to: "<sip:103@192.168.10.2>",
-        contact: "<sip:101@192.168.10.101:5060>",
-        via: "SIP/2.0/UDP 192.168.10.2:5060;branch=z9hG4bK-trans-11122",
-        sdp: "v=0\no=101 202611 IN IP4 192.168.10.101\ns=Snom-D715\nc=IN IP4 192.168.10.101\nt=0 0\nm=audio 11522 RTP/AVP 18 101\na=rtpmap:18 G729/8000\na=rtpmap:101 telephone-event/8000",
-        userAgent: "SnomD715/10.1.64.14",
-        codecNegotiation: "G.729 / Alaw Transcoder Active (Asterisk Core Translators)"
-      },
-      problems: [
-        {
-          type: "Codec Mismatch / Дополнительная транскодировка",
-          level: "warning",
-          cause: "Канал 101 передает аудио в кодеке G.729, а плечевой канал 103 поддерживает только G.711a (alaw). Asterisk вынужден запускать модуль-транскодер.",
-          time: "23:24:12",
-          recommendation: "Принудительно перенастройте аппаратные телефоны Snom/Yealink на использование первого приоритетного кодека G.711a/alaw. Это снизит загрузку CPU АТС на 80%."
-        }
-      ],
-      trace: [
-        { time: "23:24:10", event: "NewChannel", description: "Создан канал PJSIP/101-00004b21 (Секретарь)", tag: "NewChannel" },
-        { time: "23:24:12", event: "Answer", description: "Секретарь принимает входящий внешний звонок с +74953332211", tag: "Info" },
-        { time: "23:24:12", event: "BridgeEnter", description: "Связь внешнего звонка с секретарем", tag: "BridgeEnter" },
-        { time: "23:24:30", event: "DTMF Transfer", description: "Секретарь набрала '*2' (Attended Transfer) для перевода на директора (103)", tag: "Info" },
-        { time: "23:24:31", event: "NewChannel", description: "Создан служебный канал PJSIP/103-00004b23 (Директор)", tag: "NewChannel" },
-        { time: "23:24:32", event: "DialBegin", description: "Начался вызов Директора 103 (консультационный перевод)", tag: "DialBegin" },
-        { time: "23:24:36", event: "Answer", description: "Директор ответил. Консультация Секретарь ↔ Директор запущена", tag: "Info" }
-      ],
-      transferInfo: {
-        type: "Attended",
-        parties: ["+74953332211", "101 (Анна)", "103 (Сергей)"],
-        status: "Консультационный перевод (Attended Transfer) в процессе завершения"
-      }
-    },
-    {
-      id: "1719213123.901",
-      callId: "sip-stuck-flap102-3901@192.168.10.2",
-      linkedId: "1719213123.901",
-      startTime: "22:20:00",
-      type: "Inbound",
-      caller: "+79998887766",
-      callerName: "Казахстан Телеком (Провайдер)",
-      callee: "100",
-      calleeName: "Тестовое приветствие",
-      did: "74955554433",
-      trunk: "SIP-Trunk-Kaz",
-      queue: "—",
-      operator: "—",
-      status: "Hold",
-      duration: 3622, // over an hour! Stuck!
-      priority: "1",
-      application: "Wait",
-      appData: "3600",
-      channel: "SIP/trunk-kaz-000a12e3",
-      bridgedChannel: "",
-      rtp: {
-        source: "0.0.0.0:0",
-        destination: "192.168.10.2:15004",
-        codec: "—",
-        packetCount: 0,
-        packetLoss: 100,
-        jitter: 0,
-        rtt: 0,
-        mos: 1 // Hang
-      },
-      sip: {
-        from: "<sip:+79998887766@95.56.24.12>",
-        to: "<sip:74955554433@192.168.10.2>",
-        contact: "<sip:+79998887766@95.56.24.12:5060>",
-        via: "SIP/2.0/UDP 95.56.24.12:5060;branch=z9hG4bKas129df",
-        sdp: "—",
-        userAgent: "Yate/5.0.0",
-        codecNegotiation: "No active RTP session (Inactive SDP media)"
-      },
-      problems: [
-        {
-          type: "Застрявший вызов / SIP Timeout (Stuck Channel)",
-          level: "error",
-          cause: "Сессия висит 1 час. Из-за физического сбоя сетевого интерфейса АТС пропустила SIP пакет BYE от клиента. Поток RTP остановлен.",
-          time: "22:35:00",
-          recommendation: "Примените ручной сброс этого повисшего канала. Нажмите кнопку 'Trace & Hangup' или введите 'channel request hangup SIP/trunk-kaz-000a12e3' в консоли Asterisk CLI. Настройте параметр rtpkeepalive=15 в sip.conf."
-        }
-      ],
-      trace: [
-        { time: "22:20:00", event: "NewChannel", description: "Создан канал SIP/trunk-kaz-000a12e3", tag: "NewChannel" },
-        { time: "22:20:01", event: "Answer", description: "АТС ответила на входящий вызов", tag: "Info" },
-        { time: "22:20:02", event: "Playback", description: "Началось проигрывание тестового файл 'Welcome-IVR'", tag: "Info" },
-        { time: "22:21:00", event: "RTP Timeout", description: "Приостановка RTP-сигнала. Клиент сбросил сеть без отправки BYE.", tag: "Info" },
-        { time: "22:35:00", event: "Stuck Detected", description: "Система мониторинга Puls зафиксировала неподвижный мертвый канал без трафика.", tag: "Info" }
-      ],
-      transferInfo: undefined
-    }
-  ]);
-
-  // Queue Status values list for Simulated stats
-  const simulatedQueues: QueueStatus[] = [
-    {
-      queue: "801 (Support Queue)",
-      waitingCount: 1,
-      membersOnline: 6,
-      membersBusy: 4,
-      avgWait: "0:42",
-      maxWait: "2:25",
-      sla: "91%",
-      callers: [
-        { callerId: "+79201112233", joinedAt: "23:18:16", waitTime: 145, priority: 1 }
-      ]
-    },
-    {
-      queue: "802 (Sales Queue)",
-      waitingCount: 0,
-      membersOnline: 12,
-      membersBusy: 8,
-      avgWait: "0:15",
-      maxWait: "1:10",
-      sla: "96%",
-      callers: []
-    }
-  ];
-
-  // 3. Keep updating durations, packets and generate cute live events in terminal
-  useEffect(() => {
-    const timer = setInterval(() => {
-      // 3.1 Update durations in simulated mode
-      setSimulatedCalls(prev => prev.map(c => {
-        if (c.status !== 'Hold' && c.id !== "1719213123.901") { // don't grow stuck call endlessly, keep it high
-          const addedSec = 1;
-          const newPackets = c.rtp.packetCount > 0 ? c.rtp.packetCount + 50 : 0;
-          return {
-            ...c,
-            duration: c.duration + addedSec,
-            rtp: {
-              ...c.rtp,
-              packetCount: newPackets
-            }
-          };
-        }
-        return c;
-      }));
-
-      // 3.2 Append cute new AMI logs to the scrolling real-time stream
-      if (!isAmiFeedPaused) {
-        const timestamp = getServerNow().toLocaleTimeString('ru-RU');
-        const eventTemplates = [
-          { event: "Newstate", type: "PJSIP/102-00005a1e", body: "ChannelStateDesc: Ringing | CallerIDNum: 102", color: "blue" },
-          { event: "DialBegin", type: "PJSIP/102-ext105", body: "Source: PJSIP/102-00005a1e | Destination: PJSIP/105-00005a1f", color: "yellow" },
-          { event: "QueueMemberStatus", type: "Queue: 801", body: "Member: PJSIP/104 | Status: AST_DEVICE_INUSE | Paused: 0", color: "purple" },
-          { event: "BridgeEnter", type: "Bridge: br-vox-441", body: "Channel: PJSIP/102-00005a1e | CallerID: 102 ↔ 105", color: "green" },
-          { event: "Newchannel", type: "PJSIP/trunk-mtt-000a12", body: "Context: from-trunk | Exten: 74951112233 | State: Down", color: "blue" },
-          { event: "Hangup", type: "Local/502-out", body: "Cause: 16 (Normal Clearing) | Channel: Local/502-out-001;2", color: "red" },
-          { event: "QueueCallerJoin", type: "Queue: 801", body: "CallerID: +79165551212 | Position: 1 | Count: 1", color: "pink" },
-          { event: "CEL Event", type: "LINKED_ID_UPDATE", body: "UniqueID: 1719220999.1121 | Event: LINKEDID_STABILIZED", color: "slate" }
-        ];
-
-        // Randomly pick an event to show activity in NOC
-        if (Math.random() > 0.4) {
-          const picked = eventTemplates[Math.floor(Math.random() * eventTemplates.length)];
-          setLiveAmiEvents(prev => [
-            { ts: timestamp, event: picked.event, body: picked.body, type: picked.type },
-            ...prev
-          ].slice(0, 80)); // limit log to last 80 lines for performance
-        }
-      }
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, [isAmiFeedPaused]);
-
-  // Initial populate of live events
-  useEffect(() => {
-    const defaultEvents = [
-      { ts: "23:25:01", event: "Newchannel", type: "PJSIP/104-00003aa1", body: "Channel: PJSIP/104-00003aa1 | Context: from-internal", color: "blue" },
-      { ts: "23:25:02", event: "DialBegin", type: "PJSIP/104", body: "Caller: 104 -> Destination: 79114445566 | Trunk: MTT", color: "yellow" },
-      { ts: "23:25:06", event: "Newchannel", type: "PJSIP/mango-in-0021c1", body: "CallerId: +79201112233 | Context: from-trunk", color: "blue" },
-      { ts: "23:25:06", event: "QueueCallerJoin", type: "Queue: 801", body: "CallerId: +79201112233 | Position: 1", color: "pink" },
-      { ts: "23:25:12", event: "BridgeEnter", type: "PJSIP/104", body: "BridgeID: br-mtt-991 | Exten: 79114445566 ↔ 104", color: "green" }
-    ];
-    setLiveAmiEvents(defaultEvents.map(e => ({ ts: e.ts, event: e.event, body: e.body, type: e.type })));
-  }, []);
-
   // 4. Transform real liveSessionsData from Asterisk if AMI mode is selected
   const parsedLiveCalls = useMemo(() => {
     const rawSessions = liveSessionsData?.sessions || [];
@@ -582,14 +250,14 @@ export default function ActiveCallsTab({ liveSessionsData, liveSearch, setLiveSe
 
       return {
         id: r.uniqueid || `live-${idx}`,
-        callId: `SIP-AMI-ID-${r.uniqueid || idx}@pbx`,
+        callId: r.callId || '',
         linkedId: r.linkedid || r.uniqueid || '',
-        startTime: getServerNow().toLocaleTimeString('ru-RU'),
+        startTime: r.startTime || '—',
         type: callType,
         caller: r.callerId || 'Unknown',
         callee: r.exten || '—',
         did: r.did || '—',
-        trunk: context.includes('trunk') ? 'SIP-Trunk' : '—',
+        trunk: r.trunk || '—',
         queue: r.application === 'Queue' ? r.appData : '—',
         operator: cleanStatus === 'Queue' ? '—' : (r.exten || '—'),
         status: cleanStatus,
@@ -600,23 +268,23 @@ export default function ActiveCallsTab({ liveSessionsData, liveSearch, setLiveSe
         channel: r.channel || '',
         bridgedChannel: r.bridgedChannel || '',
         rtp: {
-          source: 'Live Asterisk Port',
-          destination: 'Internal IP',
-          codec: 'G.711a (alaw)',
-          packetCount: cleanDuration * 50,
-          packetLoss: 0.1,
-          jitter: 1.2,
-          rtt: 12,
-          mos: 4.4
+          source: 'Недостаточно данных',
+          destination: 'Недостаточно данных',
+          codec: 'Недостаточно данных',
+          packetCount: 0,
+          packetLoss: 0,
+          jitter: 0,
+          rtt: 0,
+          mos: 0
         },
         sip: {
           from: r.callerId || 'Unknown',
           to: r.exten || '—',
-          contact: 'AMI Registered Via Contact',
-          via: 'Via internal routing',
-          sdp: `v=0\\nLive Asterisk Trunk SDP`,
-          userAgent: 'Asterisk AMI Port Parser',
-          codecNegotiation: 'Active negotiation'
+          contact: 'Недостаточно данных',
+          via: 'Недостаточно данных',
+          sdp: 'Недостаточно данных',
+          userAgent: 'Недостаточно данных',
+          codecNegotiation: 'Недостаточно данных'
         },
         problems: [],
         trace: [
@@ -627,10 +295,10 @@ export default function ActiveCallsTab({ liveSessionsData, liveSearch, setLiveSe
     });
   }, [liveSessionsData]);
 
-  // Combined active view calls list based on mode (Simulation vs AMI mode)
+  // Production monitoring displays only sessions received from Asterisk.
   const activeCalls: ActiveCall[] = useMemo(() => {
-    return isSimulatorMode ? simulatedCalls : parsedLiveCalls;
-  }, [isSimulatorMode, simulatedCalls, parsedLiveCalls]);
+    return parsedLiveCalls;
+  }, [parsedLiveCalls]);
 
   // Apply filters on active calls list
   const filteredCalls = useMemo(() => {
@@ -693,69 +361,14 @@ export default function ActiveCallsTab({ liveSessionsData, liveSearch, setLiveSe
     return { total, inbound, outbound, internal, queue, transfer, conference, avgDuration: durationFmt(avgDurationVal) };
   }, [activeCalls]);
 
-  // 5. Diagnostics tools execution simulation
-  const runDiagnostic = (toolName: string, command: string) => {
-    setIsDiagnosticRunning(true);
-    setDiagnosticModal({
-      isOpen: true,
-      title: `${toolName.toUpperCase()} DIAGNOSTIC SESSION`,
-      output: `Инициализация...\n$ pbxpuls-diagnostic --tool=${toolName.toLowerCase()} --target=${selectedCall?.channel || 'SIP/default'}\n`
-    });
-
-    setTimeout(() => {
-      let finalOutput = '';
-      if (toolName === 'Trace Call') {
-        finalOutput = [
-          `=== TRACE CALL FOR UNIQUEID: ${selectedCall?.id || '—'} ===`,
-          `Канальный путь:`,
-          `  Плечо А: ${selectedCall?.channel || 'PJSIP/trunk-in'}`,
-          `  Аудио-мост: ${selectedCall?.rtp.codec || 'G.711a'}`,
-          `  Плечо Б: ${selectedCall?.bridgedChannel || 'PJSIP/operator-100'}`,
-          `Транссировка CEL событий:`,
-          ...(selectedCall?.trace?.map(t => `  [${t.time}] ${t.event.padEnd(20)} - ${t.description}`) || []),
-          `--------------------------------------------------`,
-          `АНАЛИЗ ПРОБЛЕМ АТС:`,
-          selectedCall && selectedCall.problems.length > 0 
-            ? `⚠️ Обнаружено отклонений: ${selectedCall.problems.length}\n` + selectedCall.problems.map(p => `  * ${p.type} (${p.level === 'error' ? 'КРИТИЧНО' : 'ВНИМАНИЕ'})\n    Рекомендация: ${p.recommendation}`).join('\n')
-            : `✅ Проблем со звонком не обнаружено. Все параметры в пределах технических стандартов SIP RFC.`
-        ].join('\n');
-      } else if (toolName === 'SIP Debug') {
-        finalOutput = [
-          `=== SIP PROTOCOL ANALYZER / DEBUGGER ===`,
-          `Call-ID: ${selectedCall?.callId}`,
-          `User-Agent (Caller): ${selectedCall?.sip.userAgent}`,
-          `Contact Header: ${selectedCall?.sip.contact}`,
-          `Via Header: ${selectedCall?.sip.via}`,
-          `Negotiated Codec: ${selectedCall?.rtp.codec}`,
-          `--------------------------------------------------`,
-          `Диагностический отчет трансивера:`,
-          `  * SIP Session-Expires: 3600 сек (поддерживается)`,
-          `  * Keep-Alive OPTIONS: статус AVAIL (задержка ${selectedCall?.rtp.rtt || 10}мс)`,
-          `  * SDP Media attribute 'rtpmap' согласован корректно.`
-        ].join('\n');
-      } else if (toolName === 'RTP Debug') {
-        finalOutput = [
-          `=== RTP AUDIO STREAM DEBUGGER ===`,
-          `RTP Source Socket      : ${selectedCall?.rtp.source}`,
-          `RTP Destination Socket : ${selectedCall?.rtp.destination}`,
-          `Предустановленный кодек : ${selectedCall?.rtp.codec}`,
-          `Общее число аудио-сегментов : ${selectedCall?.rtp.packetCount} RTP дубликатов`,
-          `Потеря медиа-пакетов   : ${selectedCall?.rtp.packetLoss}%`,
-          `Джиттер временной шкалы : ${selectedCall?.rtp.jitter} мс`,
-          `Оценка качества MOS    : ${selectedCall?.rtp.mos} (из 5.0)`,
-          `--------------------------------------------------`,
-          `Мнение эксперта PBXPULS:`,
-          selectedCall && selectedCall.rtp.packetLoss > 5
-            ? `🔴 ВНИМАНИЕ: Слишком высокий коэффициент потерь (${selectedCall.rtp.packetLoss}%). Причина: забитый сетевой шлюз или перегруженный роутер NAT.`
-            : `🟢 Качество звука номинальное. Дуплексный поток стабилен.`
-        ].join('\n');
-      } else {
-        finalOutput = `=== DIAGNOSTIC TOOL: ${toolName.toUpperCase()} ===\nПараметры сессии считаны успешно.\nКоманда завершена без ошибок на канале ${selectedCall?.channel || 'Local-PBX'}.\nКод возврата Asterisk AMI: 200 OK`;
-      }
-
-      setDiagnosticModal(prev => prev ? { ...prev, output: prev.output + finalOutput } : null);
-      setIsDiagnosticRunning(false);
-    }, 1200);
+  // Diagnostics use only fields already returned by Asterisk; no synthetic command output.
+  const runDiagnostic = (toolName: string, _command: string) => {
+    const traceRows = selectedCall?.trace?.map(row => `[${row.time}] ${row.event}: ${row.description}`) || [];
+    const output = toolName === 'Trace Call'
+      ? [`Uniqueid: ${selectedCall?.id || '—'}`, `Linkedid: ${selectedCall?.linkedId || '—'}`, `Канал: ${selectedCall?.channel || '—'}`, ...traceRows].join('\n')
+      : 'Недостаточно данных. Откройте TCPDUMP/SIP-RTP или Трассировку звонка для фактической диагностики SIP/RTP.';
+    setDiagnosticModal({ isOpen: true, title: `${toolName.toUpperCase()} · READ-ONLY`, output });
+    setIsDiagnosticRunning(false);
   };
 
   // 6. Exports to CSV, JSON and fake Excel
@@ -833,30 +446,8 @@ export default function ActiveCallsTab({ liveSessionsData, liveSearch, setLiveSe
           </div>
         </div>
 
-        {/* Mode Selector Toggle */}
-        <div className="flex bg-slate-100 dark:bg-slate-950 p-1 rounded-xl border border-slate-200/50 dark:border-slate-800 self-stretch md:self-auto justify-center">
-          <button
-            onClick={() => setIsSimulatorMode(false)}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
-              !isSimulatorMode
-                ? 'bg-rose-500 text-white shadow-sm'
-                : 'text-slate-500 hover:text-slate-700 dark:text-slate-400'
-            }`}
-          >
-            <Server className="h-3.5 w-3.5" />
-            Режим АТС (AMI)
-          </button>
-          <button
-            onClick={() => setIsSimulatorMode(true)}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
-              isSimulatorMode
-                ? 'bg-rose-500 text-white shadow-sm'
-                : 'text-slate-500 hover:text-slate-700 dark:text-slate-400'
-            }`}
-          >
-            <Zap className="h-3.5 w-3.5" />
-            Демо-режим (Симулятор)
-          </button>
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300">
+          Источник: Asterisk AMI / CLI
         </div>
       </div>
 
@@ -973,15 +564,8 @@ export default function ActiveCallsTab({ liveSessionsData, liveSearch, setLiveSe
               На АТС Asterisk нет активных каналов
             </h3>
             <p className="mt-1 text-xs text-slate-400 max-w-sm mx-auto mb-4">
-              Почтовый ящик Asterisk AMI молчит. Проверьте подключение и настройки AMI-соединения в разделе «Настройки» или запустите встроенный симулятор для проверки.
+              Активные каналы не найдены. Если звонок выполняется сейчас, проверьте AMI и доступность Asterisk CLI в разделе «Настройки».
             </p>
-            <button
-              onClick={() => setIsSimulatorMode(true)}
-              className="px-4 py-2 rounded-xl text-xs font-black bg-rose-500 hover:bg-rose-600 text-white transition inline-flex items-center gap-1.5 shadow-sm"
-            >
-              <Zap className="h-3.5 w-3.5" />
-              Включить демо-режим (симулятор звонков)
-            </button>
           </div>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
@@ -1189,7 +773,6 @@ export default function ActiveCallsTab({ liveSessionsData, liveSearch, setLiveSe
                   <div className="flex border-b border-slate-800 bg-slate-900/50">
                     {[
                       { id: 'trace', label: 'CellTrace & Схема', icon: Layout },
-                      { id: 'sip_rtp', label: 'SIP & RTP Поток', icon: Sliders },
                       { id: 'problems', label: 'Авто-Диагностика', icon: AlertOctagon, alert: selectedCall.problems.length > 0 },
                       { id: 'queue_transfer', label: 'Переводы и Очередь', icon: Shuffle },
                       { id: 'cel_cdr', label: 'CEL / CDR лог', icon: FileText }

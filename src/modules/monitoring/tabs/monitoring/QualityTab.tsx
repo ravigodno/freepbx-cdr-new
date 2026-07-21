@@ -367,13 +367,14 @@ interface QualityDevice {
   ip: string;
   type: 'SIP' | 'PJSIP';
   userAgent: string;
-  latency: number;
-  jitter: number;
-  rtpLoss: number;
+  latency: number | null;
+  jitter: number | null;
+  rtpLoss: number | null;
   rtpReceivedPackets?: number;
   rtpLostPackets?: number;
-  mos: number;
-  status: 'Отлично' | 'Хорошо' | 'Предупреждение' | 'Критично' | 'Offline';
+  mos: number | null;
+  metricsAvailable?: boolean;
+  status: 'Отлично' | 'Хорошо' | 'Предупреждение' | 'Критично' | 'Offline' | 'Недостаточно данных';
   lastCheck: string;
   network: {
     mac: string;
@@ -527,8 +528,9 @@ export default function QualityTab({ token }: Props) {
   }, [token, selectedExt, historyPeriod]);
 
   useEffect(() => {
-    refreshLiveData();
-    const interval = setInterval(refreshLiveData, 60000);
+    const refreshVisible = () => { if (!document.hidden) refreshLiveData(); };
+    refreshVisible();
+    const interval = setInterval(refreshVisible, 60000);
     return () => clearInterval(interval);
   }, [token]);
 
@@ -620,7 +622,8 @@ export default function QualityTab({ token }: Props) {
 
   // Overall counts for SUMMARY CARDS
   const totals = useMemo(() => {
-    if (!devices.length) return { online: 0, problems: 0, avgLat: 0, avgJit: 0, avgLoss: 0, avgMos: 0 };
+    if (!devices.length) return { online: 0, problems: 0, avgLat: null, avgJit: null, avgLoss: null, avgMos: null, measured: 0 };
+    const measured = devices.filter(device => device.metricsAvailable);
     let online = devices.length;
     let problems = 0;
     let sumLat = 0;
@@ -632,19 +635,22 @@ export default function QualityTab({ token }: Props) {
       if (d.status === 'Критично' || d.status === 'Предупреждение') {
         problems++;
       }
-      sumLat += d.latency;
-      sumJit += d.jitter;
-      sumLoss += d.rtpLoss;
-      sumMos += d.mos;
+      if (d.metricsAvailable) {
+        sumLat += Number(d.latency || 0);
+        sumJit += Number(d.jitter || 0);
+        sumLoss += Number(d.rtpLoss || 0);
+        sumMos += Number(d.mos || 0);
+      }
     });
 
     return {
       online,
       problems,
-      avgLat: Math.round(sumLat / devices.length),
-      avgJit: parseFloat((sumJit / devices.length).toFixed(1)),
-      avgLoss: parseFloat((sumLoss / devices.length).toFixed(2)),
-      avgMos: parseFloat((sumMos / devices.length).toFixed(2))
+      avgLat: measured.length ? Math.round(sumLat / measured.length) : null,
+      avgJit: measured.length ? parseFloat((sumJit / measured.length).toFixed(1)) : null,
+      avgLoss: measured.length ? parseFloat((sumLoss / measured.length).toFixed(2)) : null,
+      avgMos: measured.length ? parseFloat((sumMos / measured.length).toFixed(2)) : null,
+      measured: measured.length
     };
   }, [devices]);
 
@@ -1038,32 +1044,32 @@ export default function QualityTab({ token }: Props) {
         <div className="bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-[#334155] rounded-xl p-3">
           <div className="text-[10px] uppercase tracking-wider font-extrabold text-slate-400">Ср. задержка</div>
           <div className="mt-1 flex items-baseline gap-1">
-            <span className="text-xl font-black text-slate-800 dark:text-white font-mono">{totals.avgLat}</span>
-            <span className="text-xs font-bold text-slate-400">мс</span>
+            <span className="text-xl font-black text-slate-800 dark:text-white font-mono">{totals.avgLat ?? 'Недостаточно данных'}</span>
+            {totals.avgLat !== null && <span className="text-xs font-bold text-slate-400">мс</span>}
           </div>
         </div>
 
         <div className="bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-[#334155] rounded-xl p-3">
           <div className="text-[10px] uppercase tracking-wider font-extrabold text-slate-400">Ср. джиттер</div>
           <div className="mt-1 flex items-baseline gap-1">
-            <span className="text-xl font-black text-slate-800 dark:text-white font-mono">{totals.avgJit}</span>
-            <span className="text-xs font-bold text-slate-400">мс</span>
+            <span className="text-xl font-black text-slate-800 dark:text-white font-mono">{totals.avgJit ?? 'Недостаточно данных'}</span>
+            {totals.avgJit !== null && <span className="text-xs font-bold text-slate-400">мс</span>}
           </div>
         </div>
 
         <div className="bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-[#334155] rounded-xl p-3">
           <div className="text-[10px] uppercase tracking-wider font-extrabold text-slate-400">Ср. потери RTP</div>
           <div className="mt-1 flex items-baseline gap-1">
-            <span className="text-xl font-black text-slate-800 dark:text-white font-mono">{totals.avgLoss}</span>
-            <span className="text-xs font-bold text-slate-400">%</span>
+            <span className="text-xl font-black text-slate-800 dark:text-white font-mono">{totals.avgLoss ?? 'Недостаточно данных'}</span>
+            {totals.avgLoss !== null && <span className="text-xs font-bold text-slate-400">%</span>}
           </div>
         </div>
 
         <div className="bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-[#334155] rounded-xl p-3">
           <div className="text-[10px] uppercase tracking-wider font-extrabold text-slate-400">Средний MOS</div>
           <div className="mt-1 flex items-baseline gap-1">
-            <span className="text-xl font-black text-emerald-600 dark:text-emerald-400 font-mono">{totals.avgMos}</span>
-            <span className="text-xs font-bold text-slate-400">/ 4.5</span>
+            <span className="text-xl font-black text-emerald-600 dark:text-emerald-400 font-mono">{totals.avgMos ?? 'Недостаточно данных'}</span>
+            {totals.avgMos !== null && <span className="text-xs font-bold text-slate-400">/ 4.5</span>}
           </div>
         </div>
 
@@ -1205,10 +1211,10 @@ export default function QualityTab({ token }: Props) {
                       if (dev.status === 'Критично') statusBadge = "bg-red-50 text-red-700 dark:bg-red-950/20 dark:text-red-400";
 
                       // Metric dynamic coloring helpers
-                      const latColor = dev.latency > 150 ? 'text-red-600 font-bold' : dev.latency > 100 ? 'text-amber-600 font-bold' : 'text-slate-600 dark:text-slate-300';
-                      const jitColor = dev.jitter > 30 ? 'text-red-600 font-bold' : dev.jitter > 20 ? 'text-amber-600 font-bold' : 'text-slate-600 dark:text-slate-300';
-                      const lossColor = dev.rtpLoss > 3 ? 'text-red-600 font-bold' : dev.rtpLoss > 1 ? 'text-amber-600 font-bold' : 'text-slate-600 dark:text-slate-300';
-                      const mosColor = dev.mos < 3.5 ? 'text-red-600 font-black' : dev.mos < 4.0 ? 'text-amber-600 font-bold' : 'text-emerald-600 font-bold';
+                      const latColor = Number(dev.latency) > 150 ? 'text-red-600 font-bold' : Number(dev.latency) > 100 ? 'text-amber-600 font-bold' : 'text-slate-600 dark:text-slate-300';
+                      const jitColor = Number(dev.jitter) > 30 ? 'text-red-600 font-bold' : Number(dev.jitter) > 20 ? 'text-amber-600 font-bold' : 'text-slate-600 dark:text-slate-300';
+                      const lossColor = Number(dev.rtpLoss) > 3 ? 'text-red-600 font-bold' : Number(dev.rtpLoss) > 1 ? 'text-amber-600 font-bold' : 'text-slate-600 dark:text-slate-300';
+                      const mosColor = dev.mos !== null && dev.mos < 3.5 ? 'text-red-600 font-black' : dev.mos !== null && dev.mos < 4.0 ? 'text-amber-600 font-bold' : 'text-emerald-600 font-bold';
 
                       return (
                         <tr
@@ -1231,10 +1237,10 @@ export default function QualityTab({ token }: Props) {
                           <td className="px-4 py-3 text-slate-400 font-mono text-[10px] truncate max-w-[150px]" title={dev.userAgent}>
                             {dev.userAgent}
                           </td>
-                          <td className={`px-4 py-3 font-mono ${latColor}`}>{dev.latency} мс</td>
-                          <td className={`px-4 py-3 font-mono ${jitColor}`}>{dev.jitter} мс</td>
-                          <td className={`px-4 py-3 font-mono ${lossColor}`}>{dev.rtpLoss}%</td>
-                          <td className={`px-4 py-3 font-mono ${mosColor}`}>{dev.mos}</td>
+                          <td className={`px-4 py-3 font-mono ${latColor}`}>{dev.latency === null ? '—' : `${dev.latency} мс (SIP RTT)`}</td>
+                          <td className={`px-4 py-3 font-mono ${jitColor}`}>{dev.jitter === null ? 'Недостаточно данных' : `${dev.jitter} мс`}</td>
+                          <td className={`px-4 py-3 font-mono ${lossColor}`}>{dev.rtpLoss === null ? 'Недостаточно данных' : `${dev.rtpLoss}%`}</td>
+                          <td className={`px-4 py-3 font-mono ${mosColor}`}>{dev.mos ?? 'Недостаточно данных'}</td>
                           <td className="px-4 py-3">
                             <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${statusBadge}`}>
                               {dev.status}

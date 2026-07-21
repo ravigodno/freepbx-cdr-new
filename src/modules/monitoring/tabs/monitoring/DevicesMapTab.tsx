@@ -280,7 +280,7 @@ export default function DevicesMapTab({ token }: DevicesMapTabProps) {
         "Active Registration Details:",
         "  Technology: " + dev.tech,
         "  User-Agent: " + dev.userAgent,
-        "  Reg. Expire: " + (dev.sipExpire || 3600) + " sec (TTL remaining: " + (dev.status === "Offline" ? 0 : Math.floor(Math.random() * 1500 + 400)) + " sec)",
+        "  Reg. Expire: " + (dev.sipExpire ? dev.sipExpire + " sec" : "Недостаточно данных") + " (TTL remaining: Недостаточно данных)",
         "  NAT Mode: " + (dev.natMode || "RFC3581"),
         "  RTP Range: " + (dev.rtpRange || "10000-20000"),
         "  Qualify Frequency: 60000 ms",

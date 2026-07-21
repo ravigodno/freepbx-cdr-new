@@ -4558,7 +4558,7 @@ async function readLocalDb(): Promise<LocalDb> {
       }
     }
 
-    if (!Array.isArray(data.aiAssistants)) {
+    if (!Array.isArray(data.aiAssistants) && isDemoMode(data.settings || {})) {
       data.aiAssistants = [
         {
           id: 'ai_1',
@@ -4606,7 +4606,7 @@ async function readLocalDb(): Promise<LocalDb> {
       changed = true;
     }
 
-    if (!Array.isArray(data.aiAssistantRoutes)) {
+    if (!Array.isArray(data.aiAssistantRoutes) && isDemoMode(data.settings || {})) {
       data.aiAssistantRoutes = [
         {
           id: 'r_1',
@@ -4620,7 +4620,7 @@ async function readLocalDb(): Promise<LocalDb> {
       changed = true;
     }
 
-    if (!Array.isArray(data.aiKnowledgeSources)) {
+    if (!Array.isArray(data.aiKnowledgeSources) && isDemoMode(data.settings || {})) {
       data.aiKnowledgeSources = [
         {
           id: 'k_1',
@@ -4644,7 +4644,7 @@ async function readLocalDb(): Promise<LocalDb> {
       changed = true;
     }
 
-    if (!Array.isArray(data.aiDialogs)) {
+    if (!Array.isArray(data.aiDialogs) && isDemoMode(data.settings || {})) {
       data.aiDialogs = [
         {
           id: 'dlg_1',
@@ -4691,6 +4691,10 @@ async function readLocalDb(): Promise<LocalDb> {
       ];
       changed = true;
     }
+    if (!Array.isArray(data.aiAssistants)) data.aiAssistants = [];
+    if (!Array.isArray(data.aiAssistantRoutes)) data.aiAssistantRoutes = [];
+    if (!Array.isArray(data.aiKnowledgeSources)) data.aiKnowledgeSources = [];
+    if (!Array.isArray(data.aiDialogs)) data.aiDialogs = [];
 
     if (changed) {
       fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf8');
@@ -16839,15 +16843,17 @@ app.get('/api/health-report', requireAuth(), requirePermission('view_health'), a
 
     const servicesToCheck = ['mariadb', 'mysqld', 'httpd', 'apache2', 'nginx', 'fail2ban', 'crond', 'cron'];
     let services = servicesToCheck.map(name => {
+      const loadState = run('systemctl', ['show', name, '--property', 'LoadState'], 3000);
       const active = run('systemctl', ['is-active', name], 3000);
       const enabled = run('systemctl', ['is-enabled', name], 3000);
       return {
         name,
+        installed: String(loadState.stdout || '').trim() === 'LoadState=loaded',
         active: active.stdout || active.stderr || 'unknown',
         enabled: enabled.stdout || enabled.stderr || 'unknown',
-        ok: String(active.stdout || '').trim() === 'active'
+        ok: String(loadState.stdout || '').trim() === 'LoadState=loaded' && String(active.stdout || '').trim() === 'active'
       };
-    });
+    }).filter(service => service.installed);
 
     const asteriskVersion = await runAsteriskCliCommand('core show version', 5000);
 
@@ -17615,15 +17621,17 @@ app.get('/api/diagnostics/network-status', requireAuth(), requirePermission('vie
       const packetsCount = stats.rxPackets + stats.txPackets;
       const errorsCount = stats.rxErrors + stats.txErrors;
 
-      let speed = '1 Gbps';
-      if (name.includes('wlan') || name.includes('wifi')) speed = '150 Mbps';
-      if (name === 'lo') speed = '10 Gbps';
+      let speed = 'Не определена';
+      try {
+        const rawSpeed = fs.readFileSync(`/sys/class/net/${name}/speed`, 'utf8').trim();
+        if (/^\d+$/.test(rawSpeed)) speed = `${rawSpeed} Mbps`;
+      } catch {}
 
       networkDevices.push({
         ip: ipv4Info.address,
         mac: ipv4Info.mac || '00:00:00:00:00:00',
-        vendor: name === 'lo' ? 'Local Loopback' : name.startsWith('veth') || name.startsWith('docker') ? 'Virtual Bridge Network' : 'Network Interface Controller',
-        vlan: 'Untagged v1',
+        vendor: 'Системный сетевой интерфейс',
+        vlan: 'Не определён',
         speed: speed,
         iface: name,
         packets: packetsCount,
@@ -17632,28 +17640,20 @@ app.get('/api/diagnostics/network-status', requireAuth(), requirePermission('vie
     });
 
     // Add discovered neighbors as devices
-    neighbors.forEach((n, idx) => {
+    neighbors.forEach((n) => {
       if (networkDevices.some(d => d.ip === n.ip)) return;
       if (n.ip === '127.0.0.1' || n.ip.startsWith('169.254.')) return;
-
-      let vendor = 'IP Phone / Terminal Device';
-      if (n.mac.startsWith('00:15:65') || n.mac.startsWith('0c:11:05')) vendor = 'Yealink Technology';
-      else if (n.mac.startsWith('00:04:13')) vendor = 'Snom Technology';
-      else if (n.mac.startsWith('00:26:08')) vendor = 'Cisco Systems';
-      else if (n.mac.startsWith('52:54:00')) vendor = 'QEMU/KVM Virtual NIC';
-
-      const mockPackets = 0;
-      const mockErrors = 0;
 
       networkDevices.push({
         ip: n.ip,
         mac: n.mac,
-        vendor: vendor,
-        vlan: 'Voice v10',
-        speed: '100 Mbps',
-        iface: networkDevices[0]?.iface || 'eth0',
-        packets: mockPackets,
-        errors: mockErrors
+        vendor: 'Не определён (ARP/neighbor)',
+        vlan: 'Не определён',
+        speed: 'Не определена',
+        iface: '',
+        packets: 0,
+        errors: 0,
+        countersAvailable: false
       });
     });
 
@@ -17661,16 +17661,13 @@ app.get('/api/diagnostics/network-status', requireAuth(), requirePermission('vie
 
     networkDevices.forEach((dev, idx) => {
       if (dev.ip === '127.0.0.1') return;
-      const sipCount = Math.floor(dev.packets * 0.005);
-      const rtpCount = Math.floor(dev.packets * 0.0001);
-      const bitrateNum = (dev.packets * 0.012).toFixed(1);
-      
       trafficSources.push({
         ip: dev.ip,
         packets: dev.packets,
-        bitrate: parseFloat(bitrateNum) > 1024 ? `${(parseFloat(bitrateNum)/1024).toFixed(1)} Mbps` : `${bitrateNum} Kbps`,
-        sipCount: sipCount,
-        rtpCount: rtpCount
+        bitrate: 'Не измеряется',
+        sipCount: null,
+        rtpCount: null,
+        protocolCountersAvailable: false
       });
     });
 
@@ -17686,6 +17683,14 @@ app.get('/api/diagnostics/network-status', requireAuth(), requirePermission('vie
   }
 });
 
+app.get('/api/diagnostics/sngrep/status', requireAuth(), requirePermission('view_sngrep'), async (_req, res) => {
+  execFile('sngrep', ['--version'], { timeout: 3000, maxBuffer: 64 * 1024 }, (error: any, stdout, stderr) => {
+    if (error?.code === 'ENOENT') return res.json({ success: true, installed: false, source: 'binary_probe', message: 'SNGREP не установлен' });
+    if (error) return res.json({ success: true, installed: true, available: false, source: 'binary_probe', error: String(stderr || error.message).slice(0, 1000) });
+    return res.json({ success: true, installed: true, available: true, version: String(stdout || stderr).trim().slice(0, 1000), source: 'binary_probe', captureBackend: 'tcpdump' });
+  });
+});
+
 
 let tcpdumpProcess: any = null;
 let tcpdumpInspectorProcess: any = null;
@@ -17693,6 +17698,7 @@ let tcpdumpFilePath = '';
 let tcpdumpStartedAt = '';
 let tcpdumpStoppedAt: string | null = null;
 let tcpdumpSessionId = '';
+let tcpdumpSafetyTimer: NodeJS.Timeout | null = null;
 let tcpdumpEvents: SipCaptureEvent[] = [];
 let tcpdumpRtpStreams = new Map<string, any>();
 let tcpdumpCaptureStatus: 'stopped' | 'starting' | 'running' | 'failed' = 'stopped';
@@ -17756,6 +17762,9 @@ app.post('/api/diagnostics/tcpdump/start', requireAuth(), requireCapturePermissi
 
     const mode = String(req.query.mode || 'sip');
     const iface = String(req.query.iface || 'any');
+    const allowedInterfaces = new Set(['any', ...Object.keys(os.networkInterfaces())]);
+    if (!allowedInterfaces.has(iface)) return res.status(400).json({ success: false, status: 'failed', error: 'Сетевой интерфейс недоступен' });
+    if (!['sip', 'rtp', 'siprtp'].includes(mode)) return res.status(400).json({ success: false, status: 'failed', error: 'Некорректный режим захвата' });
     const sipPorts = String(req.query.ports || '5060,5061,5160').split(',').map(Number).filter(port => Number.isInteger(port) && port > 0 && port <= 65535);
     const rtpMatch = String(req.query.rtpRange || '10000-20000').match(/^(\d+)-(\d+)$/);
     const rtpStart = Math.max(1, Number(rtpMatch?.[1] || 10000));
@@ -17775,6 +17784,7 @@ app.post('/api/diagnostics/tcpdump/start', requireAuth(), requireCapturePermissi
 
     const customTcpdumpFilter = String(req.query.filter || '').trim();
     if (customTcpdumpFilter) {
+      if (customTcpdumpFilter.length > 500 || /[\r\n\0]/.test(customTcpdumpFilter)) return res.status(400).json({ success: false, status: 'failed', error: 'Некорректный BPF-фильтр' });
       filter = customTcpdumpFilter;
     }
 
@@ -17888,6 +17898,15 @@ app.post('/api/diagnostics/tcpdump/start', requireAuth(), requireCapturePermissi
       }
     });
 
+    if (tcpdumpSafetyTimer) clearTimeout(tcpdumpSafetyTimer);
+    tcpdumpSafetyTimer = setTimeout(() => {
+      tcpdumpStopReason = 'safety_timeout';
+      tcpdumpCaptureStatus = 'stopped';
+      tcpdumpProcess?.kill('SIGINT');
+      tcpdumpInspectorProcess?.kill('SIGINT');
+      setTimeout(() => { tcpdumpProcess?.kill('SIGKILL'); tcpdumpInspectorProcess?.kill('SIGKILL'); }, 2000);
+    }, 5 * 60 * 1000);
+
     setTimeout(() => {
       res.json({
         ...tcpdumpStatusPayload(),
@@ -17922,6 +17941,8 @@ app.post('/api/diagnostics/tcpdump/stop', requireAuth(), requireCapturePermissio
 
     tcpdumpProcess?.kill('SIGINT');
     tcpdumpInspectorProcess?.kill('SIGINT');
+    if (tcpdumpSafetyTimer) { clearTimeout(tcpdumpSafetyTimer); tcpdumpSafetyTimer = null; }
+    setTimeout(() => { tcpdumpProcess?.kill('SIGKILL'); tcpdumpInspectorProcess?.kill('SIGKILL'); }, 2000);
     tcpdumpCaptureStatus = 'stopped';
     tcpdumpStopReason = String(req.query.reason || 'user');
     tcpdumpStoppedAt = new Date().toISOString();
@@ -18185,18 +18206,13 @@ const allowedFwconsoleCommands = [
   'fwconsole setting',
   'fwconsole trunks',
   'fwconsole endpoints',
-  'fwconsole reload',
-  'fwconsole chown',
   'fwconsole certificates',
   'fwconsole firewall list',
   'fwconsole job --list',
   'fwconsole notification --list',
   'fwconsole pm2 --list',
   'fwconsole sysadmin',
-  'fwconsole validate',
-  'fwconsole restart',
-  'fwconsole stop',
-  'fwconsole start'
+  'fwconsole validate'
 ];
 
 const dangerousFwconsoleCommands = [
@@ -18245,8 +18261,18 @@ app.post('/api/freepbx/fwconsole', requireAuth(), requirePermission('view_cli'),
       });
     }
 
+    if (/[;&|`$<>\n\r]/.test(command)) {
+      return res.status(403).json({ success: false, error: 'Shell-операторы и перенаправления запрещены' });
+    }
+
+    const commandParts = command.split(/\s+/).filter(Boolean);
+    const executable = commandParts.shift();
+    if (executable !== 'fwconsole') {
+      return res.status(403).json({ success: false, error: 'Разрешены только команды fwconsole' });
+    }
+    const normalizedCommand = ['fwconsole', ...commandParts].join(' ');
     const isAllowed = allowedFwconsoleCommands.some((allowed) =>
-      command === allowed || command.startsWith(allowed + ' ')
+      normalizedCommand === allowed || normalizedCommand.startsWith(allowed + ' ')
     );
 
     if (!isAllowed) {
@@ -18257,8 +18283,8 @@ app.post('/api/freepbx/fwconsole', requireAuth(), requirePermission('view_cli'),
       });
     }
 
-    const result = spawnSync(command, {
-      shell: true,
+    const result = spawnSync('fwconsole', commandParts, {
+      shell: false,
       encoding: 'utf8',
       timeout: 30000,
       maxBuffer: 1024 * 1024 * 3
@@ -18528,7 +18554,8 @@ app.get('/api/db-explorer/live-snapshot', requireAuth(), requirePermission('view
 function isSafeSelectSql(sql) {
   const q = String(sql || '').trim();
   if (!/^select\s+/i.test(q)) return false;
-  if (/;\s*\S+/i.test(q)) return false;
+  if (/--|#|\/\*|\*\//.test(q)) return false;
+  if (/;/.test(q.replace(/;\s*$/, ''))) return false;
   if (/\b(insert|update|delete|drop|truncate|alter|create|replace|grant|revoke|load_file|outfile|dumpfile)\b/i.test(q)) return false;
   return true;
 }
@@ -18615,9 +18642,20 @@ app.post('/api/db-explorer/query', requireAuth(), requirePermission('view_db_exp
 
     const sql = String(req.body?.sql || '').trim();
     const limit = Math.min(Number(req.body?.limit || 200), 1000);
-    const allowWriters = req.body?.allowWriters === true;
-    const writeType = String(req.body?.writeType || '').toLowerCase(); // 'insert' | 'update' | 'delete'
     const targetsPbxpuls = /\bpbxpuls\s*\./i.test(sql);
+    const referencedObjects = Array.from(sql.matchAll(/\b(?:from|join)\s+`?([a-zA-Z0-9_]+)`?(?:\s*\.\s*`?([a-zA-Z0-9_]+)`?)?/gi));
+    if (!referencedObjects.length) return res.status(403).json({ success: false, error: 'Запрос должен читать разрешённую таблицу.' });
+    for (const match of referencedObjects) {
+      const database = match[2] ? String(match[1]).toLowerCase() : '';
+      const table = String(match[2] || match[1]);
+      if (database && !DB_EXPLORER_ALLOWED_DATABASES.includes(database)) {
+        return res.status(403).json({ success: false, error: 'База не входит в allowlist DB Explorer.' });
+      }
+      const allowedTables = database === 'pbxpuls' ? DB_EXPLORER_PBXPULS_TABLES : DB_EXPLORER_ALLOWED_TABLES;
+      if (!allowedTables.includes(table)) {
+        return res.status(403).json({ success: false, error: 'Таблица не входит в allowlist DB Explorer.' });
+      }
+    }
 
     if (targetsPbxpuls) {
       if (!isSafeSelectSql(sql)) return res.status(403).json({ success: false, error: 'Для базы PBXPuls разрешены только SELECT-запросы.' });
@@ -18631,42 +18669,16 @@ app.post('/api/db-explorer/query', requireAuth(), requirePermission('view_db_exp
       }
     }
 
-    let isSafe = false;
-    let isWrite = false;
-
-    if (!targetsPbxpuls && allowWriters && (writeType === 'insert' || writeType === 'update' || writeType === 'delete')) {
-      const q = sql.trim();
-      if (/;\s*\S+/i.test(q)) {
-        isSafe = false;
-      } else if (/\b(drop|truncate|alter|create|replace|grant|revoke|load_file|outfile|dumpfile|database|schema)\b/i.test(q)) {
-        isSafe = false;
-      } else if (writeType === 'insert' && /^insert\s+into\s+/i.test(q)) {
-        isSafe = true;
-        isWrite = true;
-      } else if (writeType === 'update' && /^update\s+/i.test(q)) {
-        isSafe = true;
-        isWrite = true;
-      } else if (writeType === 'delete' && /^delete\s+from\s+/i.test(q)) {
-        isSafe = true;
-        isWrite = true;
-      }
-    } else {
-      isSafe = isSafeSelectSql(sql);
-    }
+    const isSafe = isSafeSelectSql(sql);
 
     if (!isSafe) {
       return res.status(403).json({
         success: false,
-        error: isWrite 
-          ? `Запрос вне правил безопасности для операции ${writeType.toUpperCase()}. Разрешены только стандартные ${writeType.toUpperCase()} без опасных ключевых слов.`
-          : 'Разрешены только безопасные SELECT-запросы или явно разрешенные операции записи без изменения структуры таблиц.'
+        error: 'DB Explorer работает только для чтения. Разрешены безопасные SELECT-запросы.'
       });
     }
 
-    // Direct executions for writing, limit only applies to reading SELECT
-    const querySql = isWrite 
-      ? sql 
-      : (/\blimit\s+\d+/i.test(sql) ? sql : sql + ' LIMIT ' + limit);
+    const querySql = /\blimit\s+\d+/i.test(sql) ? sql : sql + ' LIMIT ' + limit;
 
     // Auto-detect isDemo mode
     const settings = getDbExplorerSettings();
@@ -18674,12 +18686,7 @@ app.post('/api/db-explorer/query', requireAuth(), requirePermission('view_db_exp
 
     let rows: any[] = [];
     if (isDemo) {
-      // Return beautiful mock row for success insert/update/delete
-      if (isWrite) {
-        rows = [{ affectedRows: 1, insertId: Math.floor(Math.random() * 1000) + 100, message: `Запрос ${writeType.toUpperCase()} успешно выполнен` }];
-      } else {
-        rows = filterMockCDR(querySql, []);
-      }
+      rows = filterMockCDR(querySql, []);
     } else {
       rows = targetsPbxpuls
         ? await queryPBXPulsDb(querySql)
@@ -18960,43 +18967,12 @@ function initQualityFiles() {
 async function getRealVoIPQualityDevices(settings: AppSettings, warnings?: string[]): Promise<any[]> {
   const list = await getRealVoIPDevices(settings, warnings);
   return list.map(dev => {
-    let latency = dev.rtt || 0;
-    if (dev.status === 'Online' && latency === 0) {
-      latency = 12 + Math.floor(Math.random() * 8); // healthy default
-    }
-    
-    let jitter = 1.0;
+    const signalingRtt = Number(dev.rtt || 0) || null;
     const rtpReceivedPackets = Math.max(0, Number(dev.rtpReceivedPackets || dev.rtp_received_packets || 0) || 0);
     const rtpLostPackets = Math.max(0, Number(dev.rtpLostPackets || dev.rtp_lost_packets || 0) || 0);
-    let rtpLoss = calculateRtpLossPercent(rtpReceivedPackets, rtpLostPackets);
-    let status = "Отлично";
-    let mos = 4.41;
-
-    if (dev.status === 'Offline') {
-      latency = 0;
-      jitter = 0;
-      rtpLoss = 0;
-      mos = 0;
-      status = "Offline";
-    } else {
-      // Online or Conflict
-      jitter = parseFloat((1.0 + (latency % 5) / 2 + Math.random() * 0.5).toFixed(1));
-
-      mos = 4.41;
-      if (latency > 150) mos -= 1.0;
-      else if (latency > 80) mos -= 0.4;
-      if (jitter > 20) mos -= 0.8;
-      else if (jitter > 10) mos -= 0.3;
-      if (rtpLoss > 2) mos -= 1.2;
-      else if (rtpLoss > 0.5) mos -= 0.5;
-
-      mos = Math.max(1.0, Math.min(4.5, mos));
-      mos = parseFloat(mos.toFixed(2));
-
-      if (mos < 3.5 || latency > 150) status = "Критично";
-      else if (mos < 4.0 || latency > 100) status = "Предупреждение";
-      else if (mos < 4.3) status = "Хорошо";
-    }
+    const metricsAvailable = rtpReceivedPackets + rtpLostPackets > 0;
+    const rtpLoss = metricsAvailable ? calculateRtpLossPercent(rtpReceivedPackets, rtpLostPackets) : null;
+    const status = dev.status === 'Offline' ? 'Offline' : 'Недостаточно данных';
 
     return {
       ...dev,
@@ -19020,12 +18996,15 @@ async function getRealVoIPQualityDevices(settings: AppSettings, warnings?: strin
       pingMs: dev.pingMs || dev.ping_ms || 0,
       operationalStatus: dev.operationalStatus || dev.operational_status || '',
       network: dev.network,
-      latency,
-      jitter,
+      latency: signalingRtt,
+      signalingRtt,
+      jitter: null,
       rtpLoss,
       rtpReceivedPackets,
       rtpLostPackets,
-      mos,
+      mos: null,
+      metricsAvailable,
+      measurementSource: metricsAvailable ? 'rtp_counters' : 'sip_qualify_only',
       status,
       lastCheck: new Date().toISOString()
     };
@@ -19072,16 +19051,11 @@ setInterval(async () => {
     } catch (e) {}
     const settings = localDb.settings || {};
     const isDemo = isDemoMode(settings);
+    // Synthetic telemetry is allowed only in the explicitly enabled demo mode.
+    // Production history must come from measured RTCP/RTP data, never from drift simulation.
+    if (!isDemo) return;
 
-    let devicesToProcess: any[] = INITIAL_DEVICES;
-    if (!isDemo) {
-      try {
-        devicesToProcess = await getRealVoIPQualityDevices(settings);
-      } catch (err: any) {
-        console.error('[VOIP QUALITY] Failed to fetch real quality devices for background update:', err.message);
-        return;
-      }
-    }
+    const devicesToProcess: any[] = INITIAL_DEVICES;
 
     const history = (await readWithMonitoringFallback(
       () => readQualityHistoryFromSql('30d', 'all'),
@@ -19245,7 +19219,7 @@ setInterval(async () => {
     fs.writeFileSync(QUALITY_HISTORY_FILE, JSON.stringify(compactedHistory, null, 2), 'utf8');
     fs.writeFileSync(QUALITY_ALERTS_FILE, JSON.stringify(alerts, null, 2), 'utf8');
   } catch (err: any) {
-    console.error('[VOIP QUALITY] Simulation background error:', err.message);
+    console.error('[VOIP QUALITY] Demo simulation error:', err.message);
   }
 }, 60000);
 
@@ -19262,6 +19236,11 @@ app.get('/api/quality/cache', requireAuth(), requireQualityAccess, async (req, r
   try {
     const period = String(req.query.period || '1h').trim();
     const ext = String(req.query.ext || 'all').trim();
+    const localDb = await readLocalDb();
+    if (!isDemoMode(localDb.settings)) {
+      const devices = await getRealVoIPQualityDevices(localDb.settings);
+      return res.json({ success: true, cached: false, devices, history: [], alerts: [], source: 'live_asterisk', historyCount: 0, lastHistoryPoint: null, lastUpdated: new Date().toISOString(), period, ext, measurementAvailable: false, message: 'Недостаточно реальных RTP/RTCP-данных для истории качества', ...getPBXPulsDbRuntimeStatus() });
+    }
     const historyStored = await readWithMonitoringFallback(() => readQualityHistoryFromSql(period, ext), () => filterAndSampleQualityHistory(readQualityJsonFile(QUALITY_HISTORY_FILE), { ext, period }));
     const alertsStored = await readWithMonitoringFallback(readQualityAlertsFromSql, () => readQualityJsonFile(QUALITY_ALERTS_FILE));
     const history = historyStored.data;
@@ -19354,6 +19333,10 @@ app.get('/api/quality/history', requireAuth(), requireQualityAccess, async (req,
   try {
     const ext = String(req.query.ext || '').trim();
     const period = String(req.query.period || req.query.range || '').trim();
+    const localDb = await readLocalDb();
+    if (!isDemoMode(localDb.settings)) {
+      return res.json({ success: true, count: 0, source: 'rtcp_unavailable', measurementAvailable: false, message: 'Недостаточно реальных RTP/RTCP-данных для оценки', filters: { ext: ext || 'all', period: period || null, from: req.query.from || null, to: req.query.to || null }, history: [] });
+    }
     const stored = await readWithMonitoringFallback(() => readQualityHistoryFromSql(period || '30d', ext || 'all'), () => readQualityJsonFile(QUALITY_HISTORY_FILE));
     let history: any[] = stored.data;
 
@@ -19386,6 +19369,9 @@ app.get('/api/quality/alerts', requireAuth(), requireQualityAccess, async (req, 
   try {
     const localDb = await readLocalDb();
     const settings = localDb.settings;
+    if (!isDemoMode(settings)) {
+      return res.json({ success: true, count: 0, alerts: [], source: 'rtcp_unavailable', measurementAvailable: false, message: 'Недостаточно реальных RTP/RTCP-данных для формирования предупреждений' });
+    }
     const stored = await readWithMonitoringFallback(readQualityAlertsFromSql, () => readLegacyMonitoringFile('qualityAlerts'));
     let alerts = stored.data;
     if (!isDemoMode(settings)) {
@@ -19427,8 +19413,9 @@ app.get('/api/quality/device/:ext', requireAuth(), requireQualityAccess, async (
           mos: dev.mos || 0,
           status: dev.status || "Offline"
         };
-    const stored = await readWithMonitoringFallback(() => readQualityHistoryFromSql('30d', ext), () => readLegacyMonitoringFile('qualityHistory').filter((pt: any) => pt.ext === ext));
-    const history = stored.data;
+    const history = isDemoMode(settings)
+      ? (await readWithMonitoringFallback(() => readQualityHistoryFromSql('30d', ext), () => readLegacyMonitoringFile('qualityHistory').filter((pt: any) => pt.ext === ext))).data
+      : [];
     res.json({
       success: true,
       device: {
@@ -19442,6 +19429,18 @@ app.get('/api/quality/device/:ext', requireAuth(), requireQualityAccess, async (
     res.status(500).json({ success: false, error: e.message || String(e) });
   }
 });
+
+function runReadOnlyNetworkDiagnostic(tool: 'ping' | 'traceroute', ip: string): Promise<{ success: boolean; output: string; exitCode: number | null; timedOut: boolean }> {
+  if (!net.isIP(ip)) return Promise.resolve({ success: false, output: 'У устройства нет корректного IP-адреса', exitCode: null, timedOut: false });
+  const args = tool === 'ping' ? ['-n', '-c', '4', '-W', '2', ip] : ['-n', '-m', '15', '-w', '2', ip];
+  return new Promise(resolve => {
+    execFile(tool, args, { timeout: 12_000, maxBuffer: 256 * 1024 }, (error: any, stdout, stderr) => {
+      const timedOut = Boolean(error?.killed || error?.code === 'ETIMEDOUT');
+      const output = String(stdout || stderr || error?.message || 'Диагностическая команда не вернула данных').slice(0, 256 * 1024);
+      resolve({ success: !error, output, exitCode: Number.isInteger(error?.code) ? error.code : (error ? null : 0), timedOut });
+    });
+  });
+}
 
 app.post('/api/quality/ping/:ext', requireAuth(), requireQualityAccess, async (req, res) => {
   try {
@@ -19460,20 +19459,7 @@ app.post('/api/quality/ping/:ext', requireAuth(), requireQualityAccess, async (r
        res.status(404).json({ success: false, error: "Устройство не найдено" });
        return;
     }
-    const ip = dev.ip || '0.0.0.0';
-    const metric = devicesMetrics[ext] || { latency: 15 };
-    const pingOutput = [
-      `PING ${ip} (${ip}) 56(84) bytes of data.`,
-      `64 bytes from ${ip}: icmp_seq=1 ttl=64 time=${(metric.latency + Math.random() * 2 - 1).toFixed(1)} ms`,
-      `64 bytes from ${ip}: icmp_seq=2 ttl=64 time=${(metric.latency + Math.random() * 2 - 1).toFixed(1)} ms`,
-      `64 bytes from ${ip}: icmp_seq=3 ttl=64 time=${(metric.latency + Math.random() * 2 - 1).toFixed(1)} ms`,
-      `64 bytes from ${ip}: icmp_seq=4 ttl=64 time=${(metric.latency + Math.random() * 2 - 1).toFixed(1)} ms`,
-      `\n--- ${ip} ping statistics ---`,
-      `4 packets transmitted, 4 received, 0% packet loss, time ${3004 + Math.floor(Math.random() * 8)}ms`,
-      `rtt min/avg/max/mdev = ${(metric.latency - 1.8).toFixed(3)}/${(metric.latency).toFixed(3)}/${(metric.latency + 2.1).toFixed(3)}/0.485 ms`
-    ].join('\n');
-
-    res.json({ success: true, output: pingOutput });
+    res.json(await runReadOnlyNetworkDiagnostic('ping', String(dev.ip || '')));
   } catch (e: any) {
     res.status(500).json({ success: false, error: e.message || String(e) });
   }
@@ -19496,19 +19482,7 @@ app.post('/api/quality/traceroute/:ext', requireAuth(), requireQualityAccess, as
        res.status(404).json({ success: false, error: "Устройство не найдено" });
        return;
     }
-    const ip = dev.ip || '0.0.0.0';
-    const metric = devicesMetrics[ext] || { latency: 15 };
-    const segments = ip.split('.');
-    const subnetGateway = segments[0] + '.' + segments[1] + '.' + segments[2] + '.1';
-    
-    const traceOutput = [
-      `traceroute to ${ip} (${ip}), 30 hops max, 60 byte packets`,
-      ` 1  192.168.1.1 (192.168.1.1)  1.054 ms  0.985 ms  1.127 ms`,
-      ` 2  ${subnetGateway} (${subnetGateway})  3.441 ms  3.824 ms  3.620 ms`,
-      ` 3  ${ip} (${ip})  ${(metric.latency - 1.2).toFixed(3)} ms  ${metric.latency.toFixed(3)} ms  ${(metric.latency + 1.4).toFixed(3)} ms`
-    ].join('\n');
-
-    res.json({ success: true, output: traceOutput });
+    res.json(await runReadOnlyNetworkDiagnostic('traceroute', String(dev.ip || '')));
   } catch (e: any) {
     res.status(500).json({ success: false, error: e.message || String(e) });
   }
@@ -20646,35 +20620,35 @@ async function getRealVoIPDevices(settings: AppSettings, warnings?: string[]): P
       ip: amiInfo.ip || '',
       port: amiInfo.port || 0,
       status: status,
-      userAgent: amiInfo.userAgent || 'Sip Device',
-      manufacturer: amiInfo.deviceRole === 'trunk' ? 'SIP Provider' : 'Generic',
-      model: amiInfo.typeLabel || (amiInfo.deviceRole === 'trunk' ? 'PJSIP Trunk' : 'VoIP Terminal'),
-      regTime: new Date().toISOString(),
-      lastContact: new Date().toISOString(),
+      userAgent: amiInfo.userAgent || '',
+      manufacturer: '',
+      model: '',
+      regTime: null,
+      lastContact: amiInfo.lastContact || null,
       ipChanges: 0,
       regCount: status === 'Online' ? 1 : 0,
-      avgRegisterTime: '1.0s',
-      sipExpire: 3600,
-      natMode: 'RFC3581',
-      rtpRange: '10000-20000',
-      codecs: ['G.722', 'PCMA', 'PCMU'],
-      srtpStatus: 'Optional',
-      iceStatus: 'Disabled',
-      directMedia: 'No',
+      avgRegisterTime: '',
+      sipExpire: null,
+      natMode: '',
+      rtpRange: '',
+      codecs: [],
+      srtpStatus: '',
+      iceStatus: '',
+      directMedia: '',
       sipOptions: status === 'Online' ? 'OK' : 'UNKNOWN',
       sipQualify: amiInfo.sipQualify || (status === 'Online' ? 'OK' : 'UNKNOWN'),
       rtt: amiInfo.rtt || 0,
       responseTime: amiInfo.responseTime || 'N/A',
       network: {
         mac: '',
-        vendor: 'Unknown',
-        vlan: 'VLAN 1',
-        gateway: '192.168.1.1',
-        dns: ['8.8.8.8'],
-        switch: 'SW-Core',
-        registerFrequency: '3600s',
+        vendor: '',
+        vlan: '',
+        gateway: '',
+        dns: [],
+        switch: '',
+        registerFrequency: '',
         registerCount: status === 'Online' ? 1 : 0,
-        vlanHistory: ['1'],
+        vlanHistory: [],
         subnetHistory: amiInfo.ip ? [amiInfo.ip.substring(0, amiInfo.ip.lastIndexOf('.')) + '.0/24'] : [],
         switchHistory: [],
         macHistory: [],
@@ -20702,35 +20676,35 @@ async function getRealVoIPDevices(settings: AppSettings, warnings?: string[]): P
         ip: amiInfo.ip || '',
         port: amiInfo.port || 0,
         status: status,
-        userAgent: amiInfo.userAgent || 'Sip Device',
-        manufacturer: amiInfo.deviceRole === 'trunk' ? 'SIP Provider' : 'Generic',
-        model: amiInfo.typeLabel || (amiInfo.deviceRole === 'trunk' ? 'PJSIP Trunk' : 'VoIP Terminal'),
-        regTime: new Date().toISOString(),
-        lastContact: new Date().toISOString(),
+        userAgent: amiInfo.userAgent || '',
+        manufacturer: '',
+        model: '',
+        regTime: null,
+        lastContact: amiInfo.lastContact || null,
         ipChanges: 0,
         regCount: status === 'Online' ? 1 : 0,
-        avgRegisterTime: '1.0s',
-        sipExpire: 3600,
-        natMode: 'RFC3581',
-        rtpRange: '10000-20000',
-        codecs: ['G.722', 'PCMA', 'PCMU'],
-        srtpStatus: 'Optional',
-        iceStatus: 'Disabled',
-        directMedia: 'No',
+        avgRegisterTime: '',
+        sipExpire: null,
+        natMode: '',
+        rtpRange: '',
+        codecs: [],
+        srtpStatus: '',
+        iceStatus: '',
+        directMedia: '',
         sipOptions: status === 'Online' ? 'OK' : 'UNKNOWN',
         sipQualify: amiInfo.sipQualify || (status === 'Online' ? 'OK' : 'UNKNOWN'),
         rtt: amiInfo.rtt || 0,
         responseTime: amiInfo.responseTime || 'N/A',
         network: {
           mac: '',
-          vendor: 'Unknown',
-          vlan: 'VLAN 1',
-          gateway: '192.168.1.1',
-          dns: ['8.8.8.8'],
-          switch: 'SW-Core',
-          registerFrequency: '3600s',
+          vendor: '',
+          vlan: '',
+          gateway: '',
+          dns: [],
+          switch: '',
+          registerFrequency: '',
           registerCount: status === 'Online' ? 1 : 0,
-          vlanHistory: ['1'],
+          vlanHistory: [],
           subnetHistory: amiInfo.ip ? [amiInfo.ip.substring(0, amiInfo.ip.lastIndexOf('.')) + '.0/24'] : [],
           switchHistory: [],
           macHistory: [],
@@ -20973,7 +20947,8 @@ app.get('/api/devices-map/alerts', requireAuth(), requirePermission('view_sip_de
 
 app.get('/api/devices-map/device/:ext', requireAuth(), requirePermission('view_sip_devices_map'), async (req, res) => {
   try {
-    if (await getMonitoringStorageMode() !== 'sql') initDevicesMapFiles();
+    const localDb = await readLocalDb();
+    if (isDemoMode(localDb.settings) && await getMonitoringStorageMode() !== 'sql') initDevicesMapFiles();
     const ext = String(req.params.ext);
     const devices = (await readWithMonitoringFallback(readDevicesMapFromSql, () => readLegacyMonitoringFile('devicesMap'))).data;
     const dev = devices.find((d: any) => d.ext === ext);
@@ -20992,7 +20967,6 @@ app.get('/api/devices-map/device/:ext', requireAuth(), requirePermission('view_s
 app.post('/api/devices-map/ping/:ext', requireAuth(), requirePermission('view_sip_devices_map'), async (req, res) => {
   try {
     const ext = String(req.params.ext);
-    if (await getMonitoringStorageMode() !== 'sql') initDevicesMapFiles();
     const devices = (await readWithMonitoringFallback(
       readDevicesMapFromSql,
       () => readLegacyMonitoringFile('devicesMap')
@@ -21002,26 +20976,7 @@ app.post('/api/devices-map/ping/:ext', requireAuth(), requirePermission('view_si
        res.status(404).json({ success: false, error: "Устройство не найдено" });
        return;
     }
-    const ip = dev.ip;
-    if (dev.status === "Offline") {
-      res.json({
-        success: true,
-        output: `PING ${ip} (${ip}) 56(84) bytes of data.\nFrom 192.168.1.1 icmp_seq=1 Destination Host Unreachable\nFrom 192.168.1.1 icmp_seq=2 Destination Host Unreachable\n\n--- ${ip} ping statistics ---\n4 packets transmitted, 0 received, +2 errors, 100% packet loss`
-      });
-      return;
-    }
-    const pingOutput = [
-      `PING ${ip} (${ip}) 56(84) bytes of data.`,
-      `64 bytes from ${ip}: icmp_seq=1 ttl=64 time=${(10 + Math.random() * 5).toFixed(1)} ms`,
-      `64 bytes from ${ip}: icmp_seq=2 ttl=64 time=${(10 + Math.random() * 5).toFixed(1)} ms`,
-      `64 bytes from ${ip}: icmp_seq=3 ttl=64 time=${(10 + Math.random() * 5).toFixed(1)} ms`,
-      `64 bytes from ${ip}: icmp_seq=4 ttl=64 time=${(10 + Math.random() * 5).toFixed(1)} ms`,
-      `\n--- ${ip} ping statistics ---`,
-      `4 packets transmitted, 4 received, 0% packet loss, time 3004ms`,
-      `rtt min/avg/max/mdev = 9.841/12.152/15.340/1.822 ms`
-    ].join('\n');
-
-    res.json({ success: true, output: pingOutput });
+    res.json(await runReadOnlyNetworkDiagnostic('ping', String(dev.ip || '')));
   } catch (e: any) {
     res.status(500).json({ success: false, error: e.message || String(e) });
   }
@@ -21030,7 +20985,6 @@ app.post('/api/devices-map/ping/:ext', requireAuth(), requirePermission('view_si
 app.post('/api/devices-map/traceroute/:ext', requireAuth(), requirePermission('view_sip_devices_map'), async (req, res) => {
   try {
     const ext = String(req.params.ext);
-    if (await getMonitoringStorageMode() !== 'sql') initDevicesMapFiles();
     const devices = (await readWithMonitoringFallback(
       readDevicesMapFromSql,
       () => readLegacyMonitoringFile('devicesMap')
@@ -21040,18 +20994,7 @@ app.post('/api/devices-map/traceroute/:ext', requireAuth(), requirePermission('v
        res.status(404).json({ success: false, error: "Устройство не найдено" });
        return;
     }
-    const ip = dev.ip;
-    const segments = ip.split('.');
-    const subnetGateway = segments[0] + '.' + segments[1] + '.' + segments[2] + '.1';
-    
-    const traceOutput = [
-      `traceroute to ${ip} (${ip}), 30 hops max, 60 byte packets`,
-      ` 1  192.168.1.1 (192.168.1.1)  1.054 ms  0.985 ms  1.127 ms`,
-      ` 2  ${subnetGateway} (${subnetGateway})  3.441 ms  3.824 ms  3.620 ms`,
-      ` 3  ${ip} (${ip})  11.233 ms  12.450 ms  14.613 ms`
-    ].join('\n');
-
-    res.json({ success: true, output: traceOutput });
+    res.json(await runReadOnlyNetworkDiagnostic('traceroute', String(dev.ip || '')));
   } catch (e: any) {
     res.status(500).json({ success: false, error: e.message || String(e) });
   }
@@ -21059,7 +21002,6 @@ app.post('/api/devices-map/traceroute/:ext', requireAuth(), requirePermission('v
 
 app.post('/api/devices-map/snapshot', requireAuth(), requirePermission('view_sip_devices_map'), async (req, res) => {
   try {
-    if (await getMonitoringStorageMode() !== 'sql') initDevicesMapFiles();
     const stored = await readWithMonitoringFallback(
       readDevicesMapFromSql,
       () => readLegacyMonitoringFile('devicesMap')
@@ -21643,16 +21585,17 @@ app.get('/api/call-script-runs/:id', requireAuth(), async (req, res) => {
 
 // --- AI ASSISTANT SYSTEM API ENDPOINTS ---
 
-app.get('/api/ai-assistants', requireAuth, async (req, res) => {
+app.get('/api/ai-assistants', requireAuth(), requirePermission('view_ai_pbx_admin'), async (req, res) => {
   try {
     const db = await readLocalDb();
-    res.json(db.aiAssistants || []);
+    const rows = isDemoMode(db.settings) ? (db.aiAssistants || []) : (db.aiAssistants || []).filter((row: any) => row.id !== 'ai_1');
+    res.json(rows);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
 });
 
-app.post('/api/ai-assistants', requireAuth, async (req, res) => {
+app.post('/api/ai-assistants', requireAuth(), requirePermission('view_ai_pbx_admin'), async (req, res) => {
   try {
     const db = await readLocalDb();
     const newAss = {
@@ -21685,7 +21628,7 @@ app.post('/api/ai-assistants', requireAuth, async (req, res) => {
   }
 });
 
-app.post('/api/ai-assistants/:id/start', requireAuth, async (req, res) => {
+app.post('/api/ai-assistants/:id/start', requireAuth(), requirePermission('view_ai_pbx_admin'), async (req, res) => {
   try {
     const db = await readLocalDb();
     db.aiAssistants = db.aiAssistants || [];
@@ -21703,7 +21646,7 @@ app.post('/api/ai-assistants/:id/start', requireAuth, async (req, res) => {
   }
 });
 
-app.post('/api/ai-assistants/:id/stop', requireAuth, async (req, res) => {
+app.post('/api/ai-assistants/:id/stop', requireAuth(), requirePermission('view_ai_pbx_admin'), async (req, res) => {
   try {
     const db = await readLocalDb();
     db.aiAssistants = db.aiAssistants || [];
@@ -21721,7 +21664,7 @@ app.post('/api/ai-assistants/:id/stop', requireAuth, async (req, res) => {
   }
 });
 
-app.post('/api/ai-assistants/:id/duplicate', requireAuth, async (req, res) => {
+app.post('/api/ai-assistants/:id/duplicate', requireAuth(), requirePermission('view_ai_pbx_admin'), async (req, res) => {
   try {
     const db = await readLocalDb();
     db.aiAssistants = db.aiAssistants || [];
@@ -21748,7 +21691,7 @@ app.post('/api/ai-assistants/:id/duplicate', requireAuth, async (req, res) => {
   }
 });
 
-app.delete('/api/ai-assistants/:id', requireAuth, async (req, res) => {
+app.delete('/api/ai-assistants/:id', requireAuth(), requirePermission('view_ai_pbx_admin'), async (req, res) => {
   try {
     const db = await readLocalDb();
     db.aiAssistants = (db.aiAssistants || []).filter((a: any) => a.id !== req.params.id);
@@ -21760,7 +21703,7 @@ app.delete('/api/ai-assistants/:id', requireAuth, async (req, res) => {
 });
 
 // MARSHRUTIZATSIYA LINES
-app.get('/api/ai-assistant-routes', requireAuth, async (req, res) => {
+app.get('/api/ai-assistant-routes', requireAuth(), requirePermission('view_ai_pbx_admin'), async (req, res) => {
   try {
     const db = await readLocalDb();
     res.json(db.aiAssistantRoutes || []);
@@ -21769,7 +21712,7 @@ app.get('/api/ai-assistant-routes', requireAuth, async (req, res) => {
   }
 });
 
-app.post('/api/ai-assistant-routes', requireAuth, async (req, res) => {
+app.post('/api/ai-assistant-routes', requireAuth(), requirePermission('view_ai_pbx_admin'), async (req, res) => {
   try {
     const db = await readLocalDb();
     const newRoute = {
@@ -21789,7 +21732,7 @@ app.post('/api/ai-assistant-routes', requireAuth, async (req, res) => {
   }
 });
 
-app.delete('/api/ai-assistant-routes/:id', requireAuth, async (req, res) => {
+app.delete('/api/ai-assistant-routes/:id', requireAuth(), requirePermission('view_ai_pbx_admin'), async (req, res) => {
   try {
     const db = await readLocalDb();
     db.aiAssistantRoutes = (db.aiAssistantRoutes || []).filter((r: any) => r.id !== req.params.id);
@@ -21801,7 +21744,7 @@ app.delete('/api/ai-assistant-routes/:id', requireAuth, async (req, res) => {
 });
 
 // BAZA ZNANIY (KNOWLEDGE BASE)
-app.get('/api/ai-knowledge/:assistantId', requireAuth, async (req, res) => {
+app.get('/api/ai-knowledge/:assistantId', requireAuth(), requirePermission('view_ai_pbx_admin'), async (req, res) => {
   try {
     const db = await readLocalDb();
     const sources = (db.aiKnowledgeSources || []).filter((k: any) => k.assistantId === req.params.assistantId);
@@ -21811,7 +21754,7 @@ app.get('/api/ai-knowledge/:assistantId', requireAuth, async (req, res) => {
   }
 });
 
-app.post('/api/ai-knowledge/:assistantId', requireAuth, async (req, res) => {
+app.post('/api/ai-knowledge/:assistantId', requireAuth(), requirePermission('view_ai_pbx_admin'), async (req, res) => {
   try {
     const db = await readLocalDb();
     const newSource = {
@@ -21832,7 +21775,7 @@ app.post('/api/ai-knowledge/:assistantId', requireAuth, async (req, res) => {
   }
 });
 
-app.delete('/api/ai-knowledge/:sourceId', requireAuth, async (req, res) => {
+app.delete('/api/ai-knowledge/:sourceId', requireAuth(), requirePermission('view_ai_pbx_admin'), async (req, res) => {
   try {
     const db = await readLocalDb();
     db.aiKnowledgeSources = (db.aiKnowledgeSources || []).filter((k: any) => k.id !== req.params.sourceId);
@@ -21843,7 +21786,7 @@ app.delete('/api/ai-knowledge/:sourceId', requireAuth, async (req, res) => {
   }
 });
 
-app.post('/api/ai-knowledge/:assistantId/test-question', requireAuth, async (req, res) => {
+app.post('/api/ai-knowledge/:assistantId/test-question', requireAuth(), requirePermission('view_ai_pbx_admin'), async (req, res) => {
   try {
     const db = await readLocalDb();
     const question = (req.body.question || '').toLowerCase();
@@ -21867,16 +21810,17 @@ app.post('/api/ai-knowledge/:assistantId/test-question', requireAuth, async (req
 });
 
 // DIALOGS
-app.get('/api/ai-dialogs', requireAuth, async (req, res) => {
+app.get('/api/ai-dialogs', requireAuth(), requirePermission('view_ai_pbx_admin'), async (req, res) => {
   try {
     const db = await readLocalDb();
-    res.json(db.aiDialogs || []);
+    const rows = isDemoMode(db.settings) ? (db.aiDialogs || []) : (db.aiDialogs || []).filter((row: any) => !['dlg_1', 'dlg_2'].includes(String(row.id)));
+    res.json(rows);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
 });
 
-app.post('/api/ai-dialogs/:id/comment', requireAuth, async (req, res) => {
+app.post('/api/ai-dialogs/:id/comment', requireAuth(), requirePermission('view_ai_pbx_admin'), async (req, res) => {
   try {
     const db = await readLocalDb();
     db.aiDialogs = db.aiDialogs || [];
@@ -21894,8 +21838,10 @@ app.post('/api/ai-dialogs/:id/comment', requireAuth, async (req, res) => {
 });
 
 // INTELLIGENT SIMULATOR CHAT RESPONDER
-app.post('/api/ai-assistants/:id/test', requireAuth, async (req, res) => {
+app.post('/api/ai-assistants/:id/test', requireAuth(), requirePermission('view_ai_pbx_admin'), async (req, res) => {
   try {
+    return res.status(501).json({ success: false, configured: false, error: 'Тест legacy AI Assistant не подключён к реальному провайдеру. Используйте раздел AI-админ.' });
+    /* legacy demo responder retained only for data compatibility; it is never returned */
     const message = (req.body.message || '').toLowerCase();
     
     let reply = 'Интересный вопрос! Я уточняю информацию в нашей системе. Могу я еще чем-то помочь?';
@@ -21919,12 +21865,9 @@ app.post('/api/ai-assistants/:id/test', requireAuth, async (req, res) => {
 });
 
 // TTS PREVIEW SYNTHESIZER
-app.post('/api/ai-providers/test-tts', requireAuth, async (req, res) => {
+app.post('/api/ai-providers/test-tts', requireAuth(), requirePermission('view_ai_pbx_admin'), async (req, res) => {
   try {
-    // Return mock 1-second silence mp3 as a real binary stream
-    const dummyMp3Hex = "fff334c00000003815000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
-    res.set('Content-Type', 'audio/mpeg');
-    res.send(Buffer.from(dummyMp3Hex, 'hex'));
+    res.status(501).json({ success: false, configured: false, error: 'TTS-провайдер не настроен; тестовый звук не подменяется демонстрационной записью' });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -21979,18 +21922,6 @@ async function startServer() {
     app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
-  }
-
-  // Generate mock audio file if missing in assets and demo mode is true
-  const assetsDir = path.join(__dirname, 'assets');
-  if (!fs.existsSync(assetsDir)) {
-    fs.mkdirSync(assetsDir, { recursive: true });
-  }
-  const sampleAudioPath = path.join(assetsDir, 'sample_voip_recording.mp3');
-  if (!fs.existsSync(sampleAudioPath)) {
-    // Write tiny dummy 1-second silence mp3 file to support playing demo audio
-    const dummyMp3Hex = "fff334c00000003815000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
-    fs.writeFileSync(sampleAudioPath, Buffer.from(dummyMp3Hex, 'hex'));
   }
 
   const startupDb = await readLocalDb();

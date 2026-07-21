@@ -3492,14 +3492,16 @@ export default function App() {
 
   useEffect(() => {
     if (activeView !== 'monitoring') return;
+    if (monitorMode !== 'calls') return;
     if (!hasPermission('view_active_calls')) return;
     if (isLiveMonitoringPaused) return;
 
-    loadLiveSessions();
-    const timer = setInterval(loadLiveSessions, 2000);
+    const refresh = () => { if (!document.hidden) loadLiveSessions(); };
+    refresh();
+    const timer = setInterval(refresh, 2000);
 
     return () => clearInterval(timer);
-  }, [activeView, isLiveMonitoringPaused, session?.permissions, settings]);
+  }, [activeView, monitorMode, isLiveMonitoringPaused, session?.permissions, settings]);
 
   const saveLiveSnapshot = async () => {
     try {
@@ -3611,13 +3613,15 @@ export default function App() {
 
   useEffect(() => {
     if (activeView !== 'monitoring') return;
+    if (monitorMode !== 'tcpdump' && monitorMode !== 'sngrep') return;
     if (!hasPermission('view_tcpdump')) return;
     const t = setInterval(() => {
+      if (document.hidden) return;
       loadTcpdumpStatus();
       loadTcpdumpOutput();
     }, 2000);
     return () => clearInterval(t);
-  }, [activeView, session?.permissions, settings]);
+  }, [activeView, monitorMode, session?.permissions, settings]);
 
   const renderMonitoringView = () => {
     const sessions = liveSessionsData?.sessions || [];
