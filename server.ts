@@ -137,9 +137,9 @@ import {
 import { createLiveSnapshotCache } from './server/liveSnapshotCache.js';
 import {
   appendDevicesAlertsToSql, appendDevicesHistoryToSql, appendHealthHistoryToSql, appendQualityAlertsToSql,
-  appendQualityHistoryToSql, getMonitoringStorageMode, getMonitoringStorageStatus, readDevicesAlertsFromSql,
+  appendQualityHistoryToSql, appendRealQualityHistoryToSql, getMonitoringStorageMode, getMonitoringStorageStatus, readDevicesAlertsFromSql,
   readDevicesConflictsFromSql, readDevicesHistoryFromSql, readDevicesMapFromSql, readHealthHistoryFromSql, readLatestHealthHistoryFromSql,
-  readLegacyMonitoringFile, readQualityAlertsFromSql, readQualityHistoryFromSql, readWithMonitoringFallback,
+  readLatestRealQualityMetricsFromSql, readLegacyMonitoringFile, readQualityAlertsFromSql, readQualityHistoryFromSql, readWithMonitoringFallback,
   setMonitoringStorageMode, upsertDevicesConflictsToSql, upsertDevicesMapToSql
 } from './server/monitoringSqlStorage.js';
 import { startMonitoringRetentionRunner } from './server/monitoringRetention.js';
@@ -149,7 +149,7 @@ import { registerLogAnalysisRoutes } from './server/logAnalysis/router.js';
 import { startLogAnalysisCollector } from './server/logAnalysis/service.js';
 import { registerOutgoingReportRoutes } from './server/outgoingReports.js';
 import { mergeDeviceNetworkIdentity, readIpNeighborMacs } from './server/deviceNetworkIdentity.js';
-import { getLatestRtcpQuality, recordAsteriskRtcpQuality } from './server/rtcpQualityCollector.js';
+import { getLatestRtcpQuality, qualityVariableForChannel, recordAsteriskRtcpQuality } from './server/rtcpQualityCollector.js';
 
 // Load environment variables
 dotenv.config();
@@ -326,9 +326,11 @@ async function startDtmfAmiListener(settings: AppSettings) {
             rtcpPollTimer = setInterval(() => {
               if (!loginAccepted || socket.destroyed) return;
               Array.from(activeMediaChannels).slice(0, 50).forEach(channel => {
+                const variable = qualityVariableForChannel(channel);
+                if (!variable) return;
                 const actionId = `pbxpuls-rtcp-${++rtcpActionSequence}`;
                 pendingRtcpActions.set(actionId, channel);
-                socket.write(`Action: Getvar\r\nActionID: ${actionId}\r\nChannel: ${channel}\r\nVariable: CHANNEL(rtcp,all)\r\n\r\n`);
+                socket.write(`Action: Getvar\r\nActionID: ${actionId}\r\nChannel: ${channel}\r\nVariable: ${variable}\r\n\r\n`);
               });
             }, 5000);
           } else {
@@ -355,9 +357,11 @@ async function startDtmfAmiListener(settings: AppSettings) {
         if (loginAccepted && eventName === 'Hangup') {
           const channel = ami.Channel || '';
           if (activeMediaChannels.has(channel) && !socket.destroyed) {
+            const variable = qualityVariableForChannel(channel);
+            if (!variable) return;
             const actionId = `pbxpuls-rtcp-${++rtcpActionSequence}`;
             pendingRtcpActions.set(actionId, channel);
-            socket.write(`Action: Getvar\r\nActionID: ${actionId}\r\nChannel: ${channel}\r\nVariable: CHANNEL(rtcp,all)\r\n\r\n`);
+            socket.write(`Action: Getvar\r\nActionID: ${actionId}\r\nChannel: ${channel}\r\nVariable: ${variable}\r\n\r\n`);
             setTimeout(() => activeMediaChannels.delete(channel), 2000);
           }
         }
@@ -19109,8 +19113,19 @@ function initQualityFiles() {
 
 async function getRealVoIPQualityDevices(settings: AppSettings, warnings?: string[]): Promise<any[]> {
   const list = await getRealVoIPDevices(settings, warnings);
+  let storedMetrics = new Map<string, any>();
+  try {
+    const stored = await readLatestRealQualityMetricsFromSql(30);
+    storedMetrics = new Map(stored.map(metric => [String(metric.endpoint), metric]));
+  } catch (error: any) {
+    warnings?.push(`История RTCP недоступна: ${sanitizePBXPulsDbError(error)}`);
+  }
   return list.map(dev => {
-    const rtcp = getLatestRtcpQuality(dev.ext);
+    const liveRtcp = getLatestRtcpQuality(dev.ext);
+    const registration = normalizeQualityMetrics(dev);
+    const historicalRtcp = registration.availabilityStatus === 'online' ? storedMetrics.get(String(dev.ext)) : null;
+    const rtcp = liveRtcp || historicalRtcp;
+    const metricsFreshness = liveRtcp ? 'live' : historicalRtcp ? 'historical' : 'unavailable';
     const metrics = normalizeQualityMetrics(rtcp ? {
       ...dev,
       ...rtcp,
@@ -19150,6 +19165,8 @@ async function getRealVoIPQualityDevices(settings: AppSettings, warnings?: strin
       rtpReceivedPackets: Number(dev.rtpReceivedPackets ?? dev.rtp_received_packets ?? 0),
       rtpLostPackets: Number(dev.rtpLostPackets ?? dev.rtp_lost_packets ?? 0),
       measurementSource: metrics.metricsSource,
+      metricsFreshness,
+      metricsMeasuredAt: rtcp?.measuredAt || null,
       status,
       lastCheck: new Date().toISOString()
     };
@@ -19390,14 +19407,21 @@ app.get('/api/quality/cache', requireAuth(), requireQualityAccess, async (req, r
           .map((point: any) => ({ ...point, metricsSource: 'synthetic_legacy', metricsAvailable: false, rtcpAvailable: false }))
       );
       const history = filterAndSampleQualityHistory(historyStored.data, { ext, period });
+      const measuredHistoryCount = history.filter((point: any) => point?.metricsSource === 'rtcp').length;
+      const legacyHistoryCount = history.filter((point: any) => point?.metricsSource === 'synthetic_legacy').length;
       return res.json({
         success: true, cached: true, devices, history, alerts: [], source: historyStored.source,
         historyCount: history.length, lastHistoryPoint: history[history.length - 1]?.timestamp || null,
-        lastUpdated: new Date().toISOString(), period, ext, measurementAvailable: false,
-        legacyCalculatedHistory: history.length > 0,
-        message: history.length
-          ? 'История восстановлена из SQL и помечена как архивная расчётная; реальные RTCP-метрики сейчас недоступны'
-          : 'Недостаточно реальных RTP/RTCP-данных для истории качества',
+        lastUpdated: new Date().toISOString(), period, ext,
+        measurementAvailable: measuredHistoryCount > 0,
+        measuredHistoryCount,
+        legacyCalculatedHistory: legacyHistoryCount > 0,
+        legacyHistoryCount,
+        message: measuredHistoryCount > 0
+          ? `Найдено реальных RTP/RTCP-измерений: ${measuredHistoryCount}`
+          : legacyHistoryCount > 0
+            ? 'В SQL есть только архивная расчётная история; подтверждённых RTCP-метрик за период нет'
+            : 'Недостаточно реальных RTP/RTCP-данных для истории качества',
         ...getPBXPulsDbRuntimeStatus()
       });
     }
@@ -19481,6 +19505,7 @@ app.get('/api/quality/devices', requireAuth(), requireQualityAccess, async (req,
 
     try {
       await saveQualityCurrentToPBXPulsDb(list);
+      await appendRealQualityHistoryToSql(list);
     } catch {}
 
     res.json({ success: true, count: list.length, devices: list, partial: cliWarnings.length > 0, warnings: cliWarnings, ...cliDiagnostics, ...getPBXPulsDbRuntimeStatus() });

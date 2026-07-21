@@ -385,6 +385,8 @@ interface QualityDevice {
   rtpLossPercent?: number | null;
   rtcpAvailable?: boolean;
   metricsSource?: 'rtcp' | 'sip_rtt' | 'unknown';
+  metricsFreshness?: 'live' | 'historical' | 'unavailable';
+  metricsMeasuredAt?: string | null;
   statusReason?: string;
   lastSeenAt?: string | null;
   status: 'Отлично' | 'Хорошо' | 'Предупреждение' | 'Критично' | 'Online' | 'Offline' | 'Недостаточно данных';
@@ -497,7 +499,10 @@ export default function QualityTab({ token }: Props) {
       if (!cached.success) throw new Error(cached.error || 'Cache unavailable');
       if (Array.isArray(cached.devices) && cached.devices.length) {
         setDevices(cached.devices);
-        setSelectedExt(current => current || cached.devices[0].ext);
+        const latestMeasuredExt = Array.isArray(cached.history)
+          ? [...cached.history].reverse().find(point => point?.metricsSource === 'rtcp')?.ext
+          : '';
+        setSelectedExt(current => current || latestMeasuredExt || cached.devices[0].ext);
       }
       if (Array.isArray(cached.alerts)) setAlerts(cached.alerts);
       if (Array.isArray(cached.history)) setAllHistory(cached.history);
@@ -528,6 +533,7 @@ export default function QualityTab({ token }: Props) {
         : '');
       setCacheWarning(live.qualityCacheAvailable === false ? 'Кэш качества связи недоступен: PBXPuls DB не настроена' : '');
       setLastUpdated(getServerNow().toISOString());
+      await loadCachedData();
     } catch (err: any) {
       setError('Live-обновление недоступно; показан последний сохранённый срез');
     } finally {
@@ -1237,9 +1243,9 @@ export default function QualityTab({ token }: Props) {
                             {dev.userAgent}
                           </td>
                           <td className={`px-4 py-3 font-mono ${latColor}`}>{formatMetric(dev.sipRttMs ?? dev.latency, ' мс (SIP RTT)', '—')}</td>
-                          <td className={`px-4 py-3 font-mono ${jitColor}`} title={dev.jitterMs == null && dev.jitter == null ? 'АТС не предоставила RTCP-метрики для этого устройства или звонка.' : undefined}>{formatMetric(dev.jitterMs ?? dev.jitter, ' мс')}</td>
-                          <td className={`px-4 py-3 font-mono ${lossColor}`} title={dev.rtpLossPercent == null && dev.rtpLoss == null ? 'АТС не предоставила RTCP-метрики для этого устройства или звонка.' : undefined}>{formatMetric(dev.rtpLossPercent ?? dev.rtpLoss, ' %')}</td>
-                          <td className={`px-4 py-3 font-mono ${mosColor}`} title={dev.mos === null ? 'MOS нельзя достоверно рассчитать без RTP/RTCP jitter и packet loss' : undefined}>{formatMetric(dev.mos, '', 'Нет RTCP', 2)}</td>
+                          <td className={`px-4 py-3 font-mono ${jitColor}`} title={dev.jitterMs == null && dev.jitter == null ? 'АТС не предоставила RTCP-метрики для этого устройства или звонка.' : dev.metricsFreshness === 'historical' ? `Последнее реальное RTCP-измерение: ${dev.metricsMeasuredAt ? new Date(dev.metricsMeasuredAt).toLocaleString('ru-RU') : '—'}` : undefined}>{formatMetric(dev.jitterMs ?? dev.jitter, ' мс')}</td>
+                          <td className={`px-4 py-3 font-mono ${lossColor}`} title={dev.rtpLossPercent == null && dev.rtpLoss == null ? 'АТС не предоставила RTCP-метрики для этого устройства или звонка.' : dev.metricsFreshness === 'historical' ? `Последнее реальное RTCP-измерение: ${dev.metricsMeasuredAt ? new Date(dev.metricsMeasuredAt).toLocaleString('ru-RU') : '—'}` : undefined}>{formatMetric(dev.rtpLossPercent ?? dev.rtpLoss, ' %')}</td>
+                          <td className={`px-4 py-3 font-mono ${mosColor}`} title={dev.mos === null ? 'MOS нельзя достоверно рассчитать без RTP/RTCP jitter и packet loss' : dev.metricsFreshness === 'historical' ? `Последнее реальное RTCP-измерение: ${dev.metricsMeasuredAt ? new Date(dev.metricsMeasuredAt).toLocaleString('ru-RU') : '—'}` : undefined}>{formatMetric(dev.mos, '', 'Нет RTCP', 2)}</td>
                           <td className="px-4 py-3">
                             <div className={`inline-flex flex-col rounded-lg px-2 py-1 text-[10px] font-black ${statusBadge}`} title={dev.statusReason === 'rtcp_unavailable' ? 'Устройство зарегистрировано; оценка RTP-качества недоступна.' : undefined}>
                               <span>{availabilityLabel(dev.availabilityStatus || (dev.status === 'Offline' ? 'offline' : 'online'))}</span>
@@ -1373,7 +1379,7 @@ export default function QualityTab({ token }: Props) {
                   {/* HISTORY SUMMARY STATS */}
                   <div className="xl:col-span-2 bg-slate-50 dark:bg-slate-900/40 rounded-xl p-3 flex flex-col justify-between border border-slate-200 dark:border-slate-800">
                     <div>
-                      <div className="text-[10px] uppercase font-black tracking-wider text-slate-400">Сводные показатели за выбранный период:</div>
+                      <div className="text-[10px] uppercase font-black tracking-wider text-slate-400">Сводные показатели за выбранный период · {selectedDevice?.ext || '—'}:</div>
                       <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mt-2 text-xs">
                         <div className="p-2 border rounded-lg bg-white dark:bg-slate-800 text-slate-500 font-bold border-slate-200">
                           Макс задержка: <span className="font-extrabold text-slate-800 dark:text-white font-mono ml-1">{historySummaries.maxLat === null ? 'Нет данных' : `${historySummaries.maxLat} мс`}</span>

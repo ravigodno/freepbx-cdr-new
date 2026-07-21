@@ -57,20 +57,72 @@ export async function setMonitoringStorageMode(mode: MonitoringStorageMode): Pro
 export async function readQualityHistoryFromSql(period = '24h', ext = 'all'): Promise<any[]> {
   const params: any[] = [periodStart(period)]; let extSql = '';
   if (ext && ext !== 'all') { extSql = ' AND ext = ?'; params.push(ext); }
-  const rows = await timedQuery(`SELECT * FROM (
+  const [legacyRows, rtcpRows] = await Promise.all([
+    timedQuery(`SELECT * FROM (
     SELECT ext,name,status,quality_status,latency_ms,jitter_ms,rtp_loss,mos,sampled_at
     FROM quality_history
     WHERE sampled_at >= ?${extSql}
     ORDER BY sampled_at DESC
     LIMIT ${MAX_READ_ROWS}
-  ) recent_quality ORDER BY sampled_at ASC`, params);
-  return rows.map((r: any) => ({
+  ) recent_quality ORDER BY sampled_at ASC`, params),
+    timedQuery(`SELECT * FROM (
+      SELECT ext,name,status,quality_status,sip_rtt_ms,jitter_ms,rtp_loss,mos,sampled_at
+      FROM quality_rtcp_history
+      WHERE sampled_at >= ?${extSql}
+      ORDER BY sampled_at DESC
+      LIMIT ${MAX_READ_ROWS}
+    ) recent_rtcp ORDER BY sampled_at ASC`, params)
+  ]);
+  const legacy = legacyRows.map((r: any) => ({
     ext: String(r.ext), name: r.name || '', status: r.status || '', qualityStatus: r.quality_status || '',
     latency: Number(r.latency_ms || 0), jitter: Number(r.jitter_ms || 0), rtpLoss: Number(r.rtp_loss || 0),
     mos: Number(r.mos || 0), timestamp: sqlDateToIso(r.sampled_at),
     // The legacy schema has no provenance column. These rows were written by the old
     // calculated quality collector, so they must never be presented as measured RTCP.
     metricsSource: 'synthetic_legacy', metricsAvailable: false, rtcpAvailable: false
+  }));
+  const measured = rtcpRows.map((r: any) => ({
+    ext: String(r.ext), name: r.name || '', status: r.status || '', qualityStatus: r.quality_status || '',
+    latency: num(r.sip_rtt_ms), jitter: num(r.jitter_ms), rtpLoss: num(r.rtp_loss), mos: num(r.mos),
+    timestamp: sqlDateToIso(r.sampled_at), metricsSource: 'rtcp', metricsAvailable: true, rtcpAvailable: true
+  }));
+  return [...legacy, ...measured].sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
+}
+
+export async function appendRealQualityHistoryToSql(items: any[]): Promise<void> {
+  for (const item of items) {
+    if (item?.metricsSource !== 'rtcp' || item?.rtcpAvailable !== true) continue;
+    const sampledAt = dateValue(item.lastSeenAt || item.lastCheck || new Date());
+    if (!sampledAt) continue;
+    await timedQuery(`INSERT INTO quality_rtcp_history
+      (ext,name,status,quality_status,sip_rtt_ms,jitter_ms,rtp_loss,mos,sampled_at,metrics_source)
+      VALUES (?,?,?,?,?,?,?,?,?,'rtcp')
+      ON DUPLICATE KEY UPDATE name=VALUES(name),status=VALUES(status),quality_status=VALUES(quality_status),
+        sip_rtt_ms=VALUES(sip_rtt_ms),jitter_ms=VALUES(jitter_ms),rtp_loss=VALUES(rtp_loss),mos=VALUES(mos)`,
+      [text(item.ext),text(item.name),text(item.status),text(item.qualityStatus),num(item.sipRttMs),num(item.jitterMs),num(item.rtpLossPercent),num(item.mos),sampledAt]);
+  }
+  if (items.length) markWrite('quality_rtcp_history', true);
+}
+
+export async function readLatestRealQualityMetricsFromSql(maxAgeDays = 30): Promise<any[]> {
+  const safeDays = Math.max(1, Math.min(90, Math.trunc(Number(maxAgeDays) || 30)));
+  const rows = await timedQuery(`SELECT q.ext,q.sip_rtt_ms,q.jitter_ms,q.rtp_loss,q.mos,q.sampled_at
+    FROM quality_rtcp_history q
+    JOIN (
+      SELECT ext,MAX(sampled_at) sampled_at
+      FROM quality_rtcp_history
+      WHERE sampled_at >= DATE_SUB(NOW(), INTERVAL ${safeDays} DAY)
+      GROUP BY ext
+    ) latest ON latest.ext=q.ext AND latest.sampled_at=q.sampled_at`);
+  return rows.map((row: any) => ({
+    endpoint: String(row.ext),
+    sipRttMs: num(row.sip_rtt_ms),
+    jitterMs: num(row.jitter_ms),
+    rtpLossPercent: num(row.rtp_loss),
+    mos: num(row.mos),
+    rtcpAvailable: true,
+    metricsSource: 'rtcp',
+    measuredAt: sqlDateToIso(row.sampled_at)
   }));
 }
 export async function appendQualityHistoryToSql(items: any[]): Promise<void> {

@@ -654,6 +654,28 @@ const MIGRATIONS: Migration[] = [
        WHERE r.role_key IN ('su','admin')`
     ],
     seed: seedLegacyMonitoringTabPermissions
+  },
+  {
+    key: '20260721_024_quality_rtcp_history',
+    description: 'Store measured RTP and RTCP quality history separately from legacy calculated telemetry',
+    statements: [
+      `CREATE TABLE IF NOT EXISTS quality_rtcp_history (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        ext VARCHAR(64) NOT NULL,
+        name VARCHAR(191) NULL,
+        status VARCHAR(64) NULL,
+        quality_status VARCHAR(64) NULL,
+        sip_rtt_ms DECIMAL(10,2) NULL,
+        jitter_ms DECIMAL(10,2) NULL,
+        rtp_loss DECIMAL(10,4) NULL,
+        mos DECIMAL(5,2) NULL,
+        sampled_at DATETIME NOT NULL,
+        metrics_source ENUM('rtcp') NOT NULL DEFAULT 'rtcp',
+        UNIQUE KEY uniq_quality_rtcp_ext_time (ext, sampled_at),
+        INDEX idx_quality_rtcp_time (sampled_at),
+        INDEX idx_quality_rtcp_ext_time (ext, sampled_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+    ]
   }
 ];
 
