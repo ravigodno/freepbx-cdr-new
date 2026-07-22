@@ -35,6 +35,8 @@ const transitions: Record<MediaSessionState, MediaSessionState[]> = {
   failed: [],
   cancelled: [],
 };
+const EGRESS_PLAYOUT_CAPACITY_FRAMES = 3000;
+const INGRESS_CAPTURE_CAPACITY_FRAMES = 3000;
 type Runtime = {
   tenantId: number;
   adapter: MediaTransportAdapter;
@@ -122,7 +124,7 @@ export class MediaSessionService {
     runtime.ingressProcessor = new BoundedSerialProcessor(
       (frame) => this.processIngress(tenantId, id, frame, traceId),
       {
-        capacity: 20,
+        capacity: INGRESS_CAPTURE_CAPACITY_FRAMES,
         batchSize: 8,
         signal: aborter.signal,
         onDrop: () => runtime.metrics.droppedFrames++,
@@ -135,7 +137,7 @@ export class MediaSessionService {
           ? adapter.sendFrame(frame)
           : Promise.resolve(),
       {
-        capacity: 50,
+        capacity: EGRESS_PLAYOUT_CAPACITY_FRAMES,
         batchSize: 8,
         signal: aborter.signal,
         onDrop: () => runtime.metrics.droppedFrames++,
@@ -221,7 +223,7 @@ export class MediaSessionService {
       transportFormat:
         capabilities?.transportFormat || metadata.transportFormat || null,
       sourceSampleRate: protocol?.ingressSourceSampleRate || null,
-      internalSampleRate: 16000,
+      internalSampleRate: capabilities?.internalSampleRate || 16000,
       targetSampleRate:
         protocol?.egressTargetSampleRate ||
         capabilities?.preferredAsteriskSampleRate ||
@@ -522,7 +524,7 @@ export class MediaSessionService {
     traceId: string,
   ) {
     const runtime = this.runtimes.get(id);
-    if (!runtime) return;
+    if (!runtime || runtime.stopping) return;
     if (Date.now() - runtime.started > 60_000 || runtime.events++ >= 3000) {
       await this.fail(tenantId, id, traceId, "media_limit_exceeded");
       return;
@@ -548,7 +550,7 @@ export class MediaSessionService {
         ),
         event = runtime.vad.process(pcm, item.durationMs),
         previous = runtime.vadState;
-      runtime.vadState = event.type.startsWith("speech") ? "speech" : "silence";
+      runtime.vadState = runtime.vad.state();
       if (event.type === "speech_started") {
         for (const subscriber of runtime.vadSubscribers)
           await subscriber("speech_started");
@@ -840,11 +842,13 @@ export class MediaSessionService {
         ingressQueueDepth: ingressQueue.depth,
         ingressQueuePeak: ingressQueue.peak,
         ingressQueueDropped: ingressQueue.dropped,
+        jitterDropped: jitter.dropped,
         ingressConsumerLagMs: ingressQueue.consumerLagMs,
         ingressProcessingTimeAvg: ingressQueue.processingTimeAvgMs,
         ingressProcessingTimeP95: ingressQueue.processingTimeP95Ms,
         egressQueueDepth: egressQueue.depth,
         egressQueuePeak: egressQueue.peak,
+        egressQueueDropped: egressQueue.dropped,
         egressSocketBackpressureCount:
           protocol?.egressSocketBackpressureCount || 0,
         metricsFlushCount: flush.metricsFlushCount,
@@ -920,7 +924,7 @@ export class MediaSessionService {
   async fail(tenantId: number, id: number, traceId: string, code: string) {
     const runtime = this.runtimes.get(id);
     if (runtime) {
-      runtime.stopping=true;
+      runtime.stopping = true;
       runtime.unsubscribe();
       runtime.aborter.abort();
       await runtime.ingressProcessor.stop(false);

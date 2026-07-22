@@ -25,3 +25,68 @@ export class AudioResampler {
     return out;
   }
 }
+
+export class StreamingPcm16To8Downsampler {
+  private static readonly coefficients = createLowPassFir(63, 3600 / 16000);
+  private history = new Float64Array(
+    StreamingPcm16To8Downsampler.coefficients.length - 1,
+  );
+  private initialized = false;
+
+  process(input: Int16Array) {
+    if (!input.length) return new Int16Array();
+    if (!this.initialized) {
+      this.history.fill(input[0]);
+      this.initialized = true;
+    }
+    const combined = new Float64Array(this.history.length + input.length);
+    combined.set(this.history);
+    combined.set(input, this.history.length);
+    const output = new Int16Array(Math.floor(input.length / 2));
+    let outputIndex = 0;
+    for (let index = 0; index < input.length; index++) {
+      if (index % 2 === 1) {
+        const end = this.history.length + index;
+        let filtered = 0;
+        for (
+          let tap = 0;
+          tap < StreamingPcm16To8Downsampler.coefficients.length;
+          tap++
+        )
+          filtered +=
+            combined[end - tap] *
+            StreamingPcm16To8Downsampler.coefficients[tap];
+        output[outputIndex++] = Math.max(
+          -32768,
+          Math.min(32767, Math.round(filtered)),
+        );
+      }
+    }
+    this.history.set(combined.subarray(combined.length - this.history.length));
+    return output;
+  }
+
+  reset() {
+    this.history.fill(0);
+    this.initialized = false;
+  }
+}
+
+function createLowPassFir(taps: number, normalizedCutoff: number) {
+  const coefficients = new Float64Array(taps),
+    center = (taps - 1) / 2;
+  let total = 0;
+  for (let index = 0; index < taps; index++) {
+    const distance = index - center,
+      sinc =
+        distance === 0
+          ? 2 * normalizedCutoff
+          : Math.sin(2 * Math.PI * normalizedCutoff * distance) /
+            (Math.PI * distance),
+      window = 0.54 - 0.46 * Math.cos((2 * Math.PI * index) / (taps - 1));
+    coefficients[index] = sinc * window;
+    total += coefficients[index];
+  }
+  for (let index = 0; index < taps; index++) coefficients[index] /= total;
+  return coefficients;
+}

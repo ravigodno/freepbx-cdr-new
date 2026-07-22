@@ -2,6 +2,7 @@ import { createRequire } from "module";
 import type { AudioFrame } from "../../media/mediaTypes.js";
 import { AudioPacketizer } from "../../media/audioPacketizer.js";
 import { AudioResampler } from "../../media/audioResampler.js";
+import { encodePcm16ToUlaw } from "../../media/g711.js";
 import type { RealtimeVoiceProviderAdapter } from "../realtimeVoiceProviderAdapter.js";
 import type {
   RealtimeVoiceConfig,
@@ -12,13 +13,26 @@ import { normalizeOpenAIRealtimeEvent } from "../realtimeVoiceEventNormalizer.js
 
 const PROVIDER_SAMPLE_RATE = 24000;
 const INTERNAL_SAMPLE_RATE = 16000;
+const MAX_PACKETIZER_CHUNK_MS = 200;
+const PCM16_BYTES_PER_SAMPLE = 2;
+const ULAW_FRAME_BYTES = 160;
+
+export function splitOpenAIOutputAudio(payload: Buffer) {
+  const maxChunkBytes =
+    (PROVIDER_SAMPLE_RATE * MAX_PACKETIZER_CHUNK_MS * PCM16_BYTES_PER_SAMPLE) /
+    1000;
+  const chunks: Buffer[] = [];
+  for (let offset = 0; offset < payload.length; offset += maxChunkBytes)
+    chunks.push(payload.subarray(offset, offset + maxChunkBytes));
+  return chunks;
+}
 
 export function readOpenAIRealtimeConfig() {
   const apiKey = process.env.OPENAI_API_KEY || "",
     url =
       process.env.PBXPULS_OPENAI_REALTIME_URL ||
       "wss://api.openai.com/v1/realtime",
-    model = process.env.PBXPULS_OPENAI_REALTIME_MODEL || "gpt-realtime";
+    model = process.env.PBXPULS_OPENAI_REALTIME_MODEL || "gpt-realtime-2.1";
   return { configured: Boolean(apiKey), apiKey, url, model };
 }
 
@@ -36,6 +50,13 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
   } = { state: "disconnected", failureCode: null, connectedAt: null };
   private readonly resampler = new AudioResampler();
   private readonly outputPacketizer = new AudioPacketizer();
+  private ulawOutputRemainder = Buffer.alloc(0);
+  private ulawOutputSequence = 0;
+  private pendingConfiguration: {
+    resolve: () => void;
+    reject: (error: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  } | null = null;
 
   getKey() {
     return "openai_realtime";
@@ -58,8 +79,14 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
       transcripts: true,
       multilingual: true,
       emotionControl: false,
-      supportedInputFormats: [pcm],
-      supportedOutputFormats: [pcm],
+      supportedInputFormats: [
+        pcm,
+        { codec: "slin16" as const, sampleRate: 8000, channels: 1 as const, frameDurationMs: 20 },
+      ],
+      supportedOutputFormats: [
+        pcm,
+        { codec: "ulaw" as const, sampleRate: 8000, channels: 1 as const, frameDurationMs: 20 },
+      ],
     };
   }
   async validateConfig(config: RealtimeVoiceConfig) {
@@ -93,6 +120,8 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
     }
     this.config = config;
     this.outputPacketizer.reset();
+    this.ulawOutputRemainder = Buffer.alloc(0);
+    this.ulawOutputSequence = 0;
     this.health = { state: "connecting", failureCode: null, connectedAt: null };
     const url = new URL(config.url!);
     url.searchParams.set("model", String(config.model));
@@ -161,23 +190,55 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
             ) &&
             typeof raw?.delta === "string"
           ) {
-            const frames = this.outputPacketizer.pushPcm(
+            if (this.config?.outputFormat.codec === "ulaw") {
+              this.ulawOutputRemainder = Buffer.concat([
+                this.ulawOutputRemainder,
+                Buffer.from(raw.delta, "base64"),
+              ]);
+              while (this.ulawOutputRemainder.length >= ULAW_FRAME_BYTES) {
+                const payload = this.ulawOutputRemainder.subarray(0, ULAW_FRAME_BYTES);
+                this.ulawOutputRemainder = this.ulawOutputRemainder.subarray(ULAW_FRAME_BYTES);
+                void this.emit({
+                  type: "output_audio",
+                  frame: {
+                    sequence: this.ulawOutputSequence++,
+                    timestampMs: Date.now(),
+                    direction: "egress",
+                    codec: "ulaw",
+                    sampleRate: 8000,
+                    channels: 1,
+                    durationMs: 20,
+                    payload,
+                    source: "openai_realtime",
+                    traceId: "provider",
+                    voiceSessionId: 0,
+                    mediaSessionId: 0,
+                  },
+                });
+              }
+              return;
+            }
+            for (const chunk of splitOpenAIOutputAudio(
               Buffer.from(raw.delta, "base64"),
-              {
-                codec: "slin16",
-                sampleRate: PROVIDER_SAMPLE_RATE,
-                channels: 1,
-              },
-              Date.now(),
-              {
-                source: "openai_realtime",
-                traceId: "provider",
-                voiceSessionId: 0,
-                mediaSessionId: 0,
-              },
-            );
-            for (const frame of frames)
-              void this.emit({ type: "output_audio", frame });
+            )) {
+              const frames = this.outputPacketizer.pushPcm(
+                chunk,
+                {
+                  codec: "slin16",
+                  sampleRate: PROVIDER_SAMPLE_RATE,
+                  channels: 1,
+                },
+                Date.now(),
+                {
+                  source: "openai_realtime",
+                  traceId: "provider",
+                  voiceSessionId: 0,
+                  mediaSessionId: 0,
+                },
+              );
+              for (const frame of frames)
+                void this.emit({ type: "output_audio", frame });
+            }
             return;
           }
           const normalized = normalizeOpenAIRealtimeEvent(raw, (payload) => ({
@@ -194,10 +255,27 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
             voiceSessionId: 0,
             mediaSessionId: 0,
           }));
+          if (normalized?.type === "session_configured")
+            this.settleConfiguration();
+          if (normalized?.type === "error")
+            this.settleConfiguration(
+              new RealtimeVoiceError(
+                normalized.errorCode,
+                502,
+                "Realtime session configuration was rejected",
+              ),
+            );
           if (normalized) void this.emit(normalized);
         } catch {}
       });
       socket.on("close", () => {
+        this.settleConfiguration(
+          new RealtimeVoiceError(
+            "provider_connection_failed",
+            502,
+            "Realtime provider closed during configuration",
+          ),
+        );
         this.outputPacketizer.flush();
         this.socket = null;
         this.health = {
@@ -209,6 +287,26 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
     });
   }
   async configureSession(config: RealtimeVoiceConfig) {
+    if (this.pendingConfiguration)
+      throw new RealtimeVoiceError(
+        "conflict",
+        409,
+        "Realtime session configuration is already pending",
+      );
+    const configured = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(
+        () =>
+          this.settleConfiguration(
+            new RealtimeVoiceError(
+              "provider_timeout",
+              504,
+              "Realtime session configuration timed out",
+            ),
+          ),
+        config.timeoutMs,
+      );
+      this.pendingConfiguration = { resolve, reject, timer };
+    });
     this.send({
       type: "session.update",
       session: {
@@ -218,16 +316,28 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
         output_modalities: ["audio"],
         audio: {
           input: {
-            format: { type: "audio/pcm", rate: PROVIDER_SAMPLE_RATE },
+            format:
+              config.inputFormat.sampleRate === 8000
+                ? { type: "audio/pcmu" }
+                : { type: "audio/pcm", rate: PROVIDER_SAMPLE_RATE },
+            noise_reduction: { type: "near_field" },
+            transcription: {
+              model: "gpt-4o-transcribe",
+              language: config.language.split("-")[0] || "ru",
+            },
             turn_detection: config.serverVad ? { type: "server_vad" } : null,
           },
           output: {
-            format: { type: "audio/pcm", rate: PROVIDER_SAMPLE_RATE },
+            format:
+              config.outputFormat.codec === "ulaw"
+                ? { type: "audio/pcmu" }
+                : { type: "audio/pcm", rate: PROVIDER_SAMPLE_RATE },
             voice: config.voice || "marin",
           },
         },
       },
     });
+    return configured;
   }
   async appendAudio(frame: AudioFrame) {
     if (frame.codec !== "slin16" || frame.channels !== 1)
@@ -237,18 +347,25 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
         "Realtime input format is unsupported",
       );
     const input = decodePcm16(frame.payload),
-      providerPcm = this.resampler.resamplePcm16(
-        input,
-        frame.sampleRate,
-        PROVIDER_SAMPLE_RATE,
-      );
+      providerAudio =
+        frame.sampleRate === 8000
+          ? Buffer.from(encodePcm16ToUlaw(input))
+          : encodePcm16(
+              this.resampler.resamplePcm16(
+                input,
+                frame.sampleRate,
+                PROVIDER_SAMPLE_RATE,
+              ),
+            );
     this.send({
       type: "input_audio_buffer.append",
-      audio: encodePcm16(providerPcm).toString("base64"),
+      audio: providerAudio.toString("base64"),
     });
   }
   async commitInput() {
     this.send({ type: "input_audio_buffer.commit" });
+  }
+  async createResponse() {
     this.send({ type: "response.create" });
   }
   async startInitialGreeting(text: string) {
@@ -271,6 +388,13 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
     );
   }
   async close() {
+    this.settleConfiguration(
+      new RealtimeVoiceError(
+        "provider_connection_failed",
+        502,
+        "Realtime provider closed during configuration",
+      ),
+    );
     this.socket?.close();
     this.socket = null;
     this.config = null;
@@ -301,6 +425,14 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
   }
   private async emit(event: RealtimeVoiceEvent) {
     for (const handler of this.handlers) await handler(event);
+  }
+  private settleConfiguration(error?: Error) {
+    const pending = this.pendingConfiguration;
+    if (!pending) return;
+    this.pendingConfiguration = null;
+    clearTimeout(pending.timer);
+    if (error) pending.reject(error);
+    else pending.resolve();
   }
 }
 

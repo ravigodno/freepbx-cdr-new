@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { CodecRegistry } from "../server/ai-platform/voice/media/codecRegistry.js";
-import { AudioResampler } from "../server/ai-platform/voice/media/audioResampler.js";
+import {
+  AudioResampler,
+  StreamingPcm16To8Downsampler,
+} from "../server/ai-platform/voice/media/audioResampler.js";
 import {
   AudioPacketizer,
   PACKETIZATION_ERROR_THRESHOLD,
@@ -18,6 +21,10 @@ import { ExternalMediaAdapter } from "../server/ai-platform/voice/media/transpor
 import { AudioSocketAdapter } from "../server/ai-platform/voice/media/transports/audioSocketAdapter.js";
 import { MediaSessionService } from "../server/ai-platform/voice/media/mediaSessionService.js";
 import type { AudioFrame } from "../server/ai-platform/voice/media/mediaTypes.js";
+import {
+  decodeUlawToPcm16,
+  encodePcm16ToUlaw,
+} from "../server/ai-platform/voice/media/g711.js";
 
 const codecs = new CodecRegistry();
 assert.equal(codecs.supportsDecode("ulaw"), true);
@@ -43,6 +50,28 @@ assert.equal(
   resampler.resamplePcm16(new Int16Array(480), 24000, 16000).length,
   320,
 );
+const g711Source = Int16Array.from([-30000, -10000, -1000, 0, 1000, 10000, 30000]),
+  g711Encoded = encodePcm16ToUlaw(g711Source),
+  g711Decoded = decodeUlawToPcm16(g711Encoded);
+assert.equal(g711Encoded.length, g711Source.length);
+assert.equal(g711Decoded.length, g711Source.length);
+assert.equal(g711Decoded[3], 0);
+assert.ok(g711Decoded[0] < 0 && g711Decoded[6] > 0);
+const antiAliasDownsampler = new StreamingPcm16To8Downsampler(),
+  nyquist = Int16Array.from({ length: 320 }, (_, index) =>
+    index % 2 ? -10000 : 10000,
+  ),
+  filtered = antiAliasDownsampler.process(nyquist);
+assert.equal(filtered.length, 160);
+assert.ok(Math.max(...filtered.slice(40).map(Math.abs)) < 100);
+assert.equal(antiAliasDownsampler.process(new Int16Array(320)).length, 160);
+const speechBandDownsampler = new StreamingPcm16To8Downsampler(),
+  speechBand = Int16Array.from({ length: 1600 }, (_, index) =>
+    Math.round(10000 * Math.sin((2 * Math.PI * 3000 * index) / 16000)),
+  ),
+  speechBandFiltered = speechBandDownsampler.process(speechBand),
+  speechBandPeak = Math.max(...speechBandFiltered.slice(40).map(Math.abs));
+assert.ok(speechBandPeak > 8500);
 const packetizerContext = {
     source: "test",
     traceId: "trace",
@@ -94,6 +123,13 @@ assert.ok(
       item.sampleRate === 16000 &&
       item.durationMs === 20 &&
       item.payload.byteLength === 640,
+  ),
+);
+const native8kFrames = packetize(new AudioPacketizer(8000), 40, 8000);
+assert.equal(native8kFrames.length, 2);
+assert.ok(
+  native8kFrames.every(
+    (item) => item.sampleRate === 8000 && item.payload.byteLength === 320,
   ),
 );
 const splitThirtyTen = new AudioPacketizer(),
@@ -229,8 +265,11 @@ const vad = new VadDetector(500, 2, 40),
 assert.equal(vad.process(silence).type, "silence");
 vad.process(speech);
 assert.equal(vad.process(speech).type, "speech_started");
-vad.process(silence);
+assert.equal(vad.state(), "speech");
+assert.equal(vad.process(silence).type, "silence");
+assert.equal(vad.state(), "speech");
 assert.equal(vad.process(silence).type, "speech_ended");
+assert.equal(vad.state(), "silence");
 const barge = new BargeInController(),
   controller = new AbortController();
 barge.onPlaybackStarted(controller);
@@ -249,8 +288,8 @@ const audioCapabilities = registry
 assert.deepEqual(audioCapabilities.supportedInboundPacketTypes, [0x10, 0x12]);
 assert.equal(audioCapabilities.preferredAsteriskPacketType, 0x10);
 assert.equal(audioCapabilities.preferredAsteriskSampleRate, 8000);
-assert.equal(audioCapabilities.internalSampleRate, 16000);
-assert.equal(audioCapabilities.resamplingRequired, true);
+assert.equal(audioCapabilities.internalSampleRate, 8000);
+assert.equal(audioCapabilities.resamplingRequired, false);
 await assert.rejects(() => registry.get("audiosocket").start());
 
 class Store {
@@ -449,6 +488,10 @@ const router = fs.readFileSync(
   socket = fs.readFileSync(
     "server/ai-platform/voice/media/transports/audioSocketAdapter.ts",
     "utf8",
+  ),
+  mediaService = fs.readFileSync(
+    "server/ai-platform/voice/media/mediaSessionService.ts",
+    "utf8",
   );
 assert.match(router, /Raw audio payload is forbidden/);
 assert.match(router, /view_ai_voice_media_status/);
@@ -458,4 +501,7 @@ assert.match(external, /feature_disabled/);
 assert.match(socket, /PBXPULS_AI_AUDIOSOCKET_PORT/);
 assert.match(socket, /127\.0\.0\.1/);
 assert.doesNotMatch(external + socket, /0\.0\.0\.0/);
+assert.match(mediaService, /INGRESS_CAPTURE_CAPACITY_FRAMES = 3000/);
+assert.match(mediaService, /jitterDropped: jitter\.dropped/);
+assert.match(mediaService, /egressQueueDropped: egressQueue\.dropped/);
 console.log("AI Platform Voice Media tests: OK");

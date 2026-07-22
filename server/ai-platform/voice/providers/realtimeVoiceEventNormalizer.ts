@@ -60,8 +60,18 @@ export function normalizeOpenAIRealtimeEvent(
       arguments: safeJson(raw.arguments),
       callId: String(raw.call_id || "").slice(0, 100),
     };
-  if (type === "error") return { type: "error", errorCode: "provider_error" };
+  if (type === "error")
+    return {
+      type: "error",
+      errorCode: safeErrorCode(raw?.error?.code || raw?.error?.type),
+    };
   return null;
+}
+function safeErrorCode(value: unknown) {
+  const code = String(value || "provider_error")
+    .replace(/[^A-Za-z0-9_.-]/g, "_")
+    .slice(0, 64);
+  return code || "provider_error";
 }
 function safeJson(value: unknown) {
   try {

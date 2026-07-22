@@ -65,6 +65,7 @@ type Runtime = {
   transferRequired: boolean;
   callbackOfferRequired: boolean;
   blocked: boolean;
+  responsePending: boolean;
   actorId: string;
   greetingStatus: "not_started" | "started" | "completed" | "interrupted";
   greetingStartedAt: number | null;
@@ -300,16 +301,26 @@ export class RealtimeVoiceSessionService {
       ),
       adapter = this.registry.create(input.providerKey),
       capabilities = adapter.getCapabilities(),
-      format = {
+      nativeTelephoneAudio =
+        input.providerKey === "openai_realtime" &&
+        source.transport_mode === "audiosocket",
+      inputFormat = {
         codec: "slin16" as const,
-        sampleRate: 16000,
+        sampleRate: nativeTelephoneAudio ? 8000 : 16000,
+        channels: 1 as const,
+        frameDurationMs: 20,
+      },
+      outputFormat = {
+        codec: nativeTelephoneAudio ? ("ulaw" as const) : ("slin16" as const),
+        sampleRate: nativeTelephoneAudio ? 8000 : 16000,
         channels: 1 as const,
         frameDurationMs: 20,
       };
     if (
       !capabilities.supportedInputFormats.some(
         (item) =>
-          item.codec === format.codec && item.sampleRate === format.sampleRate,
+          item.codec === inputFormat.codec &&
+          item.sampleRate === inputFormat.sampleRate,
       )
     )
       throw new RealtimeVoiceError(
@@ -331,11 +342,11 @@ export class RealtimeVoiceSessionService {
         input.providerKey === "openai_realtime"
           ? external.model
           : "synthetic-voice",
-      voice: "natural",
+      voice: input.providerKey === "openai_realtime" ? "marin" : "natural",
       language: String(source.language || "ru"),
       instructions: instructions.instructions,
-      inputFormat: format,
-      outputFormat: format,
+      inputFormat,
+      outputFormat,
       serverVad:
         input.providerKey === "openai_realtime"
           ? false
@@ -364,8 +375,8 @@ export class RealtimeVoiceSessionService {
       voice: config.voice || null,
       serverVad: config.serverVad,
       tools: config.tools.length > 0,
-      input: format,
-      output: format,
+      input: inputFormat,
+      output: outputFormat,
       metadata: {
         instructionChecksum: instructions.checksum,
         agentVersionId: source.agent_version_id,
@@ -412,6 +423,7 @@ export class RealtimeVoiceSessionService {
         transferRequired: false,
         callbackOfferRequired: false,
         blocked: false,
+        responsePending: false,
         actorId: input.actorId,
         greetingStatus: "not_started",
         greetingStartedAt: null,
@@ -490,19 +502,28 @@ export class RealtimeVoiceSessionService {
         404,
         "Active realtime session not found",
       );
-    if (runtime.blocked) return this.get(tenantId, id);
+    if (runtime.blocked || runtime.responsePending)
+      return this.get(tenantId, id);
+    const current = await this.row(tenantId, id);
+    if (current.state !== "listening") return this.get(tenantId, id);
+    runtime.responsePending = true;
     runtime.commitAt = Date.now();
-    await this.audit.append({
-      tenantId,
-      traceId,
-      actorType: "user",
-      eventType: "realtime_input_committed",
-      entityType: "realtime_voice_session",
-      entityId: String(id),
-      decision: "committed",
-      details: {},
-    });
-    await runtime.adapter.commitInput();
+    try {
+      await this.audit.append({
+        tenantId,
+        traceId,
+        actorType: "user",
+        eventType: "realtime_input_committed",
+        entityType: "realtime_voice_session",
+        entityId: String(id),
+        decision: "committed",
+        details: {},
+      });
+      await runtime.adapter.commitInput();
+    } catch (error) {
+      runtime.responsePending = false;
+      throw error;
+    }
     return this.get(tenantId, id);
   }
   async startInitialGreeting(
@@ -532,6 +553,7 @@ export class RealtimeVoiceSessionService {
       );
     runtime.greetingStatus = "started";
     runtime.greetingStartedAt = Date.now();
+    runtime.responsePending = true;
     await this.media.setGreetingStatus(
       tenantId,
       Number(row.media_session_id),
@@ -552,6 +574,7 @@ export class RealtimeVoiceSessionService {
       await this.persist(id);
       return this.get(tenantId, id);
     } catch (error) {
+      runtime.responsePending = false;
       runtime.greetingStatus = "interrupted";
       await this.media.setGreetingStatus(
         tenantId,
@@ -572,6 +595,7 @@ export class RealtimeVoiceSessionService {
         "Active realtime session not found",
       );
     await runtime.adapter.cancelResponse();
+    runtime.responsePending = false;
     const row = await this.row(tenantId, id);
     this.media.clearEgress(tenantId, Number(row.media_session_id));
     runtime.interruptions++;
@@ -635,8 +659,10 @@ export class RealtimeVoiceSessionService {
       event.type === "response_started" &&
       !runtime.blocked &&
       row.state === "listening"
-    )
+    ) {
+      runtime.responsePending = false;
       await this.transition(runtime.tenantId, id, "responding", traceId);
+    }
     if (event.type === "output_audio" && !runtime.blocked) {
       runtime.outputFrames++;
       runtime.outputAudioMs += event.frame.durationMs;
@@ -670,10 +696,16 @@ export class RealtimeVoiceSessionService {
       const text = redactAiPlatformText(event.text).slice(0, 1000);
       runtime.transcripts.push({ kind: event.kind, text });
       if (runtime.transcripts.length > 20) runtime.transcripts.shift();
-      if (event.kind === "input_final" && detectRealtimeTransfer(text))
-        await this.transfer(runtime, id, traceId, row, text);
-      else if (event.kind === "input_final" && callbackIntent(text))
-        runtime.callbackOfferRequired = true;
+      if (event.kind === "input_final") {
+        if (!text.trim()) runtime.responsePending = false;
+        else {
+          if (detectRealtimeTransfer(text))
+            await this.transfer(runtime, id, traceId, row, text);
+          else if (callbackIntent(text)) runtime.callbackOfferRequired = true;
+          if (!runtime.blocked && runtime.responsePending)
+            await runtime.adapter.createResponse?.();
+        }
+      }
     }
     if (event.type === "tool_call" && !runtime.blocked)
       await this.toolCall(runtime, id, traceId, event);
@@ -686,6 +718,7 @@ export class RealtimeVoiceSessionService {
         traceId,
       });
     if (event.type === "response_completed") {
+      runtime.responsePending = false;
       const current = await this.row(runtime.tenantId, id);
       if (current.state === "responding") {
         await this.transition(runtime.tenantId, id, "listening", traceId);
@@ -701,6 +734,7 @@ export class RealtimeVoiceSessionService {
         });
       }
     }
+    if (event.type === "response_cancelled") runtime.responsePending = false;
     if (event.type === "error")
       await this.fail(runtime.tenantId, id, traceId, event.errorCode);
     runtime.flusher.markDirty();

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import net from "node:net";
 import fs from "node:fs";
+import net from "node:net";
 import { AudioSocketAdapter } from "../server/ai-platform/voice/media/transports/audioSocketAdapter.js";
 import { SyntheticRealtimeVoiceAdapter } from "../server/ai-platform/voice/providers/adapters/syntheticRealtimeVoiceAdapter.js";
 import { LiveBridgeService } from "../server/ai-platform/voice/live/liveBridgeService.js";
@@ -36,6 +36,10 @@ const freePort = () =>
     return packets;
   };
 async function run() {
+  assert.match(
+    fs.readFileSync("server/ai-platform/voice/ari/ariClientAdapter.ts", "utf8"),
+    /format: 'slin'/,
+  );
   const settings = new Map([
       ["ai.voice_live_test_enabled", "false"],
       ["ai.voice_live_transport", "audiosocket"],
@@ -199,8 +203,8 @@ async function run() {
   client.write(packet(0x13, Buffer.alloc(320, 1)));
   await new Promise((resolve) => setTimeout(resolve, 30));
   assert.equal(received.length, 3);
-  assert.equal(received[0].sampleRate, 16000);
-  assert.equal(received[0].payload.byteLength, 640);
+  assert.equal(received[0].sampleRate, 8000);
+  assert.equal(received[0].payload.byteLength, 320);
   assert.equal(received[0].durationMs, 20);
   assert.equal(received[0].source, "audiosocket_ast18_slin8");
   assert.equal(received[1].source, "audiosocket_ast18_slin8");

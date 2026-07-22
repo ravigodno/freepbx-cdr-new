@@ -3,11 +3,15 @@ import crypto from "node:crypto";
 import type { MediaTransportAdapter } from "../mediaTransportAdapter.js";
 import type { AudioFrame, MediaTransportContext } from "../mediaTypes.js";
 import { MediaError } from "../mediaErrors.js";
-import { AudioResampler } from "../audioResampler.js";
+import {
+  AudioResampler,
+  StreamingPcm16To8Downsampler,
+} from "../audioResampler.js";
 import {
   AudioPacketizer,
   PACKETIZATION_ERROR_THRESHOLD,
 } from "../audioPacketizer.js";
+import { decodeUlawToPcm16 } from "../g711.js";
 
 const TYPE_TERMINATE = 0x00,
   TYPE_UUID = 0x01,
@@ -51,10 +55,16 @@ export class AudioSocketAdapter implements MediaTransportAdapter {
   private buffer = Buffer.alloc(0);
   private connectionId = crypto.randomUUID();
   private authenticated = false;
+  private nextEgressAt = 0;
   private readyResolve: (() => void) | null = null;
   private readyReject: ((error: Error) => void) | null = null;
   private readonly resampler = new AudioResampler();
-  private readonly packetizer = new AudioPacketizer();
+  private readonly egressDownsampler = new StreamingPcm16To8Downsampler();
+  private readonly packetizer = new AudioPacketizer(
+    readAudioSocketServerConfig().transportFormat === "ast18_slin8"
+      ? 8000
+      : 16000,
+  );
   private metrics = {
     audiosocketIngressPackets: 0,
     audiosocketEgressPackets: 0,
@@ -86,8 +96,8 @@ export class AudioSocketAdapter implements MediaTransportAdapter {
         supportedOutboundPacketTypes: ast18 ? [TYPE_SLIN8] : [TYPE_SLIN16_16K],
         preferredAsteriskPacketType: ast18 ? TYPE_SLIN8 : TYPE_SLIN16_16K,
         preferredAsteriskSampleRate: ast18 ? 8000 : 16000,
-        internalSampleRate: 16000,
-        resamplingRequired: ast18,
+        internalSampleRate: ast18 ? 8000 : 16000,
+        resamplingRequired: false,
         transportFormat: config.transportFormat,
       },
     };
@@ -157,6 +167,8 @@ export class AudioSocketAdapter implements MediaTransportAdapter {
     socket.setNoDelay(true);
     socket.setTimeout(65000, () => socket.destroy());
     this.socket = socket;
+    this.nextEgressAt = 0;
+    this.egressDownsampler.reset();
     socket.on("data", (chunk) => this.parse(chunk));
     socket.on("error", () =>
       this.readyReject?.(
@@ -254,7 +266,12 @@ export class AudioSocketAdapter implements MediaTransportAdapter {
       this.metrics.ingressPacketType = this.packetLabel(type);
       this.metrics.ingressSourceSampleRate = sourceRate;
       this.metrics.firstIngressAudioAt ??= now;
-      if (sourceRate !== 16000) this.metrics.ingressResampledFrames++;
+      const ingressTargetRate =
+        readAudioSocketServerConfig().transportFormat === "ast18_slin8"
+          ? 8000
+          : 16000;
+      if (sourceRate !== ingressTargetRate)
+        this.metrics.ingressResampledFrames++;
       for (const frame of frames) {
         for (const handler of this.handlers) {
           try {
@@ -274,8 +291,10 @@ export class AudioSocketAdapter implements MediaTransportAdapter {
         "AudioSocket is not connected",
       );
     if (
-      frame.codec !== "slin16" ||
-      frame.sampleRate !== 16000 ||
+      !(
+        (frame.codec === "slin16" && frame.sampleRate === 16000) ||
+        (frame.codec === "ulaw" && frame.sampleRate === 8000)
+      ) ||
       frame.payload.byteLength > 4096 ||
       frame.payload.byteLength % 2 !== 0
     )
@@ -284,20 +303,30 @@ export class AudioSocketAdapter implements MediaTransportAdapter {
         400,
         "Invalid AudioSocket output frame",
       );
+    const now = Date.now();
+    if (this.nextEgressAt > now)
+      await new Promise<void>((resolve) =>
+        setTimeout(resolve, this.nextEgressAt - now),
+      );
+    this.nextEgressAt =
+      Math.max(this.nextEgressAt, Date.now()) + frame.durationMs;
     const config = readAudioSocketServerConfig(),
       type =
         config.transportFormat === "ast18_slin8" ? TYPE_SLIN8 : TYPE_SLIN16_16K,
-      source = new Int16Array(
-        frame.payload.buffer.slice(
-          frame.payload.byteOffset,
-          frame.payload.byteOffset + frame.payload.byteLength,
-        ),
-      ),
+      source =
+        frame.codec === "ulaw"
+          ? decodeUlawToPcm16(frame.payload)
+          : new Int16Array(
+              frame.payload.buffer.slice(
+                frame.payload.byteOffset,
+                frame.payload.byteOffset + frame.payload.byteLength,
+              ),
+            ),
       targetRate = type === TYPE_SLIN8 ? 8000 : 16000,
       converted =
-        targetRate === 16000
+        frame.sampleRate === targetRate
           ? source
-          : this.resampler.resamplePcm16(source, 16000, targetRate),
+          : this.egressDownsampler.process(source),
       payload = new Uint8Array(converted.buffer);
     if (payload.byteLength > 4096)
       throw new MediaError(
@@ -337,7 +366,7 @@ export class AudioSocketAdapter implements MediaTransportAdapter {
     this.metrics.egressPacketType = this.packetLabel(type);
     this.metrics.egressTargetSampleRate = targetRate;
     this.metrics.firstEgressAudioAt ??= new Date().toISOString();
-    if (targetRate !== 16000) this.metrics.egressResampledFrames++;
+    if (frame.sampleRate !== targetRate) this.metrics.egressResampledFrames++;
   }
   subscribeFrames(handler: (frame: AudioFrame) => void) {
     this.handlers.add(handler);
@@ -380,6 +409,8 @@ export class AudioSocketAdapter implements MediaTransportAdapter {
     this.context = null;
     this.buffer = Buffer.alloc(0);
     this.authenticated = false;
+    this.nextEgressAt = 0;
+    this.egressDownsampler.reset();
     this.handlers.clear();
   }
 }

@@ -100,7 +100,7 @@ export class ObserverAriClientAdapter implements AriClientAdapter {
   addChannelToBridge(bridgeId: string, channelId: string) { return this.request(`/ari/bridges/${encodeURIComponent(bridgeId)}/addChannel?channel=${encodeURIComponent(channelId)}`, 'POST').then(() => {}); }
   destroyBridge(id: string) { return this.request(`/ari/bridges/${encodeURIComponent(id)}`, 'DELETE').then(() => {}); }
   createAudioSocketChannel(input: { channelId: string; app: string; externalHost: string; connectionId: string }) {
-    const query = new URLSearchParams({ app: input.app, external_host: input.externalHost, format: 'slin16', transport: 'tcp', encapsulation: 'audiosocket', connection_type: 'client', direction: 'both', channelId: input.channelId, data: input.connectionId });
+    const query = new URLSearchParams({ app: input.app, external_host: input.externalHost, format: 'slin', transport: 'tcp', encapsulation: 'audiosocket', connection_type: 'client', direction: 'both', channelId: input.channelId, data: input.connectionId });
     return this.request(`/ari/channels/externalMedia?${query}`, 'POST').then(() => {});
   }
 }

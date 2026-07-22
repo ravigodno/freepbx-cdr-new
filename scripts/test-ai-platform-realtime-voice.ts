@@ -4,6 +4,7 @@ import { SyntheticRealtimeVoiceAdapter } from "../server/ai-platform/voice/provi
 import {
   OpenAIRealtimeAdapter,
   readOpenAIRealtimeConfig,
+  splitOpenAIOutputAudio,
 } from "../server/ai-platform/voice/providers/adapters/openaiRealtimeAdapter.js";
 import { RealtimeVoiceProviderRegistry } from "../server/ai-platform/voice/providers/realtimeVoiceProviderRegistry.js";
 import {
@@ -54,6 +55,16 @@ const frame = (source: string): AudioFrame => ({
 });
 
 async function run() {
+  const openAIConfig = readOpenAIRealtimeConfig();
+  if (!process.env.PBXPULS_OPENAI_REALTIME_MODEL)
+    assert.equal(openAIConfig.model, "gpt-realtime-2.1");
+  const largeProviderDelta = Buffer.alloc(31_200);
+  const providerChunks = splitOpenAIOutputAudio(largeProviderDelta);
+  assert.deepEqual(
+    providerChunks.map((chunk) => chunk.byteLength),
+    [9_600, 9_600, 9_600, 2_400],
+  );
+  assert.equal(Buffer.concat(providerChunks).equals(largeProviderDelta), true);
   const providerFrame = (payload: Uint8Array) => ({ payload });
   assert.equal(
     normalizeOpenAIRealtimeEvent(
@@ -69,6 +80,26 @@ async function run() {
     ),
     { type: "transcript", kind: "output_final", text: "Готово" },
   );
+  assert.deepEqual(
+    normalizeOpenAIRealtimeEvent(
+      {
+        type: "conversation.item.input_audio_transcription.completed",
+        transcript: "Как меня слышно?",
+      },
+      providerFrame,
+    ),
+    { type: "transcript", kind: "input_final", text: "Как меня слышно?" },
+  );
+  assert.deepEqual(
+    normalizeOpenAIRealtimeEvent(
+      {
+        type: "conversation.item.input_audio_transcription.completed",
+        transcript: "",
+      },
+      providerFrame,
+    ),
+    { type: "transcript", kind: "input_final", text: "" },
+  );
   assert.equal(
     normalizeOpenAIRealtimeEvent(
       { type: "response.done", response: { status: "cancelled" } },
@@ -82,6 +113,13 @@ async function run() {
       providerFrame,
     )?.type,
     "response_completed",
+  );
+  assert.deepEqual(
+    normalizeOpenAIRealtimeEvent(
+      { type: "error", error: { code: "invalid_value" } },
+      providerFrame,
+    ),
+    { type: "error", errorCode: "invalid_value" },
   );
   const registry = new RealtimeVoiceProviderRegistry();
   registry.register("synthetic", () => new SyntheticRealtimeVoiceAdapter());

@@ -1,9 +1,7 @@
 import type { AudioFrame } from "./mediaTypes.js";
 import { AudioResampler } from "./audioResampler.js";
 
-const INTERNAL_SAMPLE_RATE = 16000;
 const INTERNAL_FRAME_DURATION_MS = 20;
-const INTERNAL_FRAME_BYTES = 640;
 const MIN_PACKET_DURATION_MS = 5;
 const MAX_PACKET_DURATION_MS = 200;
 const MAX_FRAMES_PER_PACKET = 10;
@@ -53,6 +51,7 @@ export class AudioPacketizer {
   private sourceDurations: number[] = [];
   private framesPerPacket: number[] = [];
   private readonly resampler = new AudioResampler();
+  constructor(private readonly targetSampleRate = 16000) {}
   private metrics = {
     sourcePackets: 0,
     packetizedFrames: 0,
@@ -102,13 +101,15 @@ export class AudioPacketizer {
       const normalized = this.resampler.resamplePcm16(
         decoded,
         format.sampleRate,
-        INTERNAL_SAMPLE_RATE,
+        this.targetSampleRate,
       );
+      const internalFrameBytes =
+        (this.targetSampleRate * INTERNAL_FRAME_DURATION_MS * 2) / 1000;
       const normalizedBytes = Buffer.allocUnsafe(normalized.length * 2);
       for (let index = 0; index < normalized.length; index++)
         normalizedBytes.writeInt16LE(normalized[index], index * 2);
       const combined = Buffer.concat([this.remainder, normalizedBytes]);
-      const frameCount = Math.floor(combined.length / INTERNAL_FRAME_BYTES);
+      const frameCount = Math.floor(combined.length / internalFrameBytes);
       if (frameCount > MAX_FRAMES_PER_PACKET) {
         this.metrics.oversizedPackets++;
         this.rejectPacket();
@@ -123,24 +124,24 @@ export class AudioPacketizer {
       this.nextTimestampMs ??= timestampMs;
       const frames: AudioFrame[] = [];
       for (let index = 0; index < frameCount; index++) {
-        const start = index * INTERNAL_FRAME_BYTES;
+        const start = index * internalFrameBytes;
         frames.push({
           sequence: this.sequence++,
           timestampMs: this.nextTimestampMs,
           direction: "ingress",
           codec: "slin16",
-          sampleRate: INTERNAL_SAMPLE_RATE,
+          sampleRate: this.targetSampleRate,
           channels: 1,
           durationMs: INTERNAL_FRAME_DURATION_MS,
           payload: new Uint8Array(
-            combined.subarray(start, start + INTERNAL_FRAME_BYTES),
+            combined.subarray(start, start + internalFrameBytes),
           ),
           ...context,
         });
         this.nextTimestampMs += INTERNAL_FRAME_DURATION_MS;
       }
       this.remainder = Buffer.from(
-        combined.subarray(frameCount * INTERNAL_FRAME_BYTES),
+        combined.subarray(frameCount * internalFrameBytes),
       );
       this.metrics.remainderPeakBytes = Math.max(
         this.metrics.remainderPeakBytes,
