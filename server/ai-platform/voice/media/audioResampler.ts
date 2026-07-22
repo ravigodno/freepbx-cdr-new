@@ -1,2 +1,27 @@
-import{MediaError}from'./mediaErrors.js';
-export class AudioResampler{resamplePcm16(input:Int16Array,fromRate:number,toRate:number){if(fromRate===toRate)return new Int16Array(input);if(![[8000,16000],[16000,8000]].some(([a,b])=>a===fromRate&&b===toRate))throw new MediaError('unsupported_codec',400,'Unsupported sample rate conversion');const length=Math.max(1,Math.round(input.length*toRate/fromRate)),out=new Int16Array(length);for(let i=0;i<length;i++){const position=i*fromRate/toRate,left=Math.floor(position),right=Math.min(input.length-1,left+1),fraction=position-left;out[i]=Math.round(input[left]*(1-fraction)+input[right]*fraction)}return out}}
+import { MediaError } from "./mediaErrors.js";
+export class AudioResampler {
+  resamplePcm16(input: Int16Array, fromRate: number, toRate: number) {
+    if (fromRate === toRate) return new Int16Array(input);
+    if (
+      ![8000, 16000, 24000].includes(fromRate) ||
+      ![8000, 16000, 24000].includes(toRate)
+    )
+      throw new MediaError(
+        "unsupported_codec",
+        400,
+        "Unsupported sample rate conversion",
+      );
+    const length = Math.max(1, Math.round((input.length * toRate) / fromRate)),
+      out = new Int16Array(length);
+    for (let i = 0; i < length; i++) {
+      const position = (i * fromRate) / toRate,
+        left = Math.min(input.length - 1, Math.floor(position)),
+        right = Math.min(input.length - 1, left + 1),
+        fraction = position - left;
+      out[i] = Math.round(
+        input[left] * (1 - fraction) + input[right] * fraction,
+      );
+    }
+    return out;
+  }
+}

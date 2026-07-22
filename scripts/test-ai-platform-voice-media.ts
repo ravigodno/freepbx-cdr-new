@@ -35,6 +35,14 @@ const resampler = new AudioResampler(),
   pcm8 = new Int16Array([0, 1000, -1000, 500]);
 assert.equal(resampler.resamplePcm16(pcm8, 8000, 16000).length, 8);
 assert.equal(resampler.resamplePcm16(new Int16Array(8), 16000, 8000).length, 4);
+assert.equal(
+  resampler.resamplePcm16(new Int16Array(320), 16000, 24000).length,
+  480,
+);
+assert.equal(
+  resampler.resamplePcm16(new Int16Array(480), 24000, 16000).length,
+  320,
+);
 const packetizerContext = {
     source: "test",
     traceId: "trace",
@@ -50,7 +58,7 @@ const packetizerContext = {
   packetize = (
     packetizer: AudioPacketizer,
     durationMs: number,
-    sampleRate: 8000 | 16000 = 8000,
+    sampleRate: 8000 | 16000 | 24000 = 8000,
     timestampMs = 1000,
   ) =>
     packetizer.pushPcm(
@@ -77,6 +85,17 @@ for (const [duration, expected] of [
     ),
   );
 }
+const providerPacketizer = new AudioPacketizer(),
+  providerFrames = packetize(providerPacketizer, 40, 24000);
+assert.equal(providerFrames.length, 2);
+assert.ok(
+  providerFrames.every(
+    (item) =>
+      item.sampleRate === 16000 &&
+      item.durationMs === 20 &&
+      item.payload.byteLength === 640,
+  ),
+);
 const splitThirtyTen = new AudioPacketizer(),
   firstThirty = packetize(splitThirtyTen, 30, 8000, 2000),
   nextTen = packetize(splitThirtyTen, 10, 8000, 2030);

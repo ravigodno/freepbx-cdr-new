@@ -12,7 +12,7 @@ export const PACKETIZATION_ERROR_THRESHOLD = 5;
 
 export interface SourcePcmFormat {
   codec: "slin16";
-  sampleRate: 8000 | 16000;
+  sampleRate: 8000 | 16000 | 24000;
   channels: 1;
 }
 
@@ -81,7 +81,7 @@ export class AudioPacketizer {
     if (
       format.codec !== "slin16" ||
       format.channels !== 1 ||
-      ![8000, 16000].includes(format.sampleRate) ||
+      ![8000, 16000, 24000].includes(format.sampleRate) ||
       durationMs < MIN_PACKET_DURATION_MS ||
       durationMs > MAX_PACKET_DURATION_MS
     ) {

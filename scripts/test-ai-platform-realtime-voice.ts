@@ -11,6 +11,7 @@ import {
   composeRealtimeInstructions,
   detectRealtimeTransfer,
 } from "../server/ai-platform/voice/providers/realtimeVoicePolicy.js";
+import { normalizeOpenAIRealtimeEvent } from "../server/ai-platform/voice/providers/realtimeVoiceEventNormalizer.js";
 import type { AudioFrame } from "../server/ai-platform/voice/media/mediaTypes.js";
 
 const format = {
@@ -53,6 +54,35 @@ const frame = (source: string): AudioFrame => ({
 });
 
 async function run() {
+  const providerFrame = (payload: Uint8Array) => ({ payload });
+  assert.equal(
+    normalizeOpenAIRealtimeEvent(
+      { type: "response.output_audio.delta", delta: "AAE=" },
+      providerFrame,
+    )?.type,
+    "output_audio",
+  );
+  assert.deepEqual(
+    normalizeOpenAIRealtimeEvent(
+      { type: "response.output_audio_transcript.done", transcript: "Готово" },
+      providerFrame,
+    ),
+    { type: "transcript", kind: "output_final", text: "Готово" },
+  );
+  assert.equal(
+    normalizeOpenAIRealtimeEvent(
+      { type: "response.done", response: { status: "cancelled" } },
+      providerFrame,
+    )?.type,
+    "response_cancelled",
+  );
+  assert.equal(
+    normalizeOpenAIRealtimeEvent(
+      { type: "response.done", response: { status: "completed" } },
+      providerFrame,
+    )?.type,
+    "response_completed",
+  );
   const registry = new RealtimeVoiceProviderRegistry();
   registry.register("synthetic", () => new SyntheticRealtimeVoiceAdapter());
   registry.register("openai_realtime", () => new OpenAIRealtimeAdapter());

@@ -1,5 +1,75 @@
-import { redactAiPlatformText } from '../../core/redaction.js';
-import type { RealtimeVoiceEvent, RealtimeTranscriptKind } from './realtimeVoiceTypes.js';
-const transcriptTypes:Record<string,RealtimeTranscriptKind>={'conversation.item.input_audio_transcription.delta':'input_partial','conversation.item.input_audio_transcription.completed':'input_final','response.audio_transcript.delta':'output_partial','response.audio_transcript.done':'output_final'};
-export function normalizeOpenAIRealtimeEvent(raw:any,frameFactory:(payload:Uint8Array)=>any):RealtimeVoiceEvent|null{const type=String(raw?.type||'');if(type==='session.created')return{type:'session_connected',providerSessionRef:String(raw?.session?.id||'')};if(type==='session.updated')return{type:'session_configured'};if(type==='input_audio_buffer.speech_started')return{type:'input_audio_started'};if(type==='input_audio_buffer.committed')return{type:'input_audio_committed'};if(type==='response.created')return{type:'response_started'};if(type==='response.done')return{type:'response_completed'};if(type==='response.cancelled')return{type:'response_cancelled'};if(type==='response.audio.delta'&&typeof raw.delta==='string')return{type:'output_audio',frame:frameFactory(Buffer.from(raw.delta,'base64'))};if(transcriptTypes[type])return{type:'transcript',kind:transcriptTypes[type],text:redactAiPlatformText(raw.delta||raw.transcript||'').slice(0,1000)};if(type==='response.function_call_arguments.done')return{type:'tool_call',toolKey:String(raw.name||''),arguments:safeJson(raw.arguments),callId:String(raw.call_id||'').slice(0,100)};if(type==='error')return{type:'error',errorCode:'provider_error'};return null}
-function safeJson(value:unknown){try{const parsed=JSON.parse(String(value||'{}'));return parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?parsed:{}}catch{return{}}}
+import { redactAiPlatformText } from "../../core/redaction.js";
+import type {
+  RealtimeVoiceEvent,
+  RealtimeTranscriptKind,
+} from "./realtimeVoiceTypes.js";
+const transcriptTypes: Record<string, RealtimeTranscriptKind> = {
+  "conversation.item.input_audio_transcription.delta": "input_partial",
+  "conversation.item.input_audio_transcription.completed": "input_final",
+  "response.output_audio_transcript.delta": "output_partial",
+  "response.output_audio_transcript.done": "output_final",
+  "response.audio_transcript.delta": "output_partial",
+  "response.audio_transcript.done": "output_final",
+};
+export function normalizeOpenAIRealtimeEvent(
+  raw: any,
+  frameFactory: (payload: Uint8Array) => any,
+): RealtimeVoiceEvent | null {
+  const type = String(raw?.type || "");
+  if (type === "session.created")
+    return {
+      type: "session_connected",
+      providerSessionRef: String(raw?.session?.id || ""),
+    };
+  if (type === "session.updated") return { type: "session_configured" };
+  if (type === "input_audio_buffer.speech_started")
+    return { type: "input_audio_started" };
+  if (type === "input_audio_buffer.committed")
+    return { type: "input_audio_committed" };
+  if (type === "response.created") return { type: "response_started" };
+  if (type === "response.done")
+    return {
+      type:
+        raw?.response?.status === "cancelled"
+          ? "response_cancelled"
+          : "response_completed",
+    };
+  if (type === "response.cancelled") return { type: "response_cancelled" };
+  if (
+    (type === "response.output_audio.delta" ||
+      type === "response.audio.delta") &&
+    typeof raw.delta === "string"
+  )
+    return {
+      type: "output_audio",
+      frame: frameFactory(Buffer.from(raw.delta, "base64")),
+    };
+  if (transcriptTypes[type])
+    return {
+      type: "transcript",
+      kind: transcriptTypes[type],
+      text: redactAiPlatformText(raw.delta || raw.transcript || "").slice(
+        0,
+        1000,
+      ),
+    };
+  if (type === "response.function_call_arguments.done")
+    return {
+      type: "tool_call",
+      toolKey: String(raw.name || ""),
+      arguments: safeJson(raw.arguments),
+      callId: String(raw.call_id || "").slice(0, 100),
+    };
+  if (type === "error") return { type: "error", errorCode: "provider_error" };
+  return null;
+}
+function safeJson(value: unknown) {
+  try {
+    const parsed = JSON.parse(String(value || "{}"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed
+      : {};
+  } catch {
+    return {};
+  }
+}

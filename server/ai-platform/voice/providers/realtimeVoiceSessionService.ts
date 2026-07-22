@@ -336,7 +336,10 @@ export class RealtimeVoiceSessionService {
       instructions: instructions.instructions,
       inputFormat: format,
       outputFormat: format,
-      serverVad: capabilities.serverVad,
+      serverVad:
+        input.providerKey === "openai_realtime"
+          ? false
+          : capabilities.serverVad,
       tools: capabilities.tools
         ? assigned.map((tool: any) => ({
             key: tool.tool_key,

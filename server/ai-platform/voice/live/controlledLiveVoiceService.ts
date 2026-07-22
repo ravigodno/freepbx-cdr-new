@@ -11,6 +11,7 @@ import { buildLiveDialplanPreview } from "./liveDialplanPreview.js";
 import { LiveBridgeService } from "./liveBridgeService.js";
 import type { LiveReadiness, LiveRuntimeMetrics } from "./liveVoiceTypes.js";
 import { AiPlatformError } from "../../core/errors.js";
+import { readOpenAIRealtimeConfig } from "../providers/adapters/openaiRealtimeAdapter.js";
 
 export class ControlledLiveVoiceService {
   private active = new Map<
@@ -98,8 +99,10 @@ export class ControlledLiveVoiceService {
         ],
         [
           "provider",
-          config.provider === "synthetic",
-          "synthetic_live_validation_required",
+          config.provider === "synthetic" ||
+            (config.provider === "openai_realtime" &&
+              readOpenAIRealtimeConfig().configured),
+          "provider_not_configured",
         ],
       ] as const;
     return {
