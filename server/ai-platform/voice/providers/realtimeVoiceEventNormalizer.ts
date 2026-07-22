@@ -10,6 +10,10 @@ const transcriptTypes: Record<string, RealtimeTranscriptKind> = {
   "response.output_audio_transcript.done": "output_final",
   "response.audio_transcript.delta": "output_partial",
   "response.audio_transcript.done": "output_final",
+  "response.output_text.delta": "output_generated_partial",
+  "response.output_text.done": "output_generated_final",
+  "response.text.delta": "output_generated_partial",
+  "response.text.done": "output_generated_final",
 };
 export function normalizeOpenAIRealtimeEvent(
   raw: any,
@@ -33,6 +37,8 @@ export function normalizeOpenAIRealtimeEvent(
         raw?.response?.status === "cancelled"
           ? "response_cancelled"
           : "response_completed",
+      eventId: String(raw?.event_id || "").slice(0, 191) || undefined,
+      usage: raw?.response?.usage && typeof raw.response.usage === "object" ? raw.response.usage : undefined,
     };
   if (type === "response.cancelled") return { type: "response_cancelled" };
   if (
@@ -52,7 +58,15 @@ export function normalizeOpenAIRealtimeEvent(
         0,
         1000,
       ),
+      ...(raw?.event_id?{eventId:String(raw.event_id).slice(0,191)}:{}),
+      ...(raw?.item_id||raw?.item?.id?{itemId:String(raw.item_id||raw.item.id).slice(0,191)}:{}),
+      ...(raw?.response_id?{responseId:String(raw.response_id).slice(0,191)}:{}),
+      ...(Number.isFinite(raw?.confidence)?{confidence:Number(raw.confidence)}:{}),
     };
+  if (type === "response.output_item.added" || type === "response.output_item.done")
+    return {type:"response_item",status:type.endsWith("done")?"done":"added",eventId:String(raw?.event_id||"").slice(0,191)||undefined,itemId:String(raw?.item?.id||raw?.item_id||"").slice(0,191)||undefined,role:String(raw?.item?.role||"").slice(0,32)||undefined};
+  if (type === "conversation.item.input_audio_transcription.failed")
+    return {type:"transcript_unavailable",speaker:"caller",errorCode:safeErrorCode(raw?.error?.code||raw?.error?.type||"transcript_unavailable")};
   if (type === "response.function_call_arguments.done")
     return {
       type: "tool_call",

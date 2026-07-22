@@ -12,6 +12,7 @@ export const AI_PLATFORM_PERMISSIONS = [
   ,'view_ai_voice_media_status','view_ai_voice_media_sessions','test_ai_voice_media','manage_ai_voice_media'
   ,'view_ai_realtime_voice_status','view_ai_realtime_voice_sessions','test_ai_realtime_voice','manage_ai_realtime_voice'
   ,'view_ai_voice_live_test','configure_ai_voice_live_test','enable_ai_voice_live_test','execute_ai_voice_live_test_checks'
+  ,'view_ai_voice_agents','manage_ai_voice_agents','test_ai_voice_agents','manage_ai_voice_routes','view_ai_voice_transcripts','export_ai_voice_transcripts'
 ] as const;
 
 export type AiPlatformPermission = typeof AI_PLATFORM_PERMISSIONS[number];

@@ -11,6 +11,7 @@ export interface AriClientAdapter {
   getHealth(): AriHealth;
   subscribe(handler: AriEventHandler): void;
   unsubscribe(handler: AriEventHandler): void;
+  onDisconnect?(handler: () => void): void;
   getChannel(id: string): Promise<unknown>;
   answerChannel(id: string): Promise<void>;
   hangupChannel(id: string): Promise<void>;
@@ -33,6 +34,7 @@ const safeUrl = (value: string, protocols: string[]) => {
 export class ObserverAriClientAdapter implements AriClientAdapter {
   private socket: any = null;
   private handlers = new Set<AriEventHandler>();
+  private disconnectHandlers = new Set<() => void>();
   private health: AriHealth;
 
   constructor(private readonly config: AriConfig) {
@@ -42,6 +44,7 @@ export class ObserverAriClientAdapter implements AriClientAdapter {
   getHealth() { return { ...this.health }; }
   subscribe(handler: AriEventHandler) { this.handlers.add(handler); }
   unsubscribe(handler: AriEventHandler) { this.handlers.delete(handler); }
+  onDisconnect(handler: () => void) { this.disconnectHandlers.add(handler); }
 
   private async request(path: string, method = 'GET') {
     if (!this.config.configured) throw new VoiceGatewayError('provider_not_configured', 503, 'ARI is not configured');
@@ -79,7 +82,7 @@ export class ObserverAriClientAdapter implements AriClientAdapter {
       socket.once('open', () => { settled = true; this.health = { state: 'connected', connectedAt: new Date().toISOString(), lastErrorCode: null }; resolve(); });
       socket.on('message', (data: unknown) => { try { const event = JSON.parse(String(data)); for (const handler of this.handlers) void handler(event); } catch {} });
       socket.once('error', fail);
-      socket.once('close', () => { this.socket = null; this.health = { ...this.health, state: 'disconnected' }; if (!settled) fail(); });
+      socket.once('close', () => { this.socket = null; this.health = { ...this.health, state: 'disconnected' }; if (!settled) fail(); else for (const handler of this.disconnectHandlers) handler(); });
     });
   }
 
@@ -110,6 +113,7 @@ export class SyntheticAriClientAdapter implements AriClientAdapter {
   connect = async () => { this.connected = true; }; disconnect = async () => { this.connected = false; };
   getHealth = () => ({ state: this.connected ? 'connected' : 'disconnected', connectedAt: this.connected ? new Date().toISOString() : null, lastErrorCode: null } as AriHealth);
   subscribe = (handler: AriEventHandler) => { this.handlers.add(handler); }; unsubscribe = (handler: AriEventHandler) => { this.handlers.delete(handler); };
+  onDisconnect = (_handler:()=>void) => {};
   emit = async (event: unknown) => { for (const handler of this.handlers) await handler(event); };
   getChannel = async () => ({}); getBridge = async () => ({}); listApplications = async () => [];
   answerChannel = async () => { this.operations.push('answer'); }; hangupChannel = async () => { this.operations.push('hangup'); }; continueChannel = async () => { this.operations.push('continue'); };

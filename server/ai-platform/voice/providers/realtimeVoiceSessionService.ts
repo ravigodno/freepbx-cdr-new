@@ -26,6 +26,7 @@ import {
 } from "./realtimeVoicePolicy.js";
 import { readOpenAIRealtimeConfig } from "./adapters/openaiRealtimeAdapter.js";
 import { MetricsFlusher } from "../media/metricsFlusher.js";
+import type { VoiceTranscriptService } from "../transcripts/voiceTranscriptService.js";
 
 const transitions: Record<RealtimeVoiceState, RealtimeVoiceState[]> = {
   created: ["connecting", "failed", "cancelled"],
@@ -93,6 +94,7 @@ export class RealtimeVoiceSessionService {
     private toolExecutor: ToolExecutor | null = null,
     private humanTransfer: HumanTransferService | null = null,
     private businessActions: BusinessActionService | null = null,
+    private transcriptService: VoiceTranscriptService | null = null,
   ) {
     this.repo = new RealtimeVoiceSessionRepository(store);
     void businessActions;
@@ -692,10 +694,13 @@ export class RealtimeVoiceSessionService {
           details: { firstResponseLatencyMs: runtime.firstResponseLatencyMs },
         });
     }
-    if (event.type === "transcript" && !event.kind.endsWith("partial")) {
+    if (event.type === "transcript") {
       const text = redactAiPlatformText(event.text).slice(0, 1000);
-      runtime.transcripts.push({ kind: event.kind, text });
-      if (runtime.transcripts.length > 20) runtime.transcripts.shift();
+      if (!event.kind.endsWith("partial")) {
+        runtime.transcripts.push({ kind: event.kind, text });
+        if (runtime.transcripts.length > 20) runtime.transcripts.shift();
+      }
+      if(this.transcriptService){const voice=(await this.store.query('SELECT route_binding_id,agent_id,agent_version_id FROM ai_voice_sessions WHERE tenant_id=? AND id=? LIMIT 1',[runtime.tenantId,runtime.voiceSessionId]))[0];if(voice)await this.transcriptService.transcript({tenantId:runtime.tenantId,voiceSessionId:runtime.voiceSessionId,mediaSessionId:runtime.mediaSessionId,realtimeSessionId:id,bindingId:voice.route_binding_id?Number(voice.route_binding_id):null,agentId:Number(voice.agent_id),agentVersionId:Number(voice.agent_version_id),kind:event.kind,text,eventId:event.eventId,confidence:event.confidence});}
       if (event.kind === "input_final") {
         if (!text.trim()) runtime.responsePending = false;
         else {
@@ -709,6 +714,7 @@ export class RealtimeVoiceSessionService {
     }
     if (event.type === "tool_call" && !runtime.blocked)
       await this.toolCall(runtime, id, traceId, event);
+    if(event.type==='tool_call'&&this.transcriptService){const voice=(await this.store.query('SELECT route_binding_id,agent_id,agent_version_id FROM ai_voice_sessions WHERE tenant_id=? AND id=? LIMIT 1',[runtime.tenantId,runtime.voiceSessionId]))[0];if(voice)await this.transcriptService.marker({tenantId:runtime.tenantId,voiceSessionId:runtime.voiceSessionId,mediaSessionId:runtime.mediaSessionId,realtimeSessionId:id,bindingId:voice.route_binding_id?Number(voice.route_binding_id):null,agentId:Number(voice.agent_id),agentVersionId:Number(voice.agent_version_id),markerType:'tool_call',text:event.toolKey})}
     if (event.type === "output_audio" && runtime.outputFrames === 1)
       await this.liveObserver?.({
         tenantId: runtime.tenantId,
@@ -718,6 +724,7 @@ export class RealtimeVoiceSessionService {
         traceId,
       });
     if (event.type === "response_completed") {
+      if(event.usage&&this.transcriptService)await this.transcriptService.usage(runtime.tenantId,runtime.voiceSessionId,event.usage);
       runtime.responsePending = false;
       const current = await this.row(runtime.tenantId, id);
       if (current.state === "responding") {
@@ -734,7 +741,8 @@ export class RealtimeVoiceSessionService {
         });
       }
     }
-    if (event.type === "response_cancelled") runtime.responsePending = false;
+    if (event.type === "response_cancelled") {runtime.responsePending = false;await this.transcriptService?.interrupt(runtime.tenantId,id,runtime.voiceSessionId);}
+    if(event.type==='transcript_unavailable'&&this.transcriptService){const voice=(await this.store.query('SELECT route_binding_id,agent_id,agent_version_id FROM ai_voice_sessions WHERE tenant_id=? AND id=? LIMIT 1',[runtime.tenantId,runtime.voiceSessionId]))[0];if(voice)await this.transcriptService.marker({tenantId:runtime.tenantId,voiceSessionId:runtime.voiceSessionId,mediaSessionId:runtime.mediaSessionId,realtimeSessionId:id,bindingId:voice.route_binding_id?Number(voice.route_binding_id):null,agentId:Number(voice.agent_id),agentVersionId:Number(voice.agent_version_id),markerType:'transcript_unavailable',text:event.errorCode})}
     if (event.type === "error")
       await this.fail(runtime.tenantId, id, traceId, event.errorCode);
     runtime.flusher.markDirty();
@@ -989,6 +997,7 @@ export class RealtimeVoiceSessionService {
       runtime.unsubscribeProvider();
       await runtime.adapter.close();
       await runtime.flusher.final(1000);
+      await this.transcriptService?.complete(tenantId,id,runtime.voiceSessionId);
       this.runtimes.delete(id);
     }
     const row = await this.row(tenantId, id);
@@ -1013,6 +1022,7 @@ export class RealtimeVoiceSessionService {
       runtime.unsubscribeProvider();
       await runtime.adapter.close().catch(() => {});
       await runtime.flusher.final(1000);
+      await this.transcriptService?.complete(tenantId,id,runtime.voiceSessionId);
       this.runtimes.delete(id);
     }
     const row = await this.row(tenantId, id);
@@ -1022,5 +1032,11 @@ export class RealtimeVoiceSessionService {
   }
   activeCount() {
     return this.runtimes.size;
+  }
+  async shutdown() {
+    for (const [id, runtime] of [...this.runtimes])
+      await this.stop(runtime.tenantId, id, "shutdown", "cancelled").catch(
+        () => {},
+      );
   }
 }

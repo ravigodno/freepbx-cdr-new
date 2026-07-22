@@ -7,6 +7,7 @@ import { LiveBridgeService } from "../server/ai-platform/voice/live/liveBridgeSe
 import { buildLiveDialplanPreview } from "../server/ai-platform/voice/live/liveDialplanPreview.js";
 import { readLiveVoiceConfig } from "../server/ai-platform/voice/live/liveVoiceConfig.js";
 import { enforceVoiceBindingPolicy } from "../server/ai-platform/voice/voiceSessionPolicy.js";
+import { buildVoiceRouteDialplanPreview } from "../server/ai-platform/voice/management/voiceRouteDialplan.js";
 const freePort = () =>
     new Promise<number>((resolve, reject) => {
       const server = net.createServer();
@@ -40,6 +41,12 @@ async function run() {
     fs.readFileSync("server/ai-platform/voice/ari/ariClientAdapter.ts", "utf8"),
     /format: 'slin'/,
   );
+  const productionPreview=buildVoiceRouteDialplanPreview({bindingKey:'sales_main',sourceType:'did',routeValue:'74950000000',fallbackType:'queue',fallbackValue:'600',stasisApplication:'pbxpuls-ai-control',recordingEnabled:true},'');
+  assert.equal(productionPreview.ready,true);
+  assert.match(productionPreview.snippet!,/MixMonitor/);
+  assert.match(productionPreview.snippet!,/Stasis\(pbxpuls-ai-control/);
+  assert.equal(productionPreview.applySupported,false);
+  assert.equal(buildVoiceRouteDialplanPreview({bindingKey:'sales_main',sourceType:'did',routeValue:'74950000000',fallbackType:'queue',fallbackValue:'600',stasisApplication:'pbxpuls-ai-control',recordingEnabled:true},productionPreview.snippet!).code,'route_block_exists');
   const settings = new Map([
       ["ai.voice_live_test_enabled", "false"],
       ["ai.voice_live_transport", "audiosocket"],

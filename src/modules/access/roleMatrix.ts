@@ -62,7 +62,8 @@ export const ROLE_PERMISSIONS: Partial<Record<UserRole, PermissionKey[]>> = {
     'view_ai_context_preview',
     'execute_ai_sandbox',
     'view_ai_tool_executions',
-    'test_ai_tools'
+    'test_ai_tools',
+    'view_ai_voice_agents','manage_ai_voice_agents','test_ai_voice_agents','manage_ai_voice_routes','view_ai_voice_transcripts','export_ai_voice_transcripts'
   ],
   manager: [
     'view_calls',
@@ -80,7 +81,8 @@ export const ROLE_PERMISSIONS: Partial<Record<UserRole, PermissionKey[]>> = {
     'view_ai_assistant',
     'manage_ai_assistant',
     'view_ai_pbx_admin',
-    'manage_ai_pbx_admin'
+    'manage_ai_pbx_admin',
+    'view_ai_voice_agents','test_ai_voice_agents','view_ai_voice_transcripts'
   ],
   operator: [
     'view_calls',

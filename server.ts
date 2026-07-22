@@ -22138,7 +22138,7 @@ const aiPbxTransferService=createPBXTransferService({
   executeBlindTransfer:async(context,destination)=>{const localDb=await readLocalDb(),result=await runAmiBlindTransfer(localDb.settings,context.channelRef,destination.ref,'internal');return{ok:result.success,actionRef:result.success?crypto.createHash('sha256').update(`${context.liveCallId}:${destination.ref}`).digest('hex').slice(0,32):null,safeMessage:result.success?'Transfer accepted':'Transfer failed'}},
   getTransferStatus:async()=> 'unknown'
 });
-registerAiPlatformRoutes(app, { requireAuth, checkPermission: checkUserPermission, readLegacyDb: readLocalDb, pbxReadServices: aiPbxReadServices,pbxTransferService:aiPbxTransferService });
+const aiPlatformRuntime=registerAiPlatformRoutes(app, { requireAuth, checkPermission: checkUserPermission, readLegacyDb: readLocalDb, pbxReadServices: aiPbxReadServices,pbxTransferService:aiPbxTransferService });
 
 // REGISTER SECURITY MONITORING CENTER ROUTES
 registerSecurityRoutes(app, requireAuth, checkUserPermission);
@@ -22204,6 +22204,7 @@ async function startServer() {
   const startupDb = await readLocalDb();
   console.log('[PBXPULS_DB] runtime configuration:', getPBXPulsDbConfigLogFields());
   await runPBXPulsMigrations();
+  await aiPlatformRuntime.start();
   startMonitoringRetentionRunner();
   startSecurityCollector();
   startLogAnalysisCollector();
@@ -22215,6 +22216,9 @@ async function startServer() {
     console.log(`Simulated Asterisk Sandbox status: DISABLED`);
   });
 }
+
+let aiPlatformShutdownStarted=false;
+for(const signal of ['SIGTERM','SIGINT'] as const)process.once(signal,()=>{if(aiPlatformShutdownStarted)return;aiPlatformShutdownStarted=true;void aiPlatformRuntime.stop().finally(()=>process.exit(0))});
 
 startServer().catch((err) => {
   console.error('Fatal initialization error:', err);

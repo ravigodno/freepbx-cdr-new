@@ -60,12 +60,28 @@ async function run() {
     assert.equal(openAIConfig.model, "gpt-realtime-2.1");
   const largeProviderDelta = Buffer.alloc(31_200);
   const providerChunks = splitOpenAIOutputAudio(largeProviderDelta);
+  const providerFrame = (payload: Uint8Array) => ({ payload });
   assert.deepEqual(
     providerChunks.map((chunk) => chunk.byteLength),
     [9_600, 9_600, 9_600, 2_400],
   );
+  assert.deepEqual(
+    normalizeOpenAIRealtimeEvent(
+      {type:"conversation.item.input_audio_transcription.delta",delta:"Как",event_id:"event-partial",item_id:"item-1"},
+      providerFrame,
+    ),
+    {type:"transcript",kind:"input_partial",text:"Как",eventId:"event-partial",itemId:"item-1"},
+  );
+  assert.deepEqual(
+    normalizeOpenAIRealtimeEvent(
+      {type:"response.output_text.delta",delta:"Сформированный текст"},providerFrame,
+    ),
+    {type:"transcript",kind:"output_generated_partial",text:"Сформированный текст"},
+  );
+  assert.equal(normalizeOpenAIRealtimeEvent({type:"conversation.item.input_audio_transcription.failed",error:{code:"transcription_failed"}},providerFrame)?.type,"transcript_unavailable");
+  const usageEvent:any=normalizeOpenAIRealtimeEvent({type:"response.done",response:{status:"completed",usage:{input_token_details:{audio_tokens:12},output_token_details:{audio_tokens:8}}}},providerFrame);
+  assert.equal(usageEvent.usage.input_token_details.audio_tokens,12);
   assert.equal(Buffer.concat(providerChunks).equals(largeProviderDelta), true);
-  const providerFrame = (payload: Uint8Array) => ({ payload });
   assert.equal(
     normalizeOpenAIRealtimeEvent(
       { type: "response.output_audio.delta", delta: "AAE=" },
@@ -227,7 +243,7 @@ async function run() {
     service = fs.readFileSync(
       "server/ai-platform/voice/providers/realtimeVoiceSessionService.ts",
       "utf8",
-    );
+    ), transcriptService=fs.readFileSync("server/ai-platform/voice/transcripts/voiceTranscriptService.ts","utf8"), transcriptRouter=fs.readFileSync("server/ai-platform/voice/transcripts/api/voiceTranscriptRouter.ts","utf8");
   assert.match(router, /Raw audio payload is forbidden/);
   assert.doesNotMatch(router, /apiKey|Authorization|providerSessionIdHash/);
   assert.match(migration, /ai\.realtime_voice_enabled','false/);
@@ -239,6 +255,12 @@ async function run() {
     service,
     /asterisk\s+-rx|external_host|createBridge|answerChannel/i,
   );
+  assert.match(transcriptService,/spoken_text_safe/);
+  assert.match(transcriptService,/incomplete=1/);
+  assert.match(transcriptService,/redactAiPlatformText/);
+  assert.doesNotMatch(transcriptService+transcriptRouter,/input_audio_buffer|base64|Authorization|OPENAI_API_KEY|raw PCM/i);
+  assert.match(transcriptRouter,/text\/event-stream/);
+  assert.match(transcriptRouter,/export_ai_voice_transcripts/);
   console.log("AI Platform realtime voice tests passed");
 }
 run().catch((error) => {

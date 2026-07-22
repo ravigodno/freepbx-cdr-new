@@ -8,8 +8,9 @@ import VoiceGatewayPanel from './VoiceGatewayPanel';
 import VoiceMediaPanel from './VoiceMediaPanel';
 import RealtimeVoicePanel from './RealtimeVoicePanel';
 import LiveVoiceTestPanel from './LiveVoiceTestPanel';
+import VoiceAgentsManagementPage from './VoiceAgentsManagementPage';
 
-interface Props { token:string; canCreate:boolean;canViewKnowledge:boolean;canViewTraining:boolean;canViewTransfers:boolean;canTestTransfer:boolean;canViewCallbacks:boolean;canManageCallbacks:boolean;canAssignActions:boolean;canViewVoice:boolean;canManageVoice:boolean;canTestVoice:boolean;canViewMedia:boolean;canTestMedia:boolean;canViewRealtime:boolean;canTestRealtime:boolean;canViewLive:boolean;canConfigureLive:boolean;canEnableLive:boolean;canCheckLive:boolean }
+interface Props { token:string; canCreate:boolean;canViewKnowledge:boolean;canViewTraining:boolean;canViewTransfers:boolean;canTestTransfer:boolean;canViewCallbacks:boolean;canManageCallbacks:boolean;canAssignActions:boolean;canViewVoice:boolean;canManageVoice:boolean;canTestVoice:boolean;canViewMedia:boolean;canTestMedia:boolean;canViewRealtime:boolean;canTestRealtime:boolean;canViewLive:boolean;canConfigureLive:boolean;canEnableLive:boolean;canCheckLive:boolean;canViewVoiceAgents:boolean;canManageVoiceAgents:boolean;canTestVoiceAgents:boolean;canViewVoiceTranscripts:boolean;canExportVoiceTranscripts:boolean }
 interface Template { id:number;template_key:string;name:string;description:string;agent_type:string }
 const FALLBACK_TEMPLATES:Template[]=[
   {id:0,template_key:'receptionist_default',name:'AI Receptionist',description:'Виртуальный администратор компании, принимающий обращения клиентов',agent_type:'receptionist'},
@@ -17,7 +18,7 @@ const FALLBACK_TEMPLATES:Template[]=[
   {id:0,template_key:'sales_manager_default',name:'AI Sales Manager',description:'AI менеджер первичных продаж',agent_type:'sales_manager'}
 ];
 
-export default function AiAgentBuilderPage({token,canCreate,canViewKnowledge,canViewTraining,canViewTransfers,canTestTransfer,canViewCallbacks,canManageCallbacks,canAssignActions,canViewVoice,canManageVoice,canTestVoice,canViewMedia,canTestMedia,canViewRealtime,canTestRealtime,canViewLive,canConfigureLive,canEnableLive,canCheckLive}:Props){
+export default function AiAgentBuilderPage({token,canCreate,canViewKnowledge,canViewTraining,canViewTransfers,canTestTransfer,canViewCallbacks,canManageCallbacks,canAssignActions,canViewVoice,canManageVoice,canTestVoice,canViewMedia,canTestMedia,canViewRealtime,canTestRealtime,canViewLive,canConfigureLive,canEnableLive,canCheckLive,canViewVoiceAgents,canManageVoiceAgents,canTestVoiceAgents,canViewVoiceTranscripts,canExportVoiceTranscripts}:Props){
   const [templates,setTemplates]=useState<Template[]>([]),[enabled,setEnabled]=useState(false),[wizard,setWizard]=useState(false),[step,setStep]=useState(1),[selected,setSelected]=useState<Template|null>(null),[name,setName]=useState(''),[role,setRole]=useState(''),[message,setMessage]=useState('');
   const headers=useMemo(()=>({Authorization:`Bearer ${token}`,'Content-Type':'application/json'}),[token]);
   useEffect(()=>{void fetch('/api/ai-platform/status',{headers}).then(r=>r.json()).then(data=>{setEnabled(Boolean(data.enabled));if(data.enabled)return fetch('/api/ai-platform/templates',{headers}).then(r=>r.json()).then(value=>setTemplates(value.rows||[]))}).catch(()=>setEnabled(false))},[headers]);
@@ -31,6 +32,7 @@ export default function AiAgentBuilderPage({token,canCreate,canViewKnowledge,can
       <button disabled={!enabled||!canCreate} onClick={()=>{setWizard(true);setStep(1)}} className="flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-40"><Plus className="h-4 w-4"/>Создать агента</button>
     </div>
     {!enabled&&<div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">AI Platform Core выключен настройкой <code>ai.platform_core_enabled=false</code>. Шаблоны показаны только для ознакомления.</div>}
+    <VoiceAgentsManagementPage token={token} canView={canViewVoiceAgents} canManage={canManageVoiceAgents} canTest={canTestVoiceAgents} canViewTranscripts={canViewVoiceTranscripts} canExportTranscripts={canExportVoiceTranscripts}/>
     {message&&<div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{message}</div>}
     {agentId>0&&<><AgentKnowledgeTrainingPage token={token} agentId={agentId} enabled={enabled} canViewKnowledge={canViewKnowledge} canViewTraining={canViewTraining}/><AgentSandboxPanel token={token} agentId={agentId}/><TransferRequestsPanel token={token} enabled={enabled} canView={canViewTransfers} canTest={canTestTransfer}/><BusinessActionsPanel token={token} enabled={enabled} agentId={agentId} canView={canViewCallbacks} canManage={canManageCallbacks} canAssign={canAssignActions}/><VoiceGatewayPanel token={token} canView={canViewVoice} canManage={canManageVoice} canTest={canTestVoice}/><VoiceMediaPanel token={token} canView={canViewMedia} canTest={canTestMedia}/><RealtimeVoicePanel token={token} canView={canViewRealtime} canTest={canTestRealtime}/><LiveVoiceTestPanel token={token} canView={canViewLive} canConfigure={canConfigureLive} canEnable={canEnableLive} canCheck={canCheckLive}/></>}
     {!agentId&&<>
