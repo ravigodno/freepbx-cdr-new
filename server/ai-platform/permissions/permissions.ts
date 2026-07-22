@@ -9,6 +9,7 @@ export const AI_PLATFORM_PERMISSIONS = [
   'manage_ai_transfer_policies', 'test_ai_human_transfer'
   ,'view_ai_actions','manage_ai_actions','execute_ai_low_risk_actions','view_ai_callback_requests','manage_ai_callback_requests','assign_ai_actions'
   ,'view_ai_voice_status','view_ai_voice_sessions','manage_ai_voice_bindings','control_ai_voice_gateway','test_ai_voice_gateway'
+  ,'view_ai_voice_media_status','view_ai_voice_media_sessions','test_ai_voice_media','manage_ai_voice_media'
 ] as const;
 
 export type AiPlatformPermission = typeof AI_PLATFORM_PERMISSIONS[number];

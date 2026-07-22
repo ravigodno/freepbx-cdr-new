@@ -1,0 +1,89 @@
+import type { AiPlatformStore } from '../../storage/aiPlatformStore.js';
+import type { AiAuditService } from '../../audit/aiAuditService.js';
+import { redactAiPlatformValue } from '../../core/redaction.js';
+import { MediaSessionRepository } from './mediaSessionRepository.js';
+import { MediaTransportRegistry } from './mediaTransportRegistry.js';
+import { CodecRegistry } from './codecRegistry.js';
+import { MediaFrameNormalizer } from './mediaFrameNormalizer.js';
+import { JitterBuffer } from './jitterBuffer.js';
+import { BackpressureController } from './backpressureController.js';
+import { VadDetector } from './vadDetector.js';
+import { BargeInController } from './bargeInController.js';
+import { MediaMetrics } from './mediaMetrics.js';
+import { MediaError } from './mediaErrors.js';
+import type { AudioFormat, AudioFrame, MediaSessionProjection, MediaSessionState, SyntheticFixture } from './mediaTypes.js';
+import { SyntheticMediaAdapter } from './transports/syntheticMediaAdapter.js';
+
+const transitions: Record<MediaSessionState, MediaSessionState[]> = {
+  created: ['negotiating', 'failed', 'cancelled'], negotiating: ['ready', 'failed', 'cancelled'], ready: ['streaming', 'failed', 'cancelled'],
+  streaming: ['paused', 'draining', 'failed', 'cancelled'], paused: ['streaming', 'draining', 'failed', 'cancelled'],
+  draining: ['completed', 'failed', 'cancelled'], completed: [], failed: [], cancelled: []
+};
+type Runtime = { tenantId: number; adapter: SyntheticMediaAdapter; aborter: AbortController; jitter: JitterBuffer; ingress: BackpressureController<AudioFrame>; egress: BackpressureController<AudioFrame>; vad: VadDetector; barge: BargeInController; metrics: MediaMetrics; unsubscribe: () => void; started: number; events: number; vadState: string; overloadReported: boolean };
+
+export class MediaSessionService {
+  private readonly repo: MediaSessionRepository;
+  private readonly runtimes = new Map<number, Runtime>();
+  private readonly normalizer = new MediaFrameNormalizer();
+  private readonly codecs = new CodecRegistry();
+  constructor(private readonly store: AiPlatformStore, private readonly audit: AiAuditService, private readonly registry: MediaTransportRegistry, private readonly isEnabled: () => Promise<boolean>) { this.repo = new MediaSessionRepository(store); }
+  private projection(row: any, runtime?: Runtime): MediaSessionProjection {
+    const metadata = JSON.parse(row.metadata_json || '{}');
+    return { id: Number(row.id), tenantId: Number(row.tenant_id), voiceSessionId: Number(row.voice_session_id), transportMode: row.transport_mode, state: row.state, codecIn: row.codec_in, codecOut: row.codec_out, sampleRateIn: Number(row.sample_rate_in), sampleRateOut: Number(row.sample_rate_out), channelsIn: Number(row.channels_in), channelsOut: Number(row.channels_out), frameDurationMs: Number(row.frame_duration_ms), ingressFrames: Number(row.ingress_frames), egressFrames: Number(row.egress_frames), ingressBytes: Number(row.ingress_bytes), egressBytes: Number(row.egress_bytes), droppedFrames: Number(row.dropped_frames), reorderedFrames: Number(row.reordered_frames), duplicateFrames: Number(row.duplicate_frames), jitterMsAvg: row.jitter_ms_avg === null ? null : Number(row.jitter_ms_avg), jitterMsP95: row.jitter_ms_p95 === null ? null : Number(row.jitter_ms_p95), ingressLatencyMsAvg: row.ingress_latency_ms_avg === null ? null : Number(row.ingress_latency_ms_avg), egressLatencyMsAvg: row.egress_latency_ms_avg === null ? null : Number(row.egress_latency_ms_avg), firstAudioAt: row.first_audio_at || null, lastAudioAt: row.last_audio_at || null, startedAt: row.started_at, endedAt: row.ended_at || null, failureCode: row.failure_code || null, vadState: runtime?.vadState || metadata.vadState || 'silence', bargeInCount: runtime?.barge.count || Number(metadata.bargeInCount || 0), queueDepth: (runtime?.ingress.depth() || 0) + (runtime?.egress.depth() || 0), memoryEstimateBytes: (runtime?.ingress.memoryEstimate(640) || 0) + (runtime?.egress.memoryEstimate(640) || 0) };
+  }
+  private async row(tenantId: number, id: number) { const rows = await this.repo.get(tenantId, id); if (!rows[0]) throw new MediaError('not_found', 404, 'Media session not found'); return rows[0]; }
+  async get(tenantId: number, id: number) { return this.projection(await this.row(tenantId, id), this.runtimes.get(id)); }
+  async list(tenantId: number, limit: number, offset: number) { return (await this.repo.list(tenantId, limit, offset)).map(row => this.projection(row, this.runtimes.get(Number(row.id)))); }
+  private async transition(tenantId: number, id: number, to: MediaSessionState, traceId: string, failureCode: string | null = null) {
+    const row = await this.row(tenantId, id); if (row.state === to) return;
+    if (!transitions[row.state as MediaSessionState]?.includes(to)) throw new MediaError('conflict', 409, 'Invalid media session transition');
+    const result: any = await this.repo.transition(tenantId, id, row.state, to, failureCode); if (!result.affectedRows) throw new MediaError('conflict', 409, 'Concurrent media session transition');
+    const eventType = to === 'ready' ? 'media_session_ready' : to === 'streaming' ? 'media_stream_started' : to === 'completed' ? 'media_session_completed' : to === 'failed' ? 'media_session_failed' : to === 'paused' ? 'media_stream_paused' : 'media_stream_resumed';
+    await this.audit.append({ tenantId, traceId, actorType: 'service', eventType, entityType: 'voice_media_session', entityId: String(id), decision: to, details: { failureCode } });
+  }
+  async createSynthetic(input: { tenantId: number; voiceSessionId: number; traceId: string; format?: AudioFormat }) {
+    if (!(await this.isEnabled())) throw new MediaError('feature_disabled', 503, 'Voice media transport is disabled');
+    if (this.runtimes.size >= 2) throw new MediaError('concurrency_limited', 429, 'Synthetic media session limit reached');
+    const voice = (await this.store.query("SELECT id,state FROM ai_voice_sessions WHERE tenant_id=? AND id=? LIMIT 1", [input.tenantId, input.voiceSessionId]))[0];
+    if (!voice) throw new MediaError('not_found', 404, 'Voice session not found');
+    if (!['active', 'waiting_for_media'].includes(voice.state)) throw new MediaError('conflict', 409, 'Voice session is not active');
+    if ((await this.repo.findActive(input.tenantId, input.voiceSessionId))[0]) throw new MediaError('conflict', 409, 'Active media session already exists');
+    const format = input.format || this.codecs.preferredInternalFormat; this.codecs.negotiate(format, format); this.registry.get('synthetic');
+    const id = await this.repo.create(input.tenantId, input.voiceSessionId, 'synthetic', format);
+    await this.audit.append({ tenantId: input.tenantId, traceId: input.traceId, actorType: 'user', eventType: 'media_session_created', entityType: 'voice_media_session', entityId: String(id), decision: 'created', details: { transportMode: 'synthetic', codec: format.codec, sampleRate: format.sampleRate } });
+    await this.transition(input.tenantId, id, 'negotiating', input.traceId);
+    await this.audit.append({ tenantId: input.tenantId, traceId: input.traceId, actorType: 'service', eventType: 'media_negotiation_started', entityType: 'voice_media_session', entityId: String(id), decision: 'started', details: {} });
+    const adapter = new SyntheticMediaAdapter(), aborter = new AbortController();
+    const runtime: Runtime = { tenantId: input.tenantId, adapter, aborter, jitter: new JitterBuffer(), ingress: new BackpressureController(100, 80, 30), egress: new BackpressureController(100, 80, 30), vad: new VadDetector(), barge: new BargeInController(), metrics: new MediaMetrics(), unsubscribe: () => {}, started: Date.now(), events: 0, vadState: 'silence', overloadReported: false };
+    await adapter.createTransport({ tenantId: input.tenantId, traceId: input.traceId, voiceSessionId: input.voiceSessionId, mediaSessionId: id, format, signal: aborter.signal });
+    runtime.unsubscribe = adapter.subscribeFrames(frame => this.ingest(input.tenantId, id, frame, input.traceId)); this.runtimes.set(id, runtime); await adapter.start();
+    await this.transition(input.tenantId, id, 'ready', input.traceId); await this.transition(input.tenantId, id, 'streaming', input.traceId);
+    await this.store.query("UPDATE ai_voice_sessions SET media_state='connected' WHERE tenant_id=? AND id=?", [input.tenantId, input.voiceSessionId]); return this.get(input.tenantId, id);
+  }
+  private async ingest(tenantId: number, id: number, frame: AudioFrame, traceId: string) {
+    const runtime = this.runtimes.get(id); if (!runtime) return;
+    if (Date.now() - runtime.started > 60_000 || runtime.events++ >= 3000) { await this.fail(tenantId, id, traceId, 'media_limit_exceeded'); return; }
+    if (Date.now() - frame.timestampMs > 5_000) { await this.fail(tenantId, id, traceId, 'event_loop_lag'); return; }
+    const normalized = this.normalizer.toInternal(frame), accepted = runtime.ingress.push(normalized);
+    if (!accepted && !runtime.overloadReported) { runtime.overloadReported = true; await this.audit.append({ tenantId, traceId, actorType: 'service', eventType: 'media_overloaded', entityType: 'voice_media_session', entityId: String(id), decision: 'dropping', details: { queue: 'ingress' } }); }
+    const ready = runtime.jitter.push(normalized);
+    for (const item of ready) {
+      runtime.metrics.record(item.payload.byteLength, 'ingress', item.timestampMs);
+      const pcm = new Int16Array(item.payload.buffer, item.payload.byteOffset, item.payload.byteLength / 2), event = runtime.vad.process(pcm, item.durationMs), previous = runtime.vadState;
+      runtime.vadState = event.type.startsWith('speech') ? 'speech' : 'silence';
+      if (event.type === 'speech_started') {
+        runtime.metrics.vadTransitions++; await this.audit.append({ tenantId, traceId, actorType: 'service', eventType: 'vad_speech_started', entityType: 'voice_media_session', entityId: String(id), decision: 'detected', details: { confidence: event.confidence, energyLevel: Math.round(event.energyLevel) } });
+        if (runtime.barge.onSpeechStarted()) { runtime.metrics.bargeInCount++; runtime.metrics.playbackInterruptions++; await this.audit.append({ tenantId, traceId, actorType: 'service', eventType: 'barge_in_detected', entityType: 'voice_media_session', entityId: String(id), decision: 'interrupt', details: {} }); await this.audit.append({ tenantId, traceId, actorType: 'service', eventType: 'playback_cancel_requested', entityType: 'voice_media_session', entityId: String(id), decision: 'cancelled', details: {} }); }
+      } else if (event.type === 'speech_ended' && previous === 'speech') { runtime.metrics.vadTransitions++; await this.audit.append({ tenantId, traceId, actorType: 'service', eventType: 'vad_speech_ended', entityType: 'voice_media_session', entityId: String(id), decision: 'detected', details: {} }); }
+    }
+    runtime.ingress.clear(); await this.persist(tenantId, id, runtime);
+  }
+  async fixture(tenantId: number, id: number, type: SyntheticFixture, count: number, traceId: string) { const runtime = this.runtimes.get(id); if (!runtime || runtime.tenantId !== tenantId) throw new MediaError('not_found', 404, 'Active synthetic media session not found'); await runtime.adapter.fixture(type, count); return this.get(tenantId, id); }
+  async bargeIn(tenantId: number, id: number, traceId: string) { const runtime = this.runtimes.get(id); if (!runtime || runtime.tenantId !== tenantId) throw new MediaError('not_found', 404, 'Active synthetic media session not found'); const row = await this.row(tenantId, id), payload = new Uint8Array(Number(row.sample_rate_out) * Number(row.frame_duration_ms) / 500); runtime.egress.push({ sequence: runtime.metrics.egressFrames, timestampMs: Date.now(), direction: 'egress', codec: 'slin16', sampleRate: 16000, channels: 1, durationMs: 20, payload, source: 'synthetic_playback', traceId, voiceSessionId: Number(row.voice_session_id), mediaSessionId: id }); runtime.metrics.record(payload.byteLength, 'egress', Date.now()); runtime.barge.onPlaybackStarted(); if (runtime.barge.onSpeechStarted()) { runtime.metrics.bargeInCount++; runtime.metrics.playbackInterruptions++; runtime.egress.clear(); await this.audit.append({ tenantId, traceId, actorType: 'service', eventType: 'barge_in_detected', entityType: 'voice_media_session', entityId: String(id), decision: 'interrupt', details: { synthetic: true } }); await this.audit.append({ tenantId, traceId, actorType: 'service', eventType: 'playback_cancel_requested', entityType: 'voice_media_session', entityId: String(id), decision: 'cancelled', details: { synthetic: true } }); } await runtime.adapter.fixture('speech', 4); await this.persist(tenantId, id, runtime); return this.get(tenantId, id); }
+  private async persist(tenantId: number, id: number, runtime: Runtime) { const jitter = runtime.jitter.metrics(); runtime.metrics.droppedFrames = runtime.ingress.dropped + runtime.egress.dropped + jitter.dropped; runtime.metrics.reorderedFrames = jitter.reordered; runtime.metrics.duplicateFrames = jitter.duplicates; await this.repo.metrics(tenantId, id, { ...runtime.metrics, jitterAvg: jitter.jitterAvg, jitterP95: jitter.jitterP95, ingressLatency: runtime.metrics.averageLatency(), egressLatency: null, firstAudioAt: runtime.metrics.firstFrameAt ? new Date(runtime.metrics.firstFrameAt) : null, lastAudioAt: runtime.metrics.lastFrameAt ? new Date(runtime.metrics.lastFrameAt) : null, metadata: redactAiPlatformValue({ vadState: runtime.vadState, bargeInCount: runtime.barge.count, playbackInterruptions: runtime.barge.interruptions }).value }); }
+  async stop(tenantId: number, id: number, traceId: string, terminal: 'completed' | 'cancelled' = 'completed') { const runtime = this.runtimes.get(id); if (runtime && runtime.tenantId !== tenantId) throw new MediaError('not_found', 404, 'Media session not found'); if (runtime) { runtime.aborter.abort(); runtime.unsubscribe(); runtime.jitter.clear(); runtime.ingress.clear(); runtime.egress.clear(); runtime.barge.reset(); await runtime.adapter.stop(); await this.persist(tenantId, id, runtime); this.runtimes.delete(id); } const row = await this.row(tenantId, id); if (!['completed', 'failed', 'cancelled'].includes(row.state)) { if (['streaming', 'paused'].includes(row.state)) await this.transition(tenantId, id, 'draining', traceId); await this.transition(tenantId, id, terminal, traceId); } await this.store.query("UPDATE ai_voice_sessions v JOIN ai_voice_media_sessions m ON m.voice_session_id=v.id SET v.media_state='disconnected' WHERE m.tenant_id=? AND m.id=?", [tenantId, id]); return this.get(tenantId, id); }
+  async fail(tenantId: number, id: number, traceId: string, code: string) { const runtime = this.runtimes.get(id); if (runtime) { runtime.aborter.abort(); runtime.unsubscribe(); await runtime.adapter.stop(); this.runtimes.delete(id); } await this.transition(tenantId, id, 'failed', traceId, code); return this.get(tenantId, id); }
+  async closeForVoiceSession(tenantId: number, voiceSessionId: number, traceId: string) { const row = (await this.repo.findActive(tenantId, voiceSessionId))[0]; return row ? this.stop(tenantId, Number(row.id), traceId) : null; }
+  activeCount() { return this.runtimes.size; }
+  async shutdown() { for (const [id, runtime] of [...this.runtimes]) await this.stop(runtime.tenantId, id, 'shutdown', 'cancelled').catch(() => {}); }
+}

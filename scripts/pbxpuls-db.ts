@@ -17,7 +17,7 @@ const requiredTables = [
   'security_file_changes', 'security_alert_rules', 'security_alert_history', 'security_scan_runs',
   'ai_tenants', 'ai_agents', 'ai_agent_versions', 'ai_provider_configs', 'ai_tools', 'ai_agent_tools',
   'ai_behavior_profiles', 'ai_audit_log', 'ai_tool_executions', 'ai_transfer_requests',
-  'ai_action_definitions', 'ai_actions', 'ai_agent_actions', 'ai_callback_requests', 'ai_voice_sessions', 'ai_voice_route_bindings'
+  'ai_action_definitions', 'ai_actions', 'ai_agent_actions', 'ai_callback_requests', 'ai_voice_sessions', 'ai_voice_route_bindings', 'ai_voice_media_sessions'
 ];
 
 function parseFreePBXConfig(): Record<string, string> {
@@ -105,10 +105,10 @@ async function inspect() {
     const connection = await connect(config);
     const [rows] = await connection.query('SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = ?', [config.database]);
     const [grantRows] = await connection.query('SHOW GRANTS FOR CURRENT_USER');
-    const [aiSettingRows] = await connection.query("SELECT setting_key,setting_value FROM settings WHERE setting_key IN ('ai.platform_core_enabled','ai.write_tools_enabled','ai.voice_control_plane_enabled')");
+    const [aiSettingRows] = await connection.query("SELECT setting_key,setting_value FROM settings WHERE setting_key IN ('ai.platform_core_enabled','ai.write_tools_enabled','ai.voice_control_plane_enabled','ai.voice_media_transport_enabled','ai.voice_media_transport_mode')");
     const [aiPermissionRows] = await connection.query(`SELECT p.permission_key,r.role_key FROM permissions p
       LEFT JOIN role_permissions rp ON rp.permission_id=p.id LEFT JOIN roles r ON r.id=rp.role_id
-      WHERE p.permission_key IN ('view_ai_tool_executions','test_ai_tools','view_ai_transfer_requests','manage_ai_transfer_policies','test_ai_human_transfer','view_ai_actions','manage_ai_actions','execute_ai_low_risk_actions','view_ai_callback_requests','manage_ai_callback_requests','assign_ai_actions','view_ai_voice_status','view_ai_voice_sessions','manage_ai_voice_bindings','control_ai_voice_gateway','test_ai_voice_gateway')`);
+      WHERE p.permission_key IN ('view_ai_tool_executions','test_ai_tools','view_ai_transfer_requests','manage_ai_transfer_policies','test_ai_human_transfer','view_ai_actions','manage_ai_actions','execute_ai_low_risk_actions','view_ai_callback_requests','manage_ai_callback_requests','assign_ai_actions','view_ai_voice_status','view_ai_voice_sessions','manage_ai_voice_bindings','control_ai_voice_gateway','test_ai_voice_gateway','view_ai_voice_media_status','view_ai_voice_media_sessions','test_ai_voice_media','manage_ai_voice_media')`);
     const [aiToolColumnRows] = await connection.query(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
       WHERE TABLE_SCHEMA=? AND TABLE_NAME='ai_tool_executions'`, [config.database]);
     const [aiToolIndexRows] = await connection.query(`SELECT DISTINCT INDEX_NAME FROM information_schema.STATISTICS
@@ -124,6 +124,9 @@ async function inspect() {
     const [aiVoiceColumnRows]=await connection.query(`SELECT TABLE_NAME,COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME IN('ai_voice_sessions','ai_voice_route_bindings')`,[config.database]);
     const [aiVoiceIndexRows]=await connection.query(`SELECT TABLE_NAME,INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=? AND TABLE_NAME IN('ai_voice_sessions','ai_voice_route_bindings')`,[config.database]);
     const [aiVoiceForeignKeyRows]=await connection.query(`SELECT TABLE_NAME,CONSTRAINT_NAME FROM information_schema.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA=? AND TABLE_NAME IN('ai_voice_sessions','ai_voice_route_bindings')`,[config.database]);
+    const [aiVoiceMediaColumnRows]=await connection.query(`SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME='ai_voice_media_sessions'`,[config.database]);
+    const [aiVoiceMediaIndexRows]=await connection.query(`SELECT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=? AND TABLE_NAME='ai_voice_media_sessions'`,[config.database]);
+    const [aiVoiceMediaForeignKeyRows]=await connection.query(`SELECT CONSTRAINT_NAME FROM information_schema.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA=? AND TABLE_NAME='ai_voice_media_sessions'`,[config.database]);
     await connection.end();
     const tables = new Set((rows as any[]).map(row => String(row.TABLE_NAME)));
     result.pbxpulsDbConnected = true;
@@ -137,6 +140,8 @@ async function inspect() {
     result.aiPlatformCoreEnabled = aiSettings.get('ai.platform_core_enabled') === 'true';
     result.aiWriteToolsEnabled = aiSettings.get('ai.write_tools_enabled') === 'true';
     result.aiVoiceControlPlaneEnabled = aiSettings.get('ai.voice_control_plane_enabled') === 'true';
+    result.aiVoiceMediaTransportEnabled = aiSettings.get('ai.voice_media_transport_enabled') === 'true';
+    result.aiVoiceMediaTransportMode = aiSettings.get('ai.voice_media_transport_mode') || 'synthetic';
     const toolPermissionRows = aiPermissionRows as any[];
     result.aiToolPermissionsRestrictedToSuAdmin = ['view_ai_tool_executions','test_ai_tools'].every(permission =>
       toolPermissionRows.some(row => row.permission_key === permission)) && toolPermissionRows.every(row => ['su','admin'].includes(String(row.role_key)));
@@ -145,6 +150,7 @@ async function inspect() {
     const actionPermissions=['view_ai_actions','manage_ai_actions','execute_ai_low_risk_actions','view_ai_callback_requests','manage_ai_callback_requests','assign_ai_actions'];
     result.aiActionPermissionsRestrictedToSuAdmin=actionPermissions.every(permission=>toolPermissionRows.some(row=>row.permission_key===permission))&&toolPermissionRows.filter(row=>actionPermissions.includes(row.permission_key)).every(row=>['su','admin'].includes(String(row.role_key)));
     const voicePermissions=['view_ai_voice_status','view_ai_voice_sessions','manage_ai_voice_bindings','control_ai_voice_gateway','test_ai_voice_gateway'];result.aiVoicePermissionsRestrictedToSuAdmin=voicePermissions.every(permission=>toolPermissionRows.some(row=>row.permission_key===permission))&&toolPermissionRows.filter(row=>voicePermissions.includes(row.permission_key)).every(row=>['su','admin'].includes(String(row.role_key)));
+    const mediaPermissions=['view_ai_voice_media_status','view_ai_voice_media_sessions','test_ai_voice_media','manage_ai_voice_media'];result.aiVoiceMediaPermissionsRestrictedToSuAdmin=mediaPermissions.every(permission=>toolPermissionRows.some(row=>row.permission_key===permission))&&toolPermissionRows.filter(row=>mediaPermissions.includes(row.permission_key)).every(row=>['su','admin'].includes(String(row.role_key)));
     const toolColumns = new Set((aiToolColumnRows as any[]).map(row => String(row.COLUMN_NAME)));
     result.aiToolExecutionsSchemaOk = ['tenant_id','trace_id','conversation_id','agent_id','agent_version_id','tool_id','tool_key','executor_key','status','risk_level','input_json','input_hash','output_json','error_code','duration_ms','actor_id','idempotency_key','completed_at'].every(column => toolColumns.has(column));
     const toolIndexes = new Set((aiToolIndexRows as any[]).map(row => String(row.INDEX_NAME)));
@@ -159,6 +165,7 @@ async function inspect() {
     result.aiActionsForeignKeysOk=(aiActionForeignKeyRows as any[]).length>=12;
     const voiceColumns=aiVoiceColumnRows as any[],hasVoiceColumns=(table:string,columns:string[])=>columns.every(column=>voiceColumns.some(row=>row.TABLE_NAME===table&&row.COLUMN_NAME===column));result.aiVoiceSchemaOk=hasVoiceColumns('ai_voice_sessions',['tenant_id','conversation_id','agent_id','agent_version_id','external_call_id_hash','ari_channel_id_encrypted','ari_channel_id_hash','state','media_state','provider_state','last_event_at'])&&hasVoiceColumns('ai_voice_route_bindings',['tenant_id','binding_key','match_type','match_value_hash','agent_id','agent_version_id','dry_run_only']);
     const voiceIndexes=aiVoiceIndexRows as any[];result.aiVoiceIndexesOk=['idx_ai_voice_session_tenant_state','idx_ai_voice_session_channel','idx_ai_voice_binding_match'].every(index=>voiceIndexes.some(row=>row.INDEX_NAME===index));result.aiVoiceForeignKeysOk=(aiVoiceForeignKeyRows as any[]).length>=8;
+    const mediaColumns=new Set((aiVoiceMediaColumnRows as any[]).map(row=>String(row.COLUMN_NAME)));result.aiVoiceMediaSchemaOk=['tenant_id','voice_session_id','transport_mode','state','codec_in','codec_out','sample_rate_in','sample_rate_out','ingress_frames','egress_frames','dropped_frames','jitter_ms_avg','failure_code','metadata_json'].every(column=>mediaColumns.has(column));const mediaIndexes=new Set((aiVoiceMediaIndexRows as any[]).map(row=>String(row.INDEX_NAME)));result.aiVoiceMediaIndexesOk=['idx_ai_voice_media_tenant_state','idx_ai_voice_media_voice_session'].every(index=>mediaIndexes.has(index));result.aiVoiceMediaForeignKeysOk=(aiVoiceMediaForeignKeyRows as any[]).length>=2;
   } catch (error: any) {
     result.reason = String(error?.message || error).replace(/(password|passwd)\s*[:=]\s*\S+/gi, '$1=********').slice(0, 300);
   }

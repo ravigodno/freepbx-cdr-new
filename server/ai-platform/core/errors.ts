@@ -23,6 +23,9 @@ export type AiPlatformErrorCode =
   | 'consent_required'
   | 'action_timeout'
   | 'action_failed'
+  | 'unsupported_codec'
+  | 'invalid_audio_frame'
+  | 'concurrency_limited'
   | 'internal_error';
 
 export class AiPlatformError extends Error {
