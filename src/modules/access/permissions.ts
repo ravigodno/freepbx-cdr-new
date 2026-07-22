@@ -71,7 +71,14 @@ export type PermissionKey =
   | 'view_ai_audit'
   | 'execute_ai_read_tools'
   | 'approve_ai_actions'
-  | 'manage_ai_platform';
+  | 'manage_ai_platform'
+  | 'create_ai_agents'
+  | 'clone_ai_agents'
+  | 'publish_ai_agents'
+  | 'manage_ai_templates'
+  | 'manage_ai_behavior_profiles'
+  | 'manage_ai_policies'
+  | 'run_ai_test_sessions';
 
 export type UserPermissions = Partial<Record<PermissionKey, boolean>>;
 

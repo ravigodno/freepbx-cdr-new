@@ -4,6 +4,7 @@ import { parseJsonObject } from '../core/redaction.js';
 import type { AiPlatformStore } from '../storage/aiPlatformStore.js';
 import { insertId } from '../storage/aiPlatformStore.js';
 import type { AiAuditService } from '../audit/aiAuditService.js';
+import { AgentConfigurationValidator, containsAiConfigSecrets } from './agentConfigurationValidator.js';
 
 export interface LifecycleActor { traceId: string; actorType: 'user'|'system'|'service'; actorId: string|null }
 export interface AgentDraftInput { agentKey: string; name: string; agentType: string; config: Record<string,unknown>; systemPrompt?: string }
@@ -23,6 +24,7 @@ export class AgentLifecycleService {
 
   async createAgentDraft(tenantId: number, input: AgentDraftInput, actor: LifecycleActor) {
     const config = parseJsonObject(input.config, 'config');
+    if(containsAiConfigSecrets(config))throw new AiPlatformError('invalid_request',400,'Secrets are not allowed in agent config');
     const unknown = await this.findUnknownToolIds(tenantId, config);
     if (unknown.length) throw new AiPlatformError('invalid_request',400,'Agent config references unknown tools');
     const result: any = await this.store.query('INSERT INTO ai_agents (tenant_id,agent_key,name,agent_type,status,created_by) VALUES (?,?,?,?,?,?)',
@@ -37,6 +39,7 @@ export class AgentLifecycleService {
     const agents = await this.store.query('SELECT id FROM ai_agents WHERE id=? AND tenant_id=? LIMIT 1',[agentId,tenantId]);
     if (!agents.length) throw new AiPlatformError('not_found',404,'Agent not found');
     const config = parseJsonObject(input.config,'config');
+    if(containsAiConfigSecrets(config))throw new AiPlatformError('invalid_request',400,'Secrets are not allowed in agent config');
     const unknown = await this.findUnknownToolIds(tenantId, config);
     if (unknown.length) throw new AiPlatformError('invalid_request',400,'Agent config references unknown tools');
     const numbers = await this.store.query('SELECT COALESCE(MAX(version_number),0)+1 next_version FROM ai_agent_versions WHERE agent_id=?',[agentId]);
@@ -54,6 +57,7 @@ export class AgentLifecycleService {
     if(row.lifecycle_status!=='draft')throw new AiPlatformError('conflict',409,'Only draft versions can be published');
     const config=parseJsonObject(row.config_json,'config_json'); const unknown=await this.findUnknownToolIds(tenantId,config);
     if(unknown.length)throw new AiPlatformError('invalid_request',400,'Agent config references unknown tools');
+    await new AgentConfigurationValidator(this.store).assertValid(tenantId,{templateId:Number(config.templateId||0)||null,behaviorProfileId:Number(config.behaviorProfileId||0)||null,config,prompt:row.system_prompt});
     const digest=checksum(config,String(row.system_prompt||''));
     await this.store.query(`UPDATE ai_agent_versions SET lifecycle_status='published',checksum=?,published_at=NOW() WHERE id=? AND lifecycle_status='draft'`,[digest,versionId]);
     await this.store.query(`UPDATE ai_agents SET current_version_id=?,status='active',updated_at=NOW() WHERE id=? AND tenant_id=?`,[versionId,agentId,tenantId]);
@@ -66,6 +70,7 @@ export class AgentLifecycleService {
     if(!rows.length)throw new AiPlatformError('not_found',404,'Agent version not found');
     if(rows[0].lifecycle_status!=='draft')throw new AiPlatformError('conflict',409,'Published and archived versions are immutable');
     const config=parseJsonObject(input.config,'config');const unknown=await this.findUnknownToolIds(tenantId,config);
+    if(containsAiConfigSecrets(config))throw new AiPlatformError('invalid_request',400,'Secrets are not allowed in agent config');
     if(unknown.length)throw new AiPlatformError('invalid_request',400,'Agent config references unknown tools');
     await this.store.query(`UPDATE ai_agent_versions SET config_json=?,system_prompt=?,checksum=NULL
       WHERE id=? AND agent_id=? AND tenant_id=? AND lifecycle_status='draft'`,[JSON.stringify(config),String(input.systemPrompt||''),versionId,agentId,tenantId]);

@@ -835,8 +835,92 @@ const MIGRATIONS: Migration[] = [
        WHERE r.role_key IN ('su','admin')`
     ],
     seed: seedAiPlatformCoreFoundation
+  },
+  {
+    key: '20260722_027_ai_agent_builder_behavior_foundation',
+    description: 'Add AI Agent Builder and Human Behavior Engine foundation',
+    statements: [
+      `ALTER TABLE ai_behavior_profiles
+        ADD COLUMN response_style_json LONGTEXT NULL,
+        ADD COLUMN emotion_model_json LONGTEXT NULL,
+        ADD COLUMN voice_behavior_json LONGTEXT NULL,
+        ADD COLUMN conversation_rules_json LONGTEXT NULL,
+        ADD COLUMN transfer_policy_json LONGTEXT NULL,
+        ADD COLUMN safety_policy_json LONGTEXT NULL`,
+      `CREATE TABLE IF NOT EXISTS ai_agent_templates (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, tenant_id BIGINT NULL, template_key VARCHAR(100) NOT NULL,
+        name VARCHAR(191) NOT NULL, description VARCHAR(500) NOT NULL, agent_type VARCHAR(100) NOT NULL,
+        industry VARCHAR(100) NULL, default_prompt LONGTEXT NOT NULL, default_behavior_profile_id BIGINT NULL,
+        default_tools_json LONGTEXT NOT NULL, default_permissions_json LONGTEXT NOT NULL,
+        status ENUM('active','disabled','archived') NOT NULL DEFAULT 'active', created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NULL,
+        UNIQUE KEY uniq_ai_agent_template (tenant_id,template_key), INDEX idx_ai_templates_tenant_status (tenant_id,status),
+        CONSTRAINT fk_ai_templates_tenant FOREIGN KEY (tenant_id) REFERENCES ai_tenants(id),
+        CONSTRAINT fk_ai_templates_behavior FOREIGN KEY (default_behavior_profile_id) REFERENCES ai_behavior_profiles(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS ai_agent_prompt_versions (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, tenant_id BIGINT NOT NULL, agent_version_id BIGINT NOT NULL,
+        version_number INT NOT NULL, prompt_text LONGTEXT NOT NULL, change_reason VARCHAR(500) NULL, checksum CHAR(64) NOT NULL,
+        created_by VARCHAR(191) NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_ai_prompt_version (agent_version_id,version_number), INDEX idx_ai_prompt_tenant (tenant_id),
+        CONSTRAINT fk_ai_prompt_tenant FOREIGN KEY (tenant_id) REFERENCES ai_tenants(id),
+        CONSTRAINT fk_ai_prompt_agent_version FOREIGN KEY (agent_version_id) REFERENCES ai_agent_versions(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS ai_transfer_policies (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, tenant_id BIGINT NULL, policy_key VARCHAR(100) NOT NULL, name VARCHAR(191) NOT NULL,
+        rules_json LONGTEXT NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_ai_transfer_policy (tenant_id,policy_key), CONSTRAINT fk_ai_transfer_tenant FOREIGN KEY (tenant_id) REFERENCES ai_tenants(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS ai_autonomy_policies (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, tenant_id BIGINT NULL, policy_key VARCHAR(100) NOT NULL,
+        level ENUM('SAFE','ASSISTED','AUTONOMOUS') NOT NULL, rules_json LONGTEXT NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_ai_autonomy_policy (tenant_id,policy_key), CONSTRAINT fk_ai_autonomy_tenant FOREIGN KEY (tenant_id) REFERENCES ai_tenants(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS ai_agent_test_sessions (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, tenant_id BIGINT NOT NULL, agent_id BIGINT NOT NULL, agent_version_id BIGINT NOT NULL,
+        started_by VARCHAR(191) NULL, status ENUM('created','completed','failed','cancelled') NOT NULL DEFAULT 'created',
+        transcript_json LONGTEXT NOT NULL, result_json LONGTEXT NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_ai_test_sessions_tenant_time (tenant_id,created_at),
+        CONSTRAINT fk_ai_test_tenant FOREIGN KEY (tenant_id) REFERENCES ai_tenants(id),
+        CONSTRAINT fk_ai_test_agent FOREIGN KEY (agent_id) REFERENCES ai_agents(id),
+        CONSTRAINT fk_ai_test_version FOREIGN KEY (agent_version_id) REFERENCES ai_agent_versions(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `INSERT IGNORE INTO permissions (permission_key,name,description,category) VALUES
+        ('create_ai_agents','Create AI agents','Create draft AI agents from templates','ai_platform'),
+        ('clone_ai_agents','Clone AI agents','Clone tenant AI agent configurations','ai_platform'),
+        ('publish_ai_agents','Publish AI agents','Publish validated immutable AI agent versions','ai_platform'),
+        ('manage_ai_templates','Manage AI templates','Manage tenant AI agent templates','ai_platform'),
+        ('manage_ai_behavior_profiles','Manage AI behavior profiles','Manage tenant behavior profiles','ai_platform'),
+        ('manage_ai_policies','Manage AI policies','Manage transfer and autonomy policies','ai_platform'),
+        ('run_ai_test_sessions','Run AI test sessions','Create non-runtime AI playground sessions','ai_platform')`,
+      `INSERT IGNORE INTO role_permissions (role_id,permission_id)
+       SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key IN
+       ('create_ai_agents','clone_ai_agents','publish_ai_agents','manage_ai_templates','manage_ai_behavior_profiles','manage_ai_policies','run_ai_test_sessions')
+       WHERE r.role_key IN ('su','admin')`
+    ],
+    seed: seedAiAgentBuilderFoundation
   }
 ];
+
+async function seedAiAgentBuilderFoundation(connection: Connection): Promise<void> {
+  const [tenantRows] = await connection.query("SELECT id FROM ai_tenants WHERE tenant_key='installation' LIMIT 1");
+  const tenantId=Number((tenantRows as any[])[0]?.id||0);if(!tenantId)throw new Error('AI installation tenant is required');
+  await connection.execute(`UPDATE ai_behavior_profiles SET response_style_json=?,emotion_model_json=?,voice_behavior_json=?,conversation_rules_json=?,transfer_policy_json=?,safety_policy_json=? WHERE tenant_id=? AND profile_key='natural_receptionist_default'`,[
+    JSON.stringify({responseStyle:'natural',verbosity:'short',professionalism:80,humorLevel:10}),JSON.stringify({emotionLevel:70,empathyLevel:80}),JSON.stringify({maxVoiceSeconds:8,allowInterrupt:true,voiceEnabled:false}),JSON.stringify({confirmationFrequency:35,maxSentences:3,multilingual:true}),JSON.stringify({policyKey:'human_first_transfer',priority:'CRITICAL'}),JSON.stringify({secretsAllowed:false,toolExecution:'disabled'}),tenantId]);
+  const [behaviorRows]=await connection.query("SELECT id FROM ai_behavior_profiles WHERE tenant_id=? AND profile_key='natural_receptionist_default' LIMIT 1",[tenantId]);
+  const behaviorId=Number((behaviorRows as any[])[0]?.id||0);
+  const templates=[
+    ['receptionist_default','AI Receptionist','Виртуальный администратор компании, принимающий обращения клиентов','receptionist','general','Вы — виртуальный администратор компании. Отвечайте естественно, кратко и профессионально. Просьба соединить с человеком имеет высший приоритет.'],
+    ['pbx_admin_default','AI PBXPuls Administrator','Помощник администратора телефонии PBXPuls','telephony_admin','telephony','Вы — помощник администратора телефонии PBXPuls. Используйте только разрешённые безопасные данные и не выполняйте изменения.'],
+    ['sales_manager_default','AI Sales Manager','AI менеджер первичных продаж','sales_manager','sales','Вы — менеджер первичных продаж. Общайтесь кратко, профессионально и уважайте просьбу клиента перейти к человеку.']
+  ];
+  for(const row of templates)await connection.execute(`INSERT INTO ai_agent_templates (tenant_id,template_key,name,description,agent_type,industry,default_prompt,default_behavior_profile_id,default_tools_json,default_permissions_json,status)
+    SELECT NULL,?,?,?,?,?,?,?,'{"toolIds":[]}','{"permissionKeys":[]}','active' FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM ai_agent_templates WHERE tenant_id IS NULL AND template_key=?)`,[row[0],row[1],row[2],row[3],row[4],row[5],behaviorId,row[0]]);
+  await connection.execute(`INSERT INTO ai_transfer_policies (tenant_id,policy_key,name,rules_json)
+    SELECT NULL,'human_first_transfer','Human First Transfer',? FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM ai_transfer_policies WHERE tenant_id IS NULL AND policy_key='human_first_transfer')`,[JSON.stringify({priority:'CRITICAL',triggers:['хочу поговорить с человеком','соедините с оператором','позовите сотрудника','нужен живой человек','переключите'],actions:{stopGeneration:true,stopSales:true,askAdditionalQuestions:false,transferToHuman:true},execution:'voice_gateway_future'})]);
+  await connection.execute(`INSERT INTO ai_autonomy_policies (tenant_id,policy_key,level,rules_json)
+    SELECT NULL,'safe_default','SAFE',? FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM ai_autonomy_policies WHERE tenant_id IS NULL AND policy_key='safe_default')`,[JSON.stringify({readAllowed:true,recommendationsAllowed:true,actionsRequireApproval:true,writeToolsEnabled:false})]);
+  await seedLegacyAiPlatformPermissions(['create_ai_agents','clone_ai_agents','publish_ai_agents','manage_ai_templates','manage_ai_behavior_profiles','manage_ai_policies','run_ai_test_sessions']);
+}
 
 async function seedAiPlatformCoreFoundation(connection: Connection): Promise<void> {
   await ensureAiAgentCurrentVersionForeignKey(connection);
@@ -876,12 +960,12 @@ async function ensureAiAgentCurrentVersionForeignKey(connection: Connection): Pr
   await connection.query('ALTER TABLE ai_agents ADD CONSTRAINT fk_ai_agents_current_version FOREIGN KEY (current_version_id) REFERENCES ai_agent_versions(id)');
 }
 
-async function seedLegacyAiPlatformPermissions(): Promise<void> {
+async function seedLegacyAiPlatformPermissions(additionalPermissions: string[] = []): Promise<void> {
   const legacyPath = path.join(process.cwd(), 'data', 'db.json');
   if (!fs.existsSync(legacyPath)) return;
   const db = JSON.parse(fs.readFileSync(legacyPath, 'utf8'));
   if (!Array.isArray(db.roles)) return;
-  const permissions = ['view_ai_platform','manage_ai_agents','manage_ai_providers','view_ai_tools','manage_ai_tools','view_ai_audit','execute_ai_read_tools','approve_ai_actions','manage_ai_platform'];
+  const permissions = ['view_ai_platform','manage_ai_agents','manage_ai_providers','view_ai_tools','manage_ai_tools','view_ai_audit','execute_ai_read_tools','approve_ai_actions','manage_ai_platform',...additionalPermissions];
   let changed = false;
   for (const role of db.roles) {
     if (!['su','admin'].includes(String(role?.id || ''))) continue;

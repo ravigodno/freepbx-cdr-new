@@ -68,6 +68,7 @@ import {
 import { CallEntry, DashboardStats, AppSettings, UserRole, DirectoryEntry } from './types';
 import ScriptsTab from './components/ScriptsTab';
 import AiAssistantTab from './components/AiAssistantTab';
+import AiAgentBuilderPage from './modules/aiPlatform/AiAgentBuilderPage';
 import AIPBXAdminTab from './components/AIPBXAdminTab';
 import packageJson from '../package.json';
 import SipDialogsTab from './modules/monitoring/tabs/monitoring/SipDialogsTab';
@@ -777,9 +778,10 @@ export default function App() {
   const [timeToNextRefresh, setTimeToNextRefresh] = useState<number>(30);
 
   // --- TELEPHONE DIRECTORY STATE & HANDLERS ---
-  const [activeView, setActiveView] = useState<'calls' | 'directory' | 'reports' | 'marketing' | 'monitoring' | 'management' | 'balance' | 'settings' | 'about' | 'scripts' | 'ai-assistant' | 'ai-pbx-admin'>(() => {
+  const [activeView, setActiveView] = useState<'calls' | 'directory' | 'reports' | 'marketing' | 'monitoring' | 'management' | 'balance' | 'settings' | 'about' | 'scripts' | 'ai-assistant' | 'ai-pbx-admin' | 'ai-platform'>(() => {
     const params = new URLSearchParams(window.location.search);
-    const saved = localStorage.getItem('asterisk_cdr_active_view') as 'calls' | 'directory' | 'reports' | 'marketing' | 'monitoring' | 'management' | 'balance' | 'about' | 'scripts' | 'ai-assistant' | 'ai-pbx-admin' | null;
+    const saved = localStorage.getItem('asterisk_cdr_active_view') as 'calls' | 'directory' | 'reports' | 'marketing' | 'monitoring' | 'management' | 'balance' | 'about' | 'scripts' | 'ai-assistant' | 'ai-pbx-admin' | 'ai-platform' | null;
+    if (window.location.pathname === '/ai-platform/agents') return 'ai-platform';
     if (window.location.pathname === '/management/directory/import') return 'directory';
     if (window.location.pathname === '/directory/import-contacts') return 'directory';
     if (/^\/management\/directory\/contact\/new$/.test(window.location.pathname)) return saved && saved !== 'directory' ? saved : 'directory';
@@ -812,6 +814,7 @@ export default function App() {
 
   useEffect(() => {
     localStorage.setItem('asterisk_cdr_active_view', activeView);
+    if (activeView !== 'ai-platform' && window.location.pathname === '/ai-platform/agents') window.history.replaceState({}, '', '/');
     if (activeView !== 'directory' && /^\/(?:management\/directory|directory\/import-contacts)/.test(window.location.pathname)) {
       window.history.replaceState({}, '', '/');
     }
@@ -3310,6 +3313,7 @@ export default function App() {
     if (hasPermission('view_scripts')) return 'scripts';
     if (hasPermission('view_ai_assistant')) return 'ai-assistant';
     if (hasPermission('view_ai_pbx_admin')) return 'ai-pbx-admin';
+    if (hasPermission('view_ai_platform')) return 'ai-platform';
     if (hasPermission('view_settings') || hasPermission('manage_users') || hasPermission('manage_roles')) return 'settings';
 
     return 'reports';
@@ -3328,6 +3332,7 @@ export default function App() {
     if (view === 'scripts') return hasPermission('view_scripts');
     if (view === 'ai-assistant') return hasPermission('view_ai_assistant');
     if (view === 'ai-pbx-admin') return hasPermission('view_ai_pbx_admin');
+    if (view === 'ai-platform') return hasPermission('view_ai_platform');
     if (view === 'settings') return hasPermission('view_settings') || hasPermission('manage_users') || hasPermission('manage_roles');
     if (view === 'about') return true;
 
@@ -5240,6 +5245,12 @@ export default function App() {
                 </button>
               )}
 
+              {hasPermission('view_ai_platform') && (
+                <button onClick={() => { setActiveView('ai-platform'); window.history.replaceState({}, '', '/ai-platform/agents'); }} className={`flex items-center ${isSidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl transition-all relative group cursor-pointer ${activeView === 'ai-platform' ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-900/30 shadow-inner' : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent'}`} title={isSidebarExpanded ? '' : 'AI Platform'}>
+                  <Bot className="h-5 w-5 shrink-0" />{isSidebarExpanded && <span className="text-xs font-semibold truncate">AI Platform</span>}
+                </button>
+              )}
+
 
           </div></div>
 
@@ -6911,6 +6922,10 @@ export default function App() {
 
     {activeView === 'ai-assistant' && hasPermission('view_ai_assistant') && (
       <AiAssistantTab session={session} hasPermission={hasPermission} />
+    )}
+
+    {activeView === 'ai-platform' && hasPermission('view_ai_platform') && (
+      <AiAgentBuilderPage token={session.token} canCreate={hasPermission('create_ai_agents')} />
     )}
 
 
