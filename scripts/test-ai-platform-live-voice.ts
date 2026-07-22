@@ -1,8 +1,253 @@
-import assert from'node:assert/strict';import net from'node:net';import fs from'node:fs';import{AudioSocketAdapter}from'../server/ai-platform/voice/media/transports/audioSocketAdapter.js';import{SyntheticRealtimeVoiceAdapter}from'../server/ai-platform/voice/providers/adapters/syntheticRealtimeVoiceAdapter.js';import{LiveBridgeService}from'../server/ai-platform/voice/live/liveBridgeService.js';import{buildLiveDialplanPreview}from'../server/ai-platform/voice/live/liveDialplanPreview.js';import{readLiveVoiceConfig}from'../server/ai-platform/voice/live/liveVoiceConfig.js';import{enforceVoiceBindingPolicy}from'../server/ai-platform/voice/voiceSessionPolicy.js';
-const freePort=()=>new Promise<number>((resolve,reject)=>{const server=net.createServer();server.once('error',reject);server.listen(0,'127.0.0.1',()=>{const port=(server.address()as net.AddressInfo).port;server.close(()=>resolve(port))})}),packet=(type:number,payload:Buffer)=>{const result=Buffer.alloc(3+payload.length);result[0]=type;result.writeUInt16BE(payload.length,1);payload.copy(result,3);return result},wirePackets=(chunks:Buffer[])=>{const data=Buffer.concat(chunks),packets:Array<{type:number;length:number}>=[];for(let offset=0;offset+3<=data.length;){const type=data[offset],length=data.readUInt16BE(offset+1);if(offset+3+length>data.length)break;packets.push({type,length});offset+=3+length}return packets};
-async function run(){const settings=new Map([['ai.voice_live_test_enabled','false'],['ai.voice_live_transport','audiosocket'],['ai.voice_live_test_extension','7999'],['ai.realtime_voice_provider','synthetic']]),store:any={query:async()=>[...settings].map(([setting_key,setting_value])=>({setting_key,setting_value}))};process.env.PBXPULS_AI_VOICE_LIVE_ALLOWED_CALLERS='100,200';const config=await readLiveVoiceConfig(store);assert.equal(config.enabled,false);assert.equal(config.transport,'audiosocket');assert.deepEqual(config.allowedCallers,['100','200']);const preview=buildLiveDialplanPreview(config,'');assert.equal(preview.ready,true);assert.match(preview.snippet!,/; BEGIN PBXPuls AI Voice Test/);assert.match(preview.snippet!,/\[from-internal-custom\][\s\S]*Gosub\(pbxpuls-ai-voice-test,7999,1\)/);assert.match(preview.snippet!,/\[pbxpuls-ai-voice-test\][\s\S]*Stasis\(pbxpuls-ai-control,controlled_test\)/);assert.match(preview.snippet!,/Return\(\)[\s\S]*; END PBXPuls AI Voice Test/);assert.doesNotMatch(preview.snippet!,/_X\.|AudioSocket|DID|queue/i);assert.equal(preview.applySupported,false);assert.equal(buildLiveDialplanPreview(config,'exten => 7999,1,NoOp(conflict)').code,'test_extension_conflict');assert.equal(buildLiveDialplanPreview({...config,testExtension:'_X.'}as any,'').code,'invalid_test_extension');assert.equal(buildLiveDialplanPreview({...config,stasisApplication:'bad app'}as any,'').code,'invalid_stasis_application');
- const binding:any={id:1,tenantId:1,bindingKey:'controlled',name:'Controlled',status:'active',matchType:'controlled_test_extension',matchValueHash:'hash',safeMatchLabel:'**99',agentId:1,agentVersionId:1,language:'ru',priority:1,dryRunOnly:false};assert.doesNotThrow(()=>enforceVoiceBindingPolicy(binding,false));assert.throws(()=>enforceVoiceBindingPolicy({...binding,matchType:'did'},false),/Production/);assert.throws(()=>enforceVoiceBindingPolicy({...binding,dryRunOnly:true},false),/invalid/);
- const operations:string[]=[],ari:any={createBridge:async()=>operations.push('bridge:create'),createAudioSocketChannel:async()=>operations.push('audio:create'),addChannelToBridge:async()=>operations.push('bridge:add'),answerChannel:async()=>operations.push('answer'),hangupChannel:async()=>operations.push('hangup'),destroyBridge:async()=>operations.push('bridge:destroy')},bridges=new LiveBridgeService(ari);await bridges.create(7,'trusted-caller','127.0.0.1:9999','uuid','app');await bridges.answer(7,'trusted-caller');await bridges.cleanup(7);await bridges.cleanup(7);assert.deepEqual(operations,['bridge:create','audio:create','bridge:add','bridge:add','answer','hangup','bridge:destroy']);
- const port=await freePort();process.env.PBXPULS_AI_AUDIOSOCKET_PORT=String(port);process.env.PBXPULS_AI_AUDIOSOCKET_HOST='127.0.0.1';delete process.env.PBXPULS_AI_AUDIOSOCKET_PACKET_MODE;const media=new AudioSocketAdapter(),provider=new SyntheticRealtimeVoiceAdapter(),received:any[]=[],providerEvents:any[]=[];await media.createTransport({tenantId:1,traceId:'smoke',voiceSessionId:7,mediaSessionId:8,format:{codec:'slin16',sampleRate:16000,channels:1,frameDurationMs:20},signal:new AbortController().signal});media.subscribeFrames(async frame=>{received.push(frame);await provider.appendAudio(frame)});provider.subscribeEvents(async event=>{providerEvents.push(event);if(event.type==='output_audio')await media.sendFrame(event.frame)});await provider.connect({providerKey:'synthetic',language:'ru',instructions:'short safe greeting',inputFormat:{codec:'slin16',sampleRate:16000,channels:1,frameDurationMs:20},outputFormat:{codec:'slin16',sampleRate:16000,channels:1,frameDurationMs:20},serverVad:false,tools:[],timeoutMs:1000});await provider.configureSession({}as any);const endpoint=media.getEndpoint(),client=net.connect(port,'127.0.0.1'),wire:Buffer[]=[];client.on('data',chunk=>wire.push(chunk));await new Promise<void>(resolve=>client.once('connect',resolve));client.write(packet(0x01,Buffer.from(endpoint.connectionId.replace(/-/g,''),'hex')));await media.start();client.write(packet(0x10,Buffer.alloc(320,1)));client.write(packet(0x12,Buffer.alloc(640,1)));client.write(packet(0x10,Buffer.alloc(319,1)));client.write(packet(0x13,Buffer.alloc(320,1)));await new Promise(resolve=>setTimeout(resolve,30));assert.equal(received.length,2);assert.equal(received[0].sampleRate,16000);assert.equal(received[0].payload.byteLength,640);assert.equal(received[0].durationMs,20);assert.equal(received[0].source,'audiosocket_ast18_slin8');assert.equal(received[1].source,'audiosocket_slin16');const ingressMetrics=media.getProtocolMetrics();assert.equal(ingressMetrics.audiosocketIngressPackets,2);assert.equal(ingressMetrics.ingressResampledFrames,1);assert.equal(ingressMetrics.malformedPackets,1);assert.equal(ingressMetrics.unknownPacketTypes,1);assert.equal(ingressMetrics.unsupportedAudioPackets,1);await provider.startInitialGreeting('Здравствуйте. Чем могу помочь?');await new Promise(resolve=>setTimeout(resolve,30));assert(providerEvents.some(event=>event.type==='output_audio'));const outgoing=wirePackets(wire);assert(outgoing.some(item=>item.type===0x10&&item.length===320));assert(!outgoing.some(item=>item.type===0x12));const egressMetrics=media.getProtocolMetrics();assert.equal(egressMetrics.audiosocketEgressPackets,3);assert.equal(egressMetrics.egressResampledFrames,3);assert.equal(egressMetrics.egressTargetSampleRate,8000);await provider.cancelResponse();await media.stop();await provider.close();assert.equal(media.getHealth().state,'disabled');
- const router=fs.readFileSync('server/ai-platform/voice/live/api/liveVoiceRouter.ts','utf8'),service=fs.readFileSync('server/ai-platform/voice/live/controlledLiveVoiceService.ts','utf8'),audio=fs.readFileSync('server/ai-platform/voice/media/transports/audioSocketAdapter.ts','utf8');assert.match(router,/Explicit confirmation is required/);assert.doesNotMatch(router,/channelId|bridgeId|externalHost/);assert.match(service,/ai\.voice_live_test_enabled/);assert.match(service,/allowedCallers/);assert.match(service,/lifecycle_status===\s*'published'/);assert.doesNotMatch(service,/JSON_EXTRACT/);assert.match(service,/metadata\?\.controlledLive&&metadata\?\.liveMetrics/);assert.match(audio,/127\.0\.0\.1/);assert.doesNotMatch(audio,/0\.0\.0\.0|writeFile|appendFile|spawn\(|exec\(/);console.log('AI Platform controlled live voice tests: OK')}
-run().catch(error=>{console.error(error);process.exit(1)});
+import assert from "node:assert/strict";
+import net from "node:net";
+import fs from "node:fs";
+import { AudioSocketAdapter } from "../server/ai-platform/voice/media/transports/audioSocketAdapter.js";
+import { SyntheticRealtimeVoiceAdapter } from "../server/ai-platform/voice/providers/adapters/syntheticRealtimeVoiceAdapter.js";
+import { LiveBridgeService } from "../server/ai-platform/voice/live/liveBridgeService.js";
+import { buildLiveDialplanPreview } from "../server/ai-platform/voice/live/liveDialplanPreview.js";
+import { readLiveVoiceConfig } from "../server/ai-platform/voice/live/liveVoiceConfig.js";
+import { enforceVoiceBindingPolicy } from "../server/ai-platform/voice/voiceSessionPolicy.js";
+const freePort = () =>
+    new Promise<number>((resolve, reject) => {
+      const server = net.createServer();
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        const port = (server.address() as net.AddressInfo).port;
+        server.close(() => resolve(port));
+      });
+    }),
+  packet = (type: number, payload: Buffer) => {
+    const result = Buffer.alloc(3 + payload.length);
+    result[0] = type;
+    result.writeUInt16BE(payload.length, 1);
+    payload.copy(result, 3);
+    return result;
+  },
+  wirePackets = (chunks: Buffer[]) => {
+    const data = Buffer.concat(chunks),
+      packets: Array<{ type: number; length: number }> = [];
+    for (let offset = 0; offset + 3 <= data.length;) {
+      const type = data[offset],
+        length = data.readUInt16BE(offset + 1);
+      if (offset + 3 + length > data.length) break;
+      packets.push({ type, length });
+      offset += 3 + length;
+    }
+    return packets;
+  };
+async function run() {
+  const settings = new Map([
+      ["ai.voice_live_test_enabled", "false"],
+      ["ai.voice_live_transport", "audiosocket"],
+      ["ai.voice_live_test_extension", "7999"],
+      ["ai.realtime_voice_provider", "synthetic"],
+    ]),
+    store: any = {
+      query: async () =>
+        [...settings].map(([setting_key, setting_value]) => ({
+          setting_key,
+          setting_value,
+        })),
+    };
+  process.env.PBXPULS_AI_VOICE_LIVE_ALLOWED_CALLERS = "100,200";
+  const config = await readLiveVoiceConfig(store);
+  assert.equal(config.enabled, false);
+  assert.equal(config.transport, "audiosocket");
+  assert.deepEqual(config.allowedCallers, ["100", "200"]);
+  const preview = buildLiveDialplanPreview(config, "");
+  assert.equal(preview.ready, true);
+  assert.match(preview.snippet!, /; BEGIN PBXPuls AI Voice Test/);
+  assert.match(
+    preview.snippet!,
+    /\[from-internal-custom\][\s\S]*Gosub\(pbxpuls-ai-voice-test,7999,1\)/,
+  );
+  assert.match(
+    preview.snippet!,
+    /\[pbxpuls-ai-voice-test\][\s\S]*Stasis\(pbxpuls-ai-control,controlled_test\)/,
+  );
+  assert.match(
+    preview.snippet!,
+    /Return\(\)[\s\S]*; END PBXPuls AI Voice Test/,
+  );
+  assert.doesNotMatch(preview.snippet!, /_X\.|AudioSocket|DID|queue/i);
+  assert.equal(preview.applySupported, false);
+  assert.equal(
+    buildLiveDialplanPreview(config, "exten => 7999,1,NoOp(conflict)").code,
+    "test_extension_conflict",
+  );
+  assert.equal(
+    buildLiveDialplanPreview({ ...config, testExtension: "_X." } as any, "")
+      .code,
+    "invalid_test_extension",
+  );
+  assert.equal(
+    buildLiveDialplanPreview(
+      { ...config, stasisApplication: "bad app" } as any,
+      "",
+    ).code,
+    "invalid_stasis_application",
+  );
+  const binding: any = {
+    id: 1,
+    tenantId: 1,
+    bindingKey: "controlled",
+    name: "Controlled",
+    status: "active",
+    matchType: "controlled_test_extension",
+    matchValueHash: "hash",
+    safeMatchLabel: "**99",
+    agentId: 1,
+    agentVersionId: 1,
+    language: "ru",
+    priority: 1,
+    dryRunOnly: false,
+  };
+  assert.doesNotThrow(() => enforceVoiceBindingPolicy(binding, false));
+  assert.throws(
+    () => enforceVoiceBindingPolicy({ ...binding, matchType: "did" }, false),
+    /Production/,
+  );
+  assert.throws(
+    () => enforceVoiceBindingPolicy({ ...binding, dryRunOnly: true }, false),
+    /invalid/,
+  );
+  const operations: string[] = [],
+    ari: any = {
+      createBridge: async () => operations.push("bridge:create"),
+      createAudioSocketChannel: async () => operations.push("audio:create"),
+      addChannelToBridge: async () => operations.push("bridge:add"),
+      answerChannel: async () => operations.push("answer"),
+      hangupChannel: async () => operations.push("hangup"),
+      destroyBridge: async () => operations.push("bridge:destroy"),
+    },
+    bridges = new LiveBridgeService(ari);
+  await bridges.create(7, "trusted-caller", "127.0.0.1:9999", "uuid", "app");
+  await bridges.answer(7, "trusted-caller");
+  await bridges.cleanup(7);
+  await bridges.cleanup(7);
+  assert.deepEqual(operations, [
+    "bridge:create",
+    "audio:create",
+    "bridge:add",
+    "bridge:add",
+    "answer",
+    "hangup",
+    "bridge:destroy",
+  ]);
+  const port = await freePort();
+  process.env.PBXPULS_AI_AUDIOSOCKET_PORT = String(port);
+  process.env.PBXPULS_AI_AUDIOSOCKET_HOST = "127.0.0.1";
+  delete process.env.PBXPULS_AI_AUDIOSOCKET_PACKET_MODE;
+  const media = new AudioSocketAdapter(),
+    provider = new SyntheticRealtimeVoiceAdapter(),
+    received: any[] = [],
+    providerEvents: any[] = [];
+  await media.createTransport({
+    tenantId: 1,
+    traceId: "smoke",
+    voiceSessionId: 7,
+    mediaSessionId: 8,
+    format: {
+      codec: "slin16",
+      sampleRate: 16000,
+      channels: 1,
+      frameDurationMs: 20,
+    },
+    signal: new AbortController().signal,
+  });
+  media.subscribeFrames(async (frame) => {
+    received.push(frame);
+    await provider.appendAudio(frame);
+  });
+  provider.subscribeEvents(async (event) => {
+    providerEvents.push(event);
+    if (event.type === "output_audio") await media.sendFrame(event.frame);
+  });
+  await provider.connect({
+    providerKey: "synthetic",
+    language: "ru",
+    instructions: "short safe greeting",
+    inputFormat: {
+      codec: "slin16",
+      sampleRate: 16000,
+      channels: 1,
+      frameDurationMs: 20,
+    },
+    outputFormat: {
+      codec: "slin16",
+      sampleRate: 16000,
+      channels: 1,
+      frameDurationMs: 20,
+    },
+    serverVad: false,
+    tools: [],
+    timeoutMs: 1000,
+  });
+  await provider.configureSession({} as any);
+  const endpoint = media.getEndpoint(),
+    client = net.connect(port, "127.0.0.1"),
+    wire: Buffer[] = [];
+  client.on("data", (chunk) => wire.push(chunk));
+  await new Promise<void>((resolve) => client.once("connect", resolve));
+  client.write(
+    packet(0x01, Buffer.from(endpoint.connectionId.replace(/-/g, ""), "hex")),
+  );
+  await media.start();
+  client.write(packet(0x10, Buffer.alloc(320, 1)));
+  client.write(packet(0x12, Buffer.alloc(640, 1)));
+  client.write(packet(0x10, Buffer.alloc(319, 1)));
+  client.write(packet(0x13, Buffer.alloc(320, 1)));
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(received.length, 2);
+  assert.equal(received[0].sampleRate, 16000);
+  assert.equal(received[0].payload.byteLength, 640);
+  assert.equal(received[0].durationMs, 20);
+  assert.equal(received[0].source, "audiosocket_ast18_slin8");
+  assert.equal(received[1].source, "audiosocket_slin16");
+  const ingressMetrics = media.getProtocolMetrics();
+  assert.equal(ingressMetrics.audiosocketIngressPackets, 2);
+  assert.equal(ingressMetrics.ingressResampledFrames, 1);
+  assert.equal(ingressMetrics.malformedPackets, 1);
+  assert.equal(ingressMetrics.unknownPacketTypes, 1);
+  assert.equal(ingressMetrics.unsupportedAudioPackets, 1);
+  await provider.startInitialGreeting("Здравствуйте. Чем могу помочь?");
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert(providerEvents.some((event) => event.type === "output_audio"));
+  const outgoing = wirePackets(wire);
+  assert(outgoing.some((item) => item.type === 0x10 && item.length === 320));
+  assert(!outgoing.some((item) => item.type === 0x12));
+  const egressMetrics = media.getProtocolMetrics();
+  assert.equal(egressMetrics.audiosocketEgressPackets, 3);
+  assert.equal(egressMetrics.egressResampledFrames, 3);
+  assert.equal(egressMetrics.egressTargetSampleRate, 8000);
+  await provider.cancelResponse();
+  await media.stop();
+  await provider.close();
+  assert.equal(media.getHealth().state, "disabled");
+  const router = fs.readFileSync(
+      "server/ai-platform/voice/live/api/liveVoiceRouter.ts",
+      "utf8",
+    ),
+    service = fs.readFileSync(
+      "server/ai-platform/voice/live/controlledLiveVoiceService.ts",
+      "utf8",
+    ),
+    audio = fs.readFileSync(
+      "server/ai-platform/voice/media/transports/audioSocketAdapter.ts",
+      "utf8",
+    );
+  assert.match(router, /Explicit confirmation is required/);
+  assert.doesNotMatch(router, /channelId|bridgeId|externalHost/);
+  assert.match(service, /ai\.voice_live_test_enabled/);
+  assert.match(service, /allowedCallers/);
+  assert.match(service, /lifecycle_status\s*===\s*["']published["']/);
+  assert.doesNotMatch(service, /JSON_EXTRACT/);
+  assert.match(service, /metadata\?\.controlledLive\s*&&\s*metadata\?\.liveMetrics/);
+  assert.match(audio, /127\.0\.0\.1/);
+  assert.doesNotMatch(audio, /0\.0\.0\.0|writeFile|appendFile|spawn\(|exec\(/);
+  console.log("AI Platform controlled live voice tests: OK");
+}
+run().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
