@@ -781,7 +781,7 @@ export default function App() {
   const [activeView, setActiveView] = useState<'calls' | 'directory' | 'reports' | 'marketing' | 'monitoring' | 'management' | 'balance' | 'settings' | 'about' | 'scripts' | 'ai-assistant' | 'ai-pbx-admin' | 'ai-platform'>(() => {
     const params = new URLSearchParams(window.location.search);
     const saved = localStorage.getItem('asterisk_cdr_active_view') as 'calls' | 'directory' | 'reports' | 'marketing' | 'monitoring' | 'management' | 'balance' | 'about' | 'scripts' | 'ai-assistant' | 'ai-pbx-admin' | 'ai-platform' | null;
-    if (window.location.pathname === '/ai-platform/agents') return 'ai-platform';
+    if (/^\/ai-platform\/agents(?:\/\d+\/knowledge)?$/.test(window.location.pathname)) return 'ai-platform';
     if (window.location.pathname === '/management/directory/import') return 'directory';
     if (window.location.pathname === '/directory/import-contacts') return 'directory';
     if (/^\/management\/directory\/contact\/new$/.test(window.location.pathname)) return saved && saved !== 'directory' ? saved : 'directory';
@@ -814,7 +814,7 @@ export default function App() {
 
   useEffect(() => {
     localStorage.setItem('asterisk_cdr_active_view', activeView);
-    if (activeView !== 'ai-platform' && window.location.pathname === '/ai-platform/agents') window.history.replaceState({}, '', '/');
+    if (activeView !== 'ai-platform' && /^\/ai-platform\/agents(?:\/\d+\/knowledge)?$/.test(window.location.pathname)) window.history.replaceState({}, '', '/');
     if (activeView !== 'directory' && /^\/(?:management\/directory|directory\/import-contacts)/.test(window.location.pathname)) {
       window.history.replaceState({}, '', '/');
     }
@@ -6925,7 +6925,7 @@ export default function App() {
     )}
 
     {activeView === 'ai-platform' && hasPermission('view_ai_platform') && (
-      <AiAgentBuilderPage token={session.token} canCreate={hasPermission('create_ai_agents')} />
+      <AiAgentBuilderPage token={session.token} canCreate={hasPermission('create_ai_agents')} canViewKnowledge={hasPermission('view_ai_knowledge')} canViewTraining={hasPermission('view_ai_training')} />
     )}
 
 

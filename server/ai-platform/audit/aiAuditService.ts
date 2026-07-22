@@ -2,7 +2,7 @@ import { redactAiPlatformValue } from '../core/redaction.js';
 import type { AgentActorType } from '../core/contracts.js';
 import type { AiPlatformStore } from '../storage/aiPlatformStore.js';
 
-export type AiAuditEventType = 'tenant_created'|'agent_created'|'agent_version_created'|'agent_version_published'|'agent_version_archived'|'provider_registered'|'provider_config_updated'|'tool_registered'|'permission_denied'|'feature_flag_blocked'|'template_created'|'template_used'|'agent_created_from_template'|'agent_cloned'|'behavior_profile_changed'|'transfer_policy_changed'|'autonomy_policy_changed'|'agent_validation_failed'|'agent_validation_passed'|'test_session_created';
+export type AiAuditEventType = 'tenant_created'|'agent_created'|'agent_version_created'|'agent_version_published'|'agent_version_archived'|'provider_registered'|'provider_config_updated'|'tool_registered'|'permission_denied'|'feature_flag_blocked'|'template_created'|'template_used'|'agent_created_from_template'|'agent_cloned'|'behavior_profile_changed'|'transfer_policy_changed'|'autonomy_policy_changed'|'agent_validation_failed'|'agent_validation_passed'|'test_session_created'|'knowledge_source_created'|'knowledge_version_created'|'knowledge_version_published'|'knowledge_archived'|'training_item_created'|'training_version_created'|'training_version_published'|'context_preview_requested'|'validation_failed';
 export interface AiAuditEvent { tenantId: number; traceId: string; actorType: AgentActorType; actorId?: string|null; eventType: AiAuditEventType; entityType: string; entityId?: string|null; decision: string; details?: unknown }
 
 export class AiAuditService {

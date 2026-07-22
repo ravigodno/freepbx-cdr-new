@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import mysql, { Connection } from 'mysql2/promise';
 import { writePBXPulsSystemEvent } from './pbxpulsEvents.js';
 import { buildLegacySettingsSeedRows } from './pbxpulsLegacySettings.js';
@@ -898,8 +899,105 @@ const MIGRATIONS: Migration[] = [
        WHERE r.role_key IN ('su','admin')`
     ],
     seed: seedAiAgentBuilderFoundation
+  },
+  {
+    key: '20260722_028_ai_knowledge_training_foundation',
+    description: 'Add tenant-scoped AI Knowledge and Training Engine foundations',
+    statements: [
+      `CREATE TABLE IF NOT EXISTS ai_knowledge_sources (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, tenant_id BIGINT NOT NULL, agent_id BIGINT NULL,
+        source_key VARCHAR(100) NOT NULL, name VARCHAR(191) NOT NULL,
+        type ENUM('document','text','faq','url','manual') NOT NULL, description VARCHAR(1000) NULL,
+        status ENUM('draft','processing','ready','published','archived') NOT NULL DEFAULT 'draft', metadata_json LONGTEXT NOT NULL,
+        created_by VARCHAR(191) NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NULL,
+        UNIQUE KEY uniq_ai_knowledge_source (tenant_id,source_key), INDEX idx_ai_knowledge_tenant_agent_status (tenant_id,agent_id,status),
+        CONSTRAINT fk_ai_knowledge_source_tenant FOREIGN KEY (tenant_id) REFERENCES ai_tenants(id),
+        CONSTRAINT fk_ai_knowledge_source_agent FOREIGN KEY (agent_id) REFERENCES ai_agents(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS ai_knowledge_versions (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, tenant_id BIGINT NOT NULL, source_id BIGINT NOT NULL, version_number INT NOT NULL,
+        content LONGTEXT NOT NULL, checksum CHAR(64) NOT NULL, status ENUM('draft','published','archived') NOT NULL DEFAULT 'draft',
+        created_by VARCHAR(191) NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, published_at DATETIME NULL,
+        UNIQUE KEY uniq_ai_knowledge_version (source_id,version_number), INDEX idx_ai_knowledge_versions_tenant_status (tenant_id,status),
+        CONSTRAINT fk_ai_knowledge_version_tenant FOREIGN KEY (tenant_id) REFERENCES ai_tenants(id),
+        CONSTRAINT fk_ai_knowledge_version_source FOREIGN KEY (source_id) REFERENCES ai_knowledge_sources(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS ai_knowledge_documents (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, tenant_id BIGINT NOT NULL, source_id BIGINT NOT NULL, version_id BIGINT NOT NULL,
+        filename VARCHAR(255) NOT NULL, mime_type VARCHAR(191) NOT NULL, storage_path VARCHAR(1000) NULL, content_text LONGTEXT NOT NULL,
+        metadata_json LONGTEXT NOT NULL, status ENUM('draft','ready','archived') NOT NULL DEFAULT 'draft', created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_ai_knowledge_documents_version (tenant_id,version_id),
+        CONSTRAINT fk_ai_knowledge_document_tenant FOREIGN KEY (tenant_id) REFERENCES ai_tenants(id),
+        CONSTRAINT fk_ai_knowledge_document_source FOREIGN KEY (source_id) REFERENCES ai_knowledge_sources(id),
+        CONSTRAINT fk_ai_knowledge_document_version FOREIGN KEY (version_id) REFERENCES ai_knowledge_versions(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS ai_knowledge_chunks (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, tenant_id BIGINT NOT NULL, document_id BIGINT NOT NULL, chunk_index INT NOT NULL,
+        content LONGTEXT NOT NULL, metadata_json LONGTEXT NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_ai_knowledge_chunk (document_id,chunk_index), INDEX idx_ai_knowledge_chunks_tenant (tenant_id),
+        CONSTRAINT fk_ai_knowledge_chunk_tenant FOREIGN KEY (tenant_id) REFERENCES ai_tenants(id),
+        CONSTRAINT fk_ai_knowledge_chunk_document FOREIGN KEY (document_id) REFERENCES ai_knowledge_documents(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS ai_agent_knowledge (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, tenant_id BIGINT NOT NULL, agent_id BIGINT NOT NULL, knowledge_source_id BIGINT NOT NULL,
+        access_mode ENUM('read','disabled') NOT NULL DEFAULT 'disabled', created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_ai_agent_knowledge (agent_id,knowledge_source_id), INDEX idx_ai_agent_knowledge_tenant_access (tenant_id,access_mode),
+        CONSTRAINT fk_ai_agent_knowledge_tenant FOREIGN KEY (tenant_id) REFERENCES ai_tenants(id),
+        CONSTRAINT fk_ai_agent_knowledge_agent FOREIGN KEY (agent_id) REFERENCES ai_agents(id),
+        CONSTRAINT fk_ai_agent_knowledge_source FOREIGN KEY (knowledge_source_id) REFERENCES ai_knowledge_sources(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS ai_training_items (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, tenant_id BIGINT NOT NULL, agent_id BIGINT NOT NULL,
+        type ENUM('instruction','example','correction','faq_answer','conversation_example') NOT NULL,
+        title VARCHAR(191) NOT NULL, input_text LONGTEXT NOT NULL, expected_output LONGTEXT NOT NULL, rule_json LONGTEXT NOT NULL,
+        status ENUM('draft','published','archived') NOT NULL DEFAULT 'draft', created_by VARCHAR(191) NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_ai_training_items_tenant_agent_status (tenant_id,agent_id,status),
+        CONSTRAINT fk_ai_training_item_tenant FOREIGN KEY (tenant_id) REFERENCES ai_tenants(id),
+        CONSTRAINT fk_ai_training_item_agent FOREIGN KEY (agent_id) REFERENCES ai_agents(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS ai_training_versions (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, tenant_id BIGINT NOT NULL, agent_id BIGINT NOT NULL, version_number INT NOT NULL,
+        training_snapshot_json LONGTEXT NOT NULL, checksum CHAR(64) NOT NULL, status ENUM('draft','published','archived') NOT NULL DEFAULT 'draft',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, published_at DATETIME NULL,
+        UNIQUE KEY uniq_ai_training_version (agent_id,version_number), INDEX idx_ai_training_versions_tenant_status (tenant_id,status),
+        CONSTRAINT fk_ai_training_version_tenant FOREIGN KEY (tenant_id) REFERENCES ai_tenants(id),
+        CONSTRAINT fk_ai_training_version_agent FOREIGN KEY (agent_id) REFERENCES ai_agents(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `INSERT IGNORE INTO permissions (permission_key,name,description,category) VALUES
+        ('manage_ai_knowledge','Manage AI knowledge','Create and version tenant AI knowledge','ai_platform'),
+        ('view_ai_knowledge','View AI knowledge','View tenant AI knowledge references','ai_platform'),
+        ('publish_ai_knowledge','Publish AI knowledge','Publish immutable AI knowledge versions','ai_platform'),
+        ('manage_ai_training','Manage AI training','Create AI training items and snapshots','ai_platform'),
+        ('view_ai_training','View AI training','View tenant AI training items','ai_platform'),
+        ('publish_ai_training','Publish AI training','Publish immutable AI training snapshots','ai_platform'),
+        ('view_ai_context_preview','View AI context preview','View safe AI agent context structure','ai_platform')`,
+      `INSERT IGNORE INTO role_permissions (role_id,permission_id)
+       SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key IN
+       ('manage_ai_knowledge','view_ai_knowledge','publish_ai_knowledge','manage_ai_training','view_ai_training','publish_ai_training','view_ai_context_preview')
+       WHERE r.role_key IN ('su','admin')`
+    ],
+    seed: seedAiKnowledgeTrainingFoundation
   }
 ];
+
+async function seedAiKnowledgeTrainingFoundation(connection: Connection): Promise<void> {
+  const [tenantRows]=await connection.query("SELECT id FROM ai_tenants WHERE tenant_key='installation' LIMIT 1");
+  const tenantId=Number((tenantRows as any[])[0]?.id||0);if(!tenantId)throw new Error('AI installation tenant is required');
+  await connection.execute(`INSERT INTO ai_knowledge_sources (tenant_id,agent_id,source_key,name,type,description,status,metadata_json,created_by)
+    SELECT ?,NULL,'receptionist_basic_knowledge','Receptionist Basic Knowledge','manual','Системный пример структуры базовых знаний ресепшена','draft','{"systemTemplate":true}','system'
+    FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM ai_knowledge_sources WHERE tenant_id=? AND source_key='receptionist_basic_knowledge')`,[tenantId,tenantId]);
+  const [sourceRows]=await connection.query("SELECT id FROM ai_knowledge_sources WHERE tenant_id=? AND source_key='receptionist_basic_knowledge' LIMIT 1",[tenantId]);
+  const sourceId=Number((sourceRows as any[])[0]?.id||0),content='Базовый шаблон знаний AI Receptionist. Заполните актуальными данными компании перед публикацией.';
+  const checksum=crypto.createHash('sha256').update(content).digest('hex');
+  await connection.execute(`INSERT INTO ai_knowledge_versions (tenant_id,source_id,version_number,content,checksum,status,created_by)
+    SELECT ?,?,1,?,?,'draft','system' FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM ai_knowledge_versions WHERE source_id=? AND version_number=1)`,[tenantId,sourceId,content,checksum,sourceId]);
+  const [agentRows]=await connection.query("SELECT id FROM ai_agents WHERE tenant_id=? AND agent_key='receptionist_default' LIMIT 1",[tenantId]);
+  const agentId=Number((agentRows as any[])[0]?.id||0);
+  if(agentId)await connection.execute(`INSERT INTO ai_training_items (tenant_id,agent_id,type,title,input_text,expected_output,rule_json,status,created_by)
+    SELECT ?,?,'instruction','human_transfer_priority_rule','Клиент просит соединить с человеком','Немедленно прекратить сценарий и инициировать передачу человеку','{"priority":"CRITICAL","execution":"future_voice_gateway"}','draft','system'
+    FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM ai_training_items WHERE tenant_id=? AND agent_id=? AND title='human_transfer_priority_rule')`,[tenantId,agentId,tenantId,agentId]);
+  await seedLegacyAiPlatformPermissions(['manage_ai_knowledge','view_ai_knowledge','publish_ai_knowledge','manage_ai_training','view_ai_training','publish_ai_training','view_ai_context_preview']);
+}
 
 async function seedAiAgentBuilderFoundation(connection: Connection): Promise<void> {
   const [tenantRows] = await connection.query("SELECT id FROM ai_tenants WHERE tenant_key='installation' LIMIT 1");

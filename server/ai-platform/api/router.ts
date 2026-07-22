@@ -11,6 +11,9 @@ import { AgentBuilderService } from '../agents/agentBuilderService.js';
 import { getAIProviderRegistry } from '../providers/providerRegistry.js';
 import { publicLegacyProviderConfig, readLegacyProviderConfig } from '../providers/legacyConfigReader.js';
 import { getToolRegistry } from '../tools/toolRegistry.js';
+import { AgentContextBuilder } from '../core/agentContextBuilder.js';
+import { registerKnowledgeRoutes } from '../knowledge/api/registerKnowledgeRoutes.js';
+import { registerTrainingRoutes } from '../training/api/registerTrainingRoutes.js';
 
 type Checker=(req:Request,permission:string)=>Promise<boolean>;
 export interface AiPlatformRouterDeps { requireAuth:any; checkPermission:Checker; readLegacyDb:()=>Promise<any>; store?:AiPlatformStore; isEnabled?:()=>Promise<boolean> }
@@ -21,7 +24,7 @@ const fail=(res:Response,error:unknown)=>{const safe=toSafeAiPlatformError(error
 const wrap=(handler:(req:Request,res:Response)=>Promise<any>)=>async(req:Request,res:Response)=>{try{await handler(req,res)}catch(error){fail(res,error)}};
 
 export function registerAiPlatformRoutes(app:Express,deps:AiPlatformRouterDeps):void{
-  const store=deps.store||sqlAiPlatformStore,audit=new AiAuditService(store),lifecycle=new AgentLifecycleService(store,audit),builder=new AgentBuilderService(store,audit);
+  const store=deps.store||sqlAiPlatformStore,audit=new AiAuditService(store),lifecycle=new AgentLifecycleService(store,audit),builder=new AgentBuilderService(store,audit),contextBuilder=new AgentContextBuilder(store);
   const readEnabled=deps.isEnabled||isAiPlatformCoreEnabled;
   const authenticated=[deps.requireAuth()];
   const permit=(permission:string)=>async(req:Request,res:Response,next:NextFunction)=>{
@@ -34,6 +37,7 @@ export function registerAiPlatformRoutes(app:Express,deps:AiPlatformRouterDeps):
     try{const tenant=await getInstallationTenant(store);await audit.append({tenantId:tenant.id,...actor(req),eventType:'feature_flag_blocked',entityType:'api',entityId:req.path,decision:'blocked',details:{flag:'ai.platform_core_enabled'}})}catch{}
     return res.status(503).json({success:false,error:'AI Platform Core is disabled',code:'feature_disabled'});
   };
+  const domainRuntime={authenticated,permit,enabled,wrap,getTenantId:async()=>(await getInstallationTenant(store)).id,actor,store,audit,positiveInt,page};
 
   app.get('/api/ai-platform/status',...authenticated,permit('view_ai_platform'),wrap(async(_req,res)=>{
     const coreEnabled=await readEnabled();let tenant:any=null,counts={agents:0,published:0,tools:0};
@@ -70,6 +74,10 @@ export function registerAiPlatformRoutes(app:Express,deps:AiPlatformRouterDeps):
   app.get('/api/ai-platform/autonomy-policies',...authenticated,permit('view_ai_platform'),enabled,wrap(async(_req,res)=>{const tenant=await getInstallationTenant(store);const rows=await store.query('SELECT id,tenant_id,policy_key,level,rules_json,created_at FROM ai_autonomy_policies WHERE tenant_id=? OR tenant_id IS NULL ORDER BY tenant_id IS NULL DESC,policy_key',[tenant.id]);res.json({success:true,rows:rows.map(row=>({...row,rules:parseJsonObject(row.rules_json,'rules_json'),rules_json:undefined}))});}));
   app.post('/api/ai-platform/agents/:id/test-session',...authenticated,permit('run_ai_test_sessions'),enabled,wrap(async(req,res)=>{const tenant=await getInstallationTenant(store),agentId=positiveInt(req.params.id,'agent id');const rows=await store.query('SELECT id FROM ai_agent_versions WHERE id=? AND agent_id=? AND tenant_id=? LIMIT 1',[positiveInt(req.body?.agentVersionId,'agent version id'),agentId,tenant.id]);if(!rows.length)throw new AiPlatformError('not_found',404,'Agent version not found');const result:any=await store.query(`INSERT INTO ai_agent_test_sessions (tenant_id,agent_id,agent_version_id,started_by,status,transcript_json,result_json) VALUES (?,?,?,?,?,?,?)`,[tenant.id,agentId,Number(rows[0].id),actor(req).actorId,'created','[]','{}']);const id=Number(result.insertId||0);await audit.append({tenantId:tenant.id,...actor(req),eventType:'test_session_created',entityType:'agent_test_session',entityId:String(id),decision:'created',details:{agentId,agentVersionId:rows[0].id,llmStarted:false}});res.status(201).json({success:true,data:{id,status:'created',llmStarted:false}});}));
   app.get('/api/ai-platform/test-sessions/:id',...authenticated,permit('run_ai_test_sessions'),enabled,wrap(async(req,res)=>{const tenant=await getInstallationTenant(store),id=positiveInt(req.params.id,'test session id');const rows=await store.query('SELECT id,agent_id,agent_version_id,started_by,status,transcript_json,result_json,created_at FROM ai_agent_test_sessions WHERE id=? AND tenant_id=? LIMIT 1',[id,tenant.id]);if(!rows.length)throw new AiPlatformError('not_found',404,'Test session not found');const row=rows[0];res.json({success:true,data:{...row,transcript:JSON.parse(String(row.transcript_json||'[]')),result:parseJsonObject(row.result_json||{},'result_json'),transcript_json:undefined,result_json:undefined}});}));
+  app.get('/api/ai-platform/agents/:id/context-preview',...authenticated,permit('view_ai_context_preview'),enabled,wrap(async(req,res)=>{const tenant=await getInstallationTenant(store),agentId=positiveInt(req.params.id,'agent id');const rows=await store.query('SELECT COALESCE(current_version_id,(SELECT id FROM ai_agent_versions WHERE agent_id=a.id AND tenant_id=a.tenant_id ORDER BY version_number DESC LIMIT 1)) version_id FROM ai_agents a WHERE id=? AND tenant_id=? LIMIT 1',[agentId,tenant.id]);const versionId=Number(rows[0]?.version_id||0);if(!versionId)throw new AiPlatformError('not_found',404,'Agent version not found');const data=await contextBuilder.buildContext(tenant.id,versionId);await audit.append({tenantId:tenant.id,...actor(req),eventType:'context_preview_requested',entityType:'agent',entityId:String(agentId),decision:'allowed',details:{agentVersionId:versionId,llmCalled:false}});res.json({success:true,data,llmCalled:false})}));
+
+  registerKnowledgeRoutes(app,domainRuntime);
+  registerTrainingRoutes(app,domainRuntime);
 
   app.get('/api/ai-platform/providers',...authenticated,permit('view_ai_platform'),enabled,wrap(async(_req,res)=>{const tenant=await getInstallationTenant(store),legacy=publicLegacyProviderConfig(readLegacyProviderConfig(await deps.readLegacyDb()));
     const rows=await store.query(`SELECT id,provider_key,purpose,model,status,created_at,updated_at,
