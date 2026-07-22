@@ -1,0 +1,3 @@
+carrier-a/sip:registrar.example.invalid carrier-a Registered
+carrier-b/sip:registrar.example.invalid carrier-b Request Sent
+carrier-c/sip:registrar.example.invalid carrier-c Rejected

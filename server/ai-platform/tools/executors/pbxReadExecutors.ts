@@ -13,6 +13,6 @@ export function createPBXReadExecutorRegistry(services: PBXReadServices): ReadOn
     'directory.search_contacts': services.searchContacts,
     'calls.search_history': services.searchHistory
   };
-  for (const [key, executor] of Object.entries(executors)) registry.register(key, executor);
+  for (const [key, executor] of Object.entries(executors)) registry.register(key,(input,signal,context)=>executor(input,signal,context?{tenantId:context.tenantId,actorId:context.actorId,permissions:context.permissions}:undefined));
   return registry;
 }

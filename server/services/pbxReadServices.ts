@@ -2,175 +2,73 @@ import crypto from 'crypto';
 
 type ToolInput = Record<string, any>;
 type ToolOutput = Record<string, any>;
-type PBXReadService = (input: ToolInput, signal?: AbortSignal) => Promise<ToolOutput>;
+export interface PBXReadRequestContext { tenantId:number;actorId:string|null;permissions:readonly string[] }
+type PBXReadService = (input: ToolInput, signal?: AbortSignal, context?: PBXReadRequestContext) => Promise<ToolOutput>;
 
 export interface PBXReadServices {
-  activeCalls: PBXReadService;
-  sipRegistrations: PBXReadService;
-  trunksStatus: PBXReadService;
-  extensionsStatus: PBXReadService;
-  missedCalls: PBXReadService;
-  callStatistics: PBXReadService;
-  searchContacts: PBXReadService;
-  searchHistory: PBXReadService;
+  activeCalls: PBXReadService; sipRegistrations: PBXReadService; trunksStatus: PBXReadService; extensionsStatus: PBXReadService;
+  missedCalls: PBXReadService; callStatistics: PBXReadService; searchContacts: PBXReadService; searchHistory: PBXReadService;
 }
 
-type FixedDiagnostic = 'channels' | 'pjsip_contacts' | 'sip_peers' | 'sip_registry';
-type DiagnosticResult = { success: boolean; message: string };
-
-export interface AuthoritativeExtension {
-  ext?: unknown;
-  name?: unknown;
-  status?: unknown;
-  tech?: unknown;
-  deviceRole?: unknown;
-}
-
+export type FixedDiagnostic = 'channels'|'pjsip_contacts'|'pjsip_registrations'|'pjsip_endpoints'|'sip_peers'|'sip_registry';
+export interface AuthoritativeExtension { ext?:unknown;name?:unknown;tech?:unknown }
+export interface ConfiguredTrunk { key?:unknown;name?:unknown;technology?:unknown }
 export interface PBXReadServiceDeps {
-  runFixedDiagnostic(command: FixedDiagnostic): Promise<DiagnosticResult>;
-  parseChannels(text: string): any[];
-  parsePjsip(text: string): Map<string, any>;
-  parseSipPeers(text: string): Map<string, any>;
-  queryCdr(sql: string, params: unknown[]): Promise<any[]>;
-  readDirectory(): Promise<any[]>;
-  readAuthoritativeExtensions(): Promise<AuthoritativeExtension[]>;
+  runFixedDiagnostic(command: FixedDiagnostic): Promise<{success:boolean;message:string}>;
+  queryCdr(sql:string,params:unknown[]):Promise<any[]>;
+  readDirectory(context:PBXReadRequestContext):Promise<any[]>;
+  readAuthoritativeExtensions():Promise<AuthoritativeExtension[]>;
+  readConfiguredTrunks():Promise<ConfiguredTrunk[]>;
+  now?:()=>number;
 }
 
-export function maskPhone(value: unknown): string {
-  const raw = String(value ?? '').trim();
-  const digits = raw.replace(/\D/g, '');
-  if (digits.length < 5) return '***';
-  return `${raw.startsWith('+') ? '+' : ''}${digits.slice(0, 2)}***${digits.slice(-2)}`;
+export function maskPhone(value:unknown):string { const raw=String(value??'').trim(),digits=raw.replace(/\D/g,'');return digits.length<5?'***':`${raw.startsWith('+')?'+':''}${digits.slice(0,2)}***${digits.slice(-2)}`; }
+export function maskIp(value:unknown):string { const text=String(value??'').trim();if(!text)return'***';if(text.includes(':'))return`${text.split(':').slice(0,2).join(':')}:***`;const parts=text.split('.');return parts.length===4?`${parts[0]}.${parts[1]}.x.x`:'***'; }
+export function maskSipContact(value:unknown):string { return String(value??'').replace(/(sips?:)([^@\s]+)@/i,'$1***@').replace(/((?:\d{1,3}\.){2})\d{1,3}\.\d{1,3}/g,'$1x.x'); }
+export function safeExtension(value:unknown):string { const extension=String(value??'').trim();return /^\d{2,6}$/.test(extension)?extension:''; }
+const hash=(value:unknown)=>crypto.createHash('sha256').update(String(value??'')).digest('hex').slice(0,16);
+const boundedLimit=(value:unknown,max=100)=>Math.max(1,Math.min(Number(value)||20,max));
+const safeText=(value:unknown,max=100)=>String(value??'').trim().slice(0,max);
+const sqlDate=(value:Date)=>value.toISOString().slice(0,19).replace('T',' ');
+const duration=(value:unknown)=>String(value??'0').split(':').reduce((total,part)=>total*60+(Number(part)||0),0);
+const contextOrDefault=(context?:PBXReadRequestContext):PBXReadRequestContext=>context||{tenantId:0,actorId:null,permissions:[]};
+const stable=(value:any):string=>Array.isArray(value)?`[${value.map(stable).join(',')}]`:value&&typeof value==='object'?`{${Object.keys(value).sort().map(key=>`${JSON.stringify(key)}:${stable(value[key])}`).join(',')}}`:JSON.stringify(value);
+
+export class PBXReadCache {
+  private readonly entries=new Map<string,{expires:number;value:ToolOutput}>();
+  constructor(private readonly maxEntries=256,private readonly now:()=>number=Date.now){}
+  async get(key:string,ttlMs:number,loader:()=>Promise<ToolOutput>):Promise<ToolOutput>{
+    this.cleanup();const cached=this.entries.get(key);if(cached&&cached.expires>this.now())return JSON.parse(JSON.stringify(cached.value));
+    const value=await loader();if(this.entries.size>=this.maxEntries)this.entries.delete(this.entries.keys().next().value as string);
+    this.entries.set(key,{expires:this.now()+ttlMs,value:JSON.parse(JSON.stringify(value))});return value;
+  }
+  cleanup():void{const now=this.now();for(const[key,item]of this.entries)if(item.expires<=now)this.entries.delete(key)}
 }
 
-export function maskIp(value: unknown): string {
-  const text = String(value ?? '').trim();
-  if (!text) return '***';
-  if (text.includes(':')) return `${text.split(':').slice(0, 2).join(':')}:***`;
-  const parts = text.split('.');
-  return parts.length === 4 ? `${parts[0]}.${parts[1]}.x.x` : '***';
-}
+export interface ParsedChannel {channel:string;context:string;extension:string;state:string;application:string;appData:string;callerId:string;duration:string;bridgedChannel:string;uniqueid:string;linkedid:string}
+export function parseCoreChannels(raw:string):ParsedChannel[]{return String(raw||'').split(/\r?\n/).map(line=>line.trim()).filter(line=>line.includes('!')&&!/^Response:|--END COMMAND--/i.test(line)).map(line=>{const p=line.replace(/^Output:\s*/i,'').split('!');return{channel:p[0]||'',context:p[1]||'',extension:p[2]||'',state:p[4]||'',application:p[5]||'',appData:p[6]||'',callerId:p[7]||'',duration:p[11]||'',bridgedChannel:p[12]||'',uniqueid:p[13]||'',linkedid:p[14]||''}})}
+export interface ParsedRegistration {technology:'PJSIP'|'SIP';endpoint:string;role:'extension'|'trunk'|'unknown';state:string;contact:string|null;latencyMs:number|null;registered:boolean;reachable:boolean}
+export function parsePjsipContacts(raw:string):ParsedRegistration[]{const rows:ParsedRegistration[]=[];for(const line of String(raw||'').split(/\r?\n/)){const m=line.match(/Contact:\s+([^/\s]+)\/(sips?:\S+?)(?:\s+[a-f\d-]+)?\s+(Avail|Unavail|NonQual|Unknown)(?:\s+([\d.]+|nan))?/i);if(!m)continue;const endpoint=m[1],state=m[3],latency=m[4]&&!/^nan$/i.test(m[4])?Math.round(Number(m[4])):null,role=/^\d{2,6}$/.test(endpoint)?'extension':'unknown';rows.push({technology:'PJSIP',endpoint,role,state,contact:m[2],latencyMs:latency,registered:/^(avail|nonqual)$/i.test(state),reachable:/^avail$/i.test(state)})}return rows}
+export function parsePjsipRegistrations(raw:string):ParsedRegistration[]{const rows:ParsedRegistration[]=[];for(const line of String(raw||'').split(/\r?\n/)){if(!/Registered|Request Sent|Rejected|Unregistered/i.test(line))continue;const parts=line.trim().split(/\s+/),endpoint=safeText(parts[0].split('/')[0],64),state=(line.match(/Registered|Request Sent|Rejected|Unregistered/i)||['Unknown'])[0];if(endpoint)rows.push({technology:'PJSIP',endpoint,role:'trunk',state,contact:null,latencyMs:null,registered:/^Registered$/i.test(state),reachable:/^Registered$/i.test(state)})}return rows}
+export function parsePjsipEndpoints(raw:string):Map<string,'extension'|'trunk'|'unknown'>{const map=new Map<string,'extension'|'trunk'|'unknown'>();for(const line of String(raw||'').split(/\r?\n/)){const m=line.match(/Endpoint:\s+([^/\s]+).*?(Available|Unavailable|Not in use|In use|Unknown)/i);if(!m)continue;map.set(m[1],/^\d{2,6}$/.test(m[1])?'extension':'unknown')}return map}
+export function parseSipPeers(raw:string):ParsedRegistration[]{const rows:ParsedRegistration[]=[];for(const line of String(raw||'').split(/\r?\n/)){const m=line.trim().match(/^([^/\s]+)\/\S+\s+(\(Unspecified\)|(?:\d{1,3}\.){3}\d{1,3}).*?(OK\s*\((\d+)\s*ms\)|UNREACHABLE|UNKNOWN)$/i);if(!m)continue;const endpoint=m[1],state=m[3],role=/^\d{2,6}$/.test(endpoint)?'extension':'unknown';rows.push({technology:'SIP',endpoint,role,state,contact:m[2]==='(Unspecified)'?null:`sip:${endpoint}@${m[2]}`,latencyMs:m[4]?Number(m[4]):null,registered:/^OK/i.test(state),reachable:/^OK/i.test(state)})}return rows}
+export function parseSipRegistry(raw:string):ParsedRegistration[]{const rows:ParsedRegistration[]=[];for(const line of String(raw||'').split(/\r?\n/)){const state=(line.match(/Registered|Request Sent|Rejected|Unregistered/i)||[])[0];if(!state)continue;const endpoint=`sip-registry-${hash(line.trim().split(/\s+/)[0])}`;rows.push({technology:'SIP',endpoint,role:'trunk',state,contact:null,latencyMs:null,registered:/^Registered$/i.test(state),reachable:/^Registered$/i.test(state)})}return rows}
 
-export function maskSipContact(value: unknown): string {
-  return String(value ?? '')
-    .replace(/(sips?:)([^@\s]+)@/i, '$1***@')
-    .replace(/((?:\d{1,3}\.){2})\d{1,3}\.\d{1,3}/g, '$1x.x');
-}
+function periodRange(period:unknown,nowMs:number):[Date,Date]{const now=new Date(nowMs),to=new Date(now),from=new Date(now);if(period==='today')from.setHours(0,0,0,0);else if(period==='yesterday'){from.setDate(from.getDate()-1);from.setHours(0,0,0,0);to.setHours(0,0,0,0)}else from.setDate(from.getDate()-(period==='last_30_days'?30:7));return[from,to]}
 
-export function safeExtension(value: unknown): string {
-  const extension = String(value ?? '').trim();
-  return /^\d{2,6}$/.test(extension) ? extension : '';
-}
-
-const boundedLimit = (value: unknown, maximum = 100): number =>
-  Math.max(1, Math.min(Number(value) || 20, maximum));
-const sqlDate = (value: Date): string => value.toISOString().slice(0, 19).replace('T', ' ');
-const safeFilter = (value: unknown, maximum = 100): string => String(value ?? '').trim().slice(0, maximum);
-
-function periodRange(period: unknown): [Date, Date] {
-  const now = new Date();
-  const to = new Date(now);
-  const from = new Date(now);
-  if (period === 'today') from.setHours(0, 0, 0, 0);
-  else if (period === 'yesterday') {
-    from.setDate(from.getDate() - 1);
-    from.setHours(0, 0, 0, 0);
-    to.setHours(0, 0, 0, 0);
-  } else from.setDate(from.getDate() - (period === 'last_30_days' ? 30 : 7));
-  return [from, to];
-}
-
-export function createPBXReadServices(deps: PBXReadServiceDeps): PBXReadServices {
-  return {
-    activeCalls: async () => {
-      const result = await deps.runFixedDiagnostic('channels');
-      const rows = result.success ? deps.parseChannels(result.message) : [];
-      return { items: rows.slice(0, 100).map(row => ({
-        direction: /from-trunk|ext-did/i.test(row.context) ? 'inbound' : /from-internal/i.test(row.context) ? 'outbound' : 'internal',
-        state: String(row.state ?? ''), extension: safeExtension(row.exten), remotePartyMasked: maskPhone(row.callerId),
-        startedAt: null, durationSeconds: String(row.duration ?? '0').split(':').reduce((total, part) => total * 60 + Number(part), 0),
-        queue: /queue/i.test(row.application) ? safeExtension(row.exten) || null : null
-      })) };
-    },
-    sipRegistrations: async () => {
-      const [pjsip, sip] = await Promise.all([deps.runFixedDiagnostic('pjsip_contacts'), deps.runFixedDiagnostic('sip_peers')]);
-      const rows = [...deps.parsePjsip(pjsip.message).values(), ...deps.parseSipPeers(sip.message).values()];
-      return { items: rows.slice(0, 200).map(row => ({
-        technology: String(row.tech ?? ''), endpoint: safeExtension(row.ext) || String(row.ext ?? '').slice(0, 64),
-        state: String(row.status ?? 'unknown'),
-        contactMasked: row.ip ? maskSipContact(`sip:${row.ext}@${row.ip}:${row.port || 5060}`) : null,
-        lastSeen: null, latencyMs: Number(row.rtt) || null
-      })) };
-    },
-    trunksStatus: async () => {
-      const [pjsip, sip] = await Promise.all([deps.runFixedDiagnostic('pjsip_contacts'), deps.runFixedDiagnostic('sip_registry')]);
-      const items = [...deps.parsePjsip(pjsip.message).values()].filter(row => row.deviceRole === 'trunk').map(row => ({
-        trunkKey: String(row.ext ?? '').slice(0, 64), technology: 'PJSIP', registrationState: String(row.status ?? 'unknown'),
-        reachable: row.status === 'Online', latencyMs: Number(row.rtt) || null,
-        safeSummary: `${String(row.ext ?? '').slice(0, 64)}: ${String(row.status ?? 'unknown').slice(0, 64)}`
-      }));
-      for (const line of sip.message.split(/\r?\n/)) {
-        if (!/Registered|Request Sent|Rejected/i.test(line)) continue;
-        const trunkKey = line.trim().split(/\s+/)[0].slice(0, 64);
-        const registered = /Registered/i.test(line);
-        items.push({ trunkKey, technology: 'SIP', registrationState: registered ? 'Registered' : 'Unavailable', reachable: registered,
-          latencyMs: null, safeSummary: `${trunkKey}: ${registered ? 'Registered' : 'Unavailable'}` });
-      }
-      return { items: items.slice(0, 100) };
-    },
-    extensionsStatus: async input => {
-      const query = safeFilter(input.query).toLowerCase();
-      const rows = (await deps.readAuthoritativeExtensions())
-        .filter(row => row.deviceRole !== 'trunk')
-        .filter(row => !query || `${row.ext ?? ''} ${row.name ?? ''}`.toLowerCase().includes(query))
-        .slice(0, boundedLimit(input.limit));
-      return { items: rows.map(row => ({ extension: safeExtension(row.ext), displayName: String(row.name ?? ''),
-        state: String(row.status ?? 'unknown'), registered: /online|registered|available/i.test(String(row.status ?? '')),
-        deviceType: row.tech ? String(row.tech) : null })) };
-    },
-    missedCalls: async input => {
-      const from = new Date(Date.now() - Math.min(Number(input.periodHours) || 24, 720) * 3_600_000);
-      const params: unknown[] = [sqlDate(from)];
-      let where = "calldate >= ? AND disposition IN ('NO ANSWER','BUSY','FAILED')";
-      if (input.extension) { where += ' AND dst = ?'; params.push(safeExtension(input.extension)); }
-      params.push(boundedLimit(input.limit));
-      const rows = await deps.queryCdr(`SELECT calldate,src,dst,disposition FROM cdr WHERE ${where} ORDER BY calldate DESC LIMIT ?`, params);
-      return { items: rows.map(row => ({ occurredAt: row.calldate, callerMasked: maskPhone(row.src), calledExtension: safeExtension(row.dst),
-        status: String(row.disposition), callbackStatus: null })) };
-    },
-    callStatistics: async input => {
-      const [from, to] = periodRange(input.period);
-      const params: unknown[] = [sqlDate(from), sqlDate(to)];
-      let where = 'calldate >= ? AND calldate < ?';
-      if (input.extension) { const extension = safeExtension(input.extension); where += ' AND (src = ? OR dst = ?)'; params.push(extension, extension); }
-      if (input.queue) { const queue = safeFilter(input.queue, 64); where += ' AND (dcontext LIKE ? OR lastdata LIKE ?)'; params.push(`%${queue}%`, `%${queue}%`); }
-      const row = (await deps.queryCdr(`SELECT COUNT(*) total,SUM(disposition='ANSWERED') answered,SUM(disposition<>'ANSWERED') missed,AVG(duration) avgDuration FROM cdr WHERE ${where}`, params))[0] ?? {};
-      return { total: Number(row.total || 0), answered: Number(row.answered || 0), missed: Number(row.missed || 0),
-        averageDurationSeconds: Math.round(Number(row.avgDuration || 0)), averageWaitSeconds: null };
-    },
-    searchContacts: async input => {
-      const query = safeFilter(input.query).toLowerCase();
-      const rows = (await deps.readDirectory()).filter(row => `${row.name ?? ''} ${row.company ?? ''} ${row.number ?? ''}`.toLowerCase().includes(query)).slice(0, boundedLimit(input.limit, 50));
-      return { items: rows.map(row => ({ contactId: String(row.id), name: String(row.name ?? ''), company: row.company || null,
-        type: String(row.type || 'contact'), phonesMasked: [maskPhone(row.number)], owner: row.owner || null, isSpam: Boolean(row.isSpam) })) };
-    },
-    searchHistory: async input => {
-      const params: unknown[] = [];
-      const conditions: string[] = [];
-      if (input.query) { const query = `%${safeFilter(input.query)}%`; conditions.push('(src LIKE ? OR dst LIKE ? OR clid LIKE ?)'); params.push(query, query, query); }
-      if (input.extension) { const extension = safeExtension(input.extension); conditions.push('(src = ? OR dst = ?)'); params.push(extension, extension); }
-      if (input.direction === 'inbound') conditions.push("dcontext REGEXP 'from-trunk|ext-did'");
-      if (input.direction === 'outbound') conditions.push("dcontext = 'from-internal'");
-      if (input.direction === 'internal') conditions.push("dcontext NOT REGEXP 'from-trunk|ext-did' AND dcontext <> 'from-internal'");
-      if (input.dateFrom) { conditions.push('calldate >= ?'); params.push(safeFilter(input.dateFrom, 32)); }
-      if (input.dateTo) { conditions.push('calldate <= ?'); params.push(safeFilter(input.dateTo, 32)); }
-      params.push(boundedLimit(input.limit));
-      const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-      const rows = await deps.queryCdr(`SELECT uniqueid,calldate,src,dst,dcontext,disposition,duration,linkedid FROM cdr ${where} ORDER BY calldate DESC LIMIT ?`, params);
-      return { items: rows.map(row => ({ callId: String(row.uniqueid), occurredAt: row.calldate,
-        direction: /from-trunk|ext-did/i.test(row.dcontext) ? 'inbound' : row.dcontext === 'from-internal' ? 'outbound' : 'internal',
-        sourceMasked: maskPhone(row.src), destinationMasked: maskPhone(row.dst), disposition: String(row.disposition), durationSeconds: Number(row.duration || 0),
-        linkedIdHash: row.linkedid ? crypto.createHash('sha256').update(String(row.linkedid)).digest('hex').slice(0, 16) : null })) };
-    }
+export function createPBXReadServices(deps:PBXReadServiceDeps):PBXReadServices{
+  const now=deps.now||Date.now,cache=new PBXReadCache(256,now);
+  const diagnostic=async(command:FixedDiagnostic)=>{try{return await deps.runFixedDiagnostic(command)}catch{return{success:false,message:''}}};
+  const cached=(name:string,ttl:number,input:ToolInput,context:PBXReadRequestContext|undefined,loader:()=>Promise<ToolOutput>)=>cache.get(`${context?.tenantId||0}:${name}:${stable(input)}`,ttl,loader);
+  const registrations=async()=>{const[c,r,e,s,sr]=await Promise.all([diagnostic('pjsip_contacts'),diagnostic('pjsip_registrations'),diagnostic('pjsip_endpoints'),diagnostic('sip_peers'),diagnostic('sip_registry')]);const endpointRoles=parsePjsipEndpoints(e.message),configured=await deps.readConfiguredTrunks(),trunks=new Set(configured.map(item=>String(item.key||'')));const rows=[...parsePjsipContacts(c.message),...parsePjsipRegistrations(r.message),...parseSipPeers(s.message),...parseSipRegistry(sr.message)];for(const row of rows){if(row.role!=='trunk')row.role=trunks.has(row.endpoint)?'trunk':endpointRoles.get(row.endpoint)||row.role}const merged=new Map<string,ParsedRegistration>();for(const row of rows){const key=`${row.technology}:${row.endpoint}`,old=merged.get(key);if(!old||row.role==='trunk'||row.reachable)merged.set(key,row)}return[...merged.values()]};
+  return{
+    activeCalls:async(input,_signal,context)=>cached('active',2000,input,context,async()=>{const result=await diagnostic('channels'),groups=new Map<string,ParsedChannel[]>();for(const row of result.success?parseCoreChannels(result.message):[]){const key=row.linkedid||row.uniqueid||row.bridgedChannel||row.channel;if(!key)continue;groups.set(key,[...(groups.get(key)||[]),row])}return{items:[...groups.entries()].slice(0,100).map(([id,legs])=>{const primary=legs.find(x=>!/^Local\//i.test(x.channel))||legs[0],all=`${legs.map(x=>`${x.context} ${x.application} ${x.appData}`).join(' ')}`,queue=(all.match(/(?:Queue\(|queue[:/\s-]*)(\d{2,6})/i)||[])[1]||null,state=legs.some(x=>/up/i.test(x.state)&&x.bridgedChannel)?'bridged':legs.some(x=>/up/i.test(x.state))?'answered':legs.some(x=>/ring/i.test(x.state))?'ringing':safeText(primary.state,32).toLowerCase()||'unknown',direction=/from-trunk|ext-did/i.test(all)?'inbound':/from-internal/i.test(all)?'outbound':'internal',dialed=(primary.appData.match(/(\d{5,15})(?:\D*$)/)||[])[1];return{callIdHash:hash(id),direction,state,extension:direction==='outbound'?safeExtension(primary.callerId)||null:safeExtension(primary.extension)||null,remotePartyMasked:maskPhone(direction==='outbound'?dialed:primary.callerId),startedAt:null,durationSeconds:Math.max(...legs.map(x=>duration(x.duration))),queue,participantsCount:legs.length||null}})}}),
+    sipRegistrations:async(input,_signal,context)=>cached('sip',5000,input,context,async()=>({items:(await registrations()).slice(0,200).map(({contact,...row})=>({...row,contactMasked:contact?maskSipContact(contact):null,lastSeen:null}))})),
+    trunksStatus:async(input,_signal,context)=>cached('trunks',5000,input,context,async()=>{const configured=await deps.readConfiguredTrunks(),names=new Map(configured.map(row=>[String(row.key||''),row.name?String(row.name):null]));return{items:(await registrations()).filter(row=>row.role==='trunk').slice(0,100).map(row=>({trunkKey:row.endpoint,displayName:names.get(row.endpoint)||null,technology:row.technology,registrationState:row.state,reachable:row.reachable,latencyMs:row.latencyMs,lastErrorSafe:/rejected|unavailable|unreachable/i.test(row.state)?safeText(row.state,64):null,safeSummary:`${row.endpoint}: ${row.registered?'registered':row.reachable?'reachable':'unavailable'}`}))}}),
+    extensionsStatus:async(input,_signal,context)=>cached('extensions',5000,input,context,async()=>{const query=safeText(input.query).toLowerCase(),[extensions,statuses]=await Promise.all([deps.readAuthoritativeExtensions(),registrations()]),statusMap=new Map(statuses.filter(x=>x.role==='extension').map(x=>[x.endpoint,x]));return{items:extensions.filter(row=>!query||`${row.ext??''} ${row.name??''}`.toLowerCase().includes(query)).slice(0,boundedLimit(input.limit)).map(row=>{const ext=safeExtension(row.ext),status=statusMap.get(ext);return{extension:ext,displayName:String(row.name||ext),state:status?.state||'unknown',registered:Boolean(status?.registered),reachable:Boolean(status?.reachable),deviceType:row.tech?String(row.tech):null,technology:(status?.technology||row.tech)?String(status?.technology||row.tech):null,latencyMs:status?.latencyMs??null}})} }),
+    missedCalls:async(input,_signal,context)=>cached('missed',10000,input,context,async()=>{const params:unknown[]=[sqlDate(new Date(now()-Math.min(Number(input.periodHours)||24,720)*3600000))],conditions=["calldate>=?","disposition IN ('NO ANSWER','BUSY','FAILED','CANCEL')"];if(input.extension){conditions.push('dst=?');params.push(safeExtension(input.extension))}params.push(boundedLimit(input.limit)*5);const rows=await deps.queryCdr(`SELECT uniqueid,linkedid,calldate,src,dst,dcontext,lastapp,lastdata,disposition,duration,billsec FROM cdr WHERE ${conditions.join(' AND ')} ORDER BY calldate DESC LIMIT ?`,params),groups=new Map<string,any>();for(const row of rows){if(/^Local\//i.test(String(row.channel||'')))continue;const id=String(row.linkedid||row.uniqueid||'');if(id&&!groups.has(id))groups.set(id,row)}return{items:[...groups.entries()].slice(0,boundedLimit(input.limit)).map(([id,row])=>({callIdHash:hash(id),occurredAt:String(row.calldate),callerMasked:maskPhone(row.src),calledExtension:safeExtension(row.dst),status:String(row.disposition),queue:/queue/i.test(`${row.lastapp} ${row.dcontext}`)?safeExtension(row.dst)||safeText(row.lastdata,32)||null:null,callbackStatus:null}))}}),
+    callStatistics:async(input,_signal,context)=>cached('stats',30000,input,context,async()=>{const[from,to]=periodRange(input.period,now()),params:unknown[]=[sqlDate(from),sqlDate(to)],conditions=['calldate>=?','calldate<?'];if(input.extension){const ext=safeExtension(input.extension);conditions.push('(src=? OR dst=?)');params.push(ext,ext)}if(input.queue){const queue=safeText(input.queue,64);conditions.push('(dcontext LIKE ? OR lastdata LIKE ?)');params.push(`%${queue}%`,`%${queue}%`)}const row=(await deps.queryCdr(`SELECT COUNT(*) total,SUM(answered) answered,SUM(1-answered) missed,SUM(abandoned) abandoned,AVG(duration) avgDuration,AVG(CASE WHEN answered=1 THEN billsec END) avgTalk,AVG(CASE WHEN answered=1 THEN duration-billsec END) avgWait FROM (SELECT COALESCE(NULLIF(linkedid,''),uniqueid) logical_id,MAX(disposition='ANSWERED') answered,MAX(disposition<>'ANSWERED' AND lastapp='Queue') abandoned,MAX(duration) duration,MAX(billsec) billsec FROM cdr WHERE ${conditions.join(' AND ')} GROUP BY logical_id) logical_calls`,params))[0]||{};return{total:Number(row.total||0),answered:Number(row.answered||0),missed:Number(row.missed||0),abandoned:row.abandoned==null?null:Number(row.abandoned),averageDurationSeconds:Math.round(Number(row.avgDuration||0)),averageTalkSeconds:row.avgTalk==null?null:Math.round(Number(row.avgTalk)),averageWaitSeconds:row.avgWait==null?null:Math.round(Number(row.avgWait)),serviceLevelPercent:null}}),
+    searchContacts:async(input,_signal,context)=>{const ctx=contextOrDefault(context),query=safeText(input.query).toLowerCase(),rows=await deps.readDirectory(ctx);return{items:rows.filter(row=>`${row.name??''} ${row.company??''} ${row.number??''} ${row.phone??''}`.toLowerCase().includes(query)).slice(0,boundedLimit(input.limit,50)).map(row=>({contactId:String(row.id),name:String(row.name||''),company:row.company||null,type:String(row.type||row.contactType||'contact'),phonesMasked:[row.number||row.phone,row.phone2].filter(Boolean).map(maskPhone),owner:row.owner||row.ownerUserId||null,isSpam:Boolean(row.isSpam||row.is_spam)}))}},
+    searchHistory:async(input,_signal,context)=>cached('history',5000,input,context,async()=>{const params:unknown[]=[],conditions:string[]=[];if(input.query){const query=`%${safeText(input.query)}%`;conditions.push('(src LIKE ? OR dst LIKE ? OR clid LIKE ?)');params.push(query,query,query)}if(input.extension){const ext=safeExtension(input.extension);conditions.push('(src=? OR dst=?)');params.push(ext,ext)}if(input.direction==='inbound')conditions.push("dcontext REGEXP 'from-trunk|ext-did'");if(input.direction==='outbound')conditions.push("dcontext='from-internal'");if(input.direction==='internal')conditions.push("dcontext NOT REGEXP 'from-trunk|ext-did' AND dcontext<>'from-internal'");if(input.dateFrom){conditions.push('calldate>=?');params.push(safeText(input.dateFrom,32))}if(input.dateTo){conditions.push('calldate<=?');params.push(safeText(input.dateTo,32))}params.push(boundedLimit(input.limit)*5);const where=conditions.length?`WHERE ${conditions.join(' AND ')}`:'',rows=await deps.queryCdr(`SELECT uniqueid,linkedid,calldate,src,dst,dcontext,lastapp,lastdata,disposition,duration,billsec FROM cdr ${where} ORDER BY calldate DESC LIMIT ?`,params),groups=new Map<string,any>();for(const row of rows){const id=String(row.linkedid||row.uniqueid||'');if(id&&!groups.has(id))groups.set(id,row)}return{items:[...groups.entries()].slice(0,boundedLimit(input.limit)).map(([id,row])=>({callId:hash(id),occurredAt:String(row.calldate),direction:/from-trunk|ext-did/i.test(row.dcontext)?'inbound':row.dcontext==='from-internal'?'outbound':'internal',sourceMasked:maskPhone(row.src),destinationMasked:maskPhone(row.dst),disposition:String(row.disposition),durationSeconds:Number(row.duration||0),billsecSeconds:row.billsec==null?null:Number(row.billsec),queue:/queue/i.test(`${row.lastapp} ${row.dcontext}`)?safeExtension(row.dst)||safeText(row.lastdata,32)||null:null,linkedIdHash:row.linkedid?hash(row.linkedid):null}))}})
   };
 }

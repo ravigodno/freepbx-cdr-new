@@ -22104,20 +22104,32 @@ const aiPbxReadServices = createPBXReadServices({
     const allowlist = {
       channels: 'core show channels concise',
       pjsip_contacts: 'pjsip show contacts',
+      pjsip_registrations: 'pjsip show registrations outbound',
+      pjsip_endpoints: 'pjsip show endpoints',
       sip_peers: 'sip show peers',
       sip_registry: 'sip show registry'
     } as const;
     return runAsteriskCliCommand(allowlist[command], 5000);
   },
-  parseChannels: parseCoreShowChannelsConcise,
-  parsePjsip: parsePjsipContacts,
-  parseSipPeers,
   queryCdr: async (sql, params) => {
     const localDb = await readLocalDb();
     return queryFreePBXCDR(localDb.settings, isDemoMode(localDb.settings), sql, params as any[]);
   },
-  readDirectory: async () => (await readLocalDb()).directory || [],
-  readAuthoritativeExtensions: async () => getRealVoIPDevices((await readLocalDb()).settings)
+  readDirectory: async context => {
+    const localDb = await readLocalDb();
+    const authUser = (localDb.users || []).find((item: any) => String(item.username || item.id) === String(context.actorId || '')) || { username: context.actorId, role: 'admin' };
+    return (await getDirectoryRuntimeSnapshot({ legacyDirectory: localDb.directory || [], settings: localDb.settings, authUser, dbUser: authUser })).contacts;
+  },
+  readAuthoritativeExtensions: async () => {
+    const localDb = await readLocalDb();
+    try { return await queryFreePBXCDR(localDb.settings, isDemoMode(localDb.settings), "SELECT id ext,description name,tech FROM asterisk.devices WHERE id REGEXP '^[0-9]{2,6}$'", []); }
+    catch { return queryFreePBXCDR(localDb.settings, isDemoMode(localDb.settings), "SELECT id ext,description name,tech FROM devices WHERE id REGEXP '^[0-9]{2,6}$'", []); }
+  },
+  readConfiguredTrunks: async () => {
+    const localDb = await readLocalDb();
+    try { return await queryFreePBXCDR(localDb.settings, isDemoMode(localDb.settings), 'SELECT name `key`,name,tech technology FROM asterisk.trunks', []); }
+    catch { return []; }
+  }
 });
 registerAiPlatformRoutes(app, { requireAuth, checkPermission: checkUserPermission, readLegacyDb: readLocalDb, pbxReadServices: aiPbxReadServices });
 

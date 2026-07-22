@@ -1,0 +1,3 @@
+198.51.100.30:5060  sip-user  60 Registered
+198.51.100.31:5060  sip-user  60 Request Sent
+198.51.100.32:5060  sip-user  60 Rejected

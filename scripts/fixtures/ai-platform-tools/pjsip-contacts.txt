@@ -1,0 +1,4 @@
+ Contact:  101/sip:101@192.0.2.10:5060              abc123 Avail         7.451
+ Contact:  102/sip:102@192.0.2.11:5060              def456 Unavail       nan
+ Contact:  carrier-a/sip:account@198.51.100.20:5060  aaa111 Avail         12.100
+ Contact: malformed

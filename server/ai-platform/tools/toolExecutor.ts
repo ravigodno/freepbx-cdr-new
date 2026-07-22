@@ -135,7 +135,7 @@ export class ToolExecutor {
       const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => { timeoutTriggered = true; controller.abort(); reject(new Error('timeout')); }, this.timeoutMs); });
       const cancelled = new Promise<never>((_, reject) => controller.signal.addEventListener('abort', () => reject(new Error(timeoutTriggered ? 'timeout' : 'cancelled')), { once: true }));
       let output: unknown;
-      try { output = await Promise.race([this.executors.get(tool.executor_key)(validatedInput, controller.signal), timeout, cancelled]); }
+      try { output = await Promise.race([this.executors.get(tool.executor_key)(validatedInput, controller.signal, context), timeout, cancelled]); }
       finally { if (timer) clearTimeout(timer); }
       let safeOutput: unknown;
       try { safeOutput = redactAiPlatformValue(validateToolOutput(schemas.output, output)).value; }

@@ -1,4 +1,5 @@
-export type ReadExecutor = (input: any, signal: AbortSignal) => Promise<any>;
+import type { ToolExecutionContext } from '../toolExecutionContext.js';
+export type ReadExecutor = (input: any, signal: AbortSignal, context?: ToolExecutionContext) => Promise<any>;
 
 export class ReadOnlyExecutorRegistry {
   private readonly map = new Map<string, ReadExecutor>();

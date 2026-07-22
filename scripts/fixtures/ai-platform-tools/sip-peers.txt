@@ -1,0 +1,3 @@
+103/103                   192.0.2.13                               D  Yes        Yes            5060     OK (18 ms)
+104/104                   (Unspecified)                            D  Yes        Yes            0        UNREACHABLE
+broken line / without useful columns
