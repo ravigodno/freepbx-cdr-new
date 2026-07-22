@@ -45,6 +45,7 @@
     ,"test:ai-platform-tools": "tsx scripts/test-ai-platform-tools.ts"
     ,"test:ai-platform-tool-loop": "tsx scripts/test-ai-platform-tool-loop.ts"
     ,"test:ai-platform-transfer": "tsx scripts/test-ai-platform-transfer.ts"
+    ,"test:ai-platform-actions": "tsx scripts/test-ai-platform-actions.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

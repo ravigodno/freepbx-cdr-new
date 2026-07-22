@@ -16,7 +16,8 @@ const requiredTables = [
   'security_ip_whitelist', 'security_sip_registration_history', 'security_check_results', 'security_file_baselines',
   'security_file_changes', 'security_alert_rules', 'security_alert_history', 'security_scan_runs',
   'ai_tenants', 'ai_agents', 'ai_agent_versions', 'ai_provider_configs', 'ai_tools', 'ai_agent_tools',
-  'ai_behavior_profiles', 'ai_audit_log', 'ai_tool_executions', 'ai_transfer_requests'
+  'ai_behavior_profiles', 'ai_audit_log', 'ai_tool_executions', 'ai_transfer_requests',
+  'ai_action_definitions', 'ai_actions', 'ai_agent_actions', 'ai_callback_requests'
 ];
 
 function parseFreePBXConfig(): Record<string, string> {
@@ -107,7 +108,7 @@ async function inspect() {
     const [aiSettingRows] = await connection.query("SELECT setting_key,setting_value FROM settings WHERE setting_key IN ('ai.platform_core_enabled','ai.write_tools_enabled')");
     const [aiPermissionRows] = await connection.query(`SELECT p.permission_key,r.role_key FROM permissions p
       LEFT JOIN role_permissions rp ON rp.permission_id=p.id LEFT JOIN roles r ON r.id=rp.role_id
-      WHERE p.permission_key IN ('view_ai_tool_executions','test_ai_tools','view_ai_transfer_requests','manage_ai_transfer_policies','test_ai_human_transfer')`);
+      WHERE p.permission_key IN ('view_ai_tool_executions','test_ai_tools','view_ai_transfer_requests','manage_ai_transfer_policies','test_ai_human_transfer','view_ai_actions','manage_ai_actions','execute_ai_low_risk_actions','view_ai_callback_requests','manage_ai_callback_requests','assign_ai_actions')`);
     const [aiToolColumnRows] = await connection.query(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
       WHERE TABLE_SCHEMA=? AND TABLE_NAME='ai_tool_executions'`, [config.database]);
     const [aiToolIndexRows] = await connection.query(`SELECT DISTINCT INDEX_NAME FROM information_schema.STATISTICS
@@ -117,6 +118,9 @@ async function inspect() {
     const [aiTransferColumnRows] = await connection.query(`SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME='ai_transfer_requests'`,[config.database]);
     const [aiTransferIndexRows] = await connection.query(`SELECT DISTINCT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=? AND TABLE_NAME='ai_transfer_requests'`,[config.database]);
     const [aiTransferForeignKeyRows] = await connection.query(`SELECT CONSTRAINT_NAME FROM information_schema.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA=? AND TABLE_NAME='ai_transfer_requests'`,[config.database]);
+    const [aiActionColumnRows]=await connection.query(`SELECT TABLE_NAME,COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME IN('ai_actions','ai_callback_requests','ai_agent_actions','ai_action_definitions')`,[config.database]);
+    const [aiActionIndexRows]=await connection.query(`SELECT TABLE_NAME,INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=? AND TABLE_NAME IN('ai_actions','ai_callback_requests','ai_agent_actions')`,[config.database]);
+    const [aiActionForeignKeyRows]=await connection.query(`SELECT TABLE_NAME,CONSTRAINT_NAME FROM information_schema.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA=? AND TABLE_NAME IN('ai_actions','ai_callback_requests','ai_agent_actions','ai_action_definitions')`,[config.database]);
     await connection.end();
     const tables = new Set((rows as any[]).map(row => String(row.TABLE_NAME)));
     result.pbxpulsDbConnected = true;
@@ -134,6 +138,8 @@ async function inspect() {
       toolPermissionRows.some(row => row.permission_key === permission)) && toolPermissionRows.every(row => ['su','admin'].includes(String(row.role_key)));
     result.aiTransferPermissionsRestrictedToSuAdmin = ['view_ai_transfer_requests','manage_ai_transfer_policies','test_ai_human_transfer'].every(permission =>
       toolPermissionRows.some(row => row.permission_key === permission)) && toolPermissionRows.filter(row => ['view_ai_transfer_requests','manage_ai_transfer_policies','test_ai_human_transfer'].includes(row.permission_key)).every(row => ['su','admin'].includes(String(row.role_key)));
+    const actionPermissions=['view_ai_actions','manage_ai_actions','execute_ai_low_risk_actions','view_ai_callback_requests','manage_ai_callback_requests','assign_ai_actions'];
+    result.aiActionPermissionsRestrictedToSuAdmin=actionPermissions.every(permission=>toolPermissionRows.some(row=>row.permission_key===permission))&&toolPermissionRows.filter(row=>actionPermissions.includes(row.permission_key)).every(row=>['su','admin'].includes(String(row.role_key)));
     const toolColumns = new Set((aiToolColumnRows as any[]).map(row => String(row.COLUMN_NAME)));
     result.aiToolExecutionsSchemaOk = ['tenant_id','trace_id','conversation_id','agent_id','agent_version_id','tool_id','tool_key','executor_key','status','risk_level','input_json','input_hash','output_json','error_code','duration_ms','actor_id','idempotency_key','completed_at'].every(column => toolColumns.has(column));
     const toolIndexes = new Set((aiToolIndexRows as any[]).map(row => String(row.INDEX_NAME)));
@@ -142,6 +148,10 @@ async function inspect() {
     const transferColumns=new Set((aiTransferColumnRows as any[]).map(row=>String(row.COLUMN_NAME)));result.aiTransferRequestsSchemaOk=['tenant_id','trace_id','conversation_id','voice_session_id','agent_id','agent_version_id','trigger_type','trigger_text_hash','destination_type','destination_value_safe','destination_ref','status','failure_code','fallback_action','pbx_action_ref','metadata_json'].every(column=>transferColumns.has(column));
     const transferIndexes=new Set((aiTransferIndexRows as any[]).map(row=>String(row.INDEX_NAME)));result.aiTransferRequestsIndexesOk=['idx_ai_transfer_tenant_time','idx_ai_transfer_tenant_status','idx_ai_transfer_conversation','idx_ai_transfer_trace','idx_ai_transfer_live'].every(index=>transferIndexes.has(index));
     result.aiTransferRequestsForeignKeysOk=(aiTransferForeignKeyRows as any[]).length>=4;
+    const actionColumns=aiActionColumnRows as any[],hasColumns=(table:string,columns:string[])=>columns.every(column=>actionColumns.some(row=>row.TABLE_NAME===table&&row.COLUMN_NAME===column));
+    result.aiActionsSchemaOk=hasColumns('ai_actions',['tenant_id','trace_id','conversation_id','agent_id','agent_version_id','action_key','status','risk_level','approval_mode','input_json','input_hash','idempotency_key','metadata_json'])&&hasColumns('ai_callback_requests',['tenant_id','conversation_id','transfer_request_id','phone_encrypted','phone_key_version','phone_hash','phone_masked','consent_status','created_by_action_id']);
+    const actionIndexes=aiActionIndexRows as any[];result.aiActionsIndexesOk=['uniq_ai_actions_idempotency','idx_ai_actions_tenant_status','idx_ai_callback_phone','uniq_ai_agent_action'].every(index=>actionIndexes.some(row=>row.INDEX_NAME===index));
+    result.aiActionsForeignKeysOk=(aiActionForeignKeyRows as any[]).length>=12;
   } catch (error: any) {
     result.reason = String(error?.message || error).replace(/(password|passwd)\s*[:=]\s*\S+/gi, '$1=********').slice(0, 300);
   }

@@ -1,0 +1,2 @@
+import{BusinessActionError}from'./actionErrors.js';
+export class ActionRateLimiter{private readonly hits=new Map<string,number[]>();consume(key:string,limit:number,windowMs:number){const now=Date.now(),values=(this.hits.get(key)||[]).filter(x=>now-x<windowMs);if(values.length>=limit)throw new BusinessActionError('rate_limited',429,'Business action rate limit exceeded');values.push(now);this.hits.set(key,values);if(this.hits.size>2000)for(const[k,v]of this.hits)if(!v.some(x=>now-x<3600000))this.hits.delete(k)}}

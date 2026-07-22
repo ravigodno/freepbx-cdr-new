@@ -56,7 +56,8 @@ for (const endpoint of ['call-trace/core', 'call-trace/logs', 'call-trace/export
 assert.match(logs, /const view=\[requireAuth\(\),permit\]/);
 
 const migrationStart = migration.indexOf("key: '20260721_023_monitoring_tab_permissions'");
-const migrationEnd = migration.indexOf('\n  }\n];', migrationStart) + 5;
+const nextMigration = migration.indexOf('\n  {\n    key:', migrationStart + 1);
+const migrationEnd = nextMigration === -1 ? migration.indexOf('\n  }\n];', migrationStart) + 5 : nextMigration;
 const migrationBlock = migration.slice(migrationStart, migrationEnd);
 assert.match(migrationBlock, /INSERT IGNORE INTO permissions/);
 assert.match(migrationBlock, /INSERT IGNORE INTO role_permissions/);

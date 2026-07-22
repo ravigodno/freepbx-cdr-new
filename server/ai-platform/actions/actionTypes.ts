@@ -1,0 +1,9 @@
+export type BusinessActionRisk='low'|'medium'|'high'|'forbidden';
+export type BusinessActionStatus='requested'|'awaiting_confirmation'|'approved'|'denied'|'running'|'completed'|'failed'|'timed_out'|'cancelled'|'expired';
+export type ConsentStatus='unknown'|'requested'|'granted'|'denied';
+export interface BusinessActionDefinition{key:string;version:number;name:string;description:string;riskLevel:BusinessActionRisk;inputSchema:Record<string,unknown>;outputSchema:Record<string,unknown>;executorKey:string;defaultApprovalMode:'customer_consent';allowedAutonomyLevels:readonly('SAFE'|'ASSISTED'|'AUTONOMOUS')[];idempotent:boolean;timeoutMs:number;enabled:boolean}
+export interface BusinessActionContext{traceId:string;tenantId:number;installationId:string;conversationId:number|null;voiceSessionId:number|null;transferRequestId:number|null;agentId:number;agentVersionId:number;actorType:'user'|'system'|'service';actorId:string|null;permissions:readonly string[];consentStatus:ConsentStatus;sourceChannel:'sandbox'|'voice';requestStartedAt:string;idempotencyKey:string|null}
+export interface CallbackActionInput{contactName?:string|null;phone:string;reason:string;preferredTime?:string|null;timezone?:string|null;priority?:'normal'|'urgent'}
+export interface BusinessActionResult{id:number;status:BusinessActionStatus;ok:boolean;callbackRequestId:number|null;safeSummary:string;duplicate:boolean;errorCode:string|null}
+export interface ActionExecutorContext{tenantId:number;conversationId:number|null;voiceSessionId:number|null;transferRequestId:number|null;agentId:number;agentVersionId:number;actionId:number;sourceChannel:'sandbox'|'voice';signal:AbortSignal}
+export interface ActionExecutor{execute(context:ActionExecutorContext,input:CallbackActionInput):Promise<{callbackRequestId:number;safeSummary:string;duplicate:boolean}>}

@@ -19,6 +19,10 @@ export type AiPlatformErrorCode =
   | 'transfer_timeout'
   | 'transfer_failed'
   | 'duplicate_transfer'
+  | 'encryption_not_configured'
+  | 'consent_required'
+  | 'action_timeout'
+  | 'action_failed'
   | 'internal_error';
 
 export class AiPlatformError extends Error {
