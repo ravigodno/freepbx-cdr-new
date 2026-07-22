@@ -10,7 +10,7 @@ export interface CallIntelligenceDeps extends CallTraceDeps {
   completeAi?: (params: {
     provider: string; model: string; temperature: number; systemPrompt: string;
     messages: Array<{ role: 'user' | 'assistant'; text: string }>;
-    responseType?: 'json' | 'text'; apiKey?: string; baseUrl?: string;
+    responseType?: 'json' | 'text'; apiKey?: string; baseUrl?: string; signal?: AbortSignal;
   }) => Promise<string>;
 }
 

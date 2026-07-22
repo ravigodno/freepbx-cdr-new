@@ -258,13 +258,13 @@ function normalizeAipbxMessagesFinal(messages: any): any[] {
 }
 
 // OPENAI_CURL_HELPER_SAFE_V1
-async function callOpenAIChatViaCurlSafe(endpoint: string, key: string, payload: any): Promise<any> {
+async function callOpenAIChatViaCurlSafe(endpoint: string, key: string, payload: any, signal?: AbortSignal): Promise<any> {
   const { execFile } = require('child_process');
 
   const body = JSON.stringify(payload);
 
   const runOnce = (attempt: number) => new Promise<any>((resolve, reject) => {
-    execFile('curl', [
+    const child = execFile('curl', [
       '-4',
       '-sS',
       '--connect-timeout', '20',
@@ -280,6 +280,7 @@ async function callOpenAIChatViaCurlSafe(endpoint: string, key: string, payload:
       timeout: 90000,
       maxBuffer: 1024 * 1024 * 4
     }, (error: any, stdout: string, stderr: string) => {
+      signal?.removeEventListener('abort', onAbort);
       if (error) {
         reject(new Error('OpenAI curl request failed on attempt ' + attempt + ': ' + sanitizeAiProviderError(stderr || 'network error')));
         return;
@@ -306,6 +307,8 @@ async function callOpenAIChatViaCurlSafe(endpoint: string, key: string, payload:
         reject(new Error('OpenAI curl returned non-JSON response'));
       }
     });
+    const onAbort = () => { child.kill('SIGTERM'); reject(Object.assign(new Error('AI request aborted'), { name: 'AbortError' })); };
+    if (signal?.aborted) onAbort(); else signal?.addEventListener('abort', onAbort, { once: true });
   });
 
   let lastError: any = null;
@@ -337,8 +340,9 @@ export async function generateAIResponse(params: {
   responseType?: 'json' | 'text';
   apiKey?: string;
   baseUrl?: string;
+  signal?: AbortSignal;
 }): Promise<string> {
-  const { provider, model, temperature, systemPrompt, messages, responseType = 'text', apiKey, baseUrl } = params;
+  const { provider, model, temperature, systemPrompt, messages, responseType = 'text', apiKey, baseUrl, signal } = params;
 
   // 1. Google Gemini
   if (provider === 'gemini') {
@@ -396,7 +400,7 @@ export async function generateAIResponse(params: {
       (payload as any).response_format = { type: 'json_object' };
     }
 
-    const data: any = await callOpenAIChatViaCurlSafe(endpoint, key, payload);
+    const data: any = await callOpenAIChatViaCurlSafe(endpoint, key, payload, signal);
 
     return String(data?.choices?.[0]?.message?.content || '').trim();
   }
@@ -427,7 +431,7 @@ export async function generateAIResponse(params: {
         'x-api-key': key,
         'anthropic-version': '2023-06-01'
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload), signal: signal as any
     });
 
     if (!res.ok) {
@@ -466,7 +470,7 @@ export async function generateAIResponse(params: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${key}`
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload), signal: signal as any
     });
 
     if (!res.ok) {
@@ -508,7 +512,7 @@ export async function generateAIResponse(params: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${key}`
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload), signal: signal as any
     });
 
     if (!res.ok) {

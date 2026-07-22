@@ -7697,9 +7697,12 @@ const app = express();
 app.use((req, res, next) => {
   if (req.path.startsWith('/api/')) {
     const started = Date.now();
-    console.log('[API START]', req.method, req.path, req.url);
+    const aiCallPath = /^\/api\/monitoring\/call-intelligence\/ai\/explain-call\/[^/?]+/;
+    const safePath = req.path.replace(aiCallPath, '/api/monitoring/call-intelligence/ai/explain-call/[CALL_ID]');
+    const safeUrl = req.url.replace(aiCallPath, '/api/monitoring/call-intelligence/ai/explain-call/[CALL_ID]');
+    console.log('[API START]', req.method, safePath, safeUrl);
     res.on('finish', () => {
-      console.log('[API END]', req.method, req.path, res.statusCode, Date.now() - started + 'ms');
+      console.log('[API END]', req.method, safePath, res.statusCode, Date.now() - started + 'ms');
     });
   }
   next();

@@ -2,7 +2,8 @@ import type { Express, NextFunction, Request, Response } from 'express';
 import { buildCallIntelligenceCore, buildCallIntelligenceDiagnosis, buildCallIntelligenceLogs, buildCallIntelligenceQuality, buildCallIntelligenceSecurity, buildCallIntelligenceSip, getCallIntelligenceCandidates, type CallIntelligenceDeps } from './service.js';
 import { buildCallIntelligenceInsights, normalizeInsightPeriod } from './insights.js';
 import { buildCallIntelligenceReport, normalizeReportType } from './reports.js';
-import { explainCall, explainReport } from './aiAnalyst.js';
+import { explainCall, explainReport, getAiAnalystStatus } from './aiAnalyst.js';
+import { AiAnalystError } from './aiHardening.js';
 
 type Checker = (req: Request, permission: string) => Promise<boolean>;
 const fail = (res: Response, status: number, message: string) => res.status(status).json({ success: false, error: message });
@@ -19,6 +20,8 @@ export function registerCallIntelligenceRoutes(app: Express, requireAuth: any, c
     next();
   };
   const aiView = [requireAuth(), permit, aiPermit];
+  const aiMeta = (req: Request, operation: 'call'|'report', targetId: string, signal?: AbortSignal) => ({ userId: String((req as any).user?.username || 'authenticated'), operation, targetId, signal });
+  const aiFail = (res: Response, error: any) => { const normalized = error instanceof AiAnalystError ? error : new AiAnalystError('provider_unavailable', 503, 'AI-провайдер временно недоступен'); if (normalized.retryAfterSeconds) res.setHeader('Retry-After', String(normalized.retryAfterSeconds)); return res.status(normalized.statusCode).json({ success: false, error: normalized.message, code: normalized.code }); };
   const route = (path: string, worker: (deps: CallIntelligenceDeps, value: any) => Promise<any>) => app.get(path, ...view, async (req, res) => {
     const controller = new AbortController(); req.once('aborted', () => controller.abort());
     try { res.json({ success: true, data: await worker(deps, input(req, controller.signal)) }); }
@@ -68,15 +71,19 @@ export function registerCallIntelligenceRoutes(app: Express, requireAuth: any, c
     try {
       const value = { ...input(req, controller.signal), query: String(req.params.id || '').trim() };
       if (!value.query || value.query.length > 255) return fail(res, 400, 'Некорректный идентификатор звонка');
-      res.json({ success: true, data: await explainCall(deps, value) });
-    } catch (error: any) { fail(res, error?.statusCode || (error?.name === 'AbortError' ? 499 : 502), error?.message || 'AI-анализ недоступен'); }
+      res.json({ success: true, data: await explainCall(deps, value, aiMeta(req, 'call', value.query, controller.signal)) });
+    } catch (error: any) { aiFail(res, error); }
   });
   app.post('/api/monitoring/call-intelligence/ai/explain-report/:type', ...aiView, async (req, res) => {
     try {
       const type = normalizeReportType(req.params.type);
       if (type !== req.params.type || type === 'management') return fail(res, 400, 'AI-объяснение доступно для daily, weekly и technical отчётов');
-      res.json({ success: true, data: await explainReport(deps, type) });
-    } catch (error: any) { fail(res, error?.statusCode || 502, error?.message || 'AI-анализ отчёта недоступен'); }
+      res.json({ success: true, data: await explainReport(deps, type, aiMeta(req, 'report', type)) });
+    } catch (error: any) { aiFail(res, error); }
+  });
+  app.get('/api/monitoring/call-intelligence/ai/status', ...aiView, async (_req, res) => {
+    try { res.json({ success: true, data: getAiAnalystStatus(await deps.getAiSettings?.() || {}) }); }
+    catch { aiFail(res, new AiAnalystError('provider_unavailable', 503, 'Не удалось получить безопасный статус AI')); }
   });
   app.get('/api/monitoring/call-intelligence/export', ...view, async (req, res) => {
     const controller = new AbortController(); req.once('aborted', () => controller.abort());

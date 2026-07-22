@@ -87,10 +87,11 @@ export default function CallIntelligencePanel({
       signal: controller.signal,
     });
     const data = await response.json();
-    if (!response.ok || data.success === false)
-      throw new Error(
-        data.error?.message || data.error || `HTTP ${response.status}`,
-      );
+    if (!response.ok || data.success === false) {
+      const requestError: any = new Error(data.error?.message || data.error || `HTTP ${response.status}`);
+      requestError.code = data.code; requestError.status = response.status;
+      throw requestError;
+    }
     return data.data;
   };
   const params = (id: string) =>
@@ -484,11 +485,12 @@ export default function CallIntelligencePanel({
                     {diagnosis.route?.length > 0 && <div className="mt-3 text-[10px] text-slate-500">Маршрут: {diagnosis.route.map((item: any) => item.label).join(" → ")}</div>}
                     {canUseAi && <button className="btn mt-4" disabled={aiLoading === "call"} onClick={explainCurrentCall}>{aiLoading === "call" ? "AI объясняет…" : "Объяснить звонок"}</button>}
                     {aiCall && <div className="mt-3 rounded-lg border border-indigo-200 bg-indigo-50 p-3 text-xs text-indigo-950 dark:border-indigo-900 dark:bg-indigo-950/30 dark:text-indigo-100">
-                      <div className="flex items-center justify-between gap-2"><b>AI-анализ</b><span className="text-[9px] uppercase">{aiCall.provider} · кэш {aiCall.cached ? "да" : "нет"}</span></div>
+                      <div className="flex items-center justify-between gap-2"><b>AI-анализ</b><span className="text-[9px] uppercase">{aiCall.modelMeta?.provider} · {aiCall.modelMeta?.latencyMs} мс · кэш {aiCall.modelMeta?.cached ? "да" : "нет"}</span></div>
                       <p className="mt-2 whitespace-pre-wrap">{aiCall.explanation}</p>
-                      <div className="mt-3 text-[10px] font-bold uppercase">Уверенность: {aiCall.confidence}</div>
-                      {aiCall.facts?.length > 0 && <div className="mt-2 space-y-1">{aiCall.facts.map((fact: any, index: number) => <div key={index}>✓ {fact.source}: {fact.message}</div>)}</div>}
-                      {aiCall.recommendations?.map((item: string) => <div key={item} className="mt-2 font-medium">Рекомендация: {item}</div>)}
+                      <div className="mt-3 text-[10px] font-bold uppercase">Уверенность: {aiCall.confidence} · движок: {aiCall.engineConfidence}</div>
+                      {aiCall.facts?.length > 0 && <div className="mt-2 space-y-1">{aiCall.facts.map((fact: any, index: number) => <div key={index}>✓ {fact.sourceType}: {fact.text} <span className="text-[9px]">(evidence {fact.evidenceIndexes.join(", ")})</span></div>)}</div>}
+                      {aiCall.recommendations?.map((item: any, index: number) => <div key={index} className="mt-2 font-medium">Рекомендация: {item.text}</div>)}
+                      {aiCall.limitations?.length > 0 && <div className="mt-3 rounded bg-white/60 p-2"><b>Ограничения:</b> {aiCall.limitations.join(", ")}</div>}
                       <p className="mt-3 text-[9px] text-indigo-600 dark:text-indigo-300">AI объясняет детерминированный диагноз PBXPuls и не выполняет самостоятельный поиск.</p>
                     </div>}
                   </>
@@ -727,7 +729,7 @@ export default function CallIntelligencePanel({
                 <div><h4 className="font-black">Основные проблемы</h4><div className="mt-2 space-y-2">{lazy.reports.problems.length?lazy.reports.problems.map((item:any)=><div key={`${item.type}:${item.affectedObjects?.[0]?.name}`} className="rounded-lg border p-3 text-xs"><b>{item.title}</b> · {item.count}<div className="text-slate-500">{item.affectedObjects?.map((o:any)=>`${o.type}: ${o.name}`).join(", ")||"Объект не определён"}</div></div>):<p className="text-xs text-slate-500">Подтверждённые проблемы не найдены.</p>}</div></div>
                 <div><h4 className="font-black">Рекомендации</h4><div className="mt-2 space-y-2">{lazy.reports.recommendations.map((item:any)=><div key={`${item.source}:${item.text}`} className="rounded bg-indigo-50 p-3 text-xs text-indigo-800"><b>{item.text}</b><div className="mt-1">Основание: {item.reason} · {item.confidence}</div></div>)}</div></div>
                 <div className="flex flex-wrap gap-2"><button className="btn" onClick={downloadReport}><Download className="h-4 w-4"/>JSON export</button>{canUseAi && reportType !== "management" && <button className="btn" disabled={aiLoading === "report"} onClick={explainCurrentReport}>{aiLoading === "report" ? "AI объясняет…" : "Объяснить отчёт"}</button>}</div>
-                {aiReport && <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-4 text-xs text-indigo-950 dark:border-indigo-900 dark:bg-indigo-950/30 dark:text-indigo-100"><div className="flex justify-between gap-2"><b>AI-анализ отчёта</b><span className="text-[9px] uppercase">{aiReport.provider} · кэш {aiReport.cached ? "да" : "нет"}</span></div><p className="mt-2 whitespace-pre-wrap">{aiReport.explanation}</p><div className="mt-3 text-[10px] font-bold uppercase">Уверенность: {aiReport.confidence}</div>{aiReport.facts?.map((fact:any,index:number)=><div key={index} className="mt-1">✓ {fact.source}: {fact.message}</div>)}</div>}
+                {aiReport && <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-4 text-xs text-indigo-950 dark:border-indigo-900 dark:bg-indigo-950/30 dark:text-indigo-100"><div className="flex justify-between gap-2"><b>AI-анализ отчёта</b><span className="text-[9px] uppercase">{aiReport.modelMeta?.provider} · {aiReport.modelMeta?.latencyMs} мс · кэш {aiReport.modelMeta?.cached ? "да" : "нет"}</span></div><p className="mt-2 whitespace-pre-wrap">{aiReport.explanation}</p><div className="mt-3 text-[10px] font-bold uppercase">Уверенность: {aiReport.confidence} · движок: {aiReport.engineConfidence}</div>{aiReport.facts?.map((fact:any,index:number)=><div key={index} className="mt-1">✓ {fact.sourceType}: {fact.text}</div>)}{aiReport.limitations?.length>0&&<div className="mt-3 rounded bg-white/60 p-2"><b>Ограничения:</b> {aiReport.limitations.join(", ")}</div>}</div>}
               </>:<p className="text-xs text-slate-500">Формирование отчёта…</p>}
             </section>
           )}
