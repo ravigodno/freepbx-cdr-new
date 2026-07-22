@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import type { AiPlatformStore } from '../storage/aiPlatformStore.js';
 import { insertId } from '../storage/aiPlatformStore.js';
 import type { AiAuditService } from '../audit/aiAuditService.js';
-import { normalizeVoiceEvent } from './voiceEventNormalizer.js';
+import { isSupportedVoiceEvent,normalizeVoiceEvent } from './voiceEventNormalizer.js';
 import { VoiceRouteResolver } from './voiceRouteResolver.js';
 import { VoiceAgentResolver } from './voiceAgentResolver.js';
 import { enforceVoiceBindingPolicy } from './voiceSessionPolicy.js';
@@ -14,7 +14,7 @@ import type { VoiceGatewayMetrics } from './voiceGatewayTypes.js';
 export class VoiceGatewayService {
   readonly sessions: VoiceSessionService;
   readonly metrics: VoiceGatewayMetrics = { normalizedEvents:0,ignoredEvents:0,sessionsCreated:0,failedSessions:0,stateTransitionErrors:0,reconnects:0,totalDurationMs:0,completedSessions:0 };
-  private readonly routes:VoiceRouteResolver; private readonly agents:VoiceAgentResolver; private readonly repo:VoiceSessionRepository; private dedup=new Map<string,number>();
+  private readonly routes:VoiceRouteResolver; private readonly agents:VoiceAgentResolver; private readonly repo:VoiceSessionRepository; private dedup=new Map<string,number>();private unsupported=new Map<string,number>();
   constructor(private readonly store:AiPlatformStore,private readonly audit:AiAuditService){this.sessions=new VoiceSessionService(store,audit);this.routes=new VoiceRouteResolver(store);this.agents=new VoiceAgentResolver(store);this.repo=new VoiceSessionRepository(store)}
   private mediaCloser:((tenantId:number,voiceSessionId:number,traceId:string)=>Promise<unknown>)|null=null;
   private liveGuard:((input:{tenantId:number;binding:any;event:any;raw:any;traceId:string})=>Promise<void>)|null=null;
@@ -22,7 +22,7 @@ export class VoiceGatewayService {
   setMediaCloser(closer:(tenantId:number,voiceSessionId:number,traceId:string)=>Promise<unknown>){this.mediaCloser=closer}
   setLiveHooks(hooks:{guard:(input:any)=>Promise<void>;start:(input:any)=>Promise<void>}){this.liveGuard=hooks.guard;this.liveStarter=hooks.start}
   async handleRawEvent(raw:any,options:{tenantId?:number;synthetic:boolean;bindingId?:number;traceId?:string}){
-    const tenantId=options.tenantId||1,traceId=options.traceId||crypto.randomUUID(),event=normalizeVoiceEvent(tenantId,raw),key=`${tenantId}:${event.eventType}:${event.channelRefHash}:${event.timestamp}`,now=Date.now();this.metrics.normalizedEvents++;
+    const tenantId=options.tenantId||1,traceId=options.traceId||crypto.randomUUID();if(!isSupportedVoiceEvent(raw)){const type=String(raw?.type||raw?.eventType||'unknown').replace(/[^A-Za-z0-9_.-]/g,'').slice(0,64)||'unknown',count=(this.unsupported.get(type)||0)+1;this.unsupported.set(type,count);if(this.unsupported.size>100)this.unsupported.delete(this.unsupported.keys().next().value!);this.metrics.ignoredEvents++;if(count===1||count%100===0)await this.audit.append({tenantId,traceId,actorType:'service',eventType:'voice_event_ignored',entityType:'voice_event',decision:'unsupported',details:{eventType:type,count}});return{ignored:true,reason:'unsupported_event'}}const event=normalizeVoiceEvent(tenantId,raw),key=`${tenantId}:${event.eventType}:${event.channelRefHash}:${event.timestamp}`,now=Date.now();this.metrics.normalizedEvents++;
     if(this.dedup.has(key))return{ignored:true,reason:'duplicate'};this.dedup.set(key,now);if(this.dedup.size>2000)for(const[k,v]of this.dedup)if(now-v>600000)this.dedup.delete(k);
     await this.audit.append({tenantId,traceId,actorType:'service',eventType:'voice_event_received',entityType:'voice_event',entityId:event.channelRefHash.slice(0,32),decision:'received',details:{eventType:event.eventType,channelRefHash:event.channelRefHash,bridgeRefHash:event.bridgeRefHash,synthetic:options.synthetic}});
     if(event.eventType==='StasisStart'){
