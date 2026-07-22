@@ -10,6 +10,7 @@
     "lint": "tsc --noEmit",
     "pbxpuls:db:check": "tsx scripts/pbxpuls-db.ts --check",
     "pbxpuls:db:setup": "tsx scripts/pbxpuls-db.ts --setup",
+    "ai-platform:prepare-receptionist-live": "tsx scripts/prepare-ai-receptionist-live-readiness.ts --apply",
     "pbxpuls:monitoring:check": "tsx scripts/pbxpuls-monitoring-check.ts",
     "pbxpuls:monitoring:sync": "tsx scripts/pbxpuls-monitoring-sync.ts",
     "pbxpuls:monitoring:retention": "tsx scripts/pbxpuls-monitoring-retention.ts",
@@ -66,6 +67,7 @@
     "react-datepicker": "^9.1.0",
     "react-dom": "^19.0.1",
     "recharts": "^3.8.1",
+    "ws": "^8.21.0",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

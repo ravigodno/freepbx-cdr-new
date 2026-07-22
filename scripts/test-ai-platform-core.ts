@@ -17,6 +17,7 @@ import { registerAiPlatformRoutes } from '../server/ai-platform/api/router.js';
 import { validateAutonomyPolicy, validateBehaviorProfile, validateTransferPolicy } from '../server/ai-platform/behavior/policyValidation.js';
 import { AgentConfigurationValidator } from '../server/ai-platform/agents/agentConfigurationValidator.js';
 import { AgentBuilderService } from '../server/ai-platform/agents/agentBuilderService.js';
+import { buildReceptionistLiveConfig, RECEPTIONIST_SYSTEM_PROMPT } from '../server/ai-platform/agents/receptionistLiveReadiness.js';
 import { AgentTemplateService } from '../server/ai-platform/agents/templateService.js';
 import { KnowledgeService } from '../server/ai-platform/knowledge/core/knowledgeService.js';
 import { TrainingService } from '../server/ai-platform/training/core/trainingService.js';
@@ -64,6 +65,7 @@ const published=await service.publishVersion(tenant.id,created.id,version2.id,ac
 await assert.rejects(()=>service.updateVersionDraft(tenant.id,created.id,version2.id,{config:{toolIds:[]}}),(error:any)=>error.code==='conflict');
 await assert.rejects(()=>service.publishVersion(tenant.id,created.id,version2.id,actor),(error:any)=>error.code==='conflict');
 await assert.rejects(()=>service.createVersionDraft(tenant.id,created.id,{config:{toolIds:[999]}},actor),(error:any)=>error.code==='invalid_request');
+const receptionistConfig=buildReceptionistLiveConfig({templateId:11,behaviorProfileId:3,transferPolicyId:1,autonomyPolicyId:1,toolIds:[7],actionDefinitionId:1,permissionKeys:[]});const receptionistValidation=await new AgentConfigurationValidator(store).validate(tenant.id,{templateId:11,behaviorProfileId:3,config:receptionistConfig,prompt:RECEPTIONIST_SYSTEM_PROMPT});assert.deepEqual(receptionistValidation,{valid:true,errors:[]});assert.equal(receptionistConfig.voiceEnabled,true);assert.equal(receptionistConfig.voice.provider,'synthetic');assert.equal(receptionistConfig.voice.mode,'speech_to_speech');assert.equal(receptionistConfig.voice.interruptible,true);assert.equal(receptionistConfig.voice.maxSentences,3);assert.equal(receptionistConfig.humanTransferPriority,'highest');
 
 const registry=new AIProviderRegistry();registry.register(new OpenAIHttpAdapter());registry.register(new OpenAIHttpAdapter('openai_compatible',true));
 for(const key of ['gemini','anthropic','deepseek'])registry.register(new LegacyProviderCompatibilityAdapter(key,async()=>''));
