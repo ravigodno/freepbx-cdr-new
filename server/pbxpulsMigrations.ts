@@ -1043,6 +1043,14 @@ const MIGRATIONS: Migration[] = [
       `INSERT IGNORE INTO permissions(permission_key,name,description,category)VALUES('view_ai_realtime_voice_status','View AI realtime voice status','View safe realtime voice provider status','ai_platform'),('view_ai_realtime_voice_sessions','View AI realtime voice sessions','View safe realtime voice session metrics','ai_platform'),('test_ai_realtime_voice','Test AI realtime voice','Run synthetic realtime voice tests','ai_platform'),('manage_ai_realtime_voice','Manage AI realtime voice','Manage disabled-by-default realtime voice settings','ai_platform')`,
       `INSERT IGNORE INTO role_permissions(role_id,permission_id)SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key IN('view_ai_realtime_voice_status','view_ai_realtime_voice_sessions','test_ai_realtime_voice','manage_ai_realtime_voice')WHERE r.role_key IN('su','admin')`
     ],seed:async()=>seedLegacyAiPlatformPermissions(['view_ai_realtime_voice_status','view_ai_realtime_voice_sessions','test_ai_realtime_voice','manage_ai_realtime_voice'])
+  },
+  {
+    key:'20260722_037_ai_controlled_live_voice',description:'Add disabled controlled internal live voice test foundation',statements:[
+      `ALTER TABLE ai_voice_route_bindings MODIFY match_type ENUM('did','extension','queue_entry','test_context','controlled_test_extension') NOT NULL`,
+      `INSERT IGNORE INTO settings(setting_key,setting_value,value_type,category,is_secret,description)VALUES('ai.voice_live_test_enabled','false','boolean','ai_platform',0,'Enable one controlled internal live voice test'),('ai.voice_live_transport','audiosocket','string','ai_platform',0,'Controlled live voice transport'),('ai.voice_live_test_extension','','string','ai_platform',0,'Dedicated internal extension for controlled live voice test')`,
+      `INSERT IGNORE INTO permissions(permission_key,name,description,category)VALUES('view_ai_voice_live_test','View AI live voice test','View safe controlled live voice readiness','ai_platform'),('configure_ai_voice_live_test','Configure AI live voice test','Validate controlled live test configuration and preview dialplan','ai_platform'),('enable_ai_voice_live_test','Enable AI live voice test','Explicitly enable or disable controlled live voice test','ai_platform'),('execute_ai_voice_live_test_checks','Execute AI live voice checks','Run read-only controlled live voice readiness checks','ai_platform')`,
+      `INSERT IGNORE INTO role_permissions(role_id,permission_id)SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key IN('view_ai_voice_live_test','configure_ai_voice_live_test','enable_ai_voice_live_test','execute_ai_voice_live_test_checks')WHERE r.role_key IN('su','admin')`
+    ],seed:async()=>seedLegacyAiPlatformPermissions(['view_ai_voice_live_test','configure_ai_voice_live_test','enable_ai_voice_live_test','execute_ai_voice_live_test_checks'])
   }
 ];
 

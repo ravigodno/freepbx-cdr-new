@@ -110,7 +110,11 @@ export type PermissionKey =
   | 'view_ai_realtime_voice_status'
   | 'view_ai_realtime_voice_sessions'
   | 'test_ai_realtime_voice'
-  | 'manage_ai_realtime_voice';
+  | 'manage_ai_realtime_voice'
+  | 'view_ai_voice_live_test'
+  | 'configure_ai_voice_live_test'
+  | 'enable_ai_voice_live_test'
+  | 'execute_ai_voice_live_test_checks';
 
 export type UserPermissions = Partial<Record<PermissionKey, boolean>>;
 

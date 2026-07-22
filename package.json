@@ -49,6 +49,7 @@
     ,"test:ai-platform-voice-control": "tsx scripts/test-ai-platform-voice-control.ts"
     ,"test:ai-platform-voice-media": "tsx scripts/test-ai-platform-voice-media.ts"
     ,"test:ai-platform-realtime-voice": "tsx scripts/test-ai-platform-realtime-voice.ts"
+    ,"test:ai-platform-live-voice": "tsx scripts/test-ai-platform-live-voice.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
