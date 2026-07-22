@@ -6,6 +6,7 @@ export interface ProviderCapabilities {
   nativeTools: boolean;
   realtimeVoice: boolean;
   structuredOutput: boolean;
+  structuredToolRequest: boolean;
 }
 
 export interface ProviderConfig {
@@ -32,5 +33,6 @@ export const TEXT_ONLY_CAPABILITIES: ProviderCapabilities = {
   streaming: false,
   nativeTools: false,
   realtimeVoice: false,
-  structuredOutput: true
+  structuredOutput: true,
+  structuredToolRequest: false
 };

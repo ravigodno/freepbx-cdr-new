@@ -1,4 +1,8 @@
-import type { ProviderResponse } from '../core/contracts.js';
-export interface SandboxActor{traceId:string;actorId:string|null}
-export interface RuntimeResult{message:string;conversationId:number;sessionId:number;intent:string|null;transferRequired:boolean;recommendedResponseDelayMs:number;interruptible:boolean;provider:string|null;model:string|null;latencyMs:number|null;context:{selectedKnowledgeIds:number[];selectedTrainingIds:number[];contextChars:number;truncated:boolean}}
-export type ProviderExecutor=(input:{messages:{role:'system'|'user'|'assistant';content:string}[];traceId:string})=>Promise<ProviderResponse>;
+import type {ProviderCapabilities} from '../providers/providerAdapter.js';
+import type {ProviderMessage,ProviderResponse,ProviderToolDefinition} from '../core/contracts.js';
+export interface SandboxActor{traceId:string;actorId:string|null;permissions?:readonly string[]}
+export interface SandboxToolSummary{toolKey:string;status:string;durationMs:number|null;safeSummary:string;errorCode:string|null;executionId:number|null;safeArguments?:unknown;safeResult?:unknown}
+export interface SandboxToolMetadata{toolDecisionMode:'native_tools'|'structured_tool_request'|'none';toolsRequested:string[];toolsExecuted:string[];toolsDenied:string[];toolExecutionIds:number[];toolLatencyMs:number;toolLoopCount:number;toolResultsSummary:SandboxToolSummary[];contextTruncated:boolean}
+export interface RuntimeResult{message:string;conversationId:number;sessionId:number;intent:string|null;transferRequired:boolean;recommendedResponseDelayMs:number;interruptible:boolean;provider:string|null;model:string|null;latencyMs:number|null;context:{selectedKnowledgeIds:number[];selectedTrainingIds:number[];contextChars:number;truncated:boolean};toolDecisionMode:'native_tools'|'structured_tool_request'|'none';toolsRequested:string[];toolsExecuted:string[];toolsDenied:string[];toolExecutionIds:number[];toolLatencyMs:number;toolLoopCount:number;toolResultsSummary:SandboxToolSummary[];contextTruncated:boolean;finalResponseSource:'model_only'|'model_with_tools'|'deterministic_transfer'|'safe_fallback'}
+export interface ProviderExecutionInput{messages:ProviderMessage[];traceId:string;responseFormat?:'text'|'json';timeoutMs?:number;signal?:AbortSignal;tools?:ProviderToolDefinition[]}
+export type ProviderExecutor=((input:ProviderExecutionInput)=>Promise<ProviderResponse>)&{getCapabilities?:()=>Promise<ProviderCapabilities>|ProviderCapabilities};

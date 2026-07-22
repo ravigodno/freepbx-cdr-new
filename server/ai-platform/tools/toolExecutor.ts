@@ -42,6 +42,7 @@ export class ToolExecutor {
     this.timeoutMs = options.timeoutMs || 8000;
     this.limiter = options.limiter || new InMemoryToolRateLimiter();
   }
+  hasExecutor(executorKey:string):boolean{return this.executors.has(executorKey)}
 
   private async emit(context: ToolExecutionContext, executionId: number, eventType: AiAuditEventType, decision: string, details: Record<string, unknown>): Promise<void> {
     try {

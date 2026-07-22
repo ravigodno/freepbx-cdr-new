@@ -19,10 +19,11 @@ function validate(config: ProviderConfig, requireBaseUrl = false): ProviderConfi
   return { valid: errors.length === 0, errors };
 }
 
-async function requestJson(url: string, init: any, timeoutMs: number): Promise<{ data: any; latencyMs: number }> {
+async function requestJson(url: string, init: any, timeoutMs: number,externalSignal?:AbortSignal): Promise<{ data: any; latencyMs: number }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), Math.max(100, Math.min(timeoutMs, 120_000)));
   const started = Date.now();
+  const cancel=()=>controller.abort();externalSignal?.addEventListener('abort',cancel,{once:true});
   try {
     const response = await fetch(url, { ...init, signal: controller.signal as any });
     const text = await response.text();
@@ -32,13 +33,13 @@ async function requestJson(url: string, init: any, timeoutMs: number): Promise<{
   } catch (error: any) {
     if (error?.name === 'AbortError') throw new AiPlatformError('internal_error', 504, 'AI provider request timed out');
     throw error;
-  } finally { clearTimeout(timer); }
+  } finally { clearTimeout(timer);externalSignal?.removeEventListener('abort',cancel); }
 }
 
 export class OpenAIHttpAdapter implements AIProviderAdapter {
   constructor(private readonly key = 'openai', private readonly requireBaseUrl = false) {}
   getKey() { return this.key; }
-  getCapabilities(): ProviderCapabilities { return { ...TEXT_ONLY_CAPABILITIES }; }
+  getCapabilities(): ProviderCapabilities { return { ...TEXT_ONLY_CAPABILITIES,structuredToolRequest:true }; }
   validateConfig(config: ProviderConfig) { return validate(config, this.requireBaseUrl); }
   async healthCheck(config: ProviderConfig): Promise<ProviderHealth> {
     const result = this.validateConfig(config);
@@ -51,7 +52,7 @@ export class OpenAIHttpAdapter implements AIProviderAdapter {
       method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.secret}` },
       body: JSON.stringify({ model: request.model || config.model, temperature: request.temperature, max_tokens: request.maxOutput,
         messages: request.messages, ...(request.responseFormat === 'json' ? { response_format: { type: 'json_object' } } : {}) })
-    }, request.timeoutMs);
+    }, request.timeoutMs,request.signal);
     const usage = result.data?.usage || {};
     return { content: String(result.data?.choices?.[0]?.message?.content || ''), provider: this.key, model: String(result.data?.model || request.model || config.model),
       finishReason: result.data?.choices?.[0]?.finish_reason || null, usage: { inputTokens: usage.prompt_tokens ?? null, outputTokens: usage.completion_tokens ?? null, totalTokens: usage.total_tokens ?? null },

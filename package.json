@@ -43,6 +43,7 @@
     ,"test:ai-platform-core": "tsx scripts/test-ai-platform-core.ts"
     ,"test:ai-platform-sandbox": "tsx scripts/test-ai-platform-sandbox.ts"
     ,"test:ai-platform-tools": "tsx scripts/test-ai-platform-tools.ts"
+    ,"test:ai-platform-tool-loop": "tsx scripts/test-ai-platform-tool-loop.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

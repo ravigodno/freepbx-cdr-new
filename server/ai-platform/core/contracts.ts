@@ -39,6 +39,9 @@ export interface AgentDefinition {
 
 export type ProviderMessageRole = 'system' | 'user' | 'assistant' | 'tool';
 export interface ProviderMessage { role: ProviderMessageRole; content: string }
+export interface ProviderToolDefinition { toolKey:string;description:string;inputSchema:Record<string,unknown> }
+export interface ProviderToolCall { callId:string|null;toolKey:string;arguments:Record<string,unknown> }
+export interface ProviderToolResultMessage { toolKey:string;callId:string|null;content:string }
 export interface ProviderUsage { inputTokens: number | null; outputTokens: number | null; totalTokens: number | null }
 
 export interface ProviderRequest {
@@ -49,6 +52,8 @@ export interface ProviderRequest {
   responseFormat: 'text' | 'json';
   traceId: string;
   timeoutMs: number;
+  tools?: ProviderToolDefinition[];
+  signal?: AbortSignal;
 }
 
 export interface ProviderResponse {
@@ -59,6 +64,7 @@ export interface ProviderResponse {
   usage: ProviderUsage;
   latencyMs: number;
   providerRequestId: string | null;
+  toolCalls?: ProviderToolCall[];
 }
 
 export type ToolRiskLevel = 'read' | 'low_write' | 'high_write' | 'forbidden';
