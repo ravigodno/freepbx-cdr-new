@@ -30,6 +30,7 @@ import { registerManagementRoutes } from './server-management.js';
 import { generateAIResponse, registerAiPbxAdminRoutes } from './server/aiPbxAdmin.js';
 import { registerAiPlatformRoutes } from './server/ai-platform/api/router.js';
 import { registerStageOneProviders } from './server/ai-platform/providers/registerProviders.js';
+import { createPBXReadServices } from './server/services/pbxReadServices.js';
 import { resolveAsteriskCli, runAsteriskCliCommand } from './server/asteriskCli.js';
 import { createConferenceFromActiveCall, createNewPhoneMeeting, getConferenceBackendStatus, startPhoneMeetingRecording, validateConferenceParticipants } from './server/conferenceService.js';
 import {
@@ -22098,7 +22099,27 @@ registerAiPbxAdminRoutes(app, requireAuth, checkUserPermission, readLocalDb, wri
 
 // REGISTER DISABLED-BY-DEFAULT MODULAR AI PLATFORM CORE
 registerStageOneProviders(generateAIResponse);
-registerAiPlatformRoutes(app, { requireAuth, checkPermission: checkUserPermission, readLegacyDb: readLocalDb });
+const aiPbxReadServices = createPBXReadServices({
+  runFixedDiagnostic: command => {
+    const allowlist = {
+      channels: 'core show channels concise',
+      pjsip_contacts: 'pjsip show contacts',
+      sip_peers: 'sip show peers',
+      sip_registry: 'sip show registry'
+    } as const;
+    return runAsteriskCliCommand(allowlist[command], 5000);
+  },
+  parseChannels: parseCoreShowChannelsConcise,
+  parsePjsip: parsePjsipContacts,
+  parseSipPeers,
+  queryCdr: async (sql, params) => {
+    const localDb = await readLocalDb();
+    return queryFreePBXCDR(localDb.settings, isDemoMode(localDb.settings), sql, params as any[]);
+  },
+  readDirectory: async () => (await readLocalDb()).directory || [],
+  readAuthoritativeExtensions: async () => getRealVoIPDevices((await readLocalDb()).settings)
+});
+registerAiPlatformRoutes(app, { requireAuth, checkPermission: checkUserPermission, readLegacyDb: readLocalDb, pbxReadServices: aiPbxReadServices });
 
 // REGISTER SECURITY MONITORING CENTER ROUTES
 registerSecurityRoutes(app, requireAuth, checkUserPermission);

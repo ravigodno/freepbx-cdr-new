@@ -986,6 +986,14 @@ const MIGRATIONS: Migration[] = [
       `INSERT IGNORE INTO permissions(permission_key,name,description,category) VALUES('execute_ai_sandbox','Execute AI sandbox','Run text-only AI agent sandbox','ai_platform')`,
       `INSERT IGNORE INTO role_permissions(role_id,permission_id) SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key='execute_ai_sandbox' WHERE r.role_key IN('su','admin')`
     ],seed:async()=>seedLegacyAiPlatformPermissions(['execute_ai_sandbox'])
+  },
+  {
+    key:'20260722_030_ai_read_tool_runtime',description:'Add secure read-only AI tool execution history',statements:[
+      `CREATE TABLE IF NOT EXISTS ai_tool_executions(id BIGINT AUTO_INCREMENT PRIMARY KEY,tenant_id BIGINT NOT NULL,trace_id VARCHAR(64) NOT NULL,conversation_id BIGINT NULL,agent_id BIGINT NOT NULL,agent_version_id BIGINT NOT NULL,tool_id BIGINT NOT NULL,tool_key VARCHAR(100) NOT NULL,executor_key VARCHAR(191) NOT NULL,status ENUM('requested','denied','running','completed','failed','timed_out','cancelled') NOT NULL DEFAULT 'requested',risk_level ENUM('read','low_write','high_write','forbidden') NOT NULL,input_json LONGTEXT NOT NULL,input_hash CHAR(64) NOT NULL,output_json LONGTEXT NULL,error_code VARCHAR(100) NULL,duration_ms INT NULL,actor_id VARCHAR(191) NULL,idempotency_key VARCHAR(128) NULL,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,completed_at DATETIME NULL,INDEX idx_ai_tool_exec_tenant_time(tenant_id,created_at),INDEX idx_ai_tool_exec_tenant_status(tenant_id,status,created_at),INDEX idx_ai_tool_exec_conversation(conversation_id),INDEX idx_ai_tool_exec_trace(trace_id),UNIQUE KEY uniq_ai_tool_idempotency(tenant_id,idempotency_key),CONSTRAINT fk_ai_tool_exec_tenant FOREIGN KEY(tenant_id)REFERENCES ai_tenants(id),CONSTRAINT fk_ai_tool_exec_conversation FOREIGN KEY(conversation_id)REFERENCES ai_conversations(id),CONSTRAINT fk_ai_tool_exec_agent FOREIGN KEY(agent_id)REFERENCES ai_agents(id),CONSTRAINT fk_ai_tool_exec_version FOREIGN KEY(agent_version_id)REFERENCES ai_agent_versions(id),CONSTRAINT fk_ai_tool_exec_tool FOREIGN KEY(tool_id)REFERENCES ai_tools(id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `INSERT IGNORE INTO settings(setting_key,setting_value,value_type,category,is_secret,description)VALUES('ai.write_tools_enabled','false','boolean','ai_platform',0,'Globally disable AI write tools')`,
+      `INSERT IGNORE INTO permissions(permission_key,name,description,category)VALUES('view_ai_tool_executions','View AI tool executions','View redacted tool execution history','ai_platform'),('test_ai_tools','Test AI tools','Test assigned read-only tools','ai_platform')`,
+      `INSERT IGNORE INTO role_permissions(role_id,permission_id)SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key IN('view_ai_tool_executions','test_ai_tools')WHERE r.role_key IN('su','admin')`
+    ],seed:async()=>seedLegacyAiPlatformPermissions(['view_ai_tool_executions','test_ai_tools'])
   }
 ];
 
