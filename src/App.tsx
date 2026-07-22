@@ -6925,7 +6925,7 @@ export default function App() {
     )}
 
     {activeView === 'ai-platform' && hasPermission('view_ai_platform') && (
-      <AiAgentBuilderPage token={session.token} canCreate={hasPermission('create_ai_agents')} canViewKnowledge={hasPermission('view_ai_knowledge')} canViewTraining={hasPermission('view_ai_training')} />
+      <AiAgentBuilderPage token={session.token} canCreate={hasPermission('create_ai_agents')} canViewKnowledge={hasPermission('view_ai_knowledge')} canViewTraining={hasPermission('view_ai_training')} canViewTransfers={hasPermission('view_ai_transfer_requests')} canTestTransfer={hasPermission('test_ai_human_transfer')} />
     )}
 
 

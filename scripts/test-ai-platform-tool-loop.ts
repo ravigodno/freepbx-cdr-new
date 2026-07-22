@@ -54,7 +54,7 @@ assert.equal(validateStructuredDecision('{"decision":"respond","toolKey":null,"a
 assert.throws(()=>validateStructuredDecision('```json\n{}\n```',[tool]),/invalid_planner_output/);
 assert.throws(()=>validateStructuredDecision('{"decision":"tool","toolKey":"unknown","arguments":{},"reasonCode":"need_data"}',[tool]),/unknown_or_unassigned/);
 assert.throws(()=>validateStructuredDecision('{"decision":"tool","toolKey":"pbx.get_active_calls","arguments":{"secret":"x"},"reasonCode":"need_data"}',[tool]));
-assert.equal(validateNativeCalls(Array.from({length:3},()=>({toolKey:tool.toolKey,arguments:{}})),[tool]).length,2);
+assert.equal(validateNativeCalls(Array.from({length:3},()=>({callId:null,toolKey:tool.toolKey,arguments:{}})),[tool]).length,2);
 assert.doesNotMatch(composeToolPlannerPrompt('apiKey=secret',{name:'A',type:'custom'},[tool]),/apiKey=secret/);
 const projected=projectToolResult(tool.toolKey,{items:Array.from({length:20},(_,i)=>({i,password:'secret'}))});
 assert.equal((projected.data as any).items.length,10);assert.equal((projected.data as any).items[0].password,'********');assert.equal(projected.metadata.truncated,true);

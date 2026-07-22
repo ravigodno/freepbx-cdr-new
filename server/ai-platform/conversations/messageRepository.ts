@@ -9,4 +9,5 @@ export class MessageRepository {
   async addTool(tenantId:number,conversationId:number,value:{toolKey:string;executionId:number|null;summary:string;result:unknown;status:string}):Promise<void>{
     await this.add(tenantId,conversationId,'tool',value.summary,{contentJson:{toolKey:value.toolKey,executionId:value.executionId,summary:value.summary,result:value.result,status:value.status}});
   }
+  async addSystemAction(tenantId:number,conversationId:number,value:{action:string;requestId:number|null;status:string;safeLabel:string|null}):Promise<void>{await this.add(tenantId,conversationId,'system','Human transfer action requested',{contentJson:value})}
 }

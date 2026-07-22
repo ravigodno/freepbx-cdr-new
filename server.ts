@@ -31,6 +31,7 @@ import { generateAIResponse, registerAiPbxAdminRoutes } from './server/aiPbxAdmi
 import { registerAiPlatformRoutes } from './server/ai-platform/api/router.js';
 import { registerStageOneProviders } from './server/ai-platform/providers/registerProviders.js';
 import { createPBXReadServices } from './server/services/pbxReadServices.js';
+import { createPBXTransferService } from './server/services/pbxTransferService.js';
 import { resolveAsteriskCli, runAsteriskCliCommand } from './server/asteriskCli.js';
 import { createConferenceFromActiveCall, createNewPhoneMeeting, getConferenceBackendStatus, startPhoneMeetingRecording, validateConferenceParticipants } from './server/conferenceService.js';
 import {
@@ -22131,7 +22132,13 @@ const aiPbxReadServices = createPBXReadServices({
     catch { return []; }
   }
 });
-registerAiPlatformRoutes(app, { requireAuth, checkPermission: checkUserPermission, readLegacyDb: readLocalDb, pbxReadServices: aiPbxReadServices });
+const aiPbxTransferService=createPBXTransferService({
+  resolveDestination:async(type,ref)=>{const target=onlyDigits(ref);if(!target)return null;const localDb=await readLocalDb();let rows:any[]=[];try{if(type==='extension')rows=await queryFreePBXCDR(localDb.settings,isDemoMode(localDb.settings),'SELECT id,description FROM asterisk.devices WHERE id=? LIMIT 1',[target]);else if(type==='queue')rows=await queryFreePBXCDR(localDb.settings,isDemoMode(localDb.settings),'SELECT extension,descr FROM asterisk.queues_config WHERE extension=? LIMIT 1',[target]);else rows=await queryFreePBXCDR(localDb.settings,isDemoMode(localDb.settings),'SELECT grpnum,description FROM asterisk.ringgroups WHERE grpnum=? LIMIT 1',[target])}catch{return null}const row=rows[0];if(!row)return null;const label=String(row.description||row.descr||'').trim();return{type,ref:target,safeLabel:`${type==='extension'?'Внутренний номер':type==='queue'?'Очередь':'Группа вызова'}${label?` «${label.slice(0,80)}»`:''}`,available:true}},
+  resolveLiveCall:async liveCallId=>{const localDb=await readLocalDb(),channels=await runAmiCoreShowChannels(localDb.settings),group=channels.filter(row=>String(row.Linkedid||row.Uniqueid||'')===liveCallId),selected=group.find(row=>/^(?:PJSIP|SIP|Local)\//i.test(String(row.Channel||'')));return selected?.Channel?{liveCallId,active:true,channelRef:String(selected.Channel)}:null},
+  executeBlindTransfer:async(context,destination)=>{const localDb=await readLocalDb(),result=await runAmiBlindTransfer(localDb.settings,context.channelRef,destination.ref,'internal');return{ok:result.success,actionRef:result.success?crypto.createHash('sha256').update(`${context.liveCallId}:${destination.ref}`).digest('hex').slice(0,32):null,safeMessage:result.success?'Transfer accepted':'Transfer failed'}},
+  getTransferStatus:async()=> 'unknown'
+});
+registerAiPlatformRoutes(app, { requireAuth, checkPermission: checkUserPermission, readLegacyDb: readLocalDb, pbxReadServices: aiPbxReadServices,pbxTransferService:aiPbxTransferService });
 
 // REGISTER SECURITY MONITORING CENTER ROUTES
 registerSecurityRoutes(app, requireAuth, checkUserPermission);

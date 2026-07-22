@@ -1,0 +1,2 @@
+import type{HumanTransferConfig,TransferDestinationConfig}from'./transferTypes.js';
+export class TransferFallbackService{chain(config:HumanTransferConfig):TransferDestinationConfig[]{return[config.primaryDestination,...config.fallbacks].slice(0,6)}safeMessage(callbackRequired:boolean){return callbackRequired?'Сейчас специалисты недоступны. Могу зафиксировать просьбу о звонке.':'Сейчас не удалось соединить со специалистом. Попробуйте ещё раз немного позже.'}}

@@ -7,6 +7,18 @@ export type AiPlatformErrorCode =
   | 'provider_unknown'
   | 'provider_not_configured'
   | 'storage_unavailable'
+  | 'rate_limited'
+  | 'destination_not_configured'
+  | 'destination_not_found'
+  | 'destination_unavailable'
+  | 'outside_business_hours'
+  | 'live_context_required'
+  | 'live_call_not_found'
+  | 'live_call_ended'
+  | 'transfer_not_allowed'
+  | 'transfer_timeout'
+  | 'transfer_failed'
+  | 'duplicate_transfer'
   | 'internal_error';
 
 export class AiPlatformError extends Error {

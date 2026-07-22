@@ -88,7 +88,10 @@ export type PermissionKey =
   | 'view_ai_context_preview'
   | 'execute_ai_sandbox'
   | 'view_ai_tool_executions'
-  | 'test_ai_tools';
+  | 'test_ai_tools'
+  | 'view_ai_transfer_requests'
+  | 'manage_ai_transfer_policies'
+  | 'test_ai_human_transfer';
 
 export type UserPermissions = Partial<Record<PermissionKey, boolean>>;
 
