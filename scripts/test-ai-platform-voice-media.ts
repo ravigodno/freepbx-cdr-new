@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { CodecRegistry } from "../server/ai-platform/voice/media/codecRegistry.js";
 import { AudioResampler } from "../server/ai-platform/voice/media/audioResampler.js";
+import {
+  AudioPacketizer,
+  PACKETIZATION_ERROR_THRESHOLD,
+} from "../server/ai-platform/voice/media/audioPacketizer.js";
 import { JitterBuffer } from "../server/ai-platform/voice/media/jitterBuffer.js";
 import { BackpressureController } from "../server/ai-platform/voice/media/backpressureController.js";
 import { BoundedSerialProcessor } from "../server/ai-platform/voice/media/boundedSerialProcessor.js";
@@ -31,6 +35,107 @@ const resampler = new AudioResampler(),
   pcm8 = new Int16Array([0, 1000, -1000, 500]);
 assert.equal(resampler.resamplePcm16(pcm8, 8000, 16000).length, 8);
 assert.equal(resampler.resamplePcm16(new Int16Array(8), 16000, 8000).length, 4);
+const packetizerContext = {
+    source: "test",
+    traceId: "trace",
+    voiceSessionId: 3,
+    mediaSessionId: 1,
+  },
+  pcm = (sampleCount: number, offset = 0) => {
+    const payload = Buffer.alloc(sampleCount * 2);
+    for (let index = 0; index < sampleCount; index++)
+      payload.writeInt16LE(offset + index, index * 2);
+    return payload;
+  },
+  packetize = (
+    packetizer: AudioPacketizer,
+    durationMs: number,
+    sampleRate: 8000 | 16000 = 8000,
+    timestampMs = 1000,
+  ) =>
+    packetizer.pushPcm(
+      pcm((sampleRate * durationMs) / 1000),
+      { codec: "slin16", sampleRate, channels: 1 },
+      timestampMs,
+      packetizerContext,
+    );
+for (const [duration, expected] of [
+  [20, 1],
+  [40, 2],
+  [60, 3],
+] as const) {
+  const subject = new AudioPacketizer(),
+    frames = packetize(subject, duration);
+  assert.equal(frames.length, expected);
+  assert.ok(
+    frames.every(
+      (item) =>
+        item.durationMs === 20 &&
+        item.sampleRate === 16000 &&
+        item.channels === 1 &&
+        item.payload.byteLength === 640,
+    ),
+  );
+}
+const splitThirtyTen = new AudioPacketizer(),
+  firstThirty = packetize(splitThirtyTen, 30, 8000, 2000),
+  nextTen = packetize(splitThirtyTen, 10, 8000, 2030);
+assert.equal(firstThirty.length, 1);
+assert.equal(nextTen.length, 1);
+assert.equal(nextTen[0].sequence, firstThirty[0].sequence + 1);
+assert.equal(nextTen[0].timestampMs, firstThirty[0].timestampMs + 20);
+const splitTenTen = new AudioPacketizer();
+assert.equal(packetize(splitTenTen, 10).length, 0);
+assert.equal(packetize(splitTenTen, 10).length, 1);
+const ordered = new AudioPacketizer(),
+  orderedFrames = ordered.pushPcm(
+    pcm(640, -1000),
+    { codec: "slin16", sampleRate: 16000, channels: 1 },
+    3000,
+    packetizerContext,
+  );
+assert.equal(orderedFrames.length, 2);
+assert.equal(Buffer.from(orderedFrames[0].payload).readInt16LE(0), -1000);
+assert.equal(Buffer.from(orderedFrames[1].payload).readInt16LE(0), -680);
+assert.equal(orderedFrames[1].timestampMs, 3020);
+const partial = new AudioPacketizer();
+packetize(partial, 10);
+assert.equal(partial.getMetrics().remainderBytes, 320);
+assert.deepEqual(partial.flush(), []);
+assert.equal(partial.getMetrics().partialFrameDropped, 1);
+assert.equal(partial.getMetrics().remainderBytes, 0);
+const malformed = new AudioPacketizer();
+assert.deepEqual(
+  malformed.pushPcm(
+    Buffer.alloc(319),
+    { codec: "slin16", sampleRate: 8000, channels: 1 },
+    0,
+    packetizerContext,
+  ),
+  [],
+);
+assert.equal(malformed.getMetrics().oddLengthPackets, 1);
+assert.deepEqual(
+  malformed.pushPcm(
+    Buffer.alloc(3202),
+    { codec: "slin16", sampleRate: 8000, channels: 1 },
+    0,
+    packetizerContext,
+  ),
+  [],
+);
+assert.equal(malformed.getMetrics().oversizedPackets, 1);
+for (let index = 2; index < PACKETIZATION_ERROR_THRESHOLD; index++)
+  malformed.pushPcm(
+    Buffer.alloc(1),
+    { codec: "slin16", sampleRate: 8000, channels: 1 },
+    0,
+    packetizerContext,
+  );
+assert.equal(
+  malformed.getMetrics().consecutivePacketizationErrors,
+  PACKETIZATION_ERROR_THRESHOLD,
+);
 const frame = (sequence: number, timestampMs = Date.now()): AudioFrame => ({
   sequence,
   timestampMs,

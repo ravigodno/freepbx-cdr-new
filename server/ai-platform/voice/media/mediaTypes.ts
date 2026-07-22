@@ -55,6 +55,20 @@ export interface AudioSocketProtocolMetrics {
   firstIngressAudioAt: string | null;
   firstEgressAudioAt: string | null;
   egressSocketBackpressureCount?: number;
+  sourcePackets: number;
+  sourcePacketDurationMsAvg: number | null;
+  sourcePacketDurationMsP95: number | null;
+  packetizedFrames: number;
+  framesPerPacketAvg: number | null;
+  framesPerPacketP95: number | null;
+  remainderBytes: number;
+  remainderPeakBytes: number;
+  partialFrameDropped: number;
+  oversizedPackets: number;
+  oddLengthPackets: number;
+  packetizationErrors: number;
+  consecutivePacketizationErrors: number;
+  packetizationErrorThreshold: number;
 }
 export interface MediaTransportCapabilities {
   mode: MediaTransportMode;

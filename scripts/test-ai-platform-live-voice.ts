@@ -193,20 +193,26 @@ async function run() {
     packet(0x01, Buffer.from(endpoint.connectionId.replace(/-/g, ""), "hex")),
   );
   await media.start();
-  client.write(packet(0x10, Buffer.alloc(320, 1)));
+  client.write(packet(0x10, Buffer.alloc(640, 1)));
   client.write(packet(0x12, Buffer.alloc(640, 1)));
   client.write(packet(0x10, Buffer.alloc(319, 1)));
   client.write(packet(0x13, Buffer.alloc(320, 1)));
   await new Promise((resolve) => setTimeout(resolve, 30));
-  assert.equal(received.length, 2);
+  assert.equal(received.length, 3);
   assert.equal(received[0].sampleRate, 16000);
   assert.equal(received[0].payload.byteLength, 640);
   assert.equal(received[0].durationMs, 20);
   assert.equal(received[0].source, "audiosocket_ast18_slin8");
-  assert.equal(received[1].source, "audiosocket_slin16");
+  assert.equal(received[1].source, "audiosocket_ast18_slin8");
+  assert.equal(received[2].source, "audiosocket_slin16");
+  assert.equal(received[1].sequence, received[0].sequence + 1);
+  assert.equal(received[1].timestampMs, received[0].timestampMs + 20);
   const ingressMetrics = media.getProtocolMetrics();
   assert.equal(ingressMetrics.audiosocketIngressPackets, 2);
   assert.equal(ingressMetrics.ingressResampledFrames, 1);
+  assert.equal(ingressMetrics.packetizedFrames, 3);
+  assert.equal(ingressMetrics.sourcePacketDurationMsAvg, 30);
+  assert.equal(ingressMetrics.framesPerPacketAvg, 1.5);
   assert.equal(ingressMetrics.malformedPackets, 1);
   assert.equal(ingressMetrics.unknownPacketTypes, 1);
   assert.equal(ingressMetrics.unsupportedAudioPackets, 1);
@@ -242,7 +248,10 @@ async function run() {
   assert.match(service, /allowedCallers/);
   assert.match(service, /lifecycle_status\s*===\s*["']published["']/);
   assert.doesNotMatch(service, /JSON_EXTRACT/);
-  assert.match(service, /metadata\?\.controlledLive\s*&&\s*metadata\?\.liveMetrics/);
+  assert.match(
+    service,
+    /metadata\?\.controlledLive\s*&&\s*metadata\?\.liveMetrics/,
+  );
   assert.match(audio, /127\.0\.0\.1/);
   assert.doesNotMatch(audio, /0\.0\.0\.0|writeFile|appendFile|spawn\(|exec\(/);
   console.log("AI Platform controlled live voice tests: OK");

@@ -4,6 +4,10 @@ import type { MediaTransportAdapter } from "../mediaTransportAdapter.js";
 import type { AudioFrame, MediaTransportContext } from "../mediaTypes.js";
 import { MediaError } from "../mediaErrors.js";
 import { AudioResampler } from "../audioResampler.js";
+import {
+  AudioPacketizer,
+  PACKETIZATION_ERROR_THRESHOLD,
+} from "../audioPacketizer.js";
 
 const TYPE_TERMINATE = 0x00,
   TYPE_UUID = 0x01,
@@ -45,12 +49,12 @@ export class AudioSocketAdapter implements MediaTransportAdapter {
   private context: MediaTransportContext | null = null;
   private handlers = new Set<(frame: AudioFrame) => void>();
   private buffer = Buffer.alloc(0);
-  private sequence = 0;
   private connectionId = crypto.randomUUID();
   private authenticated = false;
   private readyResolve: (() => void) | null = null;
   private readyReject: ((error: Error) => void) | null = null;
   private readonly resampler = new AudioResampler();
+  private readonly packetizer = new AudioPacketizer();
   private metrics = {
     audiosocketIngressPackets: 0,
     audiosocketEgressPackets: 0,
@@ -169,7 +173,7 @@ export class AudioSocketAdapter implements MediaTransportAdapter {
     while (this.buffer.length >= 3) {
       const type = this.buffer[0],
         length = this.buffer.readUInt16BE(1);
-      if (length > 4096) {
+      if (length > 6400) {
         this.metrics.malformedPackets++;
         this.metrics.protocolErrors++;
         this.socket?.destroy();
@@ -217,52 +221,47 @@ export class AudioSocketAdapter implements MediaTransportAdapter {
           this.metrics.unsupportedAudioPackets++;
         continue;
       }
-      if (length === 0 || length % 2 !== 0) {
+      const sourceRate = type === TYPE_SLIN8 ? 8000 : 16000,
+        before = this.packetizer.getMetrics(),
+        frames = this.packetizer.pushPcm(
+          payload,
+          { codec: "slin16", sampleRate: sourceRate, channels: 1 },
+          Date.now(),
+          {
+            source:
+              type === TYPE_SLIN8
+                ? "audiosocket_ast18_slin8"
+                : "audiosocket_slin16",
+            traceId: this.context.traceId,
+            voiceSessionId: this.context.voiceSessionId,
+            mediaSessionId: this.context.mediaSessionId,
+          },
+        ),
+        after = this.packetizer.getMetrics();
+      if (after.packetizationErrors > before.packetizationErrors) {
         this.metrics.malformedPackets++;
+        if (
+          after.consecutivePacketizationErrors >= PACKETIZATION_ERROR_THRESHOLD
+        ) {
+          this.metrics.protocolErrors++;
+          this.socket?.destroy();
+          return;
+        }
         continue;
       }
-      const sourceRate = type === TYPE_SLIN8 ? 8000 : 16000,
-        source = new Int16Array(
-          payload.buffer.slice(
-            payload.byteOffset,
-            payload.byteOffset + payload.byteLength,
-          ),
-        ),
-        normalized =
-          sourceRate === 16000
-            ? source
-            : this.resampler.resamplePcm16(source, sourceRate, 16000),
-        now = new Date().toISOString();
+      const now = new Date().toISOString();
       this.metrics.audiosocketIngressPackets++;
       this.metrics.ingressPacketType = this.packetLabel(type);
       this.metrics.ingressSourceSampleRate = sourceRate;
       this.metrics.firstIngressAudioAt ??= now;
       if (sourceRate !== 16000) this.metrics.ingressResampledFrames++;
-      const frame: AudioFrame = {
-        sequence: this.sequence++,
-        timestampMs: Date.now(),
-        direction: "ingress",
-        codec: "slin16",
-        sampleRate: 16000,
-        channels: 1,
-        durationMs: Math.max(
-          1,
-          Math.round((source.length / sourceRate) * 1000),
-        ),
-        payload: new Uint8Array(normalized.buffer),
-        source:
-          type === TYPE_SLIN8
-            ? "audiosocket_ast18_slin8"
-            : "audiosocket_slin16",
-        traceId: this.context.traceId,
-        voiceSessionId: this.context.voiceSessionId,
-        mediaSessionId: this.context.mediaSessionId,
-      };
-      for (const handler of this.handlers) {
-        try {
-          handler(frame);
-        } catch {
-          this.metrics.protocolErrors++;
+      for (const frame of frames) {
+        for (const handler of this.handlers) {
+          try {
+            handler(frame);
+          } catch {
+            this.metrics.protocolErrors++;
+          }
         }
       }
     }
@@ -351,7 +350,7 @@ export class AudioSocketAdapter implements MediaTransportAdapter {
     };
   }
   getProtocolMetrics() {
-    return { ...this.metrics };
+    return { ...this.metrics, ...this.packetizer.getMetrics() };
   }
   private packetLabel(type: number) {
     return type === TYPE_SLIN8
@@ -368,6 +367,7 @@ export class AudioSocketAdapter implements MediaTransportAdapter {
     };
   }
   async stop() {
+    this.packetizer.flush();
     if (this.socket && !this.socket.destroyed) {
       this.socket.write(packet(TYPE_TERMINATE, new Uint8Array()));
       this.socket.destroy();
