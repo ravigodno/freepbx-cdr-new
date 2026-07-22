@@ -1,0 +1,2 @@
+import type{VoiceRouteBinding}from'./voiceGatewayTypes.js';import{VoiceGatewayError}from'./voiceGatewayErrors.js';
+export function enforceVoiceBindingPolicy(binding:VoiceRouteBinding,synthetic:boolean){if(!binding.dryRunOnly)throw new VoiceGatewayError('permission_denied',403,'Production voice bindings are disabled');if(!synthetic&&binding.matchType==='test_context')throw new VoiceGatewayError('permission_denied',403,'Synthetic binding cannot accept live events')}

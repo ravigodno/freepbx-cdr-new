@@ -6925,7 +6925,7 @@ export default function App() {
     )}
 
     {activeView === 'ai-platform' && hasPermission('view_ai_platform') && (
-      <AiAgentBuilderPage token={session.token} canCreate={hasPermission('create_ai_agents')} canViewKnowledge={hasPermission('view_ai_knowledge')} canViewTraining={hasPermission('view_ai_training')} canViewTransfers={hasPermission('view_ai_transfer_requests')} canTestTransfer={hasPermission('test_ai_human_transfer')} canViewCallbacks={hasPermission('view_ai_callback_requests')} canManageCallbacks={hasPermission('manage_ai_callback_requests')} canAssignActions={hasPermission('assign_ai_actions')} />
+      <AiAgentBuilderPage token={session.token} canCreate={hasPermission('create_ai_agents')} canViewKnowledge={hasPermission('view_ai_knowledge')} canViewTraining={hasPermission('view_ai_training')} canViewTransfers={hasPermission('view_ai_transfer_requests')} canTestTransfer={hasPermission('test_ai_human_transfer')} canViewCallbacks={hasPermission('view_ai_callback_requests')} canManageCallbacks={hasPermission('manage_ai_callback_requests')} canAssignActions={hasPermission('assign_ai_actions')} canViewVoice={hasPermission('view_ai_voice_status')} canManageVoice={hasPermission('manage_ai_voice_bindings')} canTestVoice={hasPermission('test_ai_voice_gateway')} />
     )}
 
 

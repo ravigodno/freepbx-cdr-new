@@ -1,0 +1,1 @@
+import type{VoiceGatewayService}from'../voiceGatewayService.js';export class AriEventRouter{constructor(private readonly gateway:VoiceGatewayService,private readonly tenantId:()=>Promise<number>){}handle=async(event:unknown)=>this.gateway.handleRawEvent(event,{tenantId:await this.tenantId(),synthetic:false})}

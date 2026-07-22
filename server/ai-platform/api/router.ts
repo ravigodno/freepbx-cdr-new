@@ -29,6 +29,12 @@ import{getActionDefinitionRegistry}from'../actions/actionDefinitionRegistry.js';
 import{ActionExecutorRegistry}from'../actions/actionExecutorRegistry.js';
 import{CreateCallbackRequestExecutor}from'../actions/executors/createCallbackRequestExecutor.js';
 import{BusinessActionService}from'../actions/businessActionService.js';
+import{VoiceGatewayService}from'../voice/voiceGatewayService.js';
+import{ObserverAriClientAdapter}from'../voice/ari/ariClientAdapter.js';
+import{readAriConfig}from'../voice/ari/ariTypes.js';
+import{AriConnectionManager}from'../voice/ari/ariConnectionManager.js';
+import{registerVoiceRoutes}from'../voice/api/voiceRouter.js';
+import{AriEventRouter}from'../voice/ari/ariEventRouter.js';
 
 type Checker=(req:Request,permission:string)=>Promise<boolean>;
 export interface AiPlatformRouterDeps { requireAuth:any; checkPermission:Checker; readLegacyDb:()=>Promise<any>; store?:AiPlatformStore; isEnabled?:()=>Promise<boolean>;sandboxProvider?:ProviderExecutor;pbxReadServices?:PBXReadServices;pbxTransferService?:PBXTransferService }
@@ -54,10 +60,12 @@ export function registerAiPlatformRoutes(app:Express,deps:AiPlatformRouterDeps):
   };
   const domainRuntime={authenticated,permit,enabled,wrap,getTenantId:async()=>(await getInstallationTenant(store)).id,actor,store,audit,positiveInt,page};
   const toolExecutor=deps.pbxReadServices?new ToolExecutor(store,audit,createPBXReadExecutorRegistry(deps.pbxReadServices),{isCoreEnabled:readEnabled}):null;
-  const transferAdapter=deps.pbxTransferService?new PBXTransferExecutionAdapter(deps.pbxTransferService):null;
+  const voiceGateway=new VoiceGatewayService(store,audit);
+  const transferAdapter=deps.pbxTransferService?new PBXTransferExecutionAdapter(deps.pbxTransferService,voiceGateway.sessions):null;
   const humanTransfer=deps.pbxTransferService?new HumanTransferService(store,audit,new TransferDestinationResolver(deps.pbxTransferService),transferAdapter,{isEnabled:readEnabled}):null;
   const actionExecutors=new ActionExecutorRegistry();actionExecutors.register('create_callback_request',new CreateCallbackRequestExecutor(store));
   const businessActions=new BusinessActionService(store,audit,getActionDefinitionRegistry(),actionExecutors,readEnabled);
+  const installationTenantId=async()=>(await getInstallationTenant(store)).id,ariAdapter=new ObserverAriClientAdapter(readAriConfig()),ariEvents=new AriEventRouter(voiceGateway,installationTenantId),ariManager=new AriConnectionManager(ariAdapter,audit,installationTenantId,ariEvents.handle);
   const sandboxProvider:ProviderExecutor=deps.sandboxProvider||(async input=>{const legacy=readLegacyProviderConfig(await deps.readLegacyDb()),config=legacy.config,adapter=getAIProviderRegistry().get(config.providerKey);let last:any;for(let attempt=0;attempt<2;attempt++)try{return await adapter.generate({messages:input.messages,model:config.model,temperature:.3,maxOutput:300,responseFormat:input.responseFormat||'text',traceId:input.traceId,timeoutMs:input.timeoutMs||15000,signal:input.signal,tools:input.tools},config)}catch(error){last=error;if(attempt||!/429|502|503|timeout|unavailable/i.test(String((error as any)?.message)))break}throw last});
   if(!sandboxProvider.getCapabilities)sandboxProvider.getCapabilities=async()=>{const legacy=readLegacyProviderConfig(await deps.readLegacyDb());return getAIProviderRegistry().get(legacy.config.providerKey).getCapabilities()};
   const sandboxRuntime=new ConversationRuntime(store,audit,sandboxProvider,toolExecutor,humanTransfer,businessActions),conversationService=new ConversationService(store);
@@ -105,6 +113,7 @@ export function registerAiPlatformRoutes(app:Express,deps:AiPlatformRouterDeps):
   registerKnowledgeRoutes(app,domainRuntime);
   registerTrainingRoutes(app,domainRuntime);
   registerActionRoutes(app,domainRuntime);
+  registerVoiceRoutes(app,domainRuntime,voiceGateway,ariManager);
   app.post('/api/ai-platform/agents/:id/sandbox/start',...authenticated,permit('execute_ai_sandbox'),enabled,wrap(async(req,res)=>{const tenant=await getInstallationTenant(store),agentId=positiveInt(req.params.id,'agent id'),versionId=positiveInt(req.body?.versionId,'version id'),a=actor(req);const versions=await store.query('SELECT id,lifecycle_status FROM ai_agent_versions WHERE id=? AND agent_id=? AND tenant_id=? LIMIT 1',[versionId,agentId,tenant.id]);if(!versions.length)throw new AiPlatformError('not_found',404,'Agent version not found');if(versions[0].lifecycle_status!=='published'&&!req.body?.allowDraft)throw new AiPlatformError('conflict',409,'Draft version requires explicit sandbox mode');const conversationId=await conversationService.start(tenant.id,agentId,versionId,a.actorId);const result:any=await store.query("INSERT INTO ai_agent_test_sessions(tenant_id,agent_id,agent_version_id,started_by,status,transcript_json,result_json,conversation_id) VALUES (?,?,?,?,'active','[]','{}',?)",[tenant.id,agentId,versionId,a.actorId,conversationId]);const sessionId=Number(result.insertId);await audit.append({tenantId:tenant.id,...a,eventType:'sandbox_session_started',entityType:'sandbox_session',entityId:String(sessionId),decision:'started',details:{agentId,versionId,draft:versions[0].lifecycle_status==='draft'}});res.status(201).json({success:true,data:{sessionId,conversationId,agentVersionId:versionId,status:'active'}})}));
   app.post('/api/ai-platform/sandbox/:sessionId/message',...authenticated,permit('execute_ai_sandbox'),enabled,sandboxGuard,wrap(async(req,res)=>{const tenant=await getInstallationTenant(store),a=actor(req),controller=new AbortController(),canExecuteTools=await deps.checkPermission(req,'execute_ai_read_tools');req.once('aborted',()=>controller.abort());res.json({success:true,data:await sandboxRuntime.message(tenant.id,positiveInt(req.params.sessionId,'session id'),req.body?.message,{...a,permissions:canExecuteTools?['execute_ai_read_tools']:[]},controller.signal)})}));
   app.get('/api/ai-platform/sandbox/:sessionId',...authenticated,permit('execute_ai_sandbox'),enabled,wrap(async(req,res)=>{const tenant=await getInstallationTenant(store),a=actor(req),id=positiveInt(req.params.sessionId,'session id');const rows=await store.query('SELECT id,agent_id,agent_version_id,conversation_id,status,result_json,created_at FROM ai_agent_test_sessions WHERE id=? AND tenant_id=? AND started_by=? LIMIT 1',[id,tenant.id,a.actorId]);if(!rows.length)throw new AiPlatformError('not_found',404,'Sandbox session not found');const messages=await store.query('SELECT sequence_no,role,content,provider_message_id,token_json,latency_ms,created_at FROM ai_conversation_messages WHERE conversation_id=? AND tenant_id=? ORDER BY sequence_no',[rows[0].conversation_id,tenant.id]);res.json({success:true,data:{...rows[0],result:parseJsonObject(rows[0].result_json||{},'result_json'),result_json:undefined,messages}})}));
