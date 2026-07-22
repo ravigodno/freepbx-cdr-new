@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Bot, Plus, ShieldCheck, X } from 'lucide-react';
 import AgentKnowledgeTrainingPage from './AgentKnowledgeTrainingPage';
+import AgentSandboxPanel from './AgentSandboxPanel';
 
 interface Props { token:string; canCreate:boolean;canViewKnowledge:boolean;canViewTraining:boolean }
 interface Template { id:number;template_key:string;name:string;description:string;agent_type:string }
@@ -25,7 +26,7 @@ export default function AiAgentBuilderPage({token,canCreate,canViewKnowledge,can
     </div>
     {!enabled&&<div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">AI Platform Core выключен настройкой <code>ai.platform_core_enabled=false</code>. Шаблоны показаны только для ознакомления.</div>}
     {message&&<div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{message}</div>}
-    {agentId>0&&<AgentKnowledgeTrainingPage token={token} agentId={agentId} enabled={enabled} canViewKnowledge={canViewKnowledge} canViewTraining={canViewTraining}/>}
+    {agentId>0&&<><AgentKnowledgeTrainingPage token={token} agentId={agentId} enabled={enabled} canViewKnowledge={canViewKnowledge} canViewTraining={canViewTraining}/><AgentSandboxPanel token={token} agentId={agentId}/></>}
     {!agentId&&<>
     <div className="grid gap-4 md:grid-cols-3">{cards.map(item=><article key={item.template_key} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800"><Bot className="mb-4 h-8 w-8 text-blue-600"/><h3 className="font-black text-slate-900 dark:text-white">{item.name}</h3><p className="mt-2 min-h-12 text-sm text-slate-500">{item.description}</p><div className="mt-4 flex items-center gap-2 text-xs font-semibold text-slate-500"><ShieldCheck className="h-4 w-4"/>Draft only · runtime off</div></article>)}</div>
     {wizard&&<div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/50 p-4"><div className="w-full max-w-xl rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-800"><div className="flex items-center justify-between"><h3 className="text-lg font-black">Создание AI-сотрудника · шаг {step}/6</h3><button onClick={()=>setWizard(false)}><X/></button></div>

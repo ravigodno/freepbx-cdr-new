@@ -4,7 +4,7 @@ export const AI_PLATFORM_PERMISSIONS = [
   'manage_ai_platform', 'create_ai_agents', 'clone_ai_agents', 'publish_ai_agents',
   'manage_ai_templates', 'manage_ai_behavior_profiles', 'manage_ai_policies', 'run_ai_test_sessions',
   'manage_ai_knowledge', 'view_ai_knowledge', 'publish_ai_knowledge', 'manage_ai_training',
-  'view_ai_training', 'publish_ai_training', 'view_ai_context_preview'
+  'view_ai_training', 'publish_ai_training', 'view_ai_context_preview', 'execute_ai_sandbox'
 ] as const;
 
 export type AiPlatformPermission = typeof AI_PLATFORM_PERMISSIONS[number];

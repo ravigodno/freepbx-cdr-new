@@ -977,6 +977,15 @@ const MIGRATIONS: Migration[] = [
        WHERE r.role_key IN ('su','admin')`
     ],
     seed: seedAiKnowledgeTrainingFoundation
+  },
+  {
+    key:'20260722_029_ai_receptionist_sandbox_runtime',description:'Add universal AI sandbox conversations',statements:[
+      `CREATE TABLE IF NOT EXISTS ai_conversations (id BIGINT AUTO_INCREMENT PRIMARY KEY,tenant_id BIGINT NOT NULL,agent_id BIGINT NOT NULL,agent_version_id BIGINT NOT NULL,channel ENUM('sandbox') NOT NULL,status ENUM('active','completed','failed','cancelled') NOT NULL,language VARCHAR(20) NOT NULL,started_by VARCHAR(191) NULL,started_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,ended_at DATETIME NULL,summary LONGTEXT NULL,metadata_json LONGTEXT NOT NULL,INDEX idx_ai_conversations_tenant_status(tenant_id,status),FOREIGN KEY(tenant_id) REFERENCES ai_tenants(id),FOREIGN KEY(agent_id) REFERENCES ai_agents(id),FOREIGN KEY(agent_version_id) REFERENCES ai_agent_versions(id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS ai_conversation_messages (id BIGINT AUTO_INCREMENT PRIMARY KEY,tenant_id BIGINT NOT NULL,conversation_id BIGINT NOT NULL,sequence_no INT NOT NULL,role ENUM('system','user','assistant','tool') NOT NULL,content TEXT NOT NULL,content_json LONGTEXT NOT NULL,provider_message_id VARCHAR(191) NULL,token_json LONGTEXT NULL,latency_ms INT NULL,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,UNIQUE KEY uniq_ai_conv_message(conversation_id,sequence_no),INDEX idx_ai_conv_messages_tenant(tenant_id),FOREIGN KEY(tenant_id) REFERENCES ai_tenants(id),FOREIGN KEY(conversation_id) REFERENCES ai_conversations(id),CHECK(CHAR_LENGTH(content)<=8000)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `ALTER TABLE ai_agent_test_sessions ADD COLUMN conversation_id BIGINT NULL,ADD CONSTRAINT fk_ai_test_conversation FOREIGN KEY(conversation_id) REFERENCES ai_conversations(id)`,
+      `INSERT IGNORE INTO permissions(permission_key,name,description,category) VALUES('execute_ai_sandbox','Execute AI sandbox','Run text-only AI agent sandbox','ai_platform')`,
+      `INSERT IGNORE INTO role_permissions(role_id,permission_id) SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key='execute_ai_sandbox' WHERE r.role_key IN('su','admin')`
+    ],seed:async()=>seedLegacyAiPlatformPermissions(['execute_ai_sandbox'])
   }
 ];
 

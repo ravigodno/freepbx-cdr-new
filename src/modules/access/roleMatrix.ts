@@ -59,7 +59,8 @@ export const ROLE_PERMISSIONS: Partial<Record<UserRole, PermissionKey[]>> = {
     'manage_ai_training',
     'view_ai_training',
     'publish_ai_training',
-    'view_ai_context_preview'
+    'view_ai_context_preview',
+    'execute_ai_sandbox'
   ],
   manager: [
     'view_calls',

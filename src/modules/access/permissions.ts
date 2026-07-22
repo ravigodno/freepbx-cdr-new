@@ -85,7 +85,8 @@ export type PermissionKey =
   | 'manage_ai_training'
   | 'view_ai_training'
   | 'publish_ai_training'
-  | 'view_ai_context_preview';
+  | 'view_ai_context_preview'
+  | 'execute_ai_sandbox';
 
 export type UserPermissions = Partial<Record<PermissionKey, boolean>>;
 
