@@ -28,6 +28,8 @@ import { CallEntry, MissedCallStatus, AppSettings, DashboardStats, UserRole, Web
 import os from 'os';
 import { registerManagementRoutes } from './server-management.js';
 import { generateAIResponse, registerAiPbxAdminRoutes } from './server/aiPbxAdmin.js';
+import { registerAiPlatformRoutes } from './server/ai-platform/api/router.js';
+import { registerStageOneProviders } from './server/ai-platform/providers/registerProviders.js';
 import { resolveAsteriskCli, runAsteriskCliCommand } from './server/asteriskCli.js';
 import { createConferenceFromActiveCall, createNewPhoneMeeting, getConferenceBackendStatus, startPhoneMeetingRecording, validateConferenceParticipants } from './server/conferenceService.js';
 import {
@@ -3725,6 +3727,15 @@ function getDefaultAccessRoles() {
         view_log_analysis: true,
         view_call_intelligence: true,
         view_ai_pbx_admin: true,
+        view_ai_platform: true,
+        manage_ai_agents: true,
+        manage_ai_providers: true,
+        view_ai_tools: true,
+        manage_ai_tools: true,
+        view_ai_audit: true,
+        execute_ai_read_tools: true,
+        approve_ai_actions: true,
+        manage_ai_platform: true,
         view_security: true,
         view_security_events: true,
         view_firewall: true,
@@ -3776,6 +3787,15 @@ function getDefaultAccessRoles() {
         view_log_analysis: true,
         view_call_intelligence: true,
         view_ai_pbx_admin: true,
+        view_ai_platform: true,
+        manage_ai_agents: true,
+        manage_ai_providers: true,
+        view_ai_tools: true,
+        manage_ai_tools: true,
+        view_ai_audit: true,
+        execute_ai_read_tools: true,
+        approve_ai_actions: true,
+        manage_ai_platform: true,
         view_security: true,
         view_security_events: true,
         view_firewall: true,
@@ -22075,6 +22095,10 @@ registerManagementRoutes(app, requireAuth);
 
 // REGISTER AI PBX ADMIN ROUTES
 registerAiPbxAdminRoutes(app, requireAuth, checkUserPermission, readLocalDb, writeLocalDb);
+
+// REGISTER DISABLED-BY-DEFAULT MODULAR AI PLATFORM CORE
+registerStageOneProviders(generateAIResponse);
+registerAiPlatformRoutes(app, { requireAuth, checkPermission: checkUserPermission, readLegacyDb: readLocalDb });
 
 // REGISTER SECURITY MONITORING CENTER ROUTES
 registerSecurityRoutes(app, requireAuth, checkUserPermission);

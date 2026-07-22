@@ -40,6 +40,7 @@
     "test:log-analysis": "tsx scripts/test-log-analysis.ts",
     "test:log-source-audit": "tsx scripts/test-log-source-audit.ts",
     "test:call-trace": "tsx scripts/test-call-trace.ts"
+    ,"test:ai-platform-core": "tsx scripts/test-ai-platform-core.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

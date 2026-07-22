@@ -688,8 +688,211 @@ const MIGRATIONS: Migration[] = [
        WHERE r.role_key IN ('su','admin')`
     ],
     seed: seedLegacyMonitoringTabPermissions
+  },
+  {
+    key: '20260722_026_ai_platform_core_foundation',
+    description: 'Create tenant-scoped PBXPuls AI Platform Core foundation',
+    statements: [
+      `CREATE TABLE IF NOT EXISTS ai_tenants (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        tenant_key VARCHAR(100) NOT NULL,
+        name VARCHAR(191) NOT NULL,
+        mode ENUM('installation','saas') NOT NULL DEFAULT 'installation',
+        status ENUM('active','disabled') NOT NULL DEFAULT 'active',
+        settings_json LONGTEXT NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NULL,
+        UNIQUE KEY uniq_ai_tenants_key (tenant_key)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS ai_agents (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        tenant_id BIGINT NOT NULL,
+        agent_key VARCHAR(100) NOT NULL,
+        name VARCHAR(191) NOT NULL,
+        agent_type VARCHAR(100) NOT NULL,
+        status ENUM('draft','active','archived') NOT NULL DEFAULT 'draft',
+        current_version_id BIGINT NULL,
+        created_by VARCHAR(191) NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NULL,
+        UNIQUE KEY uniq_ai_agent_key (tenant_id,agent_key),
+        INDEX idx_ai_agents_tenant_status (tenant_id,status),
+        CONSTRAINT fk_ai_agents_tenant FOREIGN KEY (tenant_id) REFERENCES ai_tenants(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS ai_agent_versions (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        tenant_id BIGINT NOT NULL,
+        agent_id BIGINT NOT NULL,
+        version_number INT NOT NULL,
+        lifecycle_status ENUM('draft','published','archived') NOT NULL DEFAULT 'draft',
+        config_json LONGTEXT NOT NULL,
+        system_prompt LONGTEXT NOT NULL,
+        checksum CHAR(64) NULL,
+        created_by VARCHAR(191) NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        published_at DATETIME NULL,
+        UNIQUE KEY uniq_ai_agent_version (agent_id,version_number),
+        INDEX idx_ai_agent_versions_agent_status (agent_id,lifecycle_status),
+        INDEX idx_ai_agent_versions_tenant (tenant_id),
+        CONSTRAINT fk_ai_agent_versions_tenant FOREIGN KEY (tenant_id) REFERENCES ai_tenants(id),
+        CONSTRAINT fk_ai_agent_versions_agent FOREIGN KEY (agent_id) REFERENCES ai_agents(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS ai_provider_configs (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        tenant_id BIGINT NOT NULL,
+        provider_key VARCHAR(64) NOT NULL,
+        purpose VARCHAR(100) NOT NULL,
+        model VARCHAR(191) NOT NULL,
+        base_url VARCHAR(500) NULL,
+        secret_ref VARCHAR(255) NULL,
+        encrypted_secret LONGTEXT NULL,
+        key_version VARCHAR(64) NULL,
+        options_json LONGTEXT NOT NULL,
+        status ENUM('active','disabled','not_configured','error') NOT NULL DEFAULT 'not_configured',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NULL,
+        UNIQUE KEY uniq_ai_provider_purpose (tenant_id,provider_key,purpose),
+        INDEX idx_ai_provider_tenant_status (tenant_id,status),
+        CONSTRAINT fk_ai_provider_tenant FOREIGN KEY (tenant_id) REFERENCES ai_tenants(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS ai_tools (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        tenant_id BIGINT NULL,
+        tool_key VARCHAR(100) NOT NULL,
+        version INT NOT NULL,
+        description VARCHAR(500) NOT NULL,
+        risk_level ENUM('read','low_write','high_write','forbidden') NOT NULL,
+        input_schema_json LONGTEXT NOT NULL,
+        output_schema_json LONGTEXT NOT NULL,
+        executor_key VARCHAR(191) NOT NULL,
+        enabled TINYINT(1) NOT NULL DEFAULT 0,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NULL,
+        UNIQUE KEY uniq_ai_tool (tenant_id,tool_key,version),
+        INDEX idx_ai_tools_tenant_risk (tenant_id,risk_level,enabled),
+        CONSTRAINT fk_ai_tools_tenant FOREIGN KEY (tenant_id) REFERENCES ai_tenants(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS ai_agent_tools (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        tenant_id BIGINT NOT NULL,
+        agent_version_id BIGINT NOT NULL,
+        tool_id BIGINT NOT NULL,
+        enabled TINYINT(1) NOT NULL DEFAULT 0,
+        config_json LONGTEXT NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_ai_agent_tool (agent_version_id,tool_id),
+        INDEX idx_ai_agent_tools_tenant (tenant_id),
+        CONSTRAINT fk_ai_agent_tools_tenant FOREIGN KEY (tenant_id) REFERENCES ai_tenants(id),
+        CONSTRAINT fk_ai_agent_tools_version FOREIGN KEY (agent_version_id) REFERENCES ai_agent_versions(id),
+        CONSTRAINT fk_ai_agent_tools_tool FOREIGN KEY (tool_id) REFERENCES ai_tools(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS ai_behavior_profiles (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        tenant_id BIGINT NOT NULL,
+        profile_key VARCHAR(100) NOT NULL,
+        name VARCHAR(191) NOT NULL,
+        language VARCHAR(20) NOT NULL,
+        style_json LONGTEXT NOT NULL,
+        voice_rules_json LONGTEXT NOT NULL,
+        transfer_rules_json LONGTEXT NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NULL,
+        UNIQUE KEY uniq_ai_behavior_profile (tenant_id,profile_key),
+        CONSTRAINT fk_ai_behavior_tenant FOREIGN KEY (tenant_id) REFERENCES ai_tenants(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS ai_audit_log (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        tenant_id BIGINT NOT NULL,
+        trace_id VARCHAR(64) NOT NULL,
+        actor_type ENUM('user','system','service') NOT NULL,
+        actor_id VARCHAR(191) NULL,
+        event_type VARCHAR(100) NOT NULL,
+        entity_type VARCHAR(100) NOT NULL,
+        entity_id VARCHAR(100) NULL,
+        decision VARCHAR(64) NOT NULL,
+        details_json LONGTEXT NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_ai_audit_tenant_time (tenant_id,created_at),
+        INDEX idx_ai_audit_trace (trace_id),
+        INDEX idx_ai_audit_entity (tenant_id,entity_type,entity_id),
+        CONSTRAINT fk_ai_audit_tenant FOREIGN KEY (tenant_id) REFERENCES ai_tenants(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `INSERT IGNORE INTO settings (setting_key,setting_value,value_type,category,is_secret,description)
+       VALUES ('ai.platform_core_enabled','false','boolean','ai_platform',0,'Enable PBXPuls AI Platform Core APIs')`,
+      `INSERT IGNORE INTO permissions (permission_key,name,description,category) VALUES
+        ('view_ai_platform','View AI Platform','View AI Platform status and agents','ai_platform'),
+        ('manage_ai_agents','Manage AI agents','Create and version AI agents','ai_platform'),
+        ('manage_ai_providers','Manage AI providers','Manage AI provider configuration','ai_platform'),
+        ('view_ai_tools','View AI tools','View registered AI tools','ai_platform'),
+        ('manage_ai_tools','Manage AI tools','Manage AI tool definitions','ai_platform'),
+        ('view_ai_audit','View AI audit','View tenant-scoped AI audit log','ai_platform'),
+        ('execute_ai_read_tools','Execute AI read tools','Execute allowed read-only AI tools','ai_platform'),
+        ('approve_ai_actions','Approve AI actions','Approve guarded AI actions','ai_platform'),
+        ('manage_ai_platform','Manage AI Platform','Manage AI Platform foundation','ai_platform')`,
+      `INSERT IGNORE INTO role_permissions (role_id,permission_id)
+       SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key IN
+       ('view_ai_platform','manage_ai_agents','manage_ai_providers','view_ai_tools','manage_ai_tools','view_ai_audit','execute_ai_read_tools','approve_ai_actions','manage_ai_platform')
+       WHERE r.role_key IN ('su','admin')`
+    ],
+    seed: seedAiPlatformCoreFoundation
   }
 ];
+
+async function seedAiPlatformCoreFoundation(connection: Connection): Promise<void> {
+  await ensureAiAgentCurrentVersionForeignKey(connection);
+  await connection.execute(`INSERT IGNORE INTO ai_tenants (tenant_key,name,mode,status,settings_json)
+    VALUES ('installation','текущая установка PBXPuls','installation','active','{}')`);
+  const [tenantRows] = await connection.query("SELECT id FROM ai_tenants WHERE tenant_key='installation' LIMIT 1");
+  const tenantId = Number((tenantRows as any[])[0]?.id || 0);
+  if (!tenantId) throw new Error('AI Platform installation tenant seed failed');
+  await connection.execute(`INSERT IGNORE INTO ai_behavior_profiles
+    (tenant_id,profile_key,name,language,style_json,voice_rules_json,transfer_rules_json)
+    VALUES (?,?,?,?,?,?,?)`, [tenantId,'natural_receptionist_default','Natural Receptionist Default','ru',
+    JSON.stringify({responseLength:'short',naturalStyle:true}),JSON.stringify({bargeInSupported:true,multilingualEnabled:true,voiceEnabled:false}),JSON.stringify({humanTransferPriority:'highest'})]);
+  const toolRows = [
+    ['pbx.get_active_calls','Read active PBX calls'],['pbx.get_sip_registrations','Read SIP registrations'],['pbx.get_trunks_status','Read trunk status'],
+    ['pbx.get_extensions_status','Read extension status'],['pbx.get_missed_calls','Read missed calls'],['pbx.get_call_statistics','Read call statistics'],
+    ['directory.search_contacts','Search permitted directory contacts'],['calls.search_history','Search permitted call history']
+  ];
+  for (const [key,description] of toolRows) await connection.execute(`INSERT INTO ai_tools
+    (tenant_id,tool_key,version,description,risk_level,input_schema_json,output_schema_json,executor_key,enabled)
+    SELECT NULL,?,1,?,'read','{"type":"object","additionalProperties":false}','{"type":"object"}',?,1 FROM DUAL
+    WHERE NOT EXISTS (SELECT 1 FROM ai_tools WHERE tenant_id IS NULL AND tool_key=? AND version=1)`,[key,description,key,key]);
+  await connection.execute(`INSERT IGNORE INTO ai_agents (tenant_id,agent_key,name,agent_type,status,current_version_id,created_by)
+    VALUES (?,'receptionist_default','AI Receptionist','receptionist','draft',NULL,'system')`,[tenantId]);
+  const [agentRows] = await connection.query("SELECT id FROM ai_agents WHERE tenant_id=? AND agent_key='receptionist_default' LIMIT 1",[tenantId]);
+  const agentId = Number((agentRows as any[])[0]?.id || 0);
+  const config = {language:'ru',multilingual:true,behaviorProfile:'natural_receptionist_default',autonomyLevel:'safe_autonomous',voiceEnabled:false,humanTransferPriority:'highest',toolIds:[]};
+  await connection.execute(`INSERT IGNORE INTO ai_agent_versions
+    (tenant_id,agent_id,version_number,lifecycle_status,config_json,system_prompt,checksum,created_by)
+    VALUES (?,?,1,'draft',?,'',NULL,'system')`,[tenantId,agentId,JSON.stringify(config)]);
+  await seedLegacyAiPlatformPermissions();
+}
+
+async function ensureAiAgentCurrentVersionForeignKey(connection: Connection): Promise<void> {
+  const [rows] = await connection.query(`SELECT CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS
+    WHERE CONSTRAINT_SCHEMA=DATABASE() AND TABLE_NAME='ai_agents' AND CONSTRAINT_NAME='fk_ai_agents_current_version' LIMIT 1`);
+  if (Array.isArray(rows) && rows.length) return;
+  await connection.query('ALTER TABLE ai_agents ADD CONSTRAINT fk_ai_agents_current_version FOREIGN KEY (current_version_id) REFERENCES ai_agent_versions(id)');
+}
+
+async function seedLegacyAiPlatformPermissions(): Promise<void> {
+  const legacyPath = path.join(process.cwd(), 'data', 'db.json');
+  if (!fs.existsSync(legacyPath)) return;
+  const db = JSON.parse(fs.readFileSync(legacyPath, 'utf8'));
+  if (!Array.isArray(db.roles)) return;
+  const permissions = ['view_ai_platform','manage_ai_agents','manage_ai_providers','view_ai_tools','manage_ai_tools','view_ai_audit','execute_ai_read_tools','approve_ai_actions','manage_ai_platform'];
+  let changed = false;
+  for (const role of db.roles) {
+    if (!['su','admin'].includes(String(role?.id || ''))) continue;
+    role.permissions = role.permissions && typeof role.permissions === 'object' ? role.permissions : {};
+    for (const permission of permissions) if (role.permissions[permission] !== true) { role.permissions[permission] = true; changed = true; }
+  }
+  if (!changed) return;
+  const temporaryPath = `${legacyPath}.ai-platform-permissions.tmp`;
+  fs.writeFileSync(temporaryPath, JSON.stringify(db,null,2), 'utf8');
+  fs.renameSync(temporaryPath, legacyPath);
+}
 
 async function seedLegacyMonitoringTabPermissions(): Promise<void> {
   const legacyPath = path.join(process.cwd(), 'data', 'db.json');

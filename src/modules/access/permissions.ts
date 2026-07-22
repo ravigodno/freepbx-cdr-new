@@ -62,7 +62,16 @@ export type PermissionKey =
   | 'view_ai_assistant'
   | 'manage_ai_assistant'
   | 'view_ai_pbx_admin'
-  | 'manage_ai_pbx_admin';
+  | 'manage_ai_pbx_admin'
+  | 'view_ai_platform'
+  | 'manage_ai_agents'
+  | 'manage_ai_providers'
+  | 'view_ai_tools'
+  | 'manage_ai_tools'
+  | 'view_ai_audit'
+  | 'execute_ai_read_tools'
+  | 'approve_ai_actions'
+  | 'manage_ai_platform';
 
 export type UserPermissions = Partial<Record<PermissionKey, boolean>>;
 
