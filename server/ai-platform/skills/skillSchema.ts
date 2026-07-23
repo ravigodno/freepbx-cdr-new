@@ -69,7 +69,10 @@ export type SkillSchema = {
 const KEY = /^[a-z][a-z0-9_]{1,63}$/;
 const PLACEHOLDER = /\{\{\s*([a-z][a-z0-9_.]*)\s*\}\}/g;
 const ALLOWED_ROOTS = new Set(["field", "skill", "agent", "action"]);
-export function validateSkillSchema(skill: SkillSchema) {
+export function validateSkillSchema(
+  skill: SkillSchema,
+  options: { configuredActions?: boolean } = {},
+) {
   const errors: string[] = [], keys = new Set<string>();
   if (skill.schemaVersion !== SKILL_SCHEMA_VERSION) errors.push("schema_version_invalid");
   if (!KEY.test(skill.skillKey)) errors.push("skill_key_invalid");
@@ -85,8 +88,12 @@ export function validateSkillSchema(skill: SkillSchema) {
   for (const action of skill.actions)
     if (action.requiredFields.some((key) => !keys.has(key)))
       errors.push(`action_required_field_missing:${action.actionKey}`);
+  if (options.configuredActions && !skill.actions.length)
+    errors.push("configured_action_required");
   if (skill.actions.length && !skill.responseTemplates.action_success)
     errors.push("action_success_path_missing");
+  if (!skill.responseTemplates.action_unavailable)
+    errors.push("action_unavailable_template_missing");
   const dependencies = skill.validationRules.dependencies;
   if (dependencies && typeof dependencies === "object") {
     for (const [key, values] of Object.entries(dependencies as Record<string,string[]>))
@@ -101,7 +108,22 @@ export function validateSkillSchema(skill: SkillSchema) {
   if (!skill.responseTemplates.fallback) errors.push("fallback_template_missing");
   if (!skill.escalationPolicy || !Object.keys(skill.escalationPolicy).length)
     errors.push("escalation_policy_missing");
+  else if (typeof skill.escalationPolicy.enabled !== "boolean")
+    errors.push("escalation_policy_invalid");
   return [...new Set(errors)];
+}
+
+export function validateConfiguredSkillSet(
+  skills: SkillSchema[],
+  config: Record<string, unknown>,
+) {
+  const configuredActions = Boolean(
+    (config.skillEngine as Record<string, unknown> | undefined)?.configuredActions,
+  );
+  return [...new Set(skills.flatMap((skill) =>
+    validateSkillSchema(skill, { configuredActions })
+      .map((error) => `${skill.skillKey}:${error}`),
+  ))];
 }
 
 export function renderSkillTemplate(

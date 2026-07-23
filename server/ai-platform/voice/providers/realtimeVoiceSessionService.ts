@@ -6,7 +6,10 @@ import {
 } from "../../core/redaction.js";
 import { AgentContextBuilder } from "../../core/agentContextBuilder.js";
 import { SkillRepository } from "../../skills/skillRepository.js";
-import type { SkillSchema } from "../../skills/skillSchema.js";
+import {
+  validateConfiguredSkillSet,
+  type SkillSchema,
+} from "../../skills/skillSchema.js";
 import type { ToolExecutor } from "../../tools/toolExecutor.js";
 import type { HumanTransferService } from "../../transfer/humanTransferService.js";
 import type { BusinessActionService } from "../../actions/businessActionService.js";
@@ -409,6 +412,10 @@ export class RealtimeVoiceSessionService {
         input.tenantId,
         Number(source.agent_version_id),
       ),
+      skillErrors = validateConfiguredSkillSet(
+        skills,
+        (context?.agent?.version?.config || {}) as Record<string, unknown>,
+      ),
       instructions = composeRealtimeInstructions(
         context,
         String(source.language || "ru"),
@@ -430,6 +437,12 @@ export class RealtimeVoiceSessionService {
         channels: 1 as const,
         frameDurationMs: 20,
       };
+    if (skillErrors.length)
+      throw new RealtimeVoiceError(
+        "invalid_request",
+        409,
+        `Configured skill validation failed: ${skillErrors.join(",")}`,
+      );
     if (
       !capabilities.supportedInputFormats.some(
         (item) =>

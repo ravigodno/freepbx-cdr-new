@@ -29,6 +29,7 @@ export type GenericResponsePlan = {
   intent: GenericResponseIntent;
   text: string | null;
   instructions: string;
+  errorCode: string | null;
 };
 
 export const createGenericTaskState = (): GenericConversationTaskState => ({
@@ -176,8 +177,20 @@ export function planGenericResponse(
     intent: "clarify",
     text: null,
     instructions: "Ответь кратко по существу и не утверждай, что действие выполнено.",
+    errorCode: null,
   };
   const field = skill.fields.find((item) => item.key === state.nextField);
+  const action = skill.actions[0];
+  if (
+    !field &&
+    state.actionState === "not_requested" &&
+    action?.executorKey?.startsWith("unavailable/")
+  ) {
+    setGenericActionState(state, skills, "unavailable", {
+      errorCode: "action_unavailable",
+      actionKey: action.actionKey,
+    });
+  }
   let intent: GenericResponseIntent;
   let template: string | undefined | null;
   if (field) {
@@ -197,14 +210,20 @@ export function planGenericResponse(
     template = skill.responseTemplates.action_pending;
   }
   state.currentStep = intent;
-  const action = skill.actions[0];
-  const text = renderSkillTemplate(template || skill.responseTemplates.fallback || "Не удалось выполнить действие.", {
+  const selectedTemplate = template || skill.responseTemplates.fallback;
+  if (!selectedTemplate) return {
+    intent,
+    text: null,
+    instructions: "INTERNAL SAFE ERROR: action_execution_failed. Do not generate customer-facing text.",
+    errorCode: "action_execution_failed",
+  };
+  const text = renderSkillTemplate(selectedTemplate, {
     field: { label: field?.label, value: field ? state.collectedFields[field.key] : undefined },
     skill: { name: skill.name },
     agent: { name: agentName },
     action: { name: action?.name },
   });
-  return { intent, text, instructions: `Произнеси только: «${text}»` };
+  return { intent, text, instructions: `Произнеси только: «${text}»`, errorCode: null };
 }
 
 export function compileGenericTaskInstructions(

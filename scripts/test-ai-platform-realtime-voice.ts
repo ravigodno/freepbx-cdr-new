@@ -51,6 +51,10 @@ import {
   updateGenericTaskState,
 } from "../server/ai-platform/voice/providers/genericConversationTaskState.js";
 import type { SkillSchema } from "../server/ai-platform/skills/skillSchema.js";
+import {
+  validateConfiguredSkillSet,
+  validateSkillSchema,
+} from "../server/ai-platform/skills/skillSchema.js";
 import { ClosingCoordinator } from "../server/ai-platform/voice/providers/closingCoordinator.js";
 
 const format = {
@@ -100,7 +104,7 @@ async function run() {
     {key:"date",label:"Дата",type:"date",required:true,extractionHints:[],synonyms:[],enumSource:null,validation:{},confirmationRequired:true,sensitive:false,displayOrder:1,askTemplate:"На какой день?"},
     {key:"time",label:"Время",type:"time",required:true,extractionHints:[],synonyms:[],enumSource:null,validation:{},confirmationRequired:true,sensitive:false,displayOrder:2,askTemplate:"На какое время {{field.value}}?"},
     {key:"resource",label:"Ресурс",type:"entity",required:true,extractionHints:[],synonyms:[],enumSource:"resources",validation:{},confirmationRequired:true,sensitive:false,displayOrder:3,askTemplate:"Какой ресурс выбрать?"},
-  ],actions:[],responseTemplates:{action_unavailable:"Действие пока недоступно. Соединить с сотрудником?",action_success:"Действие подтверждено.",fallback:"Не удалось выполнить действие."},validationRules:{},escalationPolicy:{enabled:true},completionPolicy:{},catalogs:[{catalogKey:"resources",name:"Resources",entityType:"resource",values:[{value:"вариант-а",synonyms:["альфа"]}]}],status:"published"};
+  ],actions:[{id:1,actionKey:"create_fixture",name:"Fixture action",requiredFields:["date","time","resource"],executorKey:"unavailable/demo",permissions:[],timeoutMs:1000,retryPolicy:{},successMapping:{},failureMapping:{state:"unavailable"}}],responseTemplates:{action_unavailable:"Действие пока недоступно. Соединить с сотрудником?",action_success:"Действие подтверждено.",fallback:"Настроенный резервный ответ."},validationRules:{},escalationPolicy:{enabled:true},completionPolicy:{},catalogs:[{catalogKey:"resources",name:"Resources",entityType:"resource",values:[{value:"вариант-а",synonyms:["альфа"]}]}],status:"published"};
   const task=createGenericTaskState();
   updateGenericTaskState(task,[skill],"Хочу оформить запрос завтра в 12, вариант альфа");
   assert.equal(task.collectedFields.date,"завтра");
@@ -109,8 +113,10 @@ async function run() {
   assert.deepEqual(task.missingFields,[]);
   assert.equal(task.taskStatus,"ready");
   const unavailablePlan=planGenericResponse(task,[skill]);
+  assert.equal(task.actionState,"unavailable");
   assert.match(unavailablePlan.text||"",/соединить с сотрудником/iu);
   assert.doesNotMatch(unavailablePlan.text||"",/вы записаны|запись подтверждена/iu);
+  assert.equal(unavailablePlan.errorCode,null);
   setGenericActionState(task,[skill],"succeeded");
   assert.match(planGenericResponse(task,[skill]).text||"",/действие подтверждено/iu);
   const taskMissing=createGenericTaskState();
@@ -124,12 +130,24 @@ async function run() {
     assert.equal(state.activeSkillId,id);assert.deepEqual(state.missingFields,[]);
   };
   const field=(key:string,type:any,enumSource:string|null=null):SkillSchema["fields"][number]=>({key,label:key,type,required:true,extractionHints:[],synonyms:[],enumSource,validation:{},confirmationRequired:false,sensitive:false,displayOrder:1,askTemplate:`Уточните ${key}`});
-  scenario(2,"vehicle_service",[field("vehicle","entity","vehicles"),field("service","entity","services"),field("date","date")],[{catalogKey:"vehicles",name:"v",entityType:"vehicle",values:[{value:"марка-а",synonyms:[]}]},{catalogKey:"services",name:"s",entityType:"service",values:[{value:"услуга-а",synonyms:[]}]}],"vehicle service марка-а услуга-а завтра");
-  scenario(3,"table_request",[field("date","date"),field("time","time"),field("guests","number")],[],"4 table request завтра в 19:30");
+  scenario(2,"autoservice_booking",[field("vehicle","entity","vehicles"),field("service","entity","services"),field("date","date")],[{catalogKey:"vehicles",name:"v",entityType:"vehicle",values:[{value:"марка-а",synonyms:[]}]},{catalogKey:"services",name:"s",entityType:"service",values:[{value:"услуга-а",synonyms:[]}]}],"autoservice booking марка-а услуга-а завтра");
+  scenario(3,"restaurant_booking",[field("date","date"),field("time","time"),field("guests","number")],[],"4 restaurant booking завтра в 19:30");
   const issueField=field("issue","text");issueField.extractionHints=["issue"];
   scenario(4,"support_request",[field("product","entity","products"),issueField,field("priority","entity","priorities")],[{catalogKey:"products",name:"p",entityType:"product",values:[{value:"продукт-а",synonyms:[]}]},{catalogKey:"priorities",name:"p",entityType:"priority",values:[{value:"высокий",synonyms:[]}]}],"support request продукт-а issue не запускается высокий");
+  scenario(5,"clinic_booking",[field("date","date"),field("time","time"),field("provider","entity","providers")],[{catalogKey:"providers",name:"p",entityType:"provider",values:[{value:"специалист-а",synonyms:[]}]}],"clinic booking специалист-а завтра в 12");
+  assert.deepEqual(validateSkillSchema(skill),[]);
+  assert.deepEqual(validateConfiguredSkillSet([skill],{skillEngine:{configuredActions:true}}),[]);
+  assert.match(validateConfiguredSkillSet([{...skill,actions:[]}],{skillEngine:{configuredActions:true}}).join(","),/configured_action_required/);
+  assert.match(validateSkillSchema({...skill,actions:[{...skill.actions[0],requiredFields:["unknown"]}]}).join(","),/action_required_field_missing/);
+  assert.match(validateSkillSchema({...skill,responseTemplates:{...skill.responseTemplates,action_unavailable:undefined}}).join(","),/action_unavailable_template_missing/);
+  assert.match(validateSkillSchema({...skill,escalationPolicy:{enabled:"yes"}}).join(","),/escalation_policy_invalid/);
+  const missingTemplateState={...task,actionState:"failed" as const};
+  const missingTemplatePlan=planGenericResponse(missingTemplateState,[{...skill,responseTemplates:{}}]);
+  assert.equal(missingTemplatePlan.text,null);
+  assert.equal(missingTemplatePlan.errorCode,"action_execution_failed");
   const runtimeSource=fs.readFileSync(new URL("../server/ai-platform/voice/providers/genericConversationTaskState.ts",import.meta.url),"utf8");
   assert.doesNotMatch(runtimeSource,/SPECIALISTS|requiredAppointmentFields|невролог|ветеринар|клиник/iu);
+  assert.doesNotMatch(runtimeSource,/Не удалось выполнить действие\./u);
   assert.equal(isFarewellIntent("Спасибо, до свидания"),true);
   const closing=new ClosingCoordinator("session-safe");
   assert.equal(closing.detectIntent("turn-1").accepted,true);
@@ -694,6 +712,9 @@ async function run() {
   assert.match(migration,/uniq_ai_voice_logical_utterance/);
   assert.match(migration,/20260723_042_voice_response_completion/);
   assert.match(migration,/20260723_044_agent_personality_profile/);
+  assert.match(migration,/20260723_047_configurable_demo_action/);
+  assert.match(migration,/create_demo_appointment/);
+  assert.match(migration,/unavailable\/demo/);
   assert.match(migration,/provider_finish_reason/);
   assert.match(migration,/output_token_limit_hit/);
   assert.match(transcriptService,/COALESCE\(last_delta_at,started_at\)/);
