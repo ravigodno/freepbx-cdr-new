@@ -35,6 +35,11 @@ import {
   VoiceTurnCoordinator,
   type InterruptionDecision,
 } from "./voiceTurnCoordinator.js";
+import {
+  decideResponseCompletion,
+  receptionistResponseBudgets,
+  type ReceptionistResponseBudgets,
+} from "./realtimeResponseCompletion.js";
 
 const transitions: Record<RealtimeVoiceState, RealtimeVoiceState[]> = {
   created: ["connecting", "failed", "cancelled"],
@@ -126,6 +131,16 @@ type Runtime = {
   keywordToAudibleStopMs: number | null;
   deferredResponse: { itemId?:string; text:string } | null;
   controlledLimitResponseIds: Set<string>;
+  receptionist: boolean;
+  responseBudgets: ReceptionistResponseBudgets;
+  responseAudioBuffers: Map<string, AudioFrame[]>;
+  responseTranscripts: Map<string, string>;
+  responseRetryCounts: Map<string, number>;
+  retryPendingFromResponseId: string | null;
+  fallbackResponseIds:Set<string>;
+  fallbackPending:boolean;
+  tokenLimitHitCount: number;
+  semanticIncompleteCount: number;
 };
 
 export class RealtimeVoiceSessionService {
@@ -393,7 +408,11 @@ export class RealtimeVoiceSessionService {
         [input.tenantId, source.agent_version_id],
       ),
       external = readOpenAIRealtimeConfig();
-    const config: RealtimeVoiceConfig = {
+    const receptionist=String(context?.agent?.type||"")==="receptionist",
+      responseBudgets=receptionistResponseBudgets(
+        context?.agent?.version?.config,
+      ),
+      config: RealtimeVoiceConfig = {
       providerKey: input.providerKey,
       apiKey:
         input.providerKey === "openai_realtime" ? external.apiKey : undefined,
@@ -405,8 +424,9 @@ export class RealtimeVoiceSessionService {
       voice: input.providerKey === "openai_realtime" ? "marin" : "natural",
       language: String(source.language || "ru"),
       instructions: instructions.instructions,
-      maxOutputTokens:
-        String(context?.agent?.type || "") === "receptionist" ? 28 : undefined,
+      maxOutputTokens: receptionist ? responseBudgets.response : undefined,
+      retryOutputTokens: receptionist ? responseBudgets.retry : undefined,
+      greetingOutputTokens: receptionist ? responseBudgets.greeting : undefined,
       inputFormat,
       outputFormat,
       serverVad:
@@ -538,6 +558,16 @@ export class RealtimeVoiceSessionService {
         keywordToAudibleStopMs:null,
         deferredResponse:null,
         controlledLimitResponseIds:new Set(),
+        receptionist,
+        responseBudgets,
+        responseAudioBuffers:new Map(),
+        responseTranscripts:new Map(),
+        responseRetryCounts:new Map(),
+        retryPendingFromResponseId:null,
+        fallbackResponseIds:new Set(),
+        fallbackPending:false,
+        tokenLimitHitCount:0,
+        semanticIncompleteCount:0,
       };
     runtime.flusher = new MetricsFlusher(() => this.persist(id), 1000);
     runtime.unsubscribeProvider = adapter.subscribeEvents((event) =>
@@ -888,6 +918,49 @@ export class RealtimeVoiceSessionService {
     if (runtime.turnLatencies.length > 50) runtime.turnLatencies.shift();
     runtime.flusher.markDirty();
   }
+  private async flushBufferedResponse(
+    runtime:Runtime,
+    realtimeSessionId:number,
+    responseId:string,
+    traceId:string,
+  ){
+    const frames=runtime.responseAudioBuffers.get(responseId)||[];
+    runtime.responseAudioBuffers.delete(responseId);
+    const outputFramesBefore=runtime.outputFrames;
+    for(const frame of frames){
+      const enqueue=await this.media.enqueueEgress(
+        runtime.tenantId,
+        runtime.mediaSessionId,
+        frame,
+      );
+      if(!enqueue.accepted){
+        if(enqueue.reason==="response_limit"){
+          runtime.controlledLimitResponseIds.add(responseId);
+          runtime.responseLimitCancelCount++;
+        }
+        continue;
+      }
+      runtime.outputFrames++;
+      runtime.outputAudioMs+=frame.durationMs;
+    }
+    runtime.coordinator.updateQueuedAudio(
+      this.media.getProtocolMetrics(
+        runtime.tenantId,
+        runtime.mediaSessionId,
+      )?.queuedAudioMsCurrent||0,
+    );
+    if(frames.length&&outputFramesBefore===0)
+      await this.audit.append({
+        tenantId:runtime.tenantId,
+        traceId,
+        actorType:"service",
+        eventType:"realtime_first_audio",
+        entityType:"realtime_voice_session",
+        entityId:String(realtimeSessionId),
+        decision:"output",
+        details:{firstResponseLatencyMs:runtime.firstResponseLatencyMs},
+      });
+  }
   private async onPlayoutLifecycle(
     id:number,
     traceId:string,
@@ -959,7 +1032,8 @@ export class RealtimeVoiceSessionService {
     if (
       event.type === "response_started" &&
       !runtime.blocked &&
-      row.state === "listening"
+      (row.state === "listening" ||
+        (row.state === "responding" && runtime.retryPendingFromResponseId))
     ) {
       runtime.responsePending = false;
       runtime.activeResponseId = event.responseId || null;
@@ -970,7 +1044,20 @@ export class RealtimeVoiceSessionService {
       runtime.responseGeneratedMs = 0;
       runtime.turnState = "responding";
       runtime.coordinator.providerResponseStarted(event.responseId);
-      await this.transition(runtime.tenantId, id, "responding", traceId);
+      if(runtime.retryPendingFromResponseId&&event.responseId){
+        const previous=runtime.retryPendingFromResponseId;
+        runtime.retryPendingFromResponseId=null;
+        runtime.responseRetryCounts.set(event.responseId,1);
+        if(runtime.fallbackPending){
+          runtime.fallbackResponseIds.add(event.responseId);
+          runtime.fallbackPending=false;
+        }
+        await this.transcriptService?.bindRetryResponse(
+          runtime.tenantId,id,previous,event.responseId,
+        );
+      }
+      if(row.state==="listening")
+        await this.transition(runtime.tenantId, id, "responding", traceId);
     }
     if (event.type === "output_audio" && !runtime.blocked) {
       const responseId = event.responseId || event.frame.responseId;
@@ -1003,6 +1090,19 @@ export class RealtimeVoiceSessionService {
             responseId,
           );
         } else runtime.duplicateCancelIgnored++;
+        runtime.flusher.markDirty();
+        return;
+      }
+      if(runtime.receptionist&&responseId){
+        const buffered=runtime.responseAudioBuffers.get(responseId)||[];
+        buffered.push({
+          ...event.frame,
+          traceId,
+          voiceSessionId:Number(row.voice_session_id),
+          mediaSessionId:Number(row.media_session_id),
+        });
+        runtime.responseAudioBuffers.set(responseId,buffered);
+        runtime.responseGeneratedMs+=event.frame.durationMs;
         runtime.flusher.markDirty();
         return;
       }
@@ -1070,6 +1170,10 @@ export class RealtimeVoiceSessionService {
     ) runtime.activeItemId = event.itemId;
     if (event.type === "transcript") {
       const text = redactAiPlatformText(event.text).slice(0, 1000);
+      if(
+        event.kind==="output_final" &&
+        event.responseId
+      ) runtime.responseTranscripts.set(event.responseId,text);
       if(event.kind==="input_partial"){
         runtime.callerPartialText = (
           runtime.callerPartialText + text
@@ -1200,6 +1304,83 @@ export class RealtimeVoiceSessionService {
       if(event.usage&&this.transcriptService)await this.transcriptService.usage(runtime.tenantId,runtime.voiceSessionId,event.usage);
       if (event.responseId && event.responseId !== runtime.activeResponseId)
         return;
+      const responseId=event.responseId,
+        transcript=responseId
+          ? runtime.responseTranscripts.get(responseId)||event.outputTranscript||""
+          : event.outputTranscript||"",
+        retryCount=responseId
+          ? runtime.responseRetryCounts.get(responseId)||0
+          : 0,
+        completion=decideResponseCompletion({
+          providerStatus:event.providerStatus,
+          finishReason:event.finishReason,
+          transcript,
+          retryCount,
+          fallbackResponse:Boolean(
+            responseId&&runtime.fallbackResponseIds.has(responseId),
+          ),
+        }),
+        semantic=completion.semantic,
+        tokenLimited=completion.outputTokenLimitHit;
+      if(responseId)
+        await this.transcriptService?.providerOutcome(
+          runtime.tenantId,
+          id,
+          responseId,
+          {
+            finishReason:event.finishReason||event.providerStatus||"unknown",
+            outputTokenLimitHit:tokenLimited,
+            semanticallyComplete:semantic.complete,
+            retryCount,
+          },
+        );
+      if(
+        runtime.receptionist &&
+        responseId &&
+        completion.action==="retry" &&
+        runtime.adapter.retryResponse
+      ){
+        runtime.tokenLimitHitCount++;
+        runtime.semanticIncompleteCount++;
+        runtime.responseAudioBuffers.delete(responseId);
+        runtime.retryPendingFromResponseId=responseId;
+        await this.transcriptService?.supersedeForRetry(
+          runtime.tenantId,id,responseId,
+        );
+        await runtime.adapter.retryResponse(
+          runtime.activeItemId||undefined,
+          runtime.responseBudgets.retry,
+        );
+        runtime.flusher.markDirty();
+        return;
+      }
+      if(
+        runtime.receptionist &&
+        responseId &&
+        completion.action==="fallback" &&
+        runtime.adapter.createFallbackResponse
+      ){
+        runtime.tokenLimitHitCount++;
+        runtime.semanticIncompleteCount++;
+        runtime.responseAudioBuffers.delete(responseId);
+        runtime.retryPendingFromResponseId=responseId;
+        runtime.fallbackPending=true;
+        await this.transcriptService?.supersedeForRetry(
+          runtime.tenantId,id,responseId,
+        );
+        await runtime.adapter.createFallbackResponse(
+          runtime.activeItemId||undefined,
+        );
+        runtime.flusher.markDirty();
+        return;
+      }
+      if(!semantic.complete)runtime.semanticIncompleteCount++;
+      if(runtime.receptionist&&responseId){
+        if(tokenLimited&&!semantic.complete){
+          runtime.tokenLimitHitCount++;
+          runtime.responseAudioBuffers.delete(responseId);
+        }else await this.flushBufferedResponse(runtime,id,responseId,traceId);
+      }
       if(event.responseId)runtime.providerDoneResponseIds.add(event.responseId);
       runtime.coordinator.providerResponseDone(event.responseId);
       if(event.responseId)await this.media.providerResponseDone(runtime.tenantId,runtime.mediaSessionId,event.responseId);
@@ -1449,6 +1630,12 @@ export class RealtimeVoiceSessionService {
         pendingStopDetectedAt: runtime.pendingStopDetectedAt,
         keywordToAudibleStopMs: runtime.keywordToAudibleStopMs,
         controlledLimitCount: runtime.controlledLimitResponseIds.size,
+        responseBudgetUnits:runtime.responseBudgets.response,
+        retryBudgetUnits:runtime.responseBudgets.retry,
+        greetingBudgetUnits:runtime.responseBudgets.greeting,
+        outputLimitHitCount:runtime.tokenLimitHitCount,
+        semanticIncompleteCount:runtime.semanticIncompleteCount,
+        bufferedResponseCount:runtime.responseAudioBuffers.size,
         speechEndToProviderFirstDeltaMs:
           runtime.speechEndMonotonic === null ||
           runtime.providerFirstDeltaMonotonic === null

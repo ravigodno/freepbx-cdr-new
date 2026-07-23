@@ -46,6 +46,17 @@ export function normalizeOpenAIRealtimeEvent(
       eventId: String(raw?.event_id || "").slice(0, 191) || undefined,
       responseId: String(raw?.response?.id || raw?.response_id || "").slice(0,191) || undefined,
       usage: raw?.response?.usage && typeof raw.response.usage === "object" ? raw.response.usage : undefined,
+      providerStatus: ["completed","cancelled","incomplete","failed"].includes(String(raw?.response?.status))
+        ? raw.response.status
+        : "unknown",
+      finishReason: safeErrorCode(raw?.response?.status_details?.reason || raw?.response?.status || "unknown"),
+      maxOutputTokens:
+        raw?.response?.max_output_tokens === "inf"
+          ? "inf"
+          : Number.isFinite(raw?.response?.max_output_tokens)
+            ? Number(raw.response.max_output_tokens)
+            : undefined,
+      outputTranscript: responseTranscript(raw?.response),
     };
   if (type === "response.cancelled")
     return {
@@ -92,6 +103,17 @@ export function normalizeOpenAIRealtimeEvent(
       errorCode: safeErrorCode(raw?.error?.code || raw?.error?.type),
     };
   return null;
+}
+function responseTranscript(response: any) {
+  const values: string[] = [];
+  for (const item of Array.isArray(response?.output) ? response.output : [])
+    for (const content of Array.isArray(item?.content) ? item.content : []) {
+      const text = content?.transcript || content?.text;
+      if (typeof text === "string" && text.trim()) values.push(text.trim());
+    }
+  return values.length
+    ? redactAiPlatformText(values.join(" ")).slice(0, 1000)
+    : undefined;
 }
 function safeErrorCode(value: unknown) {
   const code = String(value || "provider_error")

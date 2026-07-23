@@ -122,6 +122,18 @@ export class SyntheticRealtimeVoiceAdapter implements RealtimeVoiceProviderAdapt
   async createResponseForRemainder(_itemId:string|undefined,text:string){
     await this.respond(text.slice(0,160),"synthetic_semantic_remainder");
   }
+  async retryResponse(_itemId:string|undefined,_maxOutputTokens:number){
+    await this.respond(
+      "Да, я вас хорошо слышу.",
+      "synthetic_controlled_retry",
+    );
+  }
+  async createFallbackResponse(){
+    await this.respond(
+      "Повторите, пожалуйста, вопрос.",
+      "synthetic_completion_fallback",
+    );
+  }
   async cancelResponse() {
     this.cancelled = true;
     this.state = "configured";
@@ -198,7 +210,13 @@ export class SyntheticRealtimeVoiceAdapter implements RealtimeVoiceProviderAdapt
     }
     if (!this.cancelled) {
       await this.emit({ type: "transcript", kind: "output_final", text });
-      await this.emit({ type: "response_completed" });
+      await this.emit({
+        type: "response_completed",
+        providerStatus:"completed",
+        finishReason:"completed",
+        maxOutputTokens:this.config.maxOutputTokens,
+        outputTranscript:text,
+      });
     }
     this.state = "configured";
   }

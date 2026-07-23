@@ -1085,6 +1085,11 @@ const MIGRATIONS: Migration[] = [
       `ALTER TABLE ai_voice_transcript_utterances ADD COLUMN logical_key CHAR(64) NULL,ADD COLUMN content_index INT UNSIGNED NOT NULL DEFAULT 0,ADD COLUMN provider_audio_transcript_safe TEXT NULL,ADD COLUMN played_audio_ms BIGINT UNSIGNED NULL,ADD COLUMN generated_audio_ms BIGINT UNSIGNED NULL,ADD COLUMN transcript_accuracy ENUM('exact','approximate','unavailable') NOT NULL DEFAULT 'unavailable',ADD COLUMN interrupted_by_hangup TINYINT(1) NOT NULL DEFAULT 0,ADD UNIQUE KEY uniq_ai_voice_logical_utterance(tenant_id,realtime_session_id,logical_key)`,
       `INSERT IGNORE INTO settings(setting_key,setting_value,value_type,category,is_secret,description)VALUES('ai.voice_max_single_response_audio_seconds','60','number','ai_platform',0,'Maximum accepted audio per provider response, clamped to 5..180 seconds')`
     ]
+  },
+  {
+    key:'20260723_042_voice_response_completion',description:'Track provider completion and controlled realtime retries',statements:[
+      `ALTER TABLE ai_voice_transcript_utterances MODIFY transcript_accuracy ENUM('exact','approximate','unavailable','controlled_limit','provider_truncated') NOT NULL DEFAULT 'unavailable',ADD COLUMN provider_finish_reason VARCHAR(64) NULL,ADD COLUMN output_token_limit_hit TINYINT(1) NOT NULL DEFAULT 0,ADD COLUMN semantically_complete TINYINT(1) NULL,ADD COLUMN superseded_by_retry TINYINT(1) NOT NULL DEFAULT 0,ADD COLUMN retry_count TINYINT UNSIGNED NOT NULL DEFAULT 0`
+    ]
   }
 ];
 

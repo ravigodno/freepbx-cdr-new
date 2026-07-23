@@ -14,6 +14,7 @@ import { ProviderSilenceTracker } from "../providerSilenceMetrics.js";
 
 const PROVIDER_SAMPLE_RATE = 24000;
 const INTERNAL_SAMPLE_RATE = 16000;
+const GENERAL_MAX_OUTPUT_TOKENS = 4096;
 const MAX_PACKETIZER_CHUNK_MS = 200;
 const PCM16_BYTES_PER_SAMPLE = 2;
 const ULAW_FRAME_BYTES = 160;
@@ -58,6 +59,7 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
   private providerOutputBursts = 0;
   private providerEventSequence = 0;
   private readonly providerSilence = new ProviderSilenceTracker();
+  private eventChain: Promise<void> = Promise.resolve();
   private pendingConfiguration: {
     resolve: () => void;
     reject: (error: Error) => void;
@@ -132,6 +134,7 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
     this.providerOutputGaps = [];
     this.providerOutputBursts = 0;
     this.providerEventSequence = 0;
+    this.eventChain = Promise.resolve();
     this.providerSilence.reset();
     this.health = { state: "connecting", failureCode: null, connectedAt: null };
     const url = new URL(config.url!);
@@ -233,7 +236,7 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
                   responseId,
                   decodeUlawToPcm16(payload),
                 );
-                void this.emit({
+                this.queueEvent({
                   type: "output_audio",
                   frame: {
                     sequence: this.ulawOutputSequence++,
@@ -282,7 +285,7 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
                   responseId,
                   decodePcm16(frame.payload),
                 );
-                void this.emit({
+                this.queueEvent({
                   type: "output_audio",
                   frame: {
                     ...frame,
@@ -324,7 +327,7 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
                 "Realtime session configuration was rejected",
               ),
             );
-          if (normalized) void this.emit(normalized);
+          if (normalized) this.queueEvent(normalized);
         } catch {}
       });
       socket.on("close", () => {
@@ -372,7 +375,8 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
         type: "realtime",
         model: config.model,
         instructions: config.instructions,
-        max_output_tokens: config.maxOutputTokens || "inf",
+        max_output_tokens:
+          config.maxOutputTokens || GENERAL_MAX_OUTPUT_TOKENS,
         output_modalities: ["audio"],
         audio: {
           input: {
@@ -426,13 +430,37 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
     this.send({ type: "input_audio_buffer.commit" });
   }
   async createResponse() {
+    this.sendResponse(
+      this.config?.maxOutputTokens,
+      "Отвечай только на русском языке. Дай одно законченное короткое предложение и сразу замолчи.",
+    );
+  }
+  async retryResponse(itemId: string | undefined, maxOutputTokens: number) {
+    if (itemId)
+      this.send({ type: "conversation.item.delete", item_id: itemId });
+    this.sendResponse(
+      maxOutputTokens,
+      "Предыдущий ответ не озвучивай. Ответь заново одним коротким, грамматически законченным предложением на русском языке.",
+    );
+  }
+  async createFallbackResponse(itemId: string | undefined) {
+    if (itemId)
+      this.send({ type: "conversation.item.delete", item_id: itemId });
+    this.sendResponse(
+      this.config?.greetingOutputTokens || 160,
+      "Произнеси дословно и полностью: «Повторите, пожалуйста, вопрос.»",
+    );
+  }
+  private sendResponse(maxOutputTokens: number | undefined, instructions: string) {
     this.send({
       type: "response.create",
       response: {
         output_modalities: ["audio"],
-        max_output_tokens: this.config?.maxOutputTokens || "inf",
-        instructions:
-          "Отвечай только на русском языке. Перейди на другой язык только после явной просьбы клиента.",
+        max_output_tokens:
+          maxOutputTokens ||
+          this.config?.maxOutputTokens ||
+          GENERAL_MAX_OUTPUT_TOKENS,
+        instructions,
       },
     });
   }
@@ -466,6 +494,7 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
       type: "response.create",
       response: {
         output_modalities: ["audio"],
+        max_output_tokens: this.config?.greetingOutputTokens || 160,
         instructions: `Say exactly this greeting in Russian: ${text}`,
       },
     });
@@ -546,6 +575,11 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
   }
   private async emit(event: RealtimeVoiceEvent) {
     for (const handler of this.handlers) await handler(event);
+  }
+  private queueEvent(event: RealtimeVoiceEvent) {
+    this.eventChain = this.eventChain
+      .catch(() => {})
+      .then(() => this.emit(event));
   }
   private settleConfiguration(error?: Error) {
     const pending = this.pendingConfiguration;

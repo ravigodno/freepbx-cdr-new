@@ -22,6 +22,12 @@ import {
   VoiceTurnCoordinator,
 } from "../server/ai-platform/voice/providers/voiceTurnCoordinator.js";
 import { ProviderSilenceTracker } from "../server/ai-platform/voice/providers/providerSilenceMetrics.js";
+import { VoiceTranscriptService } from "../server/ai-platform/voice/transcripts/voiceTranscriptService.js";
+import {
+  assessSemanticCompletion,
+  decideResponseCompletion,
+  receptionistResponseBudgets,
+} from "../server/ai-platform/voice/providers/realtimeResponseCompletion.js";
 
 const format = {
   codec: "slin16" as const,
@@ -132,6 +138,90 @@ async function run() {
   );
   assert.equal(classifyCallerSpeech("ага"),"acknowledgement");
   assert.equal(classifyCallerSpeech("Мне нужен адрес"),"substantive_speech");
+  for(const text of [
+    "Здравствуйте. Чем могу",
+    "Да, вас",
+    "Хорошо, да",
+    "Я могу помочь с",
+  ]) assert.equal(assessSemanticCompletion(text).complete,false,text);
+  for(const text of [
+    "Да, я вас хорошо слышу.",
+    "Хорошо, на какое время вас записать?",
+    "Повторите, пожалуйста, вопрос.",
+  ]) assert.equal(assessSemanticCompletion(text).complete,true,text);
+  assert.deepEqual(
+    receptionistResponseBudgets({
+      voice:{
+        maxGeneratedUnits:28,
+        retryGeneratedUnits:999,
+        greetingGeneratedUnits:1,
+      },
+    }),
+    {response:80,retry:320,greeting:120},
+  );
+  assert.deepEqual(
+    receptionistResponseBudgets({
+      voice:{
+        maxGeneratedUnits:120,
+        retryGeneratedUnits:240,
+        greetingGeneratedUnits:160,
+      },
+    }),
+    {response:120,retry:240,greeting:160},
+  );
+  assert.equal(decideResponseCompletion({
+    providerStatus:"incomplete",
+    finishReason:"max_output_tokens",
+    transcript:"Да, вас",
+    retryCount:0,
+  }).action,"retry");
+  assert.equal(decideResponseCompletion({
+    providerStatus:"incomplete",
+    finishReason:"max_output_tokens",
+    transcript:"Хорошо, да",
+    retryCount:1,
+  }).action,"fallback");
+  assert.equal(decideResponseCompletion({
+    providerStatus:"completed",
+    finishReason:"completed",
+    transcript:"Да, я вас хорошо слышу.",
+    retryCount:1,
+  }).action,"play");
+  const completionFixtures=[
+    {input:"Меня слышно?",response:"Да, я вас хорошо слышу и готов помочь с вашим вопросом.",durationMs:2800},
+    {input:"Запишите меня на приём",response:"На какой день и время вас записать к выбранному специалисту?",durationMs:3200},
+  ];
+  for(const fixture of completionFixtures){
+    const result=assessSemanticCompletion(fixture.response);
+    assert.equal(result.complete,true,fixture.input);
+    assert.ok(result.words>=8&&result.words<=16,fixture.response);
+    assert.ok(fixture.durationMs>=2000&&fixture.durationMs<=5000);
+    assert.ok(result.words<=30);
+  }
+  const transcriptQueries:Array<{sql:string;params:unknown[]}>=[],
+    transcriptStore={
+      query:async(sql:string,params:unknown[]=[])=>{
+        transcriptQueries.push({sql,params});
+        return sql.startsWith("SELECT id,sequence_no")
+          ? [{id:7,sequence_no:3}]
+          : {affectedRows:1};
+      },
+    },
+    transcriptLifecycle=new VoiceTranscriptService(transcriptStore as any);
+  await transcriptLifecycle.supersedeForRetry(1,2,"response-old");
+  await transcriptLifecycle.bindRetryResponse(
+    1,2,"response-old","response-retry",
+  );
+  assert.equal(
+    transcriptQueries.filter(({sql})=>/\bINSERT\b/iu.test(sql)).length,
+    0,
+  );
+  assert.ok(
+    transcriptQueries.some(({sql})=>/superseded_by_retry=1/iu.test(sql)),
+  );
+  assert.ok(
+    transcriptQueries.some(({sql})=>/provider_response_ref=\?/iu.test(sql)),
+  );
   turn.beginCallerTurn();
   assert.equal(turn.requestResponseForTurn(),true);
   assert.equal(turn.requestResponseForTurn(),false);
@@ -216,6 +306,22 @@ async function run() {
   assert.equal(normalizeOpenAIRealtimeEvent({type:"conversation.item.input_audio_transcription.failed",error:{code:"transcription_failed"}},providerFrame)?.type,"transcript_unavailable");
   const usageEvent:any=normalizeOpenAIRealtimeEvent({type:"response.done",response:{status:"completed",usage:{input_token_details:{audio_tokens:12},output_token_details:{audio_tokens:8}}}},providerFrame);
   assert.equal(usageEvent.usage.input_token_details.audio_tokens,12);
+  const tokenLimited:any=normalizeOpenAIRealtimeEvent({
+    type:"response.done",
+    response:{
+      id:"response-safe",
+      status:"incomplete",
+      status_details:{type:"incomplete",reason:"max_output_tokens"},
+      max_output_tokens:28,
+      output:[{content:[{type:"audio",transcript:"Да, вас"}]}],
+    },
+  },providerFrame);
+  assert.equal(tokenLimited.type,"response_completed");
+  assert.equal(tokenLimited.providerStatus,"incomplete");
+  assert.equal(tokenLimited.finishReason,"max_output_tokens");
+  assert.equal(tokenLimited.maxOutputTokens,28);
+  assert.equal(tokenLimited.outputTranscript,"Да, вас");
+  assert.equal(assessSemanticCompletion(tokenLimited.outputTranscript).complete,false);
   const safeUsage=projectSafeVoiceUsage({total_tokens:30,input_tokens:20,output_tokens:10,input_token_details:{audio_tokens:12,cached_tokens:3},output_token_details:{audio_tokens:8},api_key:"must-not-project"},{inputSeconds:61,outputSeconds:22});
   assert.equal(safeUsage.total_tokens,30);assert.equal(safeUsage.audio_tokens,20);assert.equal(safeUsage.cached_tokens,3);assert.equal((safeUsage as any).api_key,undefined);assert.equal(safeUsage.estimated_cost,null);
   const priced=estimateVoiceCost(safeUsage,{version:"2026-07-test",currency:"USD",rates:{audio:.001}});
@@ -380,8 +486,9 @@ async function run() {
     "ru",
   );
   assert.equal(instructions.checksum.length, 64);
-  assert.match(instructions.instructions, /одним коротким/);
-  assert.match(instructions.instructions, /12–18 слов/);
+  assert.match(instructions.instructions, /одним законченным/);
+  assert.match(instructions.instructions, /8–16 слов/);
+  assert.match(instructions.instructions, /не обрывай/);
   assert.match(instructions.instructions, /замолчи и слушай/);
   assert.match(instructions.instructions,/выполняй молча/iu);
   assert.doesNotMatch(instructions.instructions,/пока безопасный backend/iu);
@@ -425,6 +532,13 @@ async function run() {
   assert.match(service,/createResponseForRemainder/);
   assert.match(openaiAdapter,/max_output_tokens/);
   assert.doesNotMatch(openaiAdapter,/max_response_output_tokens/);
+  assert.match(openaiAdapter,/GENERAL_MAX_OUTPUT_TOKENS\s*=\s*4096/);
+  assert.doesNotMatch(openaiAdapter,/max_output_tokens:\s*[^,\n]*["']inf["']/);
+  assert.match(openaiAdapter,/greetingOutputTokens\s*\|\|\s*160/);
+  assert.match(service,/retryPendingFromResponseId/);
+  assert.match(service,/supersedeForRetry/);
+  assert.match(transcriptService,/provider_finish_reason/);
+  assert.match(transcriptService,/provider_truncated/);
   assert.doesNotMatch(
     service,
     /asterisk\s+-rx|external_host|createBridge|answerChannel/i,
@@ -437,6 +551,9 @@ async function run() {
   assert.match(transcriptService,/transcript_accuracy/);
   assert.match(migration,/ai\.voice_max_single_response_audio_seconds/);
   assert.match(migration,/uniq_ai_voice_logical_utterance/);
+  assert.match(migration,/20260723_042_voice_response_completion/);
+  assert.match(migration,/provider_finish_reason/);
+  assert.match(migration,/output_token_limit_hit/);
   assert.match(transcriptService,/COALESCE\(last_delta_at,started_at\)/);
   assert.match(service,/speechEndToFirstAudioMs/);
   assert.match(transcriptService,/incomplete=1/);
