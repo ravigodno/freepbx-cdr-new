@@ -45,6 +45,7 @@ import {
 import {
   compileGenericTaskInstructions,
   createGenericTaskState,
+  applySkillRoutingDecision,
   isFarewellIntent,
   planGenericResponse,
   setGenericActionState,
@@ -56,6 +57,9 @@ import {
   validateSkillSchema,
 } from "../server/ai-platform/skills/skillSchema.js";
 import { ClosingCoordinator } from "../server/ai-platform/voice/providers/closingCoordinator.js";
+import { RealtimeVoiceSessionRepository } from "../server/ai-platform/voice/providers/realtimeVoiceSessionRepository.js";
+import { SkillRouter } from "../server/ai-platform/skills/skillRouter.js";
+import { redactAiPlatformText } from "../server/ai-platform/core/redaction.js";
 
 const format = {
   codec: "slin16" as const,
@@ -100,12 +104,13 @@ async function run() {
   const personality=receptionistPersonalityV10();
   assert.deepEqual(validatePersonalityProfile(personality),[]);
   assert.match(compilePersonalityInstructions(personality),/говори немного быстрее/iu);
-  const skill:SkillSchema={id:1,schemaVersion:1,skillKey:"fixture_flow",name:"Fixture",description:"",intentExamples:["оформить запрос"],fields:[
+  const skill:SkillSchema={id:1,schemaVersion:2,skillKey:"fixture_flow",name:"Fixture",description:"Универсальное оформление запроса",triggerPhrases:["оформить запрос"],negativeTriggerPhrases:[],intentExamples:["оформить запрос"],activationThreshold:.72,ambiguityPolicy:"clarify",fields:[
     {key:"date",label:"Дата",type:"date",required:true,extractionHints:[],synonyms:[],enumSource:null,validation:{},confirmationRequired:true,sensitive:false,displayOrder:1,askTemplate:"На какой день?"},
     {key:"time",label:"Время",type:"time",required:true,extractionHints:[],synonyms:[],enumSource:null,validation:{},confirmationRequired:true,sensitive:false,displayOrder:2,askTemplate:"На какое время {{field.value}}?"},
     {key:"resource",label:"Ресурс",type:"entity",required:true,extractionHints:[],synonyms:[],enumSource:"resources",validation:{},confirmationRequired:true,sensitive:false,displayOrder:3,askTemplate:"Какой ресурс выбрать?"},
   ],actions:[{id:1,actionKey:"create_fixture",name:"Fixture action",requiredFields:["date","time","resource"],executorKey:"unavailable/demo",permissions:[],timeoutMs:1000,retryPolicy:{},successMapping:{},failureMapping:{state:"unavailable"}}],responseTemplates:{action_unavailable:"Действие пока недоступно. Соединить с сотрудником?",action_success:"Действие подтверждено.",fallback:"Настроенный резервный ответ."},validationRules:{},escalationPolicy:{enabled:true},completionPolicy:{},catalogs:[{catalogKey:"resources",name:"Resources",entityType:"resource",values:[{value:"вариант-а",synonyms:["альфа"]}]}],status:"published"};
   const task=createGenericTaskState();
+  applySkillRoutingDecision(task,[skill],await new SkillRouter().route([skill],"Хочу оформить запрос завтра в 12, вариант альфа"));
   updateGenericTaskState(task,[skill],"Хочу оформить запрос завтра в 12, вариант альфа");
   assert.equal(task.collectedFields.date,"завтра");
   assert.equal(task.collectedFields.time,"12:00");
@@ -120,21 +125,52 @@ async function run() {
   setGenericActionState(task,[skill],"succeeded");
   assert.match(planGenericResponse(task,[skill]).text||"",/действие подтверждено/iu);
   const taskMissing=createGenericTaskState();
+  applySkillRoutingDecision(taskMissing,[skill],await new SkillRouter().route([skill],"Оформить запрос завтра, альфа"));
   updateGenericTaskState(taskMissing,[skill],"Оформить запрос завтра, альфа");
   assert.deepEqual(taskMissing.missingFields,["time"]);
   assert.equal(taskMissing.nextField,"time");
   assert.match(compileGenericTaskInstructions(taskMissing,[skill]),/missing=time/iu);
-  const scenario=(id:number,key:string,fields:SkillSchema["fields"],catalogs:SkillSchema["catalogs"],utterance:string)=>{
-    const configured:SkillSchema={...skill,id,skillKey:key,intentExamples:[key.replaceAll("_"," ")],fields,catalogs};
-    const state=createGenericTaskState();updateGenericTaskState(state,[configured],utterance);
+  const scenario=async(id:number,key:string,fields:SkillSchema["fields"],catalogs:SkillSchema["catalogs"],utterance:string)=>{
+    const configured:SkillSchema={...skill,id,skillKey:key,triggerPhrases:[key.replaceAll("_"," ")],intentExamples:[key.replaceAll("_"," ")],fields,catalogs};
+    const state=createGenericTaskState();applySkillRoutingDecision(state,[configured],await new SkillRouter().route([configured],utterance));updateGenericTaskState(state,[configured],utterance);
     assert.equal(state.activeSkillId,id);assert.deepEqual(state.missingFields,[]);
   };
   const field=(key:string,type:any,enumSource:string|null=null):SkillSchema["fields"][number]=>({key,label:key,type,required:true,extractionHints:[],synonyms:[],enumSource,validation:{},confirmationRequired:false,sensitive:false,displayOrder:1,askTemplate:`Уточните ${key}`});
-  scenario(2,"autoservice_booking",[field("vehicle","entity","vehicles"),field("service","entity","services"),field("date","date")],[{catalogKey:"vehicles",name:"v",entityType:"vehicle",values:[{value:"марка-а",synonyms:[]}]},{catalogKey:"services",name:"s",entityType:"service",values:[{value:"услуга-а",synonyms:[]}]}],"autoservice booking марка-а услуга-а завтра");
-  scenario(3,"restaurant_booking",[field("date","date"),field("time","time"),field("guests","number")],[],"4 restaurant booking завтра в 19:30");
+  await scenario(2,"autoservice_booking",[field("vehicle","entity","vehicles"),field("service","entity","services"),field("date","date")],[{catalogKey:"vehicles",name:"v",entityType:"vehicle",values:[{value:"марка-а",synonyms:[]}]},{catalogKey:"services",name:"s",entityType:"service",values:[{value:"услуга-а",synonyms:[]}]}],"autoservice booking марка-а услуга-а завтра");
+  await scenario(3,"restaurant_booking",[field("date","date"),field("time","time"),field("guests","number")],[],"4 restaurant booking завтра в 19:30");
   const issueField=field("issue","text");issueField.extractionHints=["issue"];
-  scenario(4,"support_request",[field("product","entity","products"),issueField,field("priority","entity","priorities")],[{catalogKey:"products",name:"p",entityType:"product",values:[{value:"продукт-а",synonyms:[]}]},{catalogKey:"priorities",name:"p",entityType:"priority",values:[{value:"высокий",synonyms:[]}]}],"support request продукт-а issue не запускается высокий");
-  scenario(5,"clinic_booking",[field("date","date"),field("time","time"),field("provider","entity","providers")],[{catalogKey:"providers",name:"p",entityType:"provider",values:[{value:"специалист-а",synonyms:[]}]}],"clinic booking специалист-а завтра в 12");
+  await scenario(4,"support_request",[field("product","entity","products"),issueField,field("priority","entity","priorities")],[{catalogKey:"products",name:"p",entityType:"product",values:[{value:"продукт-а",synonyms:[]}]},{catalogKey:"priorities",name:"p",entityType:"priority",values:[{value:"высокий",synonyms:[]}]}],"support request продукт-а issue не запускается высокий");
+  await scenario(5,"clinic_booking",[field("date","date"),field("time","time"),field("provider","entity","providers")],[{catalogKey:"providers",name:"p",entityType:"provider",values:[{value:"специалист-а",synonyms:[]}]}],"clinic booking специалист-а завтра в 12");
+  const demo:SkillSchema={...skill,id:6,skillKey:"demo_appointment_booking",triggerPhrases:["запишите меня","хочу записаться","перенесите запись","отмените запись"],intentExamples:["нужна запись"],fields:[
+    field("date","date"),field("time","time"),{...field("specialist","entity","specialists"),askTemplate:"К какому специалисту вас записать?"},
+  ],catalogs:[{catalogKey:"specialists",name:"s",entityType:"specialist",values:[{value:"невролог",synonyms:[]}]}]};
+  const skillRouterTest=new SkillRouter();
+  for(const utterance of ["Запишите меня","Хочу записаться","Перенесите запись","Отмените запись"])
+    assert.equal((await skillRouterTest.route([demo],utterance)).skillId,demo.id);
+  assert.equal((await skillRouterTest.route([{...demo,triggerPhrases:["записать"]}],"Запишите")).skillId,demo.id);
+  assert.equal((await skillRouterTest.route([demo],"Какая сегодня погода?")).skillId,null);
+  const similar={...demo,id:7,skillKey:"similar_booking"};
+  assert.equal((await skillRouterTest.route([demo,similar],"Запишите меня")).requiresClarification,true);
+  const fallbackRouter=new SkillRouter(async()=>({skillId:demo.id,confidence:.91,reasonSafe:"configured skill semantic match"}));
+  assert.equal((await fallbackRouter.route([{...demo,triggerPhrases:[],intentExamples:[],description:""}],"Пожалуйста, помогите с оформлением")).classificationSource,"structured_classifier");
+  const demoState=createGenericTaskState(),demoDecision=await skillRouterTest.route([demo],"Запишите меня ко врачу завтра на 12");
+  applySkillRoutingDecision(demoState,[demo],demoDecision);
+  updateGenericTaskState(demoState,[demo],"Запишите меня ко врачу завтра на 12");
+  assert.equal(demoState.activeSkillId,demo.id);
+  assert.equal(demoState.collectedFields.date,"завтра");
+  assert.equal(demoState.collectedFields.time,"12:00");
+  assert.deepEqual(demoState.missingFields,["specialist"]);
+  assert.equal(planGenericResponse(demoState,[demo]).text,"К какому специалисту вас записать?");
+  for(const utterance of ["в 12","на 12","в 12:30","к 9","14.00","завтра на 12"])
+    assert.doesNotMatch(redactAiPlatformText(utterance),/\[IP\]/u);
+  assert.equal(redactAiPlatformText("адрес 192.168.1.8"),"адрес [IP]");
+  assert.equal(redactAiPlatformText("адрес 2001:db8::1"),"адрес [IP]");
+  const normalizedTimeEvent=normalizeOpenAIRealtimeEvent({type:"conversation.item.input_audio_transcription.completed",transcript:"завтра на 12"},frame);
+  assert.equal(normalizedTimeEvent?.type,"transcript");
+  if(normalizedTimeEvent?.type==="transcript"){
+    assert.equal(normalizedTimeEvent.text,"завтра на 12");
+    assert.equal(normalizedTimeEvent.extractionText,"завтра на 12");
+  }
   assert.deepEqual(validateSkillSchema(skill),[]);
   assert.deepEqual(validateConfiguredSkillSet([skill],{skillEngine:{configuredActions:true}}),[]);
   assert.match(validateConfiguredSkillSet([{...skill,actions:[]}],{skillEngine:{configuredActions:true}}).join(","),/configured_action_required/);
@@ -148,6 +184,7 @@ async function run() {
   const runtimeSource=fs.readFileSync(new URL("../server/ai-platform/voice/providers/genericConversationTaskState.ts",import.meta.url),"utf8");
   assert.doesNotMatch(runtimeSource,/SPECIALISTS|requiredAppointmentFields|невролог|ветеринар|клиник/iu);
   assert.doesNotMatch(runtimeSource,/Не удалось выполнить действие\./u);
+  assert.doesNotMatch(runtimeSource,/SPECIALISTS|medical.*regex|required.*date.*time.*specialist/iu);
   assert.equal(isFarewellIntent("Спасибо, до свидания"),true);
   const closing=new ClosingCoordinator("session-safe");
   assert.equal(closing.detectIntent("turn-1").accepted,true);
@@ -164,6 +201,17 @@ async function run() {
     actionRefSafe:"hangup_safe",requestedAt:100,confirmedAt:120,
     latencyMs:20,ariResult:"confirmed",failureCodeSafe:null,
   }),true);
+  closing.close();
+  assert.equal(closing.state,"closed");
+  let finalizedMetadata:any=null;
+  const closingRepo=new RealtimeVoiceSessionRepository({query:async(sql:string,params?:unknown[])=>{
+    if(sql.startsWith("SELECT"))return[{metadata_json:"{}"}];
+    finalizedMetadata=JSON.parse(String(params?.[0]||"{}"));return{};
+  }} as any);
+  await closingRepo.finalizeDeterministicHangup(1,1,closing.snapshot(),120);
+  assert.equal(finalizedMetadata.hangupConfirmedCount,1);
+  assert.equal(finalizedMetadata.callClosingState,"closed");
+  assert.equal(finalizedMetadata.completionReason,"ai_deterministic_hangup");
   assert.deepEqual(
     {
       farewell:closing.farewellResponseCount,
@@ -451,7 +499,7 @@ async function run() {
       {type:"conversation.item.input_audio_transcription.delta",delta:"Как",event_id:"event-partial",item_id:"item-1"},
       providerFrame,
     ),
-    {type:"transcript",kind:"input_partial",text:"Как",eventId:"event-partial",itemId:"item-1"},
+    {type:"transcript",kind:"input_partial",text:"Как",extractionText:"Как",eventId:"event-partial",itemId:"item-1"},
   );
   assert.deepEqual(
     normalizeOpenAIRealtimeEvent(
@@ -520,7 +568,7 @@ async function run() {
       },
       providerFrame,
     ),
-    { type: "transcript", kind: "input_final", text: "Как меня слышно?" },
+    { type: "transcript", kind: "input_final", text: "Как меня слышно?", extractionText: "Как меня слышно?" },
   );
   assert.deepEqual(
     normalizeOpenAIRealtimeEvent(
@@ -530,7 +578,7 @@ async function run() {
       },
       providerFrame,
     ),
-    { type: "transcript", kind: "input_final", text: "" },
+    { type: "transcript", kind: "input_final", text: "", extractionText: "" },
   );
   assert.equal(
     normalizeOpenAIRealtimeEvent(

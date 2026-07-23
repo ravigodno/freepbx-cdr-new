@@ -3,6 +3,13 @@ import type { AiPlatformStore } from "../storage/aiPlatformStore.js";
 import type { AiAuditService } from "../audit/aiAuditService.js";
 import { SkillRepository } from "./skillRepository.js";
 import { SKILL_SCHEMA_VERSION, validateSkillSchema } from "./skillSchema.js";
+import { SkillRouter, type StructuredSkillClassifier } from "./skillRouter.js";
+import {
+  applySkillRoutingDecision,
+  createGenericTaskState,
+  planGenericResponse,
+  updateGenericTaskState,
+} from "../voice/providers/genericConversationTaskState.js";
 
 export type SkillActor = { traceId:string;actorType:"user";actorId:string };
 
@@ -20,8 +27,8 @@ export class SkillService {
     const key=String(input.skillKey||"").trim(),name=String(input.name||"").trim();
     if(!/^[a-z][a-z0-9_]{1,63}$/.test(key)||!name)throw new Error("invalid_skill");
     const versions=await this.store.query("SELECT COALESCE(MAX(version_number),0)+1 version_number FROM ai_skills WHERE tenant_id=? AND skill_key=?",[tenantId,key]);
-    const result:any=await this.store.query(`INSERT INTO ai_skills(tenant_id,skill_key,schema_version,version_number,name,description,intent_examples_json,validation_rules_json,escalation_policy_json,completion_policy_json,status,created_by)
-      VALUES(?,?,?,?,?,?,?,?,?,?,'draft',?)`,[tenantId,key,SKILL_SCHEMA_VERSION,Number(versions[0].version_number),name,String(input.description||""),JSON.stringify(input.intentExamples||[]),JSON.stringify(input.validationRules||{}),JSON.stringify(input.escalationPolicy||{enabled:true}),JSON.stringify(input.completionPolicy||{}),actor.actorId]);
+    const result:any=await this.store.query(`INSERT INTO ai_skills(tenant_id,skill_key,schema_version,version_number,name,description,trigger_phrases_json,negative_trigger_phrases_json,intent_examples_json,activation_threshold,ambiguity_policy,validation_rules_json,escalation_policy_json,completion_policy_json,status,created_by)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'draft',?)`,[tenantId,key,SKILL_SCHEMA_VERSION,Number(versions[0].version_number),name,String(input.description||""),JSON.stringify(input.triggerPhrases||[]),JSON.stringify(input.negativeTriggerPhrases||[]),JSON.stringify(input.intentExamples||[]),Number(input.activationThreshold??.72),input.ambiguityPolicy==="none"?"none":"clarify",JSON.stringify(input.validationRules||{}),JSON.stringify(input.escalationPolicy||{enabled:true}),JSON.stringify(input.completionPolicy||{}),actor.actorId]);
     await this.audit.append({tenantId,...actor,eventType:"ai_skill_created",entityType:"ai_skill",entityId:String(result.insertId),decision:"created",details:{skillKey:key}});
     return this.repository.get(tenantId,Number(result.insertId));
   }
@@ -34,8 +41,8 @@ export class SkillService {
   }
   async update(tenantId:number,skillId:number,input:any,actor:SkillActor){
     await this.ensureDraft(tenantId,skillId);
-    await this.store.query(`UPDATE ai_skills SET name=COALESCE(?,name),description=COALESCE(?,description),intent_examples_json=COALESCE(?,intent_examples_json),validation_rules_json=COALESCE(?,validation_rules_json),escalation_policy_json=COALESCE(?,escalation_policy_json),completion_policy_json=COALESCE(?,completion_policy_json),updated_at=NOW() WHERE tenant_id=? AND id=?`,[
-      input.name??null,input.description??null,input.intentExamples?JSON.stringify(input.intentExamples):null,input.validationRules?JSON.stringify(input.validationRules):null,input.escalationPolicy?JSON.stringify(input.escalationPolicy):null,input.completionPolicy?JSON.stringify(input.completionPolicy):null,tenantId,skillId,
+    await this.store.query(`UPDATE ai_skills SET name=COALESCE(?,name),description=COALESCE(?,description),trigger_phrases_json=COALESCE(?,trigger_phrases_json),negative_trigger_phrases_json=COALESCE(?,negative_trigger_phrases_json),intent_examples_json=COALESCE(?,intent_examples_json),activation_threshold=COALESCE(?,activation_threshold),ambiguity_policy=COALESCE(?,ambiguity_policy),validation_rules_json=COALESCE(?,validation_rules_json),escalation_policy_json=COALESCE(?,escalation_policy_json),completion_policy_json=COALESCE(?,completion_policy_json),updated_at=NOW() WHERE tenant_id=? AND id=?`,[
+      input.name??null,input.description??null,input.triggerPhrases?JSON.stringify(input.triggerPhrases):null,input.negativeTriggerPhrases?JSON.stringify(input.negativeTriggerPhrases):null,input.intentExamples?JSON.stringify(input.intentExamples):null,input.activationThreshold??null,input.ambiguityPolicy??null,input.validationRules?JSON.stringify(input.validationRules):null,input.escalationPolicy?JSON.stringify(input.escalationPolicy):null,input.completionPolicy?JSON.stringify(input.completionPolicy):null,tenantId,skillId,
     ]);
     await this.audit.append({tenantId,...actor,eventType:"ai_skill_updated",entityType:"ai_skill",entityId:String(skillId),decision:"updated",details:{}});
     return this.repository.get(tenantId,skillId);
@@ -67,6 +74,23 @@ export class SkillService {
     if(!skill)return{valid:false,errors:["skill_not_found"]};
     const errors=validateSkillSchema(skill);
     return{valid:errors.length===0,errors,skill};
+  }
+  async recognitionPreview(tenantId:number,skillId:number,text:string,classifier:StructuredSkillClassifier|null){
+    const skill=await this.repository.get(tenantId,skillId);
+    if(!skill)throw new Error("skill_not_found");
+    const router=new SkillRouter(classifier),decision=await router.route([skill],text.slice(0,1000));
+    const state=createGenericTaskState();
+    applySkillRoutingDecision(state,[skill],decision);
+    updateGenericTaskState(state,[skill],text);
+    const plan=planGenericResponse(state,[skill]);
+    return{
+      selectedSkill:decision.skillId?skill.skillKey:null,
+      confidence:decision.confidence,
+      routing:decision,
+      extractedFields:state.collectedFields,
+      missingFields:state.missingFields,
+      nextPlannerIntent:plan.intent,
+    };
   }
   async publish(tenantId:number,skillId:number,actor:SkillActor){
     await this.ensureDraft(tenantId,skillId);

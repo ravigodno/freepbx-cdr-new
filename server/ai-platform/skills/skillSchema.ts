@@ -1,4 +1,7 @@
-export const SKILL_SCHEMA_VERSION = 1;
+export const SKILL_SCHEMA_VERSION = 2;
+const SUPPORTED_SKILL_SCHEMA_VERSIONS = new Set([1, SKILL_SCHEMA_VERSION]);
+
+export type SkillAmbiguityPolicy = "clarify" | "none";
 
 export type SkillFieldType =
   | "text" | "number" | "phone" | "date" | "time"
@@ -55,7 +58,11 @@ export type SkillSchema = {
   skillKey: string;
   name: string;
   description: string;
+  triggerPhrases?: string[];
+  negativeTriggerPhrases?: string[];
   intentExamples: string[];
+  activationThreshold?: number;
+  ambiguityPolicy?: SkillAmbiguityPolicy;
   fields: SkillFieldSchema[];
   actions: SkillActionSchema[];
   responseTemplates: Partial<Record<SkillResponseTemplateKey, string>>;
@@ -74,9 +81,13 @@ export function validateSkillSchema(
   options: { configuredActions?: boolean } = {},
 ) {
   const errors: string[] = [], keys = new Set<string>();
-  if (skill.schemaVersion !== SKILL_SCHEMA_VERSION) errors.push("schema_version_invalid");
+  if (!SUPPORTED_SKILL_SCHEMA_VERSIONS.has(skill.schemaVersion)) errors.push("schema_version_invalid");
   if (!KEY.test(skill.skillKey)) errors.push("skill_key_invalid");
   if (!skill.name.trim()) errors.push("skill_name_required");
+  if (!Number.isFinite(skill.activationThreshold ?? .72) || (skill.activationThreshold ?? .72) < 0 || (skill.activationThreshold ?? .72) > 1)
+    errors.push("activation_threshold_invalid");
+  if (!["clarify", "none"].includes(skill.ambiguityPolicy ?? "clarify"))
+    errors.push("ambiguity_policy_invalid");
   for (const field of skill.fields) {
     if (!KEY.test(field.key)) errors.push("field_key_invalid");
     if (keys.has(field.key)) errors.push("field_key_duplicate");

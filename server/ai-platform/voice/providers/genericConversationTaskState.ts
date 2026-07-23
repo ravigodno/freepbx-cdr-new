@@ -3,6 +3,7 @@ import {
   type SkillFieldSchema,
   type SkillSchema,
 } from "../../skills/skillSchema.js";
+import type { SkillRoutingDecision } from "../../skills/skillRouter.js";
 
 export type TaskActionState =
   | "not_requested" | "pending" | "succeeded" | "failed" | "unavailable";
@@ -30,6 +31,8 @@ export type GenericResponsePlan = {
   text: string | null;
   instructions: string;
   errorCode: string | null;
+  templateKey: string | null;
+  selectedAction: string | null;
 };
 
 export const createGenericTaskState = (): GenericConversationTaskState => ({
@@ -59,7 +62,7 @@ function parseUniversal(field: SkillFieldSchema, text: string) {
     return source.match(/(?:^|\s)(сегодня|завтра|послезавтра|\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?)(?=\s|$)/u)?.[1] || null;
   if (field.type === "time") {
     const clock = source.match(/(?:^|\s|в\s)((?:[01]?\d|2[0-3]))[:.]([0-5]\d)(?=\s|$)/u);
-    const hour = source.match(/(?:^|\s)в\s+((?:[01]?\d|2[0-3]))(?=\s|$)/u)?.[1];
+    const hour = source.match(/(?:^|\s)(?:в|на|к)\s+((?:[01]?\d|2[0-3]))(?=\s|$)/u)?.[1];
     return clock ? normalizeTime(clock[1], clock[2]) : hour ? normalizeTime(hour) : null;
   }
   if (field.type === "phone")
@@ -92,14 +95,6 @@ function configuredValue(skill: SkillSchema, field: SkillFieldSchema, text: stri
     }
   }
   return null;
-}
-
-function selectSkill(skills: SkillSchema[], text: string) {
-  const source = normalized(text);
-  return skills.find((skill) =>
-    skill.intentExamples.some((example) =>
-      normalized(example).split(/\s+/u).filter((word) => word.length > 3)
-        .some((word) => source.includes(word)))) || null;
 }
 
 export function validateGenericTaskState(
@@ -136,13 +131,6 @@ export function updateGenericTaskState(
   text: string,
 ) {
   let skill = skills.find((item) => item.id === state.activeSkillId) || null;
-  if (!skill) {
-    skill = selectSkill(skills, text);
-    if (skill) {
-      state.activeSkillId = skill.id;
-      state.detectedIntent = skill.skillKey;
-    }
-  }
   state.lastUpdatedFields = [];
   if (!skill) return validateGenericTaskState(state, skills);
   for (const field of skill.fields) {
@@ -152,6 +140,19 @@ export function updateGenericTaskState(
       state.lastUpdatedFields.push(field.key);
     }
   }
+  return validateGenericTaskState(state, skills);
+}
+
+export function applySkillRoutingDecision(
+  state: GenericConversationTaskState,
+  skills: SkillSchema[],
+  decision: SkillRoutingDecision,
+) {
+  if (state.activeSkillId || !decision.skillId) return state;
+  const skill = skills.find((item) => item.id === decision.skillId);
+  if (!skill) return state;
+  state.activeSkillId = skill.id;
+  state.detectedIntent = skill.skillKey;
   return validateGenericTaskState(state, skills);
 }
 
@@ -178,6 +179,8 @@ export function planGenericResponse(
     text: null,
     instructions: "Ответь кратко по существу и не утверждай, что действие выполнено.",
     errorCode: null,
+    templateKey: null,
+    selectedAction: null,
   };
   const field = skill.fields.find((item) => item.key === state.nextField);
   const action = skill.actions[0];
@@ -189,25 +192,34 @@ export function planGenericResponse(
     setGenericActionState(state, skills, "unavailable", {
       errorCode: "action_unavailable",
       actionKey: action.actionKey,
+      executorKey: action.executorKey,
+      executorResult: "unavailable",
+      invoked: true,
     });
   }
   let intent: GenericResponseIntent;
   let template: string | undefined | null;
+  let templateKey: string | null = null;
   if (field) {
     intent = "ask_missing_field";
     template = field.askTemplate || skill.responseTemplates.ask_field;
+    templateKey = field.askTemplate ? `field.${field.key}.ask_template` : "ask_field";
   } else if (state.actionState === "succeeded") {
     intent = "report_action_result";
     template = skill.responseTemplates.action_success;
+    templateKey = "action_success";
   } else if (state.actionState === "failed") {
     intent = "report_action_result";
     template = skill.responseTemplates.action_failed;
+    templateKey = "action_failed";
   } else if (state.actionState === "unavailable" || !skill.actions.length) {
     intent = "report_action_result";
     template = skill.responseTemplates.action_unavailable;
+    templateKey = "action_unavailable";
   } else {
     intent = "perform_action";
     template = skill.responseTemplates.action_pending;
+    templateKey = "action_pending";
   }
   state.currentStep = intent;
   const selectedTemplate = template || skill.responseTemplates.fallback;
@@ -216,6 +228,8 @@ export function planGenericResponse(
     text: null,
     instructions: "INTERNAL SAFE ERROR: action_execution_failed. Do not generate customer-facing text.",
     errorCode: "action_execution_failed",
+    templateKey: null,
+    selectedAction: action?.actionKey || null,
   };
   const text = renderSkillTemplate(selectedTemplate, {
     field: { label: field?.label, value: field ? state.collectedFields[field.key] : undefined },
@@ -223,7 +237,14 @@ export function planGenericResponse(
     agent: { name: agentName },
     action: { name: action?.name },
   });
-  return { intent, text, instructions: `Произнеси только: «${text}»`, errorCode: null };
+  return {
+    intent,
+    text,
+    instructions: `Произнеси только: «${text}»`,
+    errorCode: null,
+    templateKey,
+    selectedAction: action?.actionKey || null,
+  };
 }
 
 export function compileGenericTaskInstructions(

@@ -13,7 +13,7 @@ export type RealtimeVoiceEvent =
   | {type:'input_audio_stopped';itemId?:string}
   | {type:'output_audio';frame:AudioFrame;responseId?:string;itemId?:string}
   | {type:'response_started'|'response_completed'|'response_cancelled';eventId?:string;responseId?:string;usage?:Record<string,unknown>;providerStatus?:'completed'|'cancelled'|'incomplete'|'failed'|'unknown';finishReason?:string;maxOutputTokens?:number|'inf';outputTranscript?:string}
-  | {type:'transcript';kind:RealtimeTranscriptKind;text:string;eventId?:string;itemId?:string;responseId?:string;contentIndex?:number;confidence?:number}
+  | {type:'transcript';kind:RealtimeTranscriptKind;text:string;extractionText?:string;eventId?:string;itemId?:string;responseId?:string;contentIndex?:number;confidence?:number}
   | {type:'response_item';status:'added'|'done';eventId?:string;itemId?:string;role?:string}
   | {type:'transcript_unavailable';speaker:'caller'|'ai';errorCode:string}
   | {type:'tool_call';toolKey:string;arguments:Record<string,unknown>;callId:string}

@@ -1,3 +1,5 @@
+import { isIP } from "node:net";
+
 const SENSITIVE_KEY = /(?:api.?key|authorization|password|passwd|secret|token|credential|ami.?pass|ari.?pass|sip.?secret)/i;
 const MAX_STRING = 4000;
 
@@ -10,6 +12,20 @@ export interface RedactionStats {
   truncated: number;
 }
 
+function redactIpAddresses(text: string, counters: RedactionStats) {
+  const ipv4 = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;
+  text = text.replace(ipv4, (candidate) => {
+    if (isIP(candidate) !== 4) return candidate;
+    counters.ips++;
+    return "[IP]";
+  });
+  return text.replace(/[0-9A-Fa-f:]{3,}/g, (candidate) => {
+    if ((candidate.match(/:/g) || []).length < 2 || isIP(candidate) !== 6) return candidate;
+    counters.ips++;
+    return "[IP]";
+  });
+}
+
 export function redactAiPlatformText(value: unknown, stats?: RedactionStats): string {
   const counters = stats || { secrets: 0, emails: 0, ips: 0, phones: 0, paths: 0, truncated: 0 };
   let text = String(value ?? '').normalize('NFKC');
@@ -18,10 +34,14 @@ export function redactAiPlatformText(value: unknown, stats?: RedactionStats): st
   text = text.replace(/(\bbearer\s+)[A-Za-z0-9._~+/-]{8,}/gi, (_m, p) => { counters.secrets++; return `${p}********`; });
   text = text.replace(/((?:api.?key|password|passwd|secret|token|ami.?pass|ari.?pass|sip.?secret)\s*[:=]\s*)[^\s,;)]+/gi, (_m, p) => { counters.secrets++; return `${p}********`; });
   text = text.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, () => { counters.emails++; return '[EMAIL]'; });
-  text = text.replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b|\b[0-9a-f]{0,4}:[0-9a-f:]{2,}\b/gi, () => { counters.ips++; return '[IP]'; });
+  text = redactIpAddresses(text, counters);
   text = text.replace(/[A-Z]:\\[^\s]+|\/(?:var|home|root|etc|opt|tmp)\/[^\s]+/gi, () => { counters.paths++; return '[PATH]'; });
   text = text.replace(/\+?\d[\d() .-]{5,}\d/g, () => { counters.phones++; return '[PHONE]'; });
   return text;
+}
+
+export function prepareAiExtractionText(value: unknown): string {
+  return String(value ?? "").normalize("NFKC").slice(0, 1000);
 }
 
 export function redactAiPlatformValue(value: unknown): { value: unknown; stats: RedactionStats } {

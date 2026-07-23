@@ -1125,8 +1125,64 @@ const MIGRATIONS: Migration[] = [
     description:'Complete the immutable configurable demo skill with an unavailable action',
     statements:[],
     seed:seedConfigurableDemoAction
+  },
+  {
+    key:'20260723_048_configured_skill_router_v14',
+    description:'Add configured skill routing and publish receptionist version 14',
+    statements:[],
+    seed:seedConfiguredSkillRouterV14
   }
 ];
+
+async function seedConfiguredSkillRouterV14(connection:Connection):Promise<void>{
+  const [columnRows]=await connection.query("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ai_skills'");
+  const columns=new Set((columnRows as any[]).map(row=>String(row.COLUMN_NAME)));
+  const additions=[
+    ["trigger_phrases_json","ALTER TABLE ai_skills ADD COLUMN trigger_phrases_json LONGTEXT NULL AFTER description"],
+    ["negative_trigger_phrases_json","ALTER TABLE ai_skills ADD COLUMN negative_trigger_phrases_json LONGTEXT NULL AFTER trigger_phrases_json"],
+    ["activation_threshold","ALTER TABLE ai_skills ADD COLUMN activation_threshold DECIMAL(5,4) NOT NULL DEFAULT 0.7200 AFTER intent_examples_json"],
+    ["ambiguity_policy","ALTER TABLE ai_skills ADD COLUMN ambiguity_policy ENUM('clarify','none') NOT NULL DEFAULT 'clarify' AFTER activation_threshold"],
+  ];
+  for(const [column,statement] of additions)if(!columns.has(column))await connection.query(statement);
+  await connection.query("UPDATE ai_skills SET trigger_phrases_json='[]' WHERE trigger_phrases_json IS NULL");
+  await connection.query("UPDATE ai_skills SET negative_trigger_phrases_json='[]' WHERE negative_trigger_phrases_json IS NULL");
+  const [tenants]=await connection.query("SELECT id FROM ai_tenants WHERE tenant_key='installation' LIMIT 1");
+  const tenantId=Number((tenants as any[])[0]?.id||0);if(!tenantId)return;
+  const [sourceSkills]=await connection.query("SELECT * FROM ai_skills WHERE tenant_id=? AND skill_key='demo_appointment_booking' AND version_number=2 AND status='published' LIMIT 1",[tenantId]);
+  const sourceSkill=(sourceSkills as any[])[0];if(!sourceSkill)return;
+  const triggers=["запишите меня","хочу записаться","нужна запись","записаться на приём","назначить время","перенести запись","отменить запись"];
+  await connection.execute(`INSERT IGNORE INTO ai_skills(tenant_id,skill_key,schema_version,version_number,name,description,trigger_phrases_json,negative_trigger_phrases_json,intent_examples_json,activation_threshold,ambiguity_policy,validation_rules_json,escalation_policy_json,completion_policy_json,status,checksum,created_by,published_at)
+    SELECT tenant_id,skill_key,2,3,name,description,?,'[]',?,0.7200,'clarify',validation_rules_json,escalation_policy_json,completion_policy_json,'published',NULL,'system',NOW()
+    FROM ai_skills WHERE id=?`,[JSON.stringify(triggers),JSON.stringify(triggers),sourceSkill.id]);
+  const [targets]=await connection.query("SELECT id FROM ai_skills WHERE tenant_id=? AND skill_key='demo_appointment_booking' AND version_number=3 LIMIT 1",[tenantId]);
+  const skillId=Number((targets as any[])[0]?.id||0);if(!skillId)return;
+  await connection.execute(`INSERT IGNORE INTO ai_skill_fields(tenant_id,skill_id,field_key,label,field_type,required,extraction_hints_json,synonyms_json,enum_source,validation_json,confirmation_required,is_sensitive,display_order,ask_template)
+    SELECT tenant_id,?,field_key,label,field_type,required,extraction_hints_json,synonyms_json,enum_source,validation_json,confirmation_required,is_sensitive,display_order,CASE WHEN field_key='specialist' THEN 'К какому специалисту вас записать?' ELSE ask_template END
+    FROM ai_skill_fields WHERE tenant_id=? AND skill_id=?`,[skillId,tenantId,sourceSkill.id]);
+  await connection.execute(`INSERT IGNORE INTO ai_response_templates(tenant_id,skill_id,template_key,template_text,active)
+    SELECT tenant_id,?,template_key,template_text,active FROM ai_response_templates WHERE tenant_id=? AND skill_id=?`,[skillId,tenantId,sourceSkill.id]);
+  await connection.execute(`INSERT IGNORE INTO ai_skill_actions(tenant_id,skill_id,action_key,name,description,input_schema_json,required_fields_json,executor_key,permissions_json,timeout_ms,retry_policy_json,success_mapping_json,failure_mapping_json,active)
+    SELECT tenant_id,?,action_key,name,description,input_schema_json,required_fields_json,executor_key,permissions_json,timeout_ms,retry_policy_json,success_mapping_json,failure_mapping_json,active
+    FROM ai_skill_actions WHERE tenant_id=? AND skill_id=?`,[skillId,tenantId,sourceSkill.id]);
+  const [agents]=await connection.query("SELECT id FROM ai_agents WHERE tenant_id=? AND agent_key='receptionist_default' LIMIT 1",[tenantId]);
+  const agentId=Number((agents as any[])[0]?.id||0);if(!agentId)return;
+  const [sources]=await connection.query("SELECT * FROM ai_agent_versions WHERE tenant_id=? AND agent_id=? AND version_number=13 AND lifecycle_status='published' LIMIT 1",[tenantId,agentId]);
+  const source=(sources as any[])[0];if(!source)return;
+  const [existing]=await connection.query("SELECT id FROM ai_agent_versions WHERE tenant_id=? AND agent_id=? AND version_number=14 LIMIT 1",[tenantId,agentId]);
+  let versionId=Number((existing as any[])[0]?.id||0);
+  if(!versionId){
+    const config=JSON.parse(String(source.config_json||"{}"));
+    config.skillEngine={...(config.skillEngine||{}),schemaVersion:2,source:"database",routing:"configured_before_response",structuredClassifierFallback:true,authoritativePlanner:true,extractionBeforeDisplayRedaction:true};
+    config.closingMetadataFinalization=true;
+    const configJson=JSON.stringify(config),checksum=crypto.createHash("sha256").update(`${configJson}\n${source.system_prompt}`).digest("hex");
+    const [inserted]:any=await connection.execute("INSERT INTO ai_agent_versions(tenant_id,agent_id,version_number,lifecycle_status,config_json,system_prompt,checksum,created_by,published_at)VALUES(?,?,14,'published',?,?,?,?,NOW())",[tenantId,agentId,configJson,source.system_prompt,checksum,"system"]);
+    versionId=Number(inserted.insertId);
+    await connection.execute("INSERT INTO ai_agent_tools(tenant_id,agent_version_id,tool_id,enabled,config_json)SELECT tenant_id,?,tool_id,enabled,config_json FROM ai_agent_tools WHERE tenant_id=? AND agent_version_id=?",[versionId,tenantId,source.id]);
+    await connection.execute("INSERT INTO ai_agent_actions(tenant_id,agent_version_id,action_definition_id,enabled,config_json)SELECT tenant_id,?,action_definition_id,enabled,config_json FROM ai_agent_actions WHERE tenant_id=? AND agent_version_id=?",[versionId,tenantId,source.id]);
+  }
+  await connection.execute("INSERT IGNORE INTO ai_agent_skills(tenant_id,agent_version_id,skill_id,priority,enabled)VALUES(?,?,?,100,1)",[tenantId,versionId,skillId]);
+  await connection.execute("UPDATE ai_agents SET current_version_id=?,updated_at=NOW() WHERE tenant_id=? AND id=?",[versionId,tenantId,agentId]);
+}
 
 async function seedConfigurableDemoAction(connection:Connection):Promise<void>{
   const [tenants]=await connection.query("SELECT id FROM ai_tenants WHERE tenant_key='installation' LIMIT 1");

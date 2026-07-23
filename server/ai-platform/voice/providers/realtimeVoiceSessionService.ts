@@ -3,6 +3,7 @@ import type { AiAuditService } from "../../audit/aiAuditService.js";
 import {
   redactAiPlatformText,
   redactAiPlatformValue,
+  type RedactionStats,
 } from "../../core/redaction.js";
 import { AgentContextBuilder } from "../../core/agentContextBuilder.js";
 import { SkillRepository } from "../../skills/skillRepository.js";
@@ -13,6 +14,11 @@ import {
 import type { ToolExecutor } from "../../tools/toolExecutor.js";
 import type { HumanTransferService } from "../../transfer/humanTransferService.js";
 import type { BusinessActionService } from "../../actions/businessActionService.js";
+import {
+  SkillRouter,
+  type SkillRoutingDecision,
+  type StructuredSkillClassifier,
+} from "../../skills/skillRouter.js";
 import type { AudioFrame } from "../media/mediaTypes.js";
 import type { MediaSessionService } from "../media/mediaSessionService.js";
 import { RealtimeVoiceProviderRegistry } from "./realtimeVoiceProviderRegistry.js";
@@ -56,6 +62,7 @@ import {
 } from "./delayedResponseStream.js";
 import {
   createGenericTaskState,
+  applySkillRoutingDecision,
   isFarewellIntent,
   planGenericResponse,
   updateGenericTaskState,
@@ -170,6 +177,13 @@ type Runtime = {
   semanticIncompleteCount: number;
   taskState: GenericConversationTaskState;
   skills: SkillSchema[];
+  skillRoutingDecision: SkillRoutingDecision | null;
+  redactionCounts: RedactionStats;
+  plannerDecision: {
+    intent: string;
+    selectedAction: string | null;
+    templateKey: string | null;
+  } | null;
   closing: ClosingCoordinator;
   commitDispatchMs: number | null;
   responseCreateDispatchMs: number | null;
@@ -190,6 +204,7 @@ export class RealtimeVoiceSessionService {
   private controlledHangup:
     | ((event:{tenantId:number;voiceSessionId:number;traceId:string})=>Promise<SafeHangupResult>)
     | null = null;
+  private skillRouter = new SkillRouter();
   constructor(
     private store: AiPlatformStore,
     private audit: AiAuditService,
@@ -206,6 +221,9 @@ export class RealtimeVoiceSessionService {
   }
   setControlledHangupHandler(handler:(event:{tenantId:number;voiceSessionId:number;traceId:string})=>Promise<SafeHangupResult>){
     this.controlledHangup=handler;
+  }
+  setSkillClassifier(classifier:StructuredSkillClassifier|null){
+    this.skillRouter.setClassifier(classifier);
   }
   private async row(tenantId: number, id: number) {
     const rows = await this.repo.get(tenantId, id);
@@ -628,6 +646,9 @@ export class RealtimeVoiceSessionService {
         semanticIncompleteCount:0,
         taskState:createGenericTaskState(),
         skills,
+        skillRoutingDecision:null,
+        redactionCounts:{secrets:0,emails:0,ips:0,phones:0,paths:0,truncated:0},
+        plannerDecision:null,
         closing:new ClosingCoordinator(`${input.tenantId}:${source.voice_session_id}`),
         commitDispatchMs:null,
         responseCreateDispatchMs:null,
@@ -1116,7 +1137,13 @@ export class RealtimeVoiceSessionService {
           voiceSessionId:runtime.voiceSessionId,
           traceId,
         });
-        if(result)runtime.closing.hangupConfirmed(result);
+        if(result){
+          runtime.closing.hangupConfirmed(result);
+          runtime.closing.close();
+          await this.repo.finalizeDeterministicHangup(
+            runtime.tenantId,id,runtime.closing.snapshot(),result.confirmedAt,
+          );
+        }
         else runtime.closing.fail();
       }catch{
         runtime.closing.fail();
@@ -1166,13 +1193,37 @@ export class RealtimeVoiceSessionService {
       runtime.responsePending=false;
       return false;
     }
-    const plan=runtime.receptionist
+    let plan=runtime.receptionist
       ? planGenericResponse(runtime.taskState,runtime.skills)
       : null;
+    if(
+      runtime.receptionist &&
+      !runtime.taskState.activeSkillId &&
+      runtime.skillRoutingDecision?.requiresClarification
+    ){
+      const configured=runtime.skills.find(skill=>
+        skill.id===runtime.skillRoutingDecision?.alternatives[0]?.skillId);
+      const text=configured?.responseTemplates.clarification||configured?.responseTemplates.fallback||null;
+      plan={
+        intent:"clarify",
+        text,
+        instructions:text?`Произнеси только: «${text}»`:"INTERNAL SAFE ERROR: clarification_template_missing.",
+        errorCode:text?null:"clarification_template_missing",
+        templateKey:text?(configured?.responseTemplates.clarification?"clarification":"fallback"):null,
+        selectedAction:null,
+      };
+    }
+    runtime.plannerDecision=plan?{
+      intent:plan.intent,
+      selectedAction:plan.selectedAction,
+      templateKey:plan.templateKey,
+    }:null;
     const started=performance.now();
-    if(plan?.text&&runtime.adapter.createPlannedResponse)
+    if(plan?.text){
+      if(!runtime.adapter.createPlannedResponse)
+        throw new RealtimeVoiceError("provider_not_ready",503,"Configured response renderer unavailable");
       await runtime.adapter.createPlannedResponse(plan.text,plan.instructions);
-    else
+    }else
       await runtime.adapter.createResponse?.(plan?.instructions);
     runtime.responseCreateDispatchMs=Math.round(performance.now()-started);
     runtime.flusher.markDirty();
@@ -1363,6 +1414,11 @@ export class RealtimeVoiceSessionService {
     ) runtime.activeItemId = event.itemId;
     if (event.type === "transcript") {
       const text = redactAiPlatformText(event.text).slice(0, 1000);
+      const extractionText=event.kind.startsWith("input_")
+        ? String(event.extractionText??event.text).slice(0,1000)
+        : text;
+      if(event.kind.startsWith("input_"))
+        redactAiPlatformText(extractionText,runtime.redactionCounts);
       if(event.responseId&&event.kind==="output_partial"){
         const accumulated=(
           (runtime.responseTranscripts.get(event.responseId)||"")+text
@@ -1396,7 +1452,6 @@ export class RealtimeVoiceSessionService {
         runtime.callerPartialText = (
           runtime.callerPartialText + text
         ).slice(0,1000);
-        updateGenericTaskState(runtime.taskState,runtime.skills,runtime.callerPartialText);
         runtime.coordinator.updateQueuedAudio(
           this.media.getProtocolMetrics(
             runtime.tenantId,
@@ -1452,7 +1507,7 @@ export class RealtimeVoiceSessionService {
           runtime.tenantId,id,event.responseId,
         );
       if (event.kind === "input_final") {
-        runtime.callerPartialText=text;
+        runtime.callerPartialText=extractionText;
         runtime.coordinator.updateQueuedAudio(
           this.media.getProtocolMetrics(
             runtime.tenantId,
@@ -1465,7 +1520,21 @@ export class RealtimeVoiceSessionService {
             runtime,id,traceId,finalDecision,
           );
         runtime.coordinator.callerSpeechEnded();
-        updateGenericTaskState(runtime.taskState,runtime.skills,text);
+        if(!runtime.taskState.activeSkillId){
+          runtime.skillRoutingDecision=await this.skillRouter.route(runtime.skills,extractionText);
+          applySkillRoutingDecision(runtime.taskState,runtime.skills,runtime.skillRoutingDecision);
+          await this.audit.append({
+            tenantId:runtime.tenantId,
+            traceId,
+            actorType:"service",
+            eventType:"skill_routing_decision",
+            entityType:"realtime_voice_session",
+            entityId:String(id),
+            decision:runtime.skillRoutingDecision.skillId?"activated":runtime.skillRoutingDecision.requiresClarification?"ambiguous":"none",
+            details:runtime.skillRoutingDecision,
+          });
+        }
+        updateGenericTaskState(runtime.taskState,runtime.skills,extractionText);
         const stop=extractStopCommand(text),
           category=classifyCallerSpeech(text),
           responseText=stop?.semanticRemainder||text;
@@ -1834,6 +1903,13 @@ export class RealtimeVoiceSessionService {
   private async persist(id: number) {
     const runtime = this.runtimes.get(id);
     if (!runtime) return;
+    const activeSkill=runtime.skills.find(skill=>skill.id===runtime.taskState.activeSkillId);
+    const sensitiveKeys=new Set(activeSkill?.fields.filter(field=>field.sensitive).map(field=>field.key)||[]);
+    const persistedTaskState={
+      ...runtime.taskState,
+      collectedFields:Object.fromEntries(Object.entries(runtime.taskState.collectedFields)
+        .map(([key,value])=>[key,sensitiveKeys.has(key)?"[MASKED]":value])),
+    };
     await this.repo.metrics(runtime.tenantId, id, {
       inputFrames: runtime.inputFrames,
       outputFrames: runtime.outputFrames,
@@ -1893,7 +1969,11 @@ export class RealtimeVoiceSessionService {
         streamingResponseCount:runtime.responseStreams.size,
         sentenceStoppedCount:runtime.sentenceStoppedResponseIds.size,
         personalitySchemaVersion:1,
-        taskState:runtime.taskState,
+        taskState:persistedTaskState,
+        skillRoutingDecision:runtime.skillRoutingDecision,
+        redactionCategoryCounts:runtime.redactionCounts,
+        extractedFieldKeys:Object.keys(runtime.taskState.collectedFields),
+        plannerDecision:runtime.plannerDecision,
         closing:runtime.closing.snapshot(),
         callClosingState:runtime.closing.state,
         farewellCount:runtime.closing.farewellResponseCount,

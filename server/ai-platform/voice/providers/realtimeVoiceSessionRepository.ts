@@ -1,2 +1,45 @@
-import crypto from'crypto';import type{AiPlatformStore}from'../../storage/aiPlatformStore.js';import{insertId}from'../../storage/aiPlatformStore.js';import type{AudioFormat}from'../media/mediaTypes.js';import type{RealtimeVoiceState}from'./realtimeVoiceTypes.js';
-export class RealtimeVoiceSessionRepository{constructor(private readonly store:AiPlatformStore){}get(tenantId:number,id:number){return this.store.query('SELECT * FROM ai_realtime_voice_sessions WHERE tenant_id=? AND id=? LIMIT 1',[tenantId,id])}list(tenantId:number,limit:number,offset:number){return this.store.query('SELECT * FROM ai_realtime_voice_sessions WHERE tenant_id=? ORDER BY id DESC LIMIT ? OFFSET ?',[tenantId,limit,offset])}findActive(tenantId:number,mediaSessionId:number){return this.store.query("SELECT * FROM ai_realtime_voice_sessions WHERE tenant_id=? AND media_session_id=? AND state NOT IN('completed','failed','cancelled') LIMIT 1",[tenantId,mediaSessionId])}async create(input:{tenantId:number;voiceSessionId:number;mediaSessionId:number;providerKey:string;language:string;voice:string|null;serverVad:boolean;tools:boolean;input:AudioFormat;output:AudioFormat;metadata:unknown}){const result=await this.store.query(`INSERT INTO ai_realtime_voice_sessions(tenant_id,voice_session_id,media_session_id,provider_key,state,input_codec,output_codec,input_sample_rate,output_sample_rate,language,voice_key_safe,server_vad_enabled,tools_enabled,metadata_json)VALUES(?,?,? ,?,'created',?,?,?,?,?,?,?,?,?)`,[input.tenantId,input.voiceSessionId,input.mediaSessionId,input.providerKey,input.input.codec,input.output.codec,input.input.sampleRate,input.output.sampleRate,input.language,input.voice,input.serverVad?1:0,input.tools?1:0,JSON.stringify(input.metadata)]);return insertId(result)}transition(tenantId:number,id:number,from:RealtimeVoiceState,to:RealtimeVoiceState,failureCode:string|null=null){return this.store.query(`UPDATE ai_realtime_voice_sessions SET state=?,failure_code=?,connected_at=CASE WHEN ?='connected' THEN NOW() ELSE connected_at END,ended_at=CASE WHEN ? IN('completed','failed','cancelled') THEN NOW() ELSE ended_at END WHERE tenant_id=? AND id=? AND state=?`,[to,failureCode,to,to,tenantId,id,from])}providerSession(tenantId:number,id:number,ref:string){const hash=ref?crypto.createHash('sha256').update(ref).digest('hex'):null;return this.store.query('UPDATE ai_realtime_voice_sessions SET provider_session_id_hash=? WHERE tenant_id=? AND id=?',[hash,tenantId,id])}metrics(tenantId:number,id:number,m:any){return this.store.query(`UPDATE ai_realtime_voice_sessions SET input_frames=?,output_frames=?,input_audio_ms=?,output_audio_ms=?,first_input_audio_at=COALESCE(first_input_audio_at,?),first_output_audio_at=COALESCE(first_output_audio_at,?),first_response_latency_ms=COALESCE(first_response_latency_ms,?),speech_end_to_first_audio_ms=COALESCE(speech_end_to_first_audio_ms,?),commit_to_first_audio_ms=COALESCE(commit_to_first_audio_ms,?),session_start_to_first_audio_ms=COALESCE(session_start_to_first_audio_ms,?),interruption_count=?,tool_call_count=?,metadata_json=? WHERE tenant_id=? AND id=?`,[m.inputFrames,m.outputFrames,m.inputAudioMs,m.outputAudioMs,m.firstInputAt,m.firstOutputAt,m.firstResponseLatencyMs,m.speechEndToFirstAudioMs,m.commitToFirstAudioMs,m.sessionStartToFirstAudioMs,m.interruptions,m.toolCalls,JSON.stringify(m.metadata),tenantId,id])}}
+import crypto from "crypto";
+import type { AiPlatformStore } from "../../storage/aiPlatformStore.js";
+import { insertId } from "../../storage/aiPlatformStore.js";
+import type { AudioFormat } from "../media/mediaTypes.js";
+import type { RealtimeVoiceState } from "./realtimeVoiceTypes.js";
+
+export class RealtimeVoiceSessionRepository {
+  constructor(private readonly store: AiPlatformStore) {}
+  get(tenantId:number,id:number) {
+    return this.store.query("SELECT * FROM ai_realtime_voice_sessions WHERE tenant_id=? AND id=? LIMIT 1",[tenantId,id]);
+  }
+  list(tenantId:number,limit:number,offset:number) {
+    return this.store.query("SELECT * FROM ai_realtime_voice_sessions WHERE tenant_id=? ORDER BY id DESC LIMIT ? OFFSET ?",[tenantId,limit,offset]);
+  }
+  findActive(tenantId:number,mediaSessionId:number) {
+    return this.store.query("SELECT * FROM ai_realtime_voice_sessions WHERE tenant_id=? AND media_session_id=? AND state NOT IN('completed','failed','cancelled') LIMIT 1",[tenantId,mediaSessionId]);
+  }
+  async create(input:{tenantId:number;voiceSessionId:number;mediaSessionId:number;providerKey:string;language:string;voice:string|null;serverVad:boolean;tools:boolean;input:AudioFormat;output:AudioFormat;metadata:unknown}) {
+    const result=await this.store.query(`INSERT INTO ai_realtime_voice_sessions(tenant_id,voice_session_id,media_session_id,provider_key,state,input_codec,output_codec,input_sample_rate,output_sample_rate,language,voice_key_safe,server_vad_enabled,tools_enabled,metadata_json)VALUES(?,?,? ,?,'created',?,?,?,?,?,?,?,?,?)`,[input.tenantId,input.voiceSessionId,input.mediaSessionId,input.providerKey,input.input.codec,input.output.codec,input.input.sampleRate,input.output.sampleRate,input.language,input.voice,input.serverVad?1:0,input.tools?1:0,JSON.stringify(input.metadata)]);
+    return insertId(result);
+  }
+  transition(tenantId:number,id:number,from:RealtimeVoiceState,to:RealtimeVoiceState,failureCode:string|null=null) {
+    return this.store.query(`UPDATE ai_realtime_voice_sessions SET state=?,failure_code=?,connected_at=CASE WHEN ?='connected' THEN NOW() ELSE connected_at END,ended_at=CASE WHEN ? IN('completed','failed','cancelled') THEN NOW() ELSE ended_at END WHERE tenant_id=? AND id=? AND state=?`,[to,failureCode,to,to,tenantId,id,from]);
+  }
+  providerSession(tenantId:number,id:number,ref:string) {
+    const hash=ref?crypto.createHash("sha256").update(ref).digest("hex"):null;
+    return this.store.query("UPDATE ai_realtime_voice_sessions SET provider_session_id_hash=? WHERE tenant_id=? AND id=?",[hash,tenantId,id]);
+  }
+  metrics(tenantId:number,id:number,m:any) {
+    return this.store.query(`UPDATE ai_realtime_voice_sessions SET input_frames=?,output_frames=?,input_audio_ms=?,output_audio_ms=?,first_input_audio_at=COALESCE(first_input_audio_at,?),first_output_audio_at=COALESCE(first_output_audio_at,?),first_response_latency_ms=COALESCE(first_response_latency_ms,?),speech_end_to_first_audio_ms=COALESCE(speech_end_to_first_audio_ms,?),commit_to_first_audio_ms=COALESCE(commit_to_first_audio_ms,?),session_start_to_first_audio_ms=COALESCE(session_start_to_first_audio_ms,?),interruption_count=?,tool_call_count=?,metadata_json=? WHERE tenant_id=? AND id=?`,[m.inputFrames,m.outputFrames,m.inputAudioMs,m.outputAudioMs,m.firstInputAt,m.firstOutputAt,m.firstResponseLatencyMs,m.speechEndToFirstAudioMs,m.commitToFirstAudioMs,m.sessionStartToFirstAudioMs,m.interruptions,m.toolCalls,JSON.stringify(m.metadata),tenantId,id]);
+  }
+  async finalizeDeterministicHangup(tenantId:number,id:number,closing:Record<string,unknown>,confirmedAt:number) {
+    const row=(await this.get(tenantId,id))[0];
+    let metadata:Record<string,unknown>={};
+    try { metadata=JSON.parse(String(row?.metadata_json||"{}")); } catch {}
+    Object.assign(metadata,{
+      closing,
+      callClosingState:"closed",
+      hangupConfirmedCount:1,
+      hangupConfirmedAt:new Date(confirmedAt).toISOString(),
+      completionReason:"ai_deterministic_hangup",
+    });
+    return this.store.query("UPDATE ai_realtime_voice_sessions SET metadata_json=? WHERE tenant_id=? AND id=?",[JSON.stringify(metadata),tenantId,id]);
+  }
+}

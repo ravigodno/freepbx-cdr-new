@@ -1,4 +1,4 @@
-import { redactAiPlatformText } from "../../core/redaction.js";
+import { prepareAiExtractionText, redactAiPlatformText } from "../../core/redaction.js";
 import type {
   RealtimeVoiceEvent,
   RealtimeTranscriptKind,
@@ -73,19 +73,25 @@ export function normalizeOpenAIRealtimeEvent(
       frame: frameFactory(Buffer.from(raw.delta, "base64")),
     };
   if (transcriptTypes[type])
+    {
+    const providerText = raw.delta || raw.transcript || "";
     return {
       type: "transcript",
       kind: transcriptTypes[type],
-      text: redactAiPlatformText(raw.delta || raw.transcript || "").slice(
+      text: redactAiPlatformText(providerText).slice(
         0,
         1000,
       ),
+      ...(transcriptTypes[type].startsWith("input_")
+        ? { extractionText: prepareAiExtractionText(providerText) }
+        : {}),
       ...(raw?.event_id?{eventId:String(raw.event_id).slice(0,191)}:{}),
       ...(raw?.item_id||raw?.item?.id?{itemId:String(raw.item_id||raw.item.id).slice(0,191)}:{}),
       ...(raw?.response_id?{responseId:String(raw.response_id).slice(0,191)}:{}),
       ...(Number.isInteger(raw?.content_index)?{contentIndex:Number(raw.content_index)}:{}),
       ...(Number.isFinite(raw?.confidence)?{confidence:Number(raw.confidence)}:{}),
     };
+    }
   if (type === "response.output_item.added" || type === "response.output_item.done")
     return {type:"response_item",status:type.endsWith("done")?"done":"added",eventId:String(raw?.event_id||"").slice(0,191)||undefined,itemId:String(raw?.item?.id||raw?.item_id||"").slice(0,191)||undefined,role:String(raw?.item?.role||"").slice(0,32)||undefined};
   if (type === "conversation.item.input_audio_transcription.failed")

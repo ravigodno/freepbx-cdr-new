@@ -65,7 +65,11 @@ export class SkillRepository {
       skillKey:String(skill.skill_key),
       name:String(skill.name),
       description:String(skill.description||""),
+      triggerPhrases:json<string[]>(skill.trigger_phrases_json,[]),
+      negativeTriggerPhrases:json<string[]>(skill.negative_trigger_phrases_json,[]),
       intentExamples:json<string[]>(skill.intent_examples_json,[]),
+      activationThreshold:Number(skill.activation_threshold ?? .72),
+      ambiguityPolicy:skill.ambiguity_policy === "none" ? "none" : "clarify",
       fields:fields.map((row:any):SkillFieldSchema=>({
         key:String(row.field_key),
         label:String(row.label),
