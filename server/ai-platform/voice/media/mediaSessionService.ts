@@ -23,6 +23,7 @@ import { AudioSocketAdapter } from "./transports/audioSocketAdapter.js";
 import type { MediaTransportAdapter } from "./mediaTransportAdapter.js";
 import { BoundedSerialProcessor } from "./boundedSerialProcessor.js";
 import { MetricsFlusher } from "./metricsFlusher.js";
+import { decodeUlawToPcm16 } from "./g711.js";
 import { readVoiceDurationPolicy, type VoiceDurationPolicy } from "./voiceDurationPolicy.js";
 import { AudioPreRollBuffer } from "./audioPreRollBuffer.js";
 
@@ -55,8 +56,10 @@ type Runtime = {
   unsubscribe: () => void;
   ingressSubscribers: Set<(frame: AudioFrame) => void | Promise<void>>;
   vadSubscribers: Set<
-    (event: "speech_started" | "speech_ended") => void | Promise<void>
+    (event: VadSignalEvent) => void | Promise<void>
   >;
+  lastOutputEnergy: number;
+  lastOutputAt: number;
   started: number;
   events: number;
   vadState: string;
@@ -73,6 +76,18 @@ type Runtime = {
   preRollFramesCommitted: number;
   preRollFramesDropped: number;
   preRollDurationMsCommitted: number;
+};
+export type VadSignalEvent = {
+  type: "speech_started" | "speech_ended";
+  energyLevel: number;
+  confidence: number;
+  echoSuspected: boolean;
+  outputEnergyLevel: number;
+};
+const rms = (samples: Int16Array) => {
+  let sum = 0;
+  for (const sample of samples) sum += sample * sample;
+  return Math.sqrt(sum / Math.max(1, samples.length));
 };
 
 export class MediaSessionService {
@@ -132,6 +147,8 @@ export class MediaSessionService {
       unsubscribe: () => {},
       ingressSubscribers: new Set(),
       vadSubscribers: new Set(),
+      lastOutputEnergy: 0,
+      lastOutputAt: 0,
       started: Date.now(),
       events: 0,
       vadState: "silence",
@@ -621,8 +638,19 @@ export class MediaSessionService {
         const preRollFrames=runtime.preRoll.snapshot();
         runtime.preRollFramesCommitted+=preRollFrames.length;
         runtime.preRollDurationMsCommitted+=preRollFrames.reduce((sum,frame)=>sum+frame.durationMs,0);
+        const outputRecent=Date.now()-runtime.lastOutputAt<=120,
+          energyRatio=runtime.lastOutputEnergy>0
+            ?event.energyLevel/runtime.lastOutputEnergy
+            :Number.POSITIVE_INFINITY,
+          signal:VadSignalEvent={
+            type:"speech_started",
+            energyLevel:event.energyLevel,
+            confidence:event.confidence,
+            echoSuspected:outputRecent&&energyRatio>=0.65&&energyRatio<=1.35,
+            outputEnergyLevel:runtime.lastOutputEnergy,
+          };
         for (const subscriber of runtime.vadSubscribers)
-          await subscriber("speech_started");
+          await subscriber(signal);
         runtime.metrics.vadTransitions++;
         await this.audit.append({
           tenantId,
@@ -637,33 +665,16 @@ export class MediaSessionService {
             energyLevel: Math.round(event.energyLevel),
           },
         });
-        if (runtime.barge.onSpeechStarted()) {
-          runtime.metrics.bargeInCount++;
-          runtime.metrics.playbackInterruptions++;
-          await this.audit.append({
-            tenantId,
-            traceId,
-            actorType: "service",
-            eventType: "barge_in_detected",
-            entityType: "voice_media_session",
-            entityId: String(id),
-            decision: "interrupt",
-            details: {},
-          });
-          await this.audit.append({
-            tenantId,
-            traceId,
-            actorType: "service",
-            eventType: "playback_cancel_requested",
-            entityType: "voice_media_session",
-            entityId: String(id),
-            decision: "cancelled",
-            details: {},
-          });
-        }
       } else if (event.type === "speech_ended" && previous === "speech") {
+        const signal:VadSignalEvent={
+          type:"speech_ended",
+          energyLevel:event.energyLevel,
+          confidence:event.confidence,
+          echoSuspected:false,
+          outputEnergyLevel:runtime.lastOutputEnergy,
+        };
         for (const subscriber of runtime.vadSubscribers)
-          await subscriber("speech_ended");
+          await subscriber(signal);
         runtime.metrics.vadTransitions++;
         await this.audit.append({
           tenantId,
@@ -764,7 +775,7 @@ export class MediaSessionService {
   subscribeVad(
     tenantId: number,
     id: number,
-    handler: (event: "speech_started" | "speech_ended") => void | Promise<void>,
+    handler: (event: VadSignalEvent) => void | Promise<void>,
   ) {
     const runtime = this.runtimes.get(id);
     if (!runtime || runtime.tenantId !== tenantId)
@@ -823,6 +834,15 @@ export class MediaSessionService {
       direction: "egress",
       mediaSessionId: id,
     } as AudioFrame;
+    const outputSamples=frame.codec==="ulaw"
+      ?decodeUlawToPcm16(frame.payload)
+      :frame.codec==="slin16"&&frame.payload.byteLength%2===0
+        ?new Int16Array(frame.payload.buffer,frame.payload.byteOffset,frame.payload.byteLength/2)
+        :null;
+    if(outputSamples){
+      runtime.lastOutputEnergy=rms(outputSamples);
+      runtime.lastOutputAt=Date.now();
+    }
     const directResult =
       runtime.adapter instanceof AudioSocketAdapter
         ? await runtime.adapter.sendFrame(ownedFrame)
@@ -874,6 +894,16 @@ export class MediaSessionService {
     runtime.barge.onPlaybackStopped();
     runtime.flusher.markDirty();
     return discardedMs;
+  }
+  recordCanonicalBargeIn(tenantId:number,id:number){
+    const runtime=this.runtimes.get(id);
+    if(!runtime||runtime.tenantId!==tenantId)return false;
+    runtime.barge.count++;
+    runtime.barge.interruptions++;
+    runtime.metrics.bargeInCount++;
+    runtime.metrics.playbackInterruptions++;
+    runtime.flusher.markDirty();
+    return true;
   }
   async setGreetingStatus(
     tenantId: number,

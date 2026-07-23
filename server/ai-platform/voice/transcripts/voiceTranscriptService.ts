@@ -38,6 +38,9 @@ export class VoiceTranscriptService {
     handlers.add(handler); this.subscribers.set(voiceSessionId, handlers);
     return () => { handlers.delete(handler); if (!handlers.size) this.subscribers.delete(voiceSessionId); };
   }
+  turnDiagnostics(voiceSessionId:number,diagnostics:unknown){
+    this.emit(voiceSessionId,{type:"turn_diagnostics",diagnostics});
+  }
   setAnalyzer(analyzer:(input:{voiceSessionId:number;turns:Array<{id:number;speaker:string;text:string}>})=>Promise<any>){this.analyzer=analyzer}
   transcript(input: { tenantId:number;voiceSessionId:number;mediaSessionId:number;realtimeSessionId:number;bindingId:number|null;agentId:number;agentVersionId:number;kind:RealtimeTranscriptKind;text:string;eventId?:string;itemId?:string;responseId?:string;contentIndex?:number;confidence?:number;timestamp?:number }) {
     const previous=this.queues.get(input.realtimeSessionId)||Promise.resolve(),

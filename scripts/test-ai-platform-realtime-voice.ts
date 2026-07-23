@@ -16,6 +16,7 @@ import { normalizeOpenAIRealtimeEvent } from "../server/ai-platform/voice/provid
 import type { AudioFrame } from "../server/ai-platform/voice/media/mediaTypes.js";
 import { estimateVoiceCost, projectSafeVoiceUsage } from "../server/ai-platform/voice/transcripts/voiceUsageProjection.js";
 import { containsInternalAgentDisclosure, customerSafeToolResult, isUnexpectedEnglishVoiceResponse } from "../server/ai-platform/voice/providers/voiceOutputGuard.js";
+import { VoiceTurnCoordinator } from "../server/ai-platform/voice/providers/voiceTurnCoordinator.js";
 
 const format = {
   codec: "slin16" as const,
@@ -57,6 +58,85 @@ const frame = (source: string): AudioFrame => ({
 });
 
 async function run() {
+  const audible = (
+    providerState: "generating" | "provider_done" = "generating",
+    queuedAudioMs = 5000,
+  ) => {
+    const coordinator = new VoiceTurnCoordinator();
+    coordinator.providerResponseStarted("response-safe");
+    coordinator.playoutStarted({
+      responseRef: "response-safe",
+      queuedAudioMs,
+      now: 1000,
+    });
+    if (providerState === "provider_done")
+      coordinator.providerResponseDone("response-safe");
+    return coordinator;
+  };
+  let turn = audible();
+  assert.equal(
+    turn.callerSpeechStarted({ energy: 900 }, 1300).status,
+    "candidate",
+  );
+  assert.equal(turn.callerSpeechEnded(1380)?.reason, "short_speech");
+  turn = audible();
+  turn.callerSpeechStarted({ energy: 900 }, 1300);
+  assert.equal(turn.callerSpeechEnded(1400)?.reason, "short_speech");
+  turn = audible();
+  turn.callerSpeechStarted({ energy: 900 }, 1300);
+  assert.equal(turn.callerSpeechEnded(1550)?.status, "confirmed");
+  assert.equal(turn.counters.confirmedBargeInCount, 1);
+  turn = audible();
+  assert.equal(
+    turn.callerSpeechStarted(
+      { energy: 900, echoSuspected: true },
+      1300,
+    ).reason,
+    "echo",
+  );
+  assert.equal(turn.counters.rejectedEcho, 1);
+  turn = audible("provider_done");
+  turn.callerSpeechStarted({ energy: 900 }, 1300);
+  const stop = turn.transcriptPartial("Стоп, другой вопрос", 1350);
+  assert.equal(stop?.status, "confirmed");
+  assert.equal(stop?.cancelMode, "playout_only");
+  assert.equal(turn.counters.cancelSkippedProviderDone, 1);
+  assert.equal(turn.counters.cancelNotActivePrevented, 1);
+  turn = audible("generating");
+  turn.callerSpeechStarted({ energy: 900 }, 1300);
+  assert.equal(
+    turn.evaluateCandidate(1550).cancelMode,
+    "provider_and_playout",
+  );
+  assert.equal(turn.counters.cancelSentWhileGenerating, 1);
+  turn = audible("provider_done", 400);
+  turn.callerSpeechStarted({ energy: 900 }, 1300);
+  assert.equal(turn.transcriptPartial("угу", 1350)?.reason, "acknowledgement_near_end");
+  assert.equal(turn.counters.confirmedBargeInCount, 0);
+  turn = audible("provider_done", 5000);
+  turn.callerSpeechStarted({ energy: 900 }, 1300);
+  turn.transcriptPartial("угу", 1350);
+  assert.equal(turn.evaluateCandidate(1550).status, "confirmed");
+  turn.beginCallerTurn();
+  assert.equal(turn.requestResponseForTurn(), true);
+  assert.equal(turn.requestResponseForTurn(), false);
+  assert.equal(turn.counters.duplicateResponsePrevented, 1);
+  const liveStyle = audible("provider_done", 6000);
+  liveStyle.callerSpeechStarted({ energy: 900 }, 3000);
+  assert.equal(
+    liveStyle.transcriptPartial("угу", 3050)?.status,
+    "candidate",
+  );
+  const liveStop = liveStyle.transcriptPartial(
+    "Стоп, другой вопрос",
+    3100,
+  );
+  assert.equal(liveStop?.status, "confirmed");
+  assert.equal(liveStop?.cancelMode, "playout_only");
+  assert.equal(liveStyle.counters.confirmedBargeInCount, 1);
+  assert.equal(liveStyle.requestResponseForTurn(), true);
+  assert.equal(liveStyle.requestResponseForTurn(), false);
+  assert.equal(liveStyle.counters.duplicateResponsePrevented, 1);
   const openAIConfig = readOpenAIRealtimeConfig();
   if (!process.env.PBXPULS_OPENAI_REALTIME_MODEL)
     assert.equal(openAIConfig.model, "gpt-realtime-2.1");
@@ -248,7 +328,9 @@ async function run() {
   );
   assert.equal(instructions.checksum.length, 64);
   assert.match(instructions.instructions, /максимум два/);
-  assert.match(instructions.instructions, /2–6 секунд/);
+  assert.match(instructions.instructions, /2–4 секунды/);
+  assert.match(instructions.instructions, /10 секунд/);
+  assert.match(instructions.instructions, /30 слов/);
   assert.match(instructions.instructions,/выполняй молча/iu);
   assert.doesNotMatch(instructions.instructions,/пока безопасный backend/iu);
   assert.equal(containsInternalAgentDisclosure("У меня нет доступа к безопасному backend"),true);
