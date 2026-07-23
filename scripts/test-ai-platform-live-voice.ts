@@ -215,6 +215,21 @@ async function run() {
     packet(0x01, Buffer.from(endpoint.connectionId.replace(/-/g, ""), "hex")),
   );
   await media.start();
+  await media.sendFrame({
+    sequence: 0,
+    timestampMs: Date.now(),
+    direction: "egress",
+    codec: "ulaw",
+    sampleRate: 8000,
+    channels: 1,
+    durationMs: 20,
+    payload: Buffer.alloc(160, 0xff),
+    source: "openai_realtime",
+    traceId: "smoke",
+    voiceSessionId: 7,
+    mediaSessionId: 8,
+    responseId: "ulaw-regression",
+  });
   client.write(packet(0x10, Buffer.alloc(640, 1)));
   client.write(packet(0x12, Buffer.alloc(640, 1)));
   client.write(packet(0x10, Buffer.alloc(319, 1)));
@@ -245,7 +260,7 @@ async function run() {
   assert(outgoing.some((item) => item.type === 0x10 && item.length === 320));
   assert(!outgoing.some((item) => item.type === 0x12));
   const egressMetrics = media.getProtocolMetrics();
-  assert.equal(egressMetrics.audiosocketEgressPackets, 3);
+  assert.equal(egressMetrics.audiosocketEgressPackets, 4);
   assert.equal(egressMetrics.egressResampledFrames, 3);
   assert.equal(egressMetrics.egressTargetSampleRate, 8000);
   await provider.cancelResponse();

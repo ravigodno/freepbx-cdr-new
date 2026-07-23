@@ -12,7 +12,7 @@ const logicalRef = (...values: Array<string | number | null | undefined>) =>
   crypto.createHash("sha256").update(values.map(value=>String(value??"")).join(":")).digest("hex");
 
 export class VoiceTranscriptService {
-  private active = new Map<string, { id: number; sequence: number }>();
+  private active = new Map<string, { id: number; sequence: number; isFinal: boolean }>();
   private queues = new Map<number, Promise<unknown>>();
   private subscribers = new Map<number, Set<LiveHandler>>();
   private analyzer:((input:{voiceSessionId:number;turns:Array<{id:number;speaker:string;text:string}>})=>Promise<any>)|null=null;
@@ -51,24 +51,34 @@ export class VoiceTranscriptService {
       text = redactAiPlatformText(input.text).slice(0, 4000), save = settings.get("ai.voice_transcripts_save") === "true" && Number(settings.get("ai.voice_transcripts_retention_days") || 30) !== 0,
       itemRef=eventRef(input.itemId),responseRef=eventRef(input.responseId),contentIndex=Math.max(0,Number(input.contentIndex)||0),
       keys=this.keys(input.realtimeSessionId,speaker,itemRef,responseRef,contentIndex),
-      current=keys.map(key=>this.active.get(key)).find(Boolean);
+      logicalKey=logicalRef(input.realtimeSessionId,speaker,itemRef||responseRef||"active",contentIndex);
+    let current=keys.map(key=>this.active.get(key)).find(Boolean);
     if(generated&&settings.get("ai.voice_transcripts_store_generated")!=="true"){this.emit(input.voiceSessionId,{type:"transcript",speaker,text,isFinal,generated:true});return;}
     if (speaker === "ai" && settings.get("ai.voice_transcripts_save_ai") === "false") return;
     if (!isFinal && settings.get("ai.voice_transcripts_save_partial") === "false") { this.emit(input.voiceSessionId,{type:"transcript",speaker,text,isFinal:false}); return; }
     if (!save) { this.emit(input.voiceSessionId,{type:"transcript",speaker,text,isFinal}); return; }
     const now = new Date(input.timestamp || Date.now());
+    if(!current){
+      const existing=(await this.store.query(`SELECT id,sequence_no sequence,is_final FROM ai_voice_transcript_utterances WHERE tenant_id=? AND realtime_session_id=? AND speaker=? AND (logical_key=? OR (is_final=0 AND provider_item_ref IS NULL AND provider_response_ref IS NULL)) ORDER BY (logical_key=?) DESC,sequence_no DESC LIMIT 1`,[input.tenantId,input.realtimeSessionId,speaker,logicalKey,logicalKey]))[0];
+      if(existing)current={id:Number(existing.id),sequence:Number(existing.sequence),isFinal:Boolean(existing.is_final)};
+    }
+    if(current)for(const key of keys)this.active.set(key,current);
+    if(current?.isFinal&&!isFinal){
+      this.emit(input.voiceSessionId,{type:"transcript",speaker,text,isFinal:false,ignored:true});
+      return;
+    }
     if (current) {
       if(isFinal) {
-        await this.store.query(`UPDATE ai_voice_transcript_utterances SET text_safe=IF(?,text_safe,?),generated_text_safe=IF(?,?,generated_text_safe),provider_audio_transcript_safe=IF(?,provider_audio_transcript_safe,?),spoken_text_safe=IF(?,spoken_text_safe,NULL),final_text_safe=IF(?,final_text_safe,?),current_partial_text_safe=NULL,is_final=IF(?,is_final,1),ended_at=IF(?,ended_at,?),last_delta_at=?,confidence=COALESCE(?,confidence),provider_event_ref=COALESCE(?,provider_event_ref),provider_item_ref=COALESCE(provider_item_ref,?),provider_response_ref=COALESCE(provider_response_ref,?),updated_at=NOW() WHERE tenant_id=? AND id=?`,[generated?1:0,text,generated?1:0,text,generated?1:0,text,generated?1:0,generated?1:0,text,generated?1:0,generated?1:0,now,now,Number.isFinite(input.confidence)?input.confidence:null,eventRef(input.eventId),itemRef,responseRef,input.tenantId,current.id]);
+        await this.store.query(`UPDATE ai_voice_transcript_utterances SET text_safe=IF(?,text_safe,?),generated_text_safe=IF(?,?,generated_text_safe),provider_audio_transcript_safe=IF(?,provider_audio_transcript_safe,?),spoken_text_safe=IF(?,spoken_text_safe,NULL),final_text_safe=IF(?,final_text_safe,?),current_partial_text_safe=NULL,is_final=IF(?,is_final,1),ended_at=IF(?,ended_at,?),last_delta_at=?,confidence=COALESCE(?,confidence),provider_event_ref=COALESCE(?,provider_event_ref),provider_item_ref=COALESCE(provider_item_ref,?),provider_response_ref=COALESCE(provider_response_ref,?),logical_key=?,content_index=?,updated_at=NOW() WHERE tenant_id=? AND id=?`,[generated?1:0,text,generated?1:0,text,generated?1:0,text,generated?1:0,generated?1:0,text,generated?1:0,generated?1:0,now,now,Number.isFinite(input.confidence)?input.confidence:null,eventRef(input.eventId),itemRef,responseRef,logicalKey,contentIndex,input.tenantId,current.id]);
+        current.isFinal=spokenFinal||current.isFinal;
       } else {
-        await this.store.query(`UPDATE ai_voice_transcript_utterances SET current_partial_text_safe=CONCAT(COALESCE(current_partial_text_safe,''),?),text_safe=CONCAT(COALESCE(text_safe,''),?),generated_text_safe=IF(?,CONCAT(COALESCE(generated_text_safe,''),?),generated_text_safe),spoken_text_safe=IF(?,spoken_text_safe,CONCAT(COALESCE(spoken_text_safe,''),?)),last_delta_at=?,confidence=COALESCE(?,confidence),updated_at=NOW() WHERE tenant_id=? AND id=?`,[text,text,generated?1:0,text,generated?1:0,text,now,Number.isFinite(input.confidence)?input.confidence:null,input.tenantId,current.id]);
+        await this.store.query(`UPDATE ai_voice_transcript_utterances SET current_partial_text_safe=CONCAT(COALESCE(current_partial_text_safe,''),?),text_safe=CONCAT(COALESCE(text_safe,''),?),generated_text_safe=IF(?,CONCAT(COALESCE(generated_text_safe,''),?),generated_text_safe),spoken_text_safe=IF(?,spoken_text_safe,CONCAT(COALESCE(spoken_text_safe,''),?)),provider_item_ref=COALESCE(provider_item_ref,?),provider_response_ref=COALESCE(provider_response_ref,?),logical_key=?,content_index=?,last_delta_at=?,confidence=COALESCE(?,confidence),updated_at=NOW() WHERE tenant_id=? AND id=?`,[text,text,generated?1:0,text,generated?1:0,text,itemRef,responseRef,logicalKey,contentIndex,now,Number.isFinite(input.confidence)?input.confidence:null,input.tenantId,current.id]);
       }
-      if (spokenFinal&&speaker==="caller") for(const key of keys)this.active.delete(key);
+      if (spokenFinal) for(const key of keys)this.active.delete(key);
     } else {
       const rows=await this.store.query('SELECT COALESCE(MAX(sequence_no),0)+1 sequence_no FROM ai_voice_transcript_utterances WHERE tenant_id=? AND realtime_session_id=?',[input.tenantId,input.realtimeSessionId]),sequence=Number(rows[0]?.sequence_no||1),result:any=await this.store.query(`INSERT INTO ai_voice_transcript_utterances(tenant_id,voice_session_id,media_session_id,realtime_session_id,binding_id,agent_id,agent_version_id,speaker,sequence_no,started_at,ended_at,text_safe,generated_text_safe,spoken_text_safe,is_final,confidence,provider_event_ref)VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,[input.tenantId,input.voiceSessionId,input.mediaSessionId,input.realtimeSessionId,input.bindingId,input.agentId,input.agentVersionId,speaker,sequence,now,spokenFinal?now:null,text,generated?text:null,generated?null:text,spokenFinal?1:0,Number.isFinite(input.confidence)?input.confidence:null,eventRef(input.eventId)]);
-      const logicalKey=logicalRef(input.realtimeSessionId,speaker,itemRef||responseRef||"active",contentIndex);
       await this.store.query(`UPDATE ai_voice_transcript_utterances SET provider_item_ref=?,provider_response_ref=?,current_partial_text_safe=?,final_text_safe=?,provider_audio_transcript_safe=?,spoken_text_safe=IF(?='caller',spoken_text_safe,NULL),logical_key=?,content_index=?,last_delta_at=? WHERE tenant_id=? AND id=?`,[itemRef,responseRef,isFinal?null:text,spokenFinal?text:null,spokenFinal?text:null,speaker,logicalKey,contentIndex,now,input.tenantId,Number(result.insertId)]);
-      if (!spokenFinal) for(const key of keys)this.active.set(key,{id:Number(result.insertId),sequence});
+      if (!spokenFinal) for(const key of keys)this.active.set(key,{id:Number(result.insertId),sequence,isFinal:false});
     }
     this.emit(input.voiceSessionId,{type:"transcript",speaker,text,isFinal,confidence:Number.isFinite(input.confidence)?input.confidence:null});
   }

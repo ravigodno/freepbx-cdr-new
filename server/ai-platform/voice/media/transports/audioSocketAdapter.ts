@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { MediaTransportAdapter } from "../mediaTransportAdapter.js";
 import type { AudioFrame, MediaTransportContext } from "../mediaTypes.js";
 import { MediaError } from "../mediaErrors.js";
+import { decodeUlawToPcm16 } from "../g711.js";
 import { mediaWorkerClient } from "../../media-worker/mediaWorkerClient.js";
 import type { MediaWorkerEnvelope } from "../../media-worker/mediaWorkerProtocol.js";
 
@@ -110,11 +111,18 @@ export class AudioSocketAdapter implements MediaTransportAdapter {
   }
   async sendFrame(frame:AudioFrame){
     if(!this.authenticated)throw new MediaError("provider_not_configured",503,"AudioSocket is not connected");
-    const expectedBytes=frame.sampleRate===8000?320:640;
-    if(frame.codec!=="slin16"||![8000,16000].includes(frame.sampleRate)||frame.payload.byteLength!==expectedBytes)
+    const validUlaw=frame.codec==="ulaw"&&frame.sampleRate===8000&&frame.payload.byteLength===160,
+      validPcm=frame.codec==="slin16"&&
+        ((frame.sampleRate===8000&&frame.payload.byteLength===320)||
+          (frame.sampleRate===16000&&frame.payload.byteLength===640));
+    if(!validUlaw&&!validPcm)
       throw new MediaError("invalid_request",400,"Invalid AudioSocket output frame");
+    const pcm=validUlaw?decodeUlawToPcm16(frame.payload):null,
+      payload=pcm
+        ?Buffer.from(pcm.buffer,pcm.byteOffset,pcm.byteLength)
+        :Buffer.from(frame.payload);
     this.pending.push({response_ref:frame.responseId||"unscoped",item_ref:frame.itemId||"",
-      sequence:frame.sequence,pcm:Buffer.from(frame.payload)});
+      sequence:frame.sequence,pcm:payload});
     if(!this.flushScheduled){this.flushScheduled=true;setImmediate(()=>void this.flush())}
     return {accepted:true as const};
   }
