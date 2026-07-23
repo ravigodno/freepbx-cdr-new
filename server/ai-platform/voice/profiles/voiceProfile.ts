@@ -50,6 +50,18 @@ export function normalizeVoiceProfile(value:any):VoiceProfile{
   };
 }
 
+const safeVoiceText=(value:unknown,max:number)=>String(value||'').trim().slice(0,max);
+
+export function normalizePronunciationEntries(value:unknown):PronunciationEntry[]{
+  if(!Array.isArray(value))return[];
+  return value.slice(0,100).map((item:any)=>({
+    source:safeVoiceText(item?.source,191),
+    pronunciation:safeVoiceText(item?.pronunciation,191),
+    stress:safeVoiceText(item?.stress,100),
+    aliases:Array.isArray(item?.aliases)?item.aliases.slice(0,20).map((alias:unknown)=>safeVoiceText(alias,191)).filter(Boolean):[],
+  })).filter(item=>item.source&&item.pronunciation);
+}
+
 export function compileVoiceProfileInstructions(
   value:any,
   entries:PronunciationEntry[]=[],

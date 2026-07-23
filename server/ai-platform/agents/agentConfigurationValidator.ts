@@ -4,7 +4,47 @@ import type { AiPlatformStore } from '../storage/aiPlatformStore.js';
 import { validatePersonalityProfile } from './agentPersonalityProfile.js';
 
 export interface AgentValidationResult { valid:boolean; errors:string[] }
-export const containsAiConfigSecrets=(value:unknown):boolean=>Boolean(value&&typeof value==='object'&&Object.entries(value as Record<string,unknown>).some(([key,child])=>/(?:api.?key|authorization|password|secret|token|credential|ami|ari|sip)/i.test(key)||containsAiConfigSecrets(child)));
+const FORBIDDEN_CONFIG_KEYS=new Set([
+  'apikey','authorization','password','passwd','clientsecret','privatekey',
+  'webhooksecret','connectionstring','credentials','providercredentials',
+  'providercredentialreference',
+]);
+const SECRET_VALUE_PATTERNS=[
+  /\b(?:sk|rk|pk)-[A-Za-z0-9_-]{8,}\b/i,
+  /\b(?:authorization\s*[:=]\s*)?bearer\s+[A-Za-z0-9._~+/-]{8,}\b/i,
+  /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/i,
+  /\b(?:api.?key|password|passwd|client.?secret|webhook.?secret|token)\s*[:=]\s*\S{6,}/i,
+  /\b[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/i,
+  /\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\b/,
+];
+const normalizedKey=(key:string)=>key.replace(/[^a-z0-9]/gi,'').toLowerCase();
+const safePath=(parts:string[])=>parts.map(part=>part.replace(/[^a-zA-Z0-9_.-]/g,'_').slice(0,64)).join('.').slice(0,191);
+const looksLikeSecretScalar=(value:unknown)=>{
+  if(typeof value!=='string')return false;
+  const text=value.trim();
+  return SECRET_VALUE_PATTERNS.some(pattern=>pattern.test(text))||(/^[A-Za-z0-9._~+/-]{12,}$/.test(text)&&/[A-Z0-9._~+/-]/.test(text));
+};
+
+export function findAiConfigSecretField(value:unknown,path:string[]=[]):string|null{
+  if(typeof value==='string')return SECRET_VALUE_PATTERNS.some(pattern=>pattern.test(value))?safePath(path.length?path:['config']):null;
+  if(!value||typeof value!=='object')return null;
+  if(Array.isArray(value)){
+    for(let index=0;index<value.length;index++){
+      const found=findAiConfigSecretField(value[index],[...path,String(index)]);
+      if(found)return found;
+    }
+    return null;
+  }
+  for(const[key,child]of Object.entries(value as Record<string,unknown>)){
+    const childPath=[...path,key],keyName=normalizedKey(key);
+    if(FORBIDDEN_CONFIG_KEYS.has(keyName)||((keyName==='secret'||keyName==='token')&&looksLikeSecretScalar(child)))
+      return safePath(childPath);
+    const found=findAiConfigSecretField(child,childPath);
+    if(found)return found;
+  }
+  return null;
+}
+export const containsAiConfigSecrets=(value:unknown):boolean=>findAiConfigSecretField(value)!==null;
 
 export class AgentConfigurationValidator {
   constructor(private readonly store:AiPlatformStore) {}

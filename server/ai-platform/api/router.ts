@@ -63,6 +63,8 @@ import{registerSkillRoutes}from'../skills/api/registerSkillRoutes.js';
 import{OPENAI_REALTIME_VOICES,DEFAULT_RUSSIAN_TEST_PHRASE,normalizeVoiceProfile,compileVoiceProfileInstructions}from'../voice/profiles/voiceProfile.js';
 import{RUSSIAN_VOICE_COMPARISON_TEXTS,buildRussianVoiceComparisonRequest}from'../voice/profiles/voiceComparison.js';
 import{VoiceCatalogService,VoicePreviewCache}from'../voice/profiles/voiceCatalogService.js';
+import{findAiConfigSecretField}from'../agents/agentConfigurationValidator.js';
+import{normalizePronunciationEntries}from'../voice/profiles/voiceProfile.js';
 
 type Checker=(req:Request,permission:string)=>Promise<boolean>;
 export interface AiPlatformRouterDeps { requireAuth:any; checkPermission:Checker; readLegacyDb:()=>Promise<any>; store?:AiPlatformStore; isEnabled?:()=>Promise<boolean>;sandboxProvider?:ProviderExecutor;pbxReadServices?:PBXReadServices;pbxTransferService?:PBXTransferService }
@@ -71,6 +73,12 @@ const page=(req:Request)=>({limit:Math.max(1,Math.min(Number(req.query.limit)||5
 const actor=(req:Request)=>({traceId:String(req.header('x-trace-id')||crypto.randomUUID()).slice(0,64),actorType:'user' as const,actorId:String((req as any).user?.username||'authenticated').slice(0,191)});
 const fail=(res:Response,error:unknown)=>{const safe=toSafeAiPlatformError(error);return res.status(safe.statusCode).json({success:false,error:safe.message,code:safe.code})};
 const wrap=(handler:(req:Request,res:Response)=>Promise<any>)=>async(req:Request,res:Response)=>{try{await handler(req,res)}catch(error){fail(res,error)}};
+const safeVoiceSettings=(body:any)=>{
+  const input={voiceProfile:body?.voiceProfile||{},pronunciationEntries:body?.pronunciationEntries||[]};
+  const forbidden=findAiConfigSecretField(input);
+  if(forbidden)throw new AiPlatformError('invalid_request',400,`Настройки не сохранены: обнаружено запрещённое поле ${forbidden}.`);
+  return{profile:normalizeVoiceProfile(input.voiceProfile),entries:normalizePronunciationEntries(input.pronunciationEntries),vad:Math.max(300,Math.min(Number(body?.endOfTurnSilenceMs)||350,600))};
+};
 
 export function registerAiPlatformRoutes(app:Express,deps:AiPlatformRouterDeps){
   startMainEventLoopDiagnostics();
@@ -179,20 +187,19 @@ export function registerAiPlatformRoutes(app:Express,deps:AiPlatformRouterDeps){
   }));
   app.post('/api/ai-platform/agents/:id/voice-settings/preview',...authenticated,permit('manage_ai_agents'),enabled,wrap(async(req,res)=>{
     positiveInt(req.params.id,'agent id');
-    const profile=normalizeVoiceProfile(req.body?.voiceProfile||{}),vad=Math.max(300,Math.min(Number(req.body?.endOfTurnSilenceMs)||350,600));
-    const entries=Array.isArray(req.body?.pronunciationEntries)?req.body.pronunciationEntries.slice(0,100):[];
+    const{profile,vad,entries}=safeVoiceSettings(req.body);
     res.json({success:true,data:{voiceProfile:profile,endOfTurnSilenceMs:vad,compiledInstructions:compileVoiceProfileInstructions(profile,entries),testPhrase:DEFAULT_RUSSIAN_TEST_PHRASE,latencyEstimate:{vadMs:vad,startupBufferMs:500,providerDependent:true},changesApplied:false,auditoryReviewRequired:true}});
   }));
   app.post('/api/ai-platform/agents/:id/voice-settings/draft',...authenticated,permit('manage_ai_voice_profiles'),permit('manage_ai_agents'),enabled,wrap(async(req,res)=>{
-    const tenant=await getInstallationTenant(store),id=positiveInt(req.params.id,'agent id'),profile=normalizeVoiceProfile(req.body?.voiceProfile||{});
+    const tenant=await getInstallationTenant(store),id=positiveInt(req.params.id,'agent id'),{profile,vad,entries}=safeVoiceSettings(req.body);
     const rows=await store.query(`SELECT v.id, v.config_json,v.system_prompt FROM ai_agents a JOIN ai_agent_versions v ON v.id=a.current_version_id
       WHERE a.tenant_id=? AND a.id=? AND v.lifecycle_status='published' LIMIT 1`,[tenant.id,id]);
     if(!rows.length)throw new AiPlatformError('not_found',404,'Agent not found');
-    const config:any=parseJsonObject(rows[0].config_json||{},'config_json'),vad=Math.max(300,Math.min(Number(req.body?.endOfTurnSilenceMs)||350,600));
+    const config:any=parseJsonObject(rows[0].config_json||{},'config_json');
     await voiceCatalog.requireAvailable(tenant.id,profile.provider,profile.voiceId);
     const oldVoiceId=String(config.voiceProfile?.voiceId||'');
     config.voiceProfile=profile;config.voice={...(config.voice||{}),endOfTurnSilenceMs:vad,speakingRate:profile.speakingRate,pauseStyle:profile.pauseStyle};
-    config.pronunciationEntries=Array.isArray(req.body?.pronunciationEntries)?req.body.pronunciationEntries.slice(0,100):[];
+    config.pronunciationEntries=entries;
     const data=await builder.createDraftVersion(tenant.id,id,{config,systemPrompt:String(rows[0].system_prompt||''),changeReason:'Voice profile settings'},actor(req));
     await store.query(`INSERT INTO ai_agent_tools(tenant_id,agent_version_id,tool_id,enabled,config_json)
       SELECT tenant_id,?,tool_id,enabled,config_json FROM ai_agent_tools WHERE tenant_id=? AND agent_version_id=?`,[data.id,tenant.id,rows[0].id]);
