@@ -28,9 +28,15 @@ export function normalizeOpenAIRealtimeEvent(
   if (type === "session.updated") return { type: "session_configured" };
   if (type === "input_audio_buffer.speech_started")
     return { type: "input_audio_started" };
+  if (type === "input_audio_buffer.speech_stopped")
+    return { type: "input_audio_stopped", itemId: String(raw?.item_id || "").slice(0,191) || undefined };
   if (type === "input_audio_buffer.committed")
     return { type: "input_audio_committed" };
-  if (type === "response.created") return { type: "response_started" };
+  if (type === "response.created")
+    return {
+      type: "response_started",
+      responseId: String(raw?.response?.id || "").slice(0, 191) || undefined,
+    };
   if (type === "response.done")
     return {
       type:
@@ -38,9 +44,14 @@ export function normalizeOpenAIRealtimeEvent(
           ? "response_cancelled"
           : "response_completed",
       eventId: String(raw?.event_id || "").slice(0, 191) || undefined,
+      responseId: String(raw?.response?.id || raw?.response_id || "").slice(0,191) || undefined,
       usage: raw?.response?.usage && typeof raw.response.usage === "object" ? raw.response.usage : undefined,
     };
-  if (type === "response.cancelled") return { type: "response_cancelled" };
+  if (type === "response.cancelled")
+    return {
+      type: "response_cancelled",
+      responseId: String(raw?.response_id || "").slice(0,191) || undefined,
+    };
   if (
     (type === "response.output_audio.delta" ||
       type === "response.audio.delta") &&

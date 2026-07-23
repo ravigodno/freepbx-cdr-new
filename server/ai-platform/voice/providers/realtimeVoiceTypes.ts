@@ -10,8 +10,9 @@ export type RealtimeVoiceEvent =
   | {type:'session_connected';providerSessionRef?:string}
   | {type:'session_configured'}
   | {type:'input_audio_started'|'input_audio_committed'}
-  | {type:'output_audio';frame:AudioFrame}
-  | {type:'response_started'|'response_completed'|'response_cancelled';eventId?:string;usage?:Record<string,unknown>}
+  | {type:'input_audio_stopped';itemId?:string}
+  | {type:'output_audio';frame:AudioFrame;responseId?:string;itemId?:string}
+  | {type:'response_started'|'response_completed'|'response_cancelled';eventId?:string;responseId?:string;usage?:Record<string,unknown>}
   | {type:'transcript';kind:RealtimeTranscriptKind;text:string;eventId?:string;itemId?:string;responseId?:string;confidence?:number}
   | {type:'response_item';status:'added'|'done';eventId?:string;itemId?:string;role?:string}
   | {type:'transcript_unavailable';speaker:'caller'|'ai';errorCode:string}

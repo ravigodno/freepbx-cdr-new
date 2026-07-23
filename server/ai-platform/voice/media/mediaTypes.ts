@@ -29,6 +29,10 @@ export interface AudioFrame {
   traceId: string;
   voiceSessionId: number;
   mediaSessionId: number;
+  responseId?: string;
+  providerItemId?: string;
+  providerArrivedAtMs?: number;
+  providerDeltaBytes?: number;
 }
 export interface AudioSocketProtocolCapabilities {
   supportedInboundPacketTypes: readonly number[];
@@ -55,6 +59,14 @@ export interface AudioSocketProtocolMetrics {
   firstIngressAudioAt: string | null;
   firstEgressAudioAt: string | null;
   egressSocketBackpressureCount?: number;
+  bufferedAudioMs?: number;
+  adaptivePrebufferMs?: number;
+  playoutUnderruns?: number;
+  outputBursts?: number;
+  egressPacketGapP95Ms?: number | null;
+  egressPacketGapMaxMs?: number | null;
+  eventLoopLagP95Ms?: number | null;
+  eventLoopLagMaxMs?: number | null;
   sourcePackets: number;
   sourcePacketDurationMsAvg: number | null;
   sourcePacketDurationMsP95: number | null;

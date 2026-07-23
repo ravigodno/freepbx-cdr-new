@@ -17,7 +17,8 @@ export interface RealtimeVoiceProviderAdapter {
   commitInput(): Promise<void>;
   createResponse?(): Promise<void>;
   startInitialGreeting?(text: string): Promise<void>;
-  cancelResponse(): Promise<void>;
+  cancelResponse(responseId?: string): Promise<void>;
+  truncateResponse?(itemId: string, audioEndMs: number): Promise<void>;
   sendToolResult(callId: string, result: unknown): Promise<void>;
   close(): Promise<void>;
   getHealth(): RealtimeProviderHealth;

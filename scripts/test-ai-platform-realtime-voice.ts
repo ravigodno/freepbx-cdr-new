@@ -15,6 +15,7 @@ import {
 import { normalizeOpenAIRealtimeEvent } from "../server/ai-platform/voice/providers/realtimeVoiceEventNormalizer.js";
 import type { AudioFrame } from "../server/ai-platform/voice/media/mediaTypes.js";
 import { estimateVoiceCost, projectSafeVoiceUsage } from "../server/ai-platform/voice/transcripts/voiceUsageProjection.js";
+import { containsInternalAgentDisclosure, customerSafeToolResult } from "../server/ai-platform/voice/providers/voiceOutputGuard.js";
 
 const format = {
   codec: "slin16" as const,
@@ -94,6 +95,20 @@ async function run() {
       providerFrame,
     )?.type,
     "output_audio",
+  );
+  assert.deepEqual(
+    normalizeOpenAIRealtimeEvent(
+      {type:"input_audio_buffer.speech_stopped",item_id:"item-user"},
+      providerFrame,
+    ),
+    {type:"input_audio_stopped",itemId:"item-user"},
+  );
+  assert.equal(
+    normalizeOpenAIRealtimeEvent(
+      {type:"response.created",response:{id:"resp-current"}},
+      providerFrame,
+    )?.responseId,
+    "resp-current",
   );
   assert.deepEqual(
     normalizeOpenAIRealtimeEvent(
@@ -233,6 +248,12 @@ async function run() {
   );
   assert.equal(instructions.checksum.length, 64);
   assert.match(instructions.instructions, /1–3/);
+  assert.match(instructions.instructions,/выполняй молча/iu);
+  assert.doesNotMatch(instructions.instructions,/пока безопасный backend/iu);
+  assert.equal(containsInternalAgentDisclosure("У меня нет доступа к безопасному backend"),true);
+  assert.equal(containsInternalAgentDisclosure("Мы разрабатываем публичный API для клиентов"),false);
+  assert.equal(containsInternalAgentDisclosure("У нас есть API для интеграции клиентов"),false);
+  assert.match(customerSafeToolResult(false),/соединить вас с сотрудником/iu);
   assert.doesNotMatch(instructions.instructions, /password|api[_ -]?key/i);
   const openai = new OpenAIRealtimeAdapter();
   const missing = { ...config, providerKey: "openai_realtime", apiKey: "" };

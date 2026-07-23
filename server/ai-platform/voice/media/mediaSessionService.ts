@@ -24,6 +24,7 @@ import type { MediaTransportAdapter } from "./mediaTransportAdapter.js";
 import { BoundedSerialProcessor } from "./boundedSerialProcessor.js";
 import { MetricsFlusher } from "./metricsFlusher.js";
 import { readVoiceDurationPolicy, type VoiceDurationPolicy } from "./voiceDurationPolicy.js";
+import { AudioPreRollBuffer } from "./audioPreRollBuffer.js";
 
 const transitions: Record<MediaSessionState, MediaSessionState[]> = {
   created: ["negotiating", "failed", "cancelled"],
@@ -67,6 +68,7 @@ type Runtime = {
   durationWarningSent: boolean;
   durationEnding: boolean;
   syntheticSafetyLimit: boolean;
+  preRoll: AudioPreRollBuffer;
 };
 
 export class MediaSessionService {
@@ -137,6 +139,7 @@ export class MediaSessionService {
       durationWarningSent: false,
       durationEnding: false,
       syntheticSafetyLimit,
+      preRoll: new AudioPreRollBuffer(240),
     };
     runtime.ingressProcessor = new BoundedSerialProcessor(
       (frame) => this.processIngress(tenantId, id, frame, traceId),
@@ -589,6 +592,7 @@ export class MediaSessionService {
     const normalized = this.normalizer.toInternal(frame);
     const ready = runtime.jitter.push(normalized);
     for (const item of ready) {
+      runtime.preRoll.push(item);
       runtime.metrics.record(
         item.payload.byteLength,
         "ingress",
@@ -756,6 +760,18 @@ export class MediaSessionService {
     runtime.vadSubscribers.add(handler);
     return () => runtime.vadSubscribers.delete(handler);
   }
+  subscribePlayout(
+    tenantId: number,
+    id: number,
+    handler: (frame: AudioFrame) => void,
+  ) {
+    const runtime = this.runtimes.get(id);
+    if (!runtime || runtime.tenantId !== tenantId)
+      throw new MediaError("not_found", 404, "Active media session not found");
+    return runtime.adapter instanceof AudioSocketAdapter
+      ? runtime.adapter.subscribePlayout(handler)
+      : () => {};
+  }
   async enqueueEgress(tenantId: number, id: number, frame: AudioFrame) {
     const runtime = this.runtimes.get(id);
     if (!runtime || runtime.tenantId !== tenantId)
@@ -788,11 +804,16 @@ export class MediaSessionService {
     runtime.flusher.markDirty();
     return result.accepted;
   }
-  clearEgress(tenantId: number, id: number) {
+  clearEgress(tenantId: number, id: number, responseId?: string) {
     const runtime = this.runtimes.get(id);
-    if (!runtime || runtime.tenantId !== tenantId) return false;
+    if (!runtime || runtime.tenantId !== tenantId) return 0;
     runtime.egressProcessor.clear();
-    return true;
+    const discardedMs =
+      runtime.adapter instanceof AudioSocketAdapter
+        ? runtime.adapter.clearPlayout(responseId)
+        : 0;
+    runtime.flusher.markDirty();
+    return discardedMs;
   }
   async setGreetingStatus(
     tenantId: number,
@@ -907,6 +928,7 @@ export class MediaSessionService {
         metricsFlushCount: flush.metricsFlushCount,
         metricsFlushFailures: flush.metricsFlushFailures,
         metricsLastFlushedAt: flush.metricsLastFlushedAt,
+        vadPreRollMs: runtime.preRoll.durationMs(),
       }).value,
     });
   }
@@ -929,6 +951,7 @@ export class MediaSessionService {
       await runtime.ingressProcessor.stop(false);
       await runtime.egressProcessor.stop(false);
       runtime.jitter.clear();
+      runtime.preRoll.clear();
       runtime.ingress.clear();
       runtime.egress.clear();
       runtime.greetingStatus =

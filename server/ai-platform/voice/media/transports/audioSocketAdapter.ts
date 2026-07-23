@@ -12,6 +12,7 @@ import {
   PACKETIZATION_ERROR_THRESHOLD,
 } from "../audioPacketizer.js";
 import { decodeUlawToPcm16 } from "../g711.js";
+import { AdaptivePlayoutBuffer } from "../adaptivePlayoutBuffer.js";
 
 const TYPE_TERMINATE = 0x00,
   TYPE_UUID = 0x01,
@@ -52,10 +53,25 @@ export class AudioSocketAdapter implements MediaTransportAdapter {
   private socket: net.Socket | null = null;
   private context: MediaTransportContext | null = null;
   private handlers = new Set<(frame: AudioFrame) => void>();
+  private playoutHandlers = new Set<(frame: AudioFrame) => void>();
   private buffer = Buffer.alloc(0);
   private connectionId = crypto.randomUUID();
   private authenticated = false;
-  private nextEgressAt = 0;
+  private readonly playout = new AdaptivePlayoutBuffer(
+    async (frame) => {
+      await this.writeFrame(frame);
+      for (const handler of this.playoutHandlers) handler(frame);
+    },
+    {
+      initialPrebufferMs: Math.max(
+        60,
+        Math.min(Number(process.env.PBXPULS_AI_PLAYOUT_PREBUFFER_MS || 80), 200),
+      ),
+      minPrebufferMs: 60,
+      maxPrebufferMs: 200,
+      maximumBufferedMs: 1000,
+    },
+  );
   private readyResolve: (() => void) | null = null;
   private readyReject: ((error: Error) => void) | null = null;
   private readonly resampler = new AudioResampler();
@@ -167,7 +183,6 @@ export class AudioSocketAdapter implements MediaTransportAdapter {
     socket.setNoDelay(true);
     socket.setTimeout(65000, () => socket.destroy());
     this.socket = socket;
-    this.nextEgressAt = 0;
     this.egressDownsampler.reset();
     socket.on("data", (chunk) => this.parse(chunk));
     socket.on("error", () =>
@@ -303,13 +318,10 @@ export class AudioSocketAdapter implements MediaTransportAdapter {
         400,
         "Invalid AudioSocket output frame",
       );
-    const now = Date.now();
-    if (this.nextEgressAt > now)
-      await new Promise<void>((resolve) =>
-        setTimeout(resolve, this.nextEgressAt - now),
-      );
-    this.nextEgressAt =
-      Math.max(this.nextEgressAt, Date.now()) + frame.durationMs;
+    this.playout.enqueue(frame);
+  }
+  private async writeFrame(frame: AudioFrame) {
+    if (!this.socket || this.socket.destroyed || !this.authenticated) return;
     const config = readAudioSocketServerConfig(),
       type =
         config.transportFormat === "ast18_slin8" ? TYPE_SLIN8 : TYPE_SLIN16_16K,
@@ -372,6 +384,10 @@ export class AudioSocketAdapter implements MediaTransportAdapter {
     this.handlers.add(handler);
     return () => this.handlers.delete(handler);
   }
+  subscribePlayout(handler: (frame: AudioFrame) => void) {
+    this.playoutHandlers.add(handler);
+    return () => this.playoutHandlers.delete(handler);
+  }
   getHealth() {
     return {
       state: this.socket ? "connected" : this.server ? "listening" : "disabled",
@@ -379,7 +395,14 @@ export class AudioSocketAdapter implements MediaTransportAdapter {
     };
   }
   getProtocolMetrics() {
-    return { ...this.metrics, ...this.packetizer.getMetrics() };
+    return {
+      ...this.metrics,
+      ...this.packetizer.getMetrics(),
+      ...this.playout.metrics(),
+    };
+  }
+  clearPlayout(responseId?: string) {
+    return this.playout.clear(responseId);
   }
   private packetLabel(type: number) {
     return type === TYPE_SLIN8
@@ -409,8 +432,9 @@ export class AudioSocketAdapter implements MediaTransportAdapter {
     this.context = null;
     this.buffer = Buffer.alloc(0);
     this.authenticated = false;
-    this.nextEgressAt = 0;
+    this.playout.stop();
     this.egressDownsampler.reset();
     this.handlers.clear();
+    this.playoutHandlers.clear();
   }
 }

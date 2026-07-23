@@ -1,4 +1,5 @@
 import { redactAiPlatformValue } from '../core/redaction.js';
+import { customerSafeToolResult } from '../voice/providers/voiceOutputGuard.js';
 
 const MAX_ITEMS=10,MAX_CHARS=6000;
 function compact(value:any,state:{truncated:boolean}):any{
@@ -10,5 +11,5 @@ export function projectToolResult(toolKey:string,data:unknown,ok=true,errorCode:
   const state={truncated:false};let safe=compact(redactAiPlatformValue(data).value,state),serialized=JSON.stringify(safe);
   if(serialized.length>MAX_CHARS){state.truncated=true;safe={summary:'Tool result exceeded context budget'}}
   const count=Array.isArray((safe as any)?.items)?(safe as any).items.length:null;
-  return{toolKey,ok,summary:ok?(count===null?'Read-only data received':`${count} result items`):'Read-only tool unavailable',data:safe,errorCode,metadata:{truncated:state.truncated,itemLimit:MAX_ITEMS}};
+  return{toolKey,ok,summary:customerSafeToolResult(ok),data:safe,errorCode,metadata:{truncated:state.truncated,itemLimit:MAX_ITEMS,count}};
 }

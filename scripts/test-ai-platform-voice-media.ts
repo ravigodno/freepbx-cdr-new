@@ -22,6 +22,8 @@ import { AudioSocketAdapter } from "../server/ai-platform/voice/media/transports
 import { MediaSessionService } from "../server/ai-platform/voice/media/mediaSessionService.js";
 import type { AudioFrame } from "../server/ai-platform/voice/media/mediaTypes.js";
 import { readVoiceDurationPolicy } from "../server/ai-platform/voice/media/voiceDurationPolicy.js";
+import { AdaptivePlayoutBuffer } from "../server/ai-platform/voice/media/adaptivePlayoutBuffer.js";
+import { AudioPreRollBuffer } from "../server/ai-platform/voice/media/audioPreRollBuffer.js";
 import {
   decodeUlawToPcm16,
   encodePcm16ToUlaw,
@@ -206,6 +208,25 @@ const frame = (sequence: number, timestampMs = Date.now()): AudioFrame => ({
   voiceSessionId: 3,
   mediaSessionId: 1,
 });
+const preRoll = new AudioPreRollBuffer(240);
+for (let index = 0; index < 20; index++) preRoll.push(frame(index));
+assert.equal(preRoll.durationMs(), 240);
+assert.equal(preRoll.snapshot().length, 12);
+assert.deepEqual(preRoll.snapshot().map(item=>item.sequence),[8,9,10,11,12,13,14,15,16,17,18,19]);
+preRoll.clear();
+assert.equal(preRoll.durationMs(),0);
+const pacedWrites:number[]=[];
+const playout=new AdaptivePlayoutBuffer(async()=>{pacedWrites.push(performance.now())},{initialPrebufferMs:60,minPrebufferMs:60,maxPrebufferMs:200,maximumBufferedMs:1000});
+for(let index=0;index<10;index++)playout.enqueue({...frame(index),direction:"egress"});
+await new Promise(resolve=>setTimeout(resolve,280));
+const pacedMetrics=playout.metrics();
+assert.ok(pacedWrites.length>=8);
+assert.ok(pacedMetrics.egressPacketGapP95Ms!>=15);
+assert.ok(pacedMetrics.egressPacketGapP95Ms!<45);
+assert.ok(pacedMetrics.outputBursts>0);
+const discarded=playout.clear();
+assert.ok(discarded>=0);
+playout.stop();
 const jitter = new JitterBuffer(40, 80, 20);
 jitter.push(frame(1));
 jitter.push(frame(3));

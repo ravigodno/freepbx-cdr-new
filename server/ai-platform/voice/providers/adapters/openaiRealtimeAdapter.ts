@@ -52,6 +52,9 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
   private readonly outputPacketizer = new AudioPacketizer();
   private ulawOutputRemainder = Buffer.alloc(0);
   private ulawOutputSequence = 0;
+  private providerOutputArrivals: number[] = [];
+  private providerOutputGaps: number[] = [];
+  private providerOutputBursts = 0;
   private pendingConfiguration: {
     resolve: () => void;
     reject: (error: Error) => void;
@@ -122,6 +125,9 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
     this.outputPacketizer.reset();
     this.ulawOutputRemainder = Buffer.alloc(0);
     this.ulawOutputSequence = 0;
+    this.providerOutputArrivals = [];
+    this.providerOutputGaps = [];
+    this.providerOutputBursts = 0;
     this.health = { state: "connecting", failureCode: null, connectedAt: null };
     const url = new URL(config.url!);
     url.searchParams.set("model", String(config.model));
@@ -190,6 +196,22 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
             ) &&
             typeof raw?.delta === "string"
           ) {
+            const arrivedAt = performance.now(),
+              previous = this.providerOutputArrivals.at(-1);
+            if (previous !== undefined) {
+              const gap = Math.max(0, arrivedAt - previous);
+              this.providerOutputGaps.push(gap);
+              if (gap < 10) this.providerOutputBursts++;
+              if (this.providerOutputGaps.length > 2000)
+                this.providerOutputGaps.shift();
+            }
+            this.providerOutputArrivals.push(arrivedAt);
+            if (this.providerOutputArrivals.length > 2000)
+              this.providerOutputArrivals.shift();
+            const responseId =
+                String(raw?.response_id || "").slice(0, 191) || undefined,
+              itemId = String(raw?.item_id || "").slice(0, 191) || undefined,
+              deltaBytes = Buffer.byteLength(raw.delta, "base64");
             if (this.config?.outputFormat.codec === "ulaw") {
               this.ulawOutputRemainder = Buffer.concat([
                 this.ulawOutputRemainder,
@@ -213,6 +235,10 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
                     traceId: "provider",
                     voiceSessionId: 0,
                     mediaSessionId: 0,
+                    responseId,
+                    providerItemId: itemId,
+                    providerArrivedAtMs: Date.now(),
+                    providerDeltaBytes: deltaBytes,
                   },
                 });
               }
@@ -237,7 +263,18 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
                 },
               );
               for (const frame of frames)
-                void this.emit({ type: "output_audio", frame });
+                void this.emit({
+                  type: "output_audio",
+                  frame: {
+                    ...frame,
+                    responseId,
+                    providerItemId: itemId,
+                    providerArrivedAtMs: Date.now(),
+                    providerDeltaBytes: deltaBytes,
+                  },
+                  responseId,
+                  itemId,
+                });
             }
             return;
           }
@@ -377,8 +414,20 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
       },
     });
   }
-  async cancelResponse() {
-    this.send({ type: "response.cancel" });
+  async cancelResponse(responseId?: string) {
+    this.send({
+      type: "response.cancel",
+      ...(responseId ? { response_id: responseId } : {}),
+    });
+  }
+  async truncateResponse(itemId: string, audioEndMs: number) {
+    if (!itemId || !Number.isFinite(audioEndMs)) return;
+    this.send({
+      type: "conversation.item.truncate",
+      item_id: itemId,
+      content_index: 0,
+      audio_end_ms: Math.max(0, Math.floor(audioEndMs)),
+    });
   }
   async sendToolResult() {
     throw new RealtimeVoiceError(
@@ -407,6 +456,21 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
   }
   getHealth() {
     return { ...this.health };
+  }
+  getOutputMetrics() {
+    const sorted = [...this.providerOutputGaps].sort((a, b) => a - b),
+      avg = sorted.length
+        ? sorted.reduce((sum, value) => sum + value, 0) / sorted.length
+        : null;
+    return {
+      providerOutputGapAvgMs: avg,
+      providerOutputGapP95Ms: sorted.length
+        ? sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))]
+        : null,
+      providerOutputGapMaxMs: sorted.length ? sorted.at(-1)! : null,
+      providerOutputPauses: sorted.filter((value) => value > 120).length,
+      providerOutputBursts: this.providerOutputBursts,
+    };
   }
   subscribeEvents(
     handler: (event: RealtimeVoiceEvent) => void | Promise<void>,

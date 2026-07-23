@@ -1074,6 +1074,11 @@ const MIGRATIONS: Migration[] = [
       `UPDATE ai_voice_transcript_utterances SET last_delta_at=COALESCE(ended_at,started_at),current_partial_text_safe=IF(is_final=0,text_safe,NULL),final_text_safe=IF(is_final=1,text_safe,NULL),ended_at=IF(is_final=0,COALESCE(updated_at,started_at),ended_at)`,
       `INSERT IGNORE INTO settings(setting_key,setting_value,value_type,category,is_secret,description)VALUES('ai.voice_max_call_duration_seconds','1800','number','ai_platform',0,'Maximum voice call duration, clamped to 60..7200 seconds'),('ai.voice_duration_warning_seconds','60','number','ai_platform',0,'Warning lead time before graceful duration limit'),('ai.voice_pricing_snapshot_version','','string','ai_platform',0,'Versioned server-side voice pricing snapshot'),('ai.voice_pricing_currency','USD','string','ai_platform',0,'Voice pricing currency'),('ai.voice_pricing_rates_json','{}','json','ai_platform',0,'Versioned provider/model voice pricing rates per token')`
     ]
+  },
+  {
+    key:'20260723_040_voice_continuity_barge_in',description:'Add adaptive voice playout and natural interruption settings',statements:[
+      `INSERT IGNORE INTO settings(setting_key,setting_value,value_type,category,is_secret,description)VALUES('ai.voice_playout_prebuffer_ms','80','number','ai_platform',0,'Initial adaptive voice playout buffer, clamped to 60..200 ms'),('ai.voice_vad_preroll_ms','240','number','ai_platform',0,'Bounded local VAD pre-roll for interruption detection')`
+    ]
   }
 ];
 

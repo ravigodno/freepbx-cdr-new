@@ -28,6 +28,7 @@ import { readOpenAIRealtimeConfig } from "./adapters/openaiRealtimeAdapter.js";
 import { MetricsFlusher } from "../media/metricsFlusher.js";
 import type { VoiceTranscriptService } from "../transcripts/voiceTranscriptService.js";
 import { readVoiceDurationPolicy } from "../media/voiceDurationPolicy.js";
+import { containsInternalAgentDisclosure, customerSafeToolResult } from "./voiceOutputGuard.js";
 
 const transitions: Record<RealtimeVoiceState, RealtimeVoiceState[]> = {
   created: ["connecting", "failed", "cancelled"],
@@ -51,6 +52,7 @@ type Runtime = {
   unsubscribeProvider: () => void;
   unsubscribeMedia: () => void;
   unsubscribeVad: () => void;
+  unsubscribePlayout: () => void;
   aborter: AbortController;
   started: number;
   inputFrames: number;
@@ -77,6 +79,20 @@ type Runtime = {
   callbackOfferRequired: boolean;
   blocked: boolean;
   responsePending: boolean;
+  turnState: "listening"|"responding"|"cancelling"|"interrupted"|"listening_after_interrupt";
+  activeResponseId: string | null;
+  activeItemId: string | null;
+  cancelledResponseIds: Set<string>;
+  responsePlayedMs: number;
+  bargeInDetectedAt: number | null;
+  cancelSentAt: number | null;
+  playoutStoppedAt: number | null;
+  cancelLatencyMs: number | null;
+  audibleStopLatencyMs: number | null;
+  discardedBufferedAudioMs: number;
+  falseBargeInCount: number;
+  speechAnchorSource: "provider_vad"|"local_vad"|null;
+  commitAnchorSource: "provider_commit"|"client_commit"|null;
   actorId: string;
   greetingStatus: "not_started" | "started" | "completed" | "interrupted";
   greetingStartedAt: number | null;
@@ -423,6 +439,7 @@ export class RealtimeVoiceSessionService {
         unsubscribeProvider: () => {},
         unsubscribeMedia: () => {},
         unsubscribeVad: () => {},
+        unsubscribePlayout: () => {},
         aborter,
         started: Date.now(),
         inputFrames: 0,
@@ -449,6 +466,20 @@ export class RealtimeVoiceSessionService {
         callbackOfferRequired: false,
         blocked: false,
         responsePending: false,
+        turnState: "listening",
+        activeResponseId: null,
+        activeItemId: null,
+        cancelledResponseIds: new Set(),
+        responsePlayedMs: 0,
+        bargeInDetectedAt: null,
+        cancelSentAt: null,
+        playoutStoppedAt: null,
+        cancelLatencyMs: null,
+        audibleStopLatencyMs: null,
+        discardedBufferedAudioMs: 0,
+        falseBargeInCount: 0,
+        speechAnchorSource: null,
+        commitAnchorSource: null,
         actorId: input.actorId,
         greetingStatus: "not_started",
         greetingStartedAt: null,
@@ -477,6 +508,7 @@ export class RealtimeVoiceSessionService {
           if (event === "speech_ended") {
             runtime.speechEndAt = Date.now();
             runtime.speechEndMonotonic = performance.now();
+            runtime.speechAnchorSource = "local_vad";
             return this.commit(input.tenantId, id, input.traceId).then(() => {});
           }
           return this.get(input.tenantId, id).then((current) =>
@@ -485,6 +517,11 @@ export class RealtimeVoiceSessionService {
               : undefined,
           );
         },
+      );
+      runtime.unsubscribePlayout = this.media.subscribePlayout(
+        input.tenantId,
+        input.mediaSessionId,
+        (frame) => this.onPlayout(id, frame),
       );
       await this.transition(input.tenantId, id, "listening", input.traceId);
       await this.store.query(
@@ -533,6 +570,7 @@ export class RealtimeVoiceSessionService {
     runtime.responsePending = true;
     runtime.commitAt = Date.now();
     runtime.commitMonotonic = performance.now();
+    runtime.commitAnchorSource = "client_commit";
     try {
       await this.audit.append({
         tenantId,
@@ -611,7 +649,7 @@ export class RealtimeVoiceSessionService {
     }
   }
   async bargeIn(tenantId: number, id: number, traceId: string) {
-    const started = Date.now(),
+    const started = performance.now(),
       runtime = this.runtimes.get(id);
     if (!runtime || runtime.tenantId !== tenantId)
       throw new RealtimeVoiceError(
@@ -619,10 +657,30 @@ export class RealtimeVoiceSessionService {
         404,
         "Active realtime session not found",
       );
-    await runtime.adapter.cancelResponse();
+    if (!["responding"].includes(runtime.turnState) || !runtime.activeResponseId) {
+      runtime.falseBargeInCount++;
+      return this.get(tenantId, id);
+    }
+    runtime.turnState = "cancelling";
+    runtime.bargeInDetectedAt = Date.now();
+    const responseId = runtime.activeResponseId,
+      itemId = runtime.activeItemId;
+    await runtime.adapter.cancelResponse(responseId);
+    runtime.cancelSentAt = Date.now();
+    runtime.cancelLatencyMs = Math.max(0, Math.round(performance.now() - started));
     runtime.responsePending = false;
     const row = await this.row(tenantId, id);
-    this.media.clearEgress(tenantId, Number(row.media_session_id));
+    runtime.discardedBufferedAudioMs = this.media.clearEgress(
+      tenantId,
+      Number(row.media_session_id),
+      responseId,
+    );
+    runtime.playoutStoppedAt = Date.now();
+    runtime.audibleStopLatencyMs = Math.max(0,Math.round(performance.now()-started));
+    if (itemId && runtime.adapter.truncateResponse)
+      await runtime.adapter.truncateResponse(itemId, runtime.responsePlayedMs);
+    runtime.cancelledResponseIds.add(responseId);
+    runtime.turnState = "interrupted";
     runtime.interruptions++;
     if (runtime.greetingStatus === "started") {
       runtime.greetingStatus = "interrupted";
@@ -636,11 +694,12 @@ export class RealtimeVoiceSessionService {
       await this.transition(tenantId, id, "interrupted", traceId);
       await this.transition(tenantId, id, "listening", traceId);
     }
+    runtime.turnState = "listening_after_interrupt";
     await this.liveObserver?.({
       tenantId,
       voiceSessionId: Number(row.voice_session_id),
       type: "barge_in",
-      latencyMs: Date.now() - started,
+      latencyMs: runtime.audibleStopLatencyMs,
       traceId,
     });
     await this.audit.append({
@@ -651,10 +710,37 @@ export class RealtimeVoiceSessionService {
       entityType: "realtime_voice_session",
       entityId: String(id),
       decision: "barge_in",
-      details: {},
+      details: {
+        cancelLatencyMs: runtime.cancelLatencyMs,
+        audibleStopLatencyMs: runtime.audibleStopLatencyMs,
+        discardedBufferedAudioMs: runtime.discardedBufferedAudioMs,
+      },
     });
     await this.persist(id);
     return this.get(tenantId, id);
+  }
+  private onPlayout(id: number, frame: AudioFrame) {
+    const runtime = this.runtimes.get(id);
+    if (!runtime) return;
+    if (
+      frame.responseId &&
+      runtime.cancelledResponseIds.has(frame.responseId)
+    ) return;
+    runtime.responsePlayedMs += frame.durationMs;
+    if (runtime.firstOutputMonotonic !== null) return;
+    runtime.firstOutputMonotonic = performance.now();
+    runtime.firstOutputAt = Date.now();
+    runtime.commitToFirstAudioMs = runtime.commitMonotonic === null
+      ? null : Math.max(1,Math.round(runtime.firstOutputMonotonic-runtime.commitMonotonic));
+    runtime.speechEndToFirstAudioMs = runtime.speechEndMonotonic === null
+      ? null : Math.max(1,Math.round(runtime.firstOutputMonotonic-runtime.speechEndMonotonic));
+    runtime.sessionStartToFirstAudioMs = Math.max(
+      1,
+      Math.round(runtime.firstOutputMonotonic-runtime.startedMonotonic),
+    );
+    runtime.firstResponseLatencyMs =
+      runtime.speechEndToFirstAudioMs ?? runtime.commitToFirstAudioMs;
+    runtime.flusher.markDirty();
   }
   private async handleEvent(
     id: number,
@@ -686,25 +772,21 @@ export class RealtimeVoiceSessionService {
       row.state === "listening"
     ) {
       runtime.responsePending = false;
+      runtime.activeResponseId = event.responseId || null;
+      runtime.activeItemId = null;
+      runtime.responsePlayedMs = 0;
+      runtime.turnState = "responding";
       await this.transition(runtime.tenantId, id, "responding", traceId);
     }
-    if (event.type === "output_audio" && !runtime.blocked) {
+    if (
+      event.type === "output_audio" &&
+      !runtime.blocked &&
+      (!(event.responseId || event.frame.responseId) ||
+        (!runtime.cancelledResponseIds.has((event.responseId || event.frame.responseId)!) &&
+          (!runtime.activeResponseId || (event.responseId || event.frame.responseId) === runtime.activeResponseId)))
+    ) {
       runtime.outputFrames++;
       runtime.outputAudioMs += event.frame.durationMs;
-      runtime.firstOutputAt ??= Date.now();
-      if (runtime.firstOutputMonotonic === null) {
-        runtime.firstOutputMonotonic = performance.now();
-        runtime.commitToFirstAudioMs = runtime.commitMonotonic === null
-          ? null : Math.max(1,Math.round(runtime.firstOutputMonotonic-runtime.commitMonotonic));
-        runtime.speechEndToFirstAudioMs = runtime.speechEndMonotonic === null
-          ? null : Math.max(1,Math.round(runtime.firstOutputMonotonic-runtime.speechEndMonotonic));
-        runtime.sessionStartToFirstAudioMs = Math.max(
-          1,
-          Math.round(runtime.firstOutputMonotonic-runtime.startedMonotonic),
-        );
-        runtime.firstResponseLatencyMs =
-          runtime.speechEndToFirstAudioMs ?? runtime.commitToFirstAudioMs;
-      }
       await this.media.enqueueEgress(
         runtime.tenantId,
         Number(row.media_session_id),
@@ -727,8 +809,31 @@ export class RealtimeVoiceSessionService {
           details: { firstResponseLatencyMs: runtime.firstResponseLatencyMs },
         });
     }
+    if (event.type === "input_audio_stopped") {
+      runtime.speechEndAt = Date.now();
+      runtime.speechEndMonotonic = performance.now();
+      runtime.speechAnchorSource = "provider_vad";
+    }
+    if (event.type === "input_audio_committed") {
+      runtime.commitAt = Date.now();
+      runtime.commitMonotonic = performance.now();
+      runtime.commitAnchorSource = "provider_commit";
+    }
+    if (
+      event.type === "response_item" &&
+      event.status === "added" &&
+      event.role === "assistant" &&
+      event.itemId
+    ) runtime.activeItemId = event.itemId;
     if (event.type === "transcript") {
       const text = redactAiPlatformText(event.text).slice(0, 1000);
+      if (
+        event.kind.startsWith("output_") &&
+        containsInternalAgentDisclosure(text)
+      ) {
+        await this.bargeIn(runtime.tenantId,id,traceId);
+        return;
+      }
       if (!event.kind.endsWith("partial")) {
         runtime.transcripts.push({ kind: event.kind, text });
         if (runtime.transcripts.length > 20) runtime.transcripts.shift();
@@ -759,6 +864,11 @@ export class RealtimeVoiceSessionService {
     if (event.type === "response_completed") {
       if(event.usage&&this.transcriptService)await this.transcriptService.usage(runtime.tenantId,runtime.voiceSessionId,event.usage);
       runtime.responsePending = false;
+      if (event.responseId && event.responseId !== runtime.activeResponseId)
+        return;
+      runtime.turnState = "listening";
+      runtime.activeResponseId = null;
+      runtime.activeItemId = null;
       const current = await this.row(runtime.tenantId, id);
       if (current.state === "responding") {
         await this.transition(runtime.tenantId, id, "listening", traceId);
@@ -774,7 +884,7 @@ export class RealtimeVoiceSessionService {
         });
       }
     }
-    if (event.type === "response_cancelled") {runtime.responsePending = false;await this.transcriptService?.interrupt(runtime.tenantId,id,runtime.voiceSessionId);}
+    if (event.type === "response_cancelled") {runtime.responsePending = false;runtime.turnState="listening_after_interrupt";await this.transcriptService?.interrupt(runtime.tenantId,id,runtime.voiceSessionId);}
     if(event.type==='transcript_unavailable'&&this.transcriptService){const voice=(await this.store.query('SELECT route_binding_id,agent_id,agent_version_id FROM ai_voice_sessions WHERE tenant_id=? AND id=? LIMIT 1',[runtime.tenantId,runtime.voiceSessionId]))[0];if(voice)await this.transcriptService.marker({tenantId:runtime.tenantId,voiceSessionId:runtime.voiceSessionId,mediaSessionId:runtime.mediaSessionId,realtimeSessionId:id,bindingId:voice.route_binding_id?Number(voice.route_binding_id):null,agentId:Number(voice.agent_id),agentVersionId:Number(voice.agent_version_id),markerType:'transcript_unavailable',text:event.errorCode})}
     if (event.type === "error")
       await this.fail(runtime.tenantId, id, traceId, event.errorCode);
@@ -874,6 +984,7 @@ export class RealtimeVoiceSessionService {
       await runtime.adapter.sendToolResult(event.callId, {
         ok: false,
         errorCode: "tool_loop_limit",
+        message: customerSafeToolResult(false),
       });
       return;
     }
@@ -891,6 +1002,7 @@ export class RealtimeVoiceSessionService {
       await runtime.adapter.sendToolResult(event.callId, {
         ok: false,
         errorCode: "tool_not_available",
+        message: customerSafeToolResult(false),
       });
       return;
     }
@@ -924,6 +1036,7 @@ export class RealtimeVoiceSessionService {
       await runtime.adapter.sendToolResult(event.callId, {
         ok: true,
         data: redactAiPlatformValue(result.data).value,
+        message: customerSafeToolResult(true),
       });
       await this.audit.append({
         tenantId: runtime.tenantId,
@@ -939,6 +1052,7 @@ export class RealtimeVoiceSessionService {
       await runtime.adapter.sendToolResult(event.callId, {
         ok: false,
         errorCode: "tool_failed",
+        message: customerSafeToolResult(false),
       });
     }
   }
@@ -969,6 +1083,17 @@ export class RealtimeVoiceSessionService {
         greetingStatus: runtime.greetingStatus,
         greetingStartedAt: runtime.greetingStartedAt,
         greetingCompletedAt: runtime.greetingCompletedAt,
+        turnState: runtime.turnState,
+        speechAnchorSource: runtime.speechAnchorSource,
+        commitAnchorSource: runtime.commitAnchorSource,
+        bargeInDetectedAt: runtime.bargeInDetectedAt,
+        cancelSentAt: runtime.cancelSentAt,
+        playoutStoppedAt: runtime.playoutStoppedAt,
+        cancelLatencyMs: runtime.cancelLatencyMs,
+        audibleStopLatencyMs: runtime.audibleStopLatencyMs,
+        discardedBufferedAudioMs: runtime.discardedBufferedAudioMs,
+        falseBargeInCount: runtime.falseBargeInCount,
+        providerOutput: runtime.adapter.getOutputMetrics?.() || null,
       }).value,
     });
   }
@@ -1030,6 +1155,7 @@ export class RealtimeVoiceSessionService {
       runtime.aborter.abort();
       runtime.unsubscribeMedia();
       runtime.unsubscribeVad();
+      runtime.unsubscribePlayout();
       runtime.unsubscribeProvider();
       await runtime.adapter.close();
       await runtime.flusher.final(1000);
@@ -1055,6 +1181,7 @@ export class RealtimeVoiceSessionService {
       runtime.aborter.abort();
       runtime.unsubscribeMedia();
       runtime.unsubscribeVad();
+      runtime.unsubscribePlayout();
       runtime.unsubscribeProvider();
       await runtime.adapter.close().catch(() => {});
       await runtime.flusher.final(1000);

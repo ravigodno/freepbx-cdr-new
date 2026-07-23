@@ -218,7 +218,7 @@ async function run() {
   client.write(packet(0x12, Buffer.alloc(640, 1)));
   client.write(packet(0x10, Buffer.alloc(319, 1)));
   client.write(packet(0x13, Buffer.alloc(320, 1)));
-  await new Promise((resolve) => setTimeout(resolve, 30));
+  await new Promise((resolve) => setTimeout(resolve, 180));
   assert.equal(received.length, 3);
   assert.equal(received[0].sampleRate, 8000);
   assert.equal(received[0].payload.byteLength, 320);
@@ -238,7 +238,7 @@ async function run() {
   assert.equal(ingressMetrics.unknownPacketTypes, 1);
   assert.equal(ingressMetrics.unsupportedAudioPackets, 1);
   await provider.startInitialGreeting("Здравствуйте. Чем могу помочь?");
-  await new Promise((resolve) => setTimeout(resolve, 30));
+  await new Promise((resolve) => setTimeout(resolve, 180));
   assert(providerEvents.some((event) => event.type === "output_audio"));
   const outgoing = wirePackets(wire);
   assert(outgoing.some((item) => item.type === 0x10 && item.length === 320));
