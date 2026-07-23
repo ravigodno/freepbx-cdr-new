@@ -23,6 +23,7 @@ export type GenericConversationTaskState = {
   nextField: string | null;
   actionState: TaskActionState;
   actionResult: Record<string, unknown> | null;
+  actionResultReported: boolean;
   taskStatus: "idle" | "collecting" | "ready" | "completed" | "failed";
 };
 
@@ -47,6 +48,7 @@ export const createGenericTaskState = (): GenericConversationTaskState => ({
   nextField: null,
   actionState: "not_requested",
   actionResult: null,
+  actionResultReported: false,
   taskStatus: "idle",
 });
 
@@ -119,7 +121,7 @@ export function validateGenericTaskState(
       return Boolean(value && typeof pattern === "string" && !new RegExp(pattern, "u").test(value));
     }).map((field) => field.key);
   state.nextField = state.invalidFields[0] || state.missingFields[0] || null;
-  state.taskStatus = state.actionState === "succeeded" ? "completed"
+  state.taskStatus = state.actionResultReported || state.actionState === "succeeded" ? "completed"
     : state.actionState === "failed" ? "failed"
       : state.nextField ? "collecting" : "ready";
   return state;
@@ -164,7 +166,17 @@ export function setGenericActionState(
 ) {
   state.actionState = actionState;
   state.actionResult = result;
+  state.actionResultReported = false;
   return validateGenericTaskState(state, skills);
+}
+
+export function markGenericActionResultReported(
+  state:GenericConversationTaskState,
+  skills:SkillSchema[],
+){
+  if(["succeeded","failed","unavailable"].includes(state.actionState))
+    state.actionResultReported=true;
+  return validateGenericTaskState(state,skills);
 }
 
 export function planGenericResponse(
@@ -184,6 +196,14 @@ export function planGenericResponse(
   };
   const field = skill.fields.find((item) => item.key === state.nextField);
   const action = skill.actions[0];
+  if(state.actionResultReported)return{
+    intent:"clarify",
+    text:null,
+    instructions:"Результат предыдущего действия уже сообщён. Ответь кратко на текущую meta-реплику и не повторяй предыдущий action template.",
+    errorCode:null,
+    templateKey:null,
+    selectedAction:null,
+  };
   if (
     !field &&
     state.actionState === "not_requested" &&

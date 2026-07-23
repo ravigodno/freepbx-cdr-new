@@ -1143,6 +1143,33 @@ const MIGRATIONS: Migration[] = [
       `INSERT IGNORE INTO role_permissions(role_id,permission_id)SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key IN('view_ai_voice_profiles','manage_ai_voice_profiles')WHERE r.role_key IN('su','admin')`
     ],
     seed:seedRussianVoiceLatencyV15
+  },
+  {
+    key:'20260723_050_configured_meta_intents',
+    description:'Add generic configured conversation intents for post-action meta turns',
+    statements:[
+      `CREATE TABLE IF NOT EXISTS ai_voice_catalog(id BIGINT AUTO_INCREMENT PRIMARY KEY,tenant_id BIGINT NULL,provider_key VARCHAR(64) NOT NULL,voice_id VARCHAR(100) NOT NULL,display_name VARCHAR(191) NOT NULL,description TEXT NULL,supported TINYINT(1) NOT NULL DEFAULT 1,active TINYINT(1) NOT NULL DEFAULT 1,sort_order INT NOT NULL DEFAULT 100,metadata_json LONGTEXT NOT NULL,last_verified_at DATETIME NULL,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at DATETIME NULL,UNIQUE KEY uniq_ai_voice_catalog(tenant_id,provider_key,voice_id),CONSTRAINT fk_ai_voice_catalog_tenant FOREIGN KEY(tenant_id)REFERENCES ai_tenants(id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `INSERT IGNORE INTO ai_voice_catalog(tenant_id,provider_key,voice_id,display_name,description,supported,active,sort_order,metadata_json,last_verified_at)VALUES
+       (NULL,'openai_realtime','alloy','Alloy','OpenAI Realtime voice Alloy',1,1,10,'{}',NOW()),
+       (NULL,'openai_realtime','ash','Ash','OpenAI Realtime voice Ash',1,1,20,'{}',NOW()),
+       (NULL,'openai_realtime','ballad','Ballad','OpenAI Realtime voice Ballad',1,1,30,'{}',NOW()),
+       (NULL,'openai_realtime','coral','Coral','OpenAI Realtime voice Coral',1,1,40,'{}',NOW()),
+       (NULL,'openai_realtime','echo','Echo','OpenAI Realtime voice Echo',1,1,50,'{}',NOW()),
+       (NULL,'openai_realtime','sage','Sage','OpenAI Realtime voice Sage',1,1,60,'{}',NOW()),
+       (NULL,'openai_realtime','shimmer','Shimmer','OpenAI Realtime voice Shimmer',1,1,70,'{}',NOW()),
+       (NULL,'openai_realtime','verse','Verse','OpenAI Realtime voice Verse',1,1,80,'{}',NOW()),
+       (NULL,'openai_realtime','marin','Marin','OpenAI Realtime voice Marin',1,1,90,'{}',NOW()),
+       (NULL,'openai_realtime','cedar','Cedar','OpenAI Realtime voice Cedar',1,1,100,'{}',NOW())`,
+      `INSERT IGNORE INTO permissions(permission_key,name,description,category)VALUES
+       ('view_ai_voice_catalog','View AI voice catalog','View provider voice catalog','ai_platform'),
+       ('generate_ai_voice_preview','Generate AI voice preview','Generate isolated provider voice previews','ai_platform')`,
+      `INSERT IGNORE INTO role_permissions(role_id,permission_id)SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key IN('view_ai_voice_catalog','generate_ai_voice_preview')WHERE r.role_key IN('su','admin')`,
+      `CREATE TABLE IF NOT EXISTS ai_conversation_intent_routes(id BIGINT AUTO_INCREMENT PRIMARY KEY,tenant_id BIGINT NULL,intent_key VARCHAR(64) NOT NULL,trigger_phrases_json LONGTEXT NOT NULL,negative_trigger_phrases_json LONGTEXT NOT NULL,response_template TEXT NOT NULL,route_mode ENUM('meta_response','skill_continuation') NOT NULL DEFAULT 'meta_response',priority INT NOT NULL DEFAULT 100,active TINYINT(1) NOT NULL DEFAULT 1,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,UNIQUE KEY uniq_ai_conversation_intent(tenant_id,intent_key),CONSTRAINT fk_ai_conversation_intent_tenant FOREIGN KEY(tenant_id)REFERENCES ai_tenants(id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `INSERT IGNORE INTO ai_conversation_intent_routes(tenant_id,intent_key,trigger_phrases_json,negative_trigger_phrases_json,response_template,route_mode,priority,active)VALUES(NULL,'hearing_check','["меня слышно","вы меня слышите","хорошо слышно"]','[]','Да, я вас хорошо слышу.','meta_response',300,1)`,
+      `INSERT IGNORE INTO ai_conversation_intent_routes(tenant_id,intent_key,trigger_phrases_json,negative_trigger_phrases_json,response_template,route_mode,priority,active)VALUES(NULL,'voice_style_request','["скажи эту фразу немного быстрее","говори быстрее","говорите быстрее","говори медленнее","говорите медленнее"]','[]','Хорошо, постараюсь учесть удобный для вас темп речи.','meta_response',250,1)`,
+      `INSERT IGNORE INTO ai_conversation_intent_routes(tenant_id,intent_key,trigger_phrases_json,negative_trigger_phrases_json,response_template,route_mode,priority,active)VALUES(NULL,'meta_conversation','["как тебя зовут","ты меня понимаешь","ты робот"]','[]','Я вас понимаю и готова помочь с вашим вопросом.','meta_response',200,1)`,
+      `INSERT IGNORE INTO ai_conversation_intent_routes(tenant_id,intent_key,trigger_phrases_json,negative_trigger_phrases_json,response_template,route_mode,priority,active)VALUES(NULL,'active_skill_continuation','["по записи","по моему вопросу","продолжим"]','[]','Продолжим текущую задачу.','skill_continuation',100,1)`
+    ]
   }
 ];
 

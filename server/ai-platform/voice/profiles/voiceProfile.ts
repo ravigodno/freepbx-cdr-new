@@ -14,6 +14,7 @@ export type VoiceProfile={
   expressiveness:'warm_moderate'|'neutral';
   pitchStyle:'neutral'|'low'|'high';
   pronunciationDictionaryId?:number|null;
+  pronunciationInstructions?:string;
 };
 
 export type PronunciationEntry={
@@ -45,6 +46,7 @@ export function normalizeVoiceProfile(value:any):VoiceProfile{
     pitchStyle:['low','high'].includes(value?.pitchStyle)?value.pitchStyle:'neutral',
     pronunciationDictionaryId:value?.pronunciationDictionaryId
       ? Number(value.pronunciationDictionaryId):null,
+    pronunciationInstructions:String(value?.pronunciationInstructions||"").trim().slice(0,1000),
   };
 }
 
@@ -56,7 +58,7 @@ export function compileVoiceProfileInstructions(
   const instructions=[
     'Говори на естественном современном русском языке.',
     'Используй нейтральное русское произношение и не имитируй иностранный акцент.',
-    'Произноси окончания слов полностью и чётко, не растягивай гласные и не используй англоязычную интонацию.',
+    'Произноси окончания слов полностью и чётко, не растягивай гласные и не используй англоязычную или прибалтийскую интонацию.',
     profile.pauseStyle==='short_natural'
       ? 'Делай короткие естественные паузы.':'Делай естественные паузы.',
     profile.speakingRate==='slightly_fast'
@@ -67,5 +69,7 @@ export function compileVoiceProfileInstructions(
     for(const item of entries)
       instructions.push(`${item.source}: ${item.pronunciation}${item.stress?`; ударение ${item.stress}`:''}.`);
   }
+  if(profile.pronunciationInstructions)
+    instructions.push(`Дополнительные инструкции произношения: ${profile.pronunciationInstructions}`);
   return instructions.join('\n');
 }

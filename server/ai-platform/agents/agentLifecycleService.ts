@@ -61,7 +61,7 @@ export class AgentLifecycleService {
     const digest=checksum(config,String(row.system_prompt||''));
     await this.store.query(`UPDATE ai_agent_versions SET lifecycle_status='published',checksum=?,published_at=NOW() WHERE id=? AND lifecycle_status='draft'`,[digest,versionId]);
     await this.store.query(`UPDATE ai_agents SET current_version_id=?,status='active',updated_at=NOW() WHERE id=? AND tenant_id=?`,[versionId,agentId,tenantId]);
-    await this.audit.append({tenantId,...actor,eventType:'agent_version_published',entityType:'agent_version',entityId:String(versionId),decision:'published',details:{agentId,checksum:digest}});
+    await this.audit.append({tenantId,...actor,eventType:'agent_version_published',entityType:'agent_version',entityId:String(versionId),decision:'published',details:{agentId,checksum:digest,versionId,voiceId:String((config.voiceProfile as any)?.voiceId||'')}});
     return {id:versionId,status:'published',checksum:digest};
   }
 

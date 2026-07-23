@@ -120,7 +120,11 @@ export type PermissionKey =
   | 'test_ai_voice_agents'
   | 'manage_ai_voice_routes'
   | 'view_ai_voice_transcripts'
-  | 'export_ai_voice_transcripts';
+  | 'export_ai_voice_transcripts'
+  | 'view_ai_voice_profiles'
+  | 'manage_ai_voice_profiles'
+  | 'view_ai_voice_catalog'
+  | 'generate_ai_voice_preview';
 
 export type UserPermissions = Partial<Record<PermissionKey, boolean>>;
 

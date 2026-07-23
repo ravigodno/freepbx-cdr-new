@@ -63,7 +63,8 @@ export const ROLE_PERMISSIONS: Partial<Record<UserRole, PermissionKey[]>> = {
     'execute_ai_sandbox',
     'view_ai_tool_executions',
     'test_ai_tools',
-    'view_ai_voice_agents','manage_ai_voice_agents','test_ai_voice_agents','manage_ai_voice_routes','view_ai_voice_transcripts','export_ai_voice_transcripts'
+    'view_ai_voice_agents','manage_ai_voice_agents','test_ai_voice_agents','manage_ai_voice_routes','view_ai_voice_transcripts','export_ai_voice_transcripts',
+    'view_ai_voice_profiles','manage_ai_voice_profiles','view_ai_voice_catalog','generate_ai_voice_preview'
   ],
   manager: [
     'view_calls',

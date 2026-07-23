@@ -65,9 +65,17 @@ import {
   applySkillRoutingDecision,
   isFarewellIntent,
   planGenericResponse,
+  markGenericActionResultReported,
   updateGenericTaskState,
   type GenericConversationTaskState,
+  type GenericResponsePlan,
 } from "./genericConversationTaskState.js";
+import {
+  routeConfiguredConversationIntent,
+  configuredMetaResponseForTurn,
+  rowsToConfiguredConversationIntents,
+  type ConfiguredConversationIntentRoute,
+} from "./configuredConversationIntentRouter.js";
 import {
   ClosingCoordinator,
   type SafeHangupResult,
@@ -180,6 +188,10 @@ type Runtime = {
   semanticIncompleteCount: number;
   taskState: GenericConversationTaskState;
   skills: SkillSchema[];
+  conversationIntentRoutes:ConfiguredConversationIntentRoute[];
+  pendingConversationIntentPlan:GenericResponsePlan|null;
+  actionResultReported:boolean;
+  lastConversationIntent:{intentKey:string;matchedTrigger:string;routeMode:string}|null;
   skillRoutingDecision: SkillRoutingDecision | null;
   redactionCounts: RedactionStats;
   plannerDecision: {
@@ -453,6 +465,14 @@ export class RealtimeVoiceSessionService {
         input.tenantId,
         Number(source.agent_version_id),
       ),
+      conversationIntentRows=await this.store.query(
+        `SELECT intent_key,trigger_phrases_json,negative_trigger_phrases_json,response_template,route_mode,priority
+         FROM ai_conversation_intent_routes
+         WHERE (tenant_id=? OR tenant_id IS NULL) AND active=1
+         ORDER BY priority DESC,id`,
+        [input.tenantId],
+      ),
+      conversationIntentRoutes=rowsToConfiguredConversationIntents(conversationIntentRows),
       skillErrors = validateConfiguredSkillSet(
         skills,
         (context?.agent?.version?.config || {}) as Record<string, unknown>,
@@ -674,6 +694,10 @@ export class RealtimeVoiceSessionService {
         semanticIncompleteCount:0,
         taskState:createGenericTaskState(),
         skills,
+        conversationIntentRoutes,
+        pendingConversationIntentPlan:null,
+        actionResultReported:false,
+        lastConversationIntent:null,
         skillRoutingDecision:null,
         redactionCounts:{secrets:0,emails:0,ips:0,phones:0,paths:0,truncated:0},
         plannerDecision:null,
@@ -1258,9 +1282,10 @@ export class RealtimeVoiceSessionService {
       return false;
     }
     if(runtime.currentPipeline)runtime.currentPipeline.plannerStartedAt=performance.now();
-    let plan=runtime.receptionist
+    let plan=runtime.pendingConversationIntentPlan||(runtime.receptionist
       ? planGenericResponse(runtime.taskState,runtime.skills)
-      : null;
+      : null);
+    runtime.pendingConversationIntentPlan=null;
     if(
       runtime.receptionist &&
       !runtime.taskState.activeSkillId &&
@@ -1294,6 +1319,10 @@ export class RealtimeVoiceSessionService {
       await runtime.adapter.createResponse?.(plan?.instructions);
     runtime.responseCreateDispatchMs=Math.round(performance.now()-started);
     if(runtime.currentPipeline)runtime.currentPipeline.responseCreateDoneAt=performance.now();
+    if(plan?.intent==="report_action_result"){
+      runtime.actionResultReported=true;
+      markGenericActionResultReported(runtime.taskState,runtime.skills);
+    }
     runtime.flusher.markDirty();
     void traceId;
     return true;
@@ -1637,6 +1666,32 @@ export class RealtimeVoiceSessionService {
         runtime.currentPipeline.extractionStartedAt=performance.now();
         updateGenericTaskState(runtime.taskState,runtime.skills,extractionText);
         runtime.currentPipeline.extractionDoneAt=performance.now();
+        const conversationIntent=routeConfiguredConversationIntent(
+          runtime.conversationIntentRoutes,
+          extractionText,
+        );
+        runtime.lastConversationIntent=conversationIntent?{
+          intentKey:conversationIntent.intentKey,
+          matchedTrigger:conversationIntent.matchedTrigger,
+          routeMode:conversationIntent.routeMode,
+        }:null;
+        const metaResponse=configuredMetaResponseForTurn(
+          runtime.conversationIntentRoutes,
+          extractionText,
+          {
+            actionResultReported:runtime.actionResultReported,
+            activeSkillId:runtime.taskState.activeSkillId,
+            lastUpdatedFields:runtime.taskState.lastUpdatedFields,
+          },
+        );
+        if(metaResponse)runtime.pendingConversationIntentPlan={
+          intent:"clarify",
+          text:metaResponse.responseTemplate,
+          instructions:`Произнеси только: «${metaResponse.responseTemplate}»`,
+          errorCode:null,
+          templateKey:`conversation_intent.${metaResponse.intentKey}`,
+          selectedAction:null,
+        };
         const stop=extractStopCommand(text),
           category=classifyCallerSpeech(text),
           responseText=stop?.semanticRemainder||text;
@@ -2076,6 +2131,8 @@ export class RealtimeVoiceSessionService {
         redactionCategoryCounts:runtime.redactionCounts,
         extractedFieldKeys:Object.keys(runtime.taskState.collectedFields),
         plannerDecision:runtime.plannerDecision,
+        conversationIntentDecision:runtime.lastConversationIntent,
+        actionResultReported:runtime.actionResultReported,
         closing:runtime.closing.snapshot(),
         callClosingState:runtime.closing.state,
         farewellCount:runtime.closing.farewellResponseCount,

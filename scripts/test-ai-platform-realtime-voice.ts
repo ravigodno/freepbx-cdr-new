@@ -25,6 +25,9 @@ import { ProviderSilenceTracker } from "../server/ai-platform/voice/providers/pr
 import { VoiceTranscriptService } from "../server/ai-platform/voice/transcripts/voiceTranscriptService.js";
 import { VadDetector } from "../server/ai-platform/voice/media/vadDetector.js";
 import { OPENAI_REALTIME_VOICES,compileVoiceProfileInstructions,normalizeVoiceProfile } from "../server/ai-platform/voice/profiles/voiceProfile.js";
+import { RUSSIAN_VOICE_COMPARISON_TEXTS,buildRussianVoiceComparisonRequest } from "../server/ai-platform/voice/profiles/voiceComparison.js";
+import { configuredMetaResponseForTurn,routeConfiguredConversationIntent,type ConfiguredConversationIntentRoute } from "../server/ai-platform/voice/providers/configuredConversationIntentRouter.js";
+import { VoiceCatalogService,VoicePreviewCache } from "../server/ai-platform/voice/profiles/voiceCatalogService.js";
 import {
   assessSemanticCompletion,
   decideResponseCompletion,
@@ -50,6 +53,7 @@ import {
   applySkillRoutingDecision,
   isFarewellIntent,
   planGenericResponse,
+  markGenericActionResultReported,
   setGenericActionState,
   updateGenericTaskState,
 } from "../server/ai-platform/voice/providers/genericConversationTaskState.js";
@@ -119,6 +123,28 @@ async function run() {
   assert.match(voiceInstructions,/нейтральное русское произношение/iu);
   assert.match(voiceInstructions,/короткие естественные паузы/iu);
   assert.match(voiceInstructions,/Пи-Би-Икс Пульс/u);
+  const comparisonRequests=OPENAI_REALTIME_VOICES.map(voiceId=>
+    buildRussianVoiceComparisonRequest({voiceId,textKey:"primary"}));
+  assert.deepEqual([...new Set(comparisonRequests.map(item=>item.text))],[RUSSIAN_VOICE_COMPARISON_TEXTS.primary]);
+  assert.deepEqual([...new Set(comparisonRequests.map(item=>item.instructions))].length,1);
+  assert.deepEqual([...new Set(comparisonRequests.map(item=>JSON.stringify(item.output)))].length,1);
+  assert.equal(buildRussianVoiceComparisonRequest({voiceId:"marin",textKey:"additional"}).text,RUSSIAN_VOICE_COMPARISON_TEXTS.additional);
+  const catalogRows=OPENAI_REALTIME_VOICES.map((voiceId,index)=>({id:index+1,provider_key:"openai_realtime",voice_id:voiceId,display_name:voiceId,description:null,supported:1,active:1,sort_order:index,metadata_json:"{}",last_verified_at:"now"}));
+  const catalogService=new VoiceCatalogService({query:async()=>catalogRows} as any,{append:async()=>{}} as any);
+  assert.deepEqual((await catalogService.list(1)).map(item=>item.voiceId),[...OPENAI_REALTIME_VOICES]);
+  const previewCache=new VoicePreviewCache(1000),cacheKey=previewCache.key({provider:"openai_realtime",model:"same",voiceId:"marin",textHash:"same",profile:voiceProfile});
+  previewCache.set(cacheKey,Buffer.from("wav"));
+  assert.equal(previewCache.get(cacheKey)?.toString(),"wav");
+  const intentRoutes:ConfiguredConversationIntentRoute[]=[
+    {intentKey:"hearing_check",triggerPhrases:["меня слышно"],negativeTriggerPhrases:[],responseTemplate:"Да, я вас хорошо слышу.",routeMode:"meta_response",priority:300},
+    {intentKey:"voice_style_request",triggerPhrases:["немного быстрее"],negativeTriggerPhrases:[],responseTemplate:"Хорошо, учту темп.",routeMode:"meta_response",priority:250},
+    {intentKey:"active_skill_continuation",triggerPhrases:["продолжим"],negativeTriggerPhrases:[],responseTemplate:"Продолжим.",routeMode:"skill_continuation",priority:100},
+  ];
+  assert.equal(routeConfiguredConversationIntent(intentRoutes,"А меня слышно?")?.intentKey,"hearing_check");
+  assert.equal(configuredMetaResponseForTurn(intentRoutes,"А меня слышно?",{actionResultReported:true,activeSkillId:3,lastUpdatedFields:[]})?.responseTemplate,"Да, я вас хорошо слышу.");
+  assert.equal(configuredMetaResponseForTurn(intentRoutes,"Скажи эту фразу немного быстрее",{actionResultReported:true,activeSkillId:3,lastUpdatedFields:[]})?.intentKey,"voice_style_request");
+  assert.equal(configuredMetaResponseForTurn(intentRoutes,"продолжим",{actionResultReported:true,activeSkillId:3,lastUpdatedFields:[]}),null);
+  assert.equal(configuredMetaResponseForTurn(intentRoutes,"А меня слышно?",{actionResultReported:true,activeSkillId:3,lastUpdatedFields:["specialist"]}),null);
   const personality=receptionistPersonalityV10();
   assert.deepEqual(validatePersonalityProfile(personality),[]);
   assert.match(compilePersonalityInstructions(personality),/говори немного быстрее/iu);
@@ -140,6 +166,13 @@ async function run() {
   assert.match(unavailablePlan.text||"",/соединить с сотрудником/iu);
   assert.doesNotMatch(unavailablePlan.text||"",/вы записаны|запись подтверждена/iu);
   assert.equal(unavailablePlan.errorCode,null);
+  markGenericActionResultReported(task,[skill]);
+  const afterReported=planGenericResponse(task,[skill]);
+  assert.equal(task.taskStatus,"completed");
+  assert.equal(afterReported.intent,"clarify");
+  assert.equal(afterReported.templateKey,null);
+  assert.doesNotMatch(afterReported.instructions,/Действие пока недоступно/u);
+  task.actionResultReported=false;
   setGenericActionState(task,[skill],"succeeded");
   assert.match(planGenericResponse(task,[skill]).text||"",/действие подтверждено/iu);
   const taskMissing=createGenericTaskState();
@@ -200,7 +233,11 @@ async function run() {
   assert.equal(missingTemplatePlan.text,null);
   assert.equal(missingTemplatePlan.errorCode,"action_execution_failed");
   const runtimeSource=fs.readFileSync(new URL("../server/ai-platform/voice/providers/genericConversationTaskState.ts",import.meta.url),"utf8");
+  const voiceUi=fs.readFileSync(new URL("../src/modules/aiPlatform/VoiceSettingsPanel.tsx",import.meta.url),"utf8");
   assert.doesNotMatch(runtimeSource,/SPECIALISTS|requiredAppointmentFields|невролог|ветеринар|клиник/iu);
+  assert.match(voiceUi,/\/api\/ai-platform\/voice-catalog/);
+  assert.match(voiceUi,/catalog\.filter/);
+  assert.doesNotMatch(voiceUi,/alloy.*ash.*ballad/u);
   assert.doesNotMatch(runtimeSource,/Не удалось выполнить действие\./u);
   assert.doesNotMatch(runtimeSource,/SPECIALISTS|medical.*regex|required.*date.*time.*specialist/iu);
   assert.equal(isFarewellIntent("Спасибо, до свидания"),true);
