@@ -69,7 +69,13 @@ export class AudioSocketAdapter implements MediaTransportAdapter {
       ),
       minPrebufferMs: 60,
       maxPrebufferMs: 200,
-      maximumBufferedMs: 1000,
+      maxSingleResponseAudioSeconds: Math.max(
+        5,
+        Math.min(
+          Number(process.env.PBXPULS_AI_MAX_SINGLE_RESPONSE_AUDIO_SECONDS || 60),
+          180,
+        ),
+      ),
     },
   );
   private readyResolve: (() => void) | null = null;
@@ -97,6 +103,7 @@ export class AudioSocketAdapter implements MediaTransportAdapter {
     firstIngressAudioAt: null as string | null,
     firstEgressAudioAt: null as string | null,
     egressSocketBackpressureCount: 0,
+    audioSocketWriteErrors: 0,
   };
   getCapabilities() {
     const config = readAudioSocketServerConfig(),
@@ -318,7 +325,7 @@ export class AudioSocketAdapter implements MediaTransportAdapter {
         400,
         "Invalid AudioSocket output frame",
       );
-    this.playout.enqueue(frame);
+    return this.playout.enqueue(frame);
   }
   private async writeFrame(frame: AudioFrame) {
     if (!this.socket || this.socket.destroyed || !this.authenticated) return;
@@ -346,7 +353,14 @@ export class AudioSocketAdapter implements MediaTransportAdapter {
         400,
         "Invalid AudioSocket output frame",
       );
-    if (!this.socket.write(packet(type, payload))) {
+    let writable = false;
+    try {
+      writable = this.socket.write(packet(type, payload));
+    } catch (error) {
+      this.metrics.audioSocketWriteErrors++;
+      throw error;
+    }
+    if (!writable) {
       this.metrics.egressSocketBackpressureCount++;
       await new Promise<void>((resolve, reject) => {
         const socket = this.socket!;
@@ -401,8 +415,11 @@ export class AudioSocketAdapter implements MediaTransportAdapter {
       ...this.playout.metrics(),
     };
   }
-  clearPlayout(responseId?: string) {
-    return this.playout.clear(responseId);
+  clearPlayout(
+    responseId?: string,
+    reason: "barge_in" | "session_end" = "barge_in",
+  ) {
+    return this.playout.clear(responseId, reason);
   }
   private packetLabel(type: number) {
     return type === TYPE_SLIN8

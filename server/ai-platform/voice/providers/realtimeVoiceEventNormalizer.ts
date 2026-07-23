@@ -72,6 +72,7 @@ export function normalizeOpenAIRealtimeEvent(
       ...(raw?.event_id?{eventId:String(raw.event_id).slice(0,191)}:{}),
       ...(raw?.item_id||raw?.item?.id?{itemId:String(raw.item_id||raw.item.id).slice(0,191)}:{}),
       ...(raw?.response_id?{responseId:String(raw.response_id).slice(0,191)}:{}),
+      ...(Number.isInteger(raw?.content_index)?{contentIndex:Number(raw.content_index)}:{}),
       ...(Number.isFinite(raw?.confidence)?{confidence:Number(raw.confidence)}:{}),
     };
   if (type === "response.output_item.added" || type === "response.output_item.done")

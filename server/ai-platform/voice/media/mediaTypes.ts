@@ -33,6 +33,8 @@ export interface AudioFrame {
   providerItemId?: string;
   providerArrivedAtMs?: number;
   providerDeltaBytes?: number;
+  providerEventSequence?: number;
+  contentIndex?: number;
 }
 export interface AudioSocketProtocolCapabilities {
   supportedInboundPacketTypes: readonly number[];
@@ -59,6 +61,32 @@ export interface AudioSocketProtocolMetrics {
   firstIngressAudioAt: string | null;
   firstEgressAudioAt: string | null;
   egressSocketBackpressureCount?: number;
+  audioSocketWriteErrors?: number;
+  providerAudioFramesAccepted?: number;
+  providerAudioDurationMsAccepted?: number;
+  playoutFramesWritten?: number;
+  playoutDurationMsWritten?: number;
+  queuedAudioMsCurrent?: number;
+  queuedAudioMsPeak?: number;
+  prebufferMsCurrent?: number;
+  prebufferMsMin?: number;
+  prebufferMsAvg?: number;
+  prebufferMsMax?: number;
+  schedulerLateFrames?: number;
+  schedulerLagAvgMs?: number | null;
+  schedulerLagP95Ms?: number | null;
+  schedulerLagMaxMs?: number | null;
+  responseLimitRejectedFrames?: number;
+  bargeInDiscardedFrames?: number;
+  sessionEndDiscardedFrames?: number;
+  malformedRejectedFrames?: number;
+  audioConservationMismatch?: number;
+  playoutPauseCount?: number;
+  playoutResumeCount?: number;
+  realBurstEvents?: number;
+  framesPerBurstAvg?: number | null;
+  framesPerBurstP95?: number | null;
+  framesPerBurstMax?: number | null;
   bufferedAudioMs?: number;
   adaptivePrebufferMs?: number;
   playoutUnderruns?: number;

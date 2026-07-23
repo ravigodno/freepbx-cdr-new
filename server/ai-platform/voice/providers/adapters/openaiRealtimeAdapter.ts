@@ -55,6 +55,7 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
   private providerOutputArrivals: number[] = [];
   private providerOutputGaps: number[] = [];
   private providerOutputBursts = 0;
+  private providerEventSequence = 0;
   private pendingConfiguration: {
     resolve: () => void;
     reject: (error: Error) => void;
@@ -128,6 +129,7 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
     this.providerOutputArrivals = [];
     this.providerOutputGaps = [];
     this.providerOutputBursts = 0;
+    this.providerEventSequence = 0;
     this.health = { state: "connecting", failureCode: null, connectedAt: null };
     const url = new URL(config.url!);
     url.searchParams.set("model", String(config.model));
@@ -211,6 +213,10 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
             const responseId =
                 String(raw?.response_id || "").slice(0, 191) || undefined,
               itemId = String(raw?.item_id || "").slice(0, 191) || undefined,
+              contentIndex = Number.isInteger(raw?.content_index)
+                ? Number(raw.content_index)
+                : 0,
+              providerEventSequence = this.providerEventSequence++,
               deltaBytes = Buffer.byteLength(raw.delta, "base64");
             if (this.config?.outputFormat.codec === "ulaw") {
               this.ulawOutputRemainder = Buffer.concat([
@@ -239,6 +245,8 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
                     providerItemId: itemId,
                     providerArrivedAtMs: Date.now(),
                     providerDeltaBytes: deltaBytes,
+                    providerEventSequence,
+                    contentIndex,
                   },
                 });
               }
@@ -271,6 +279,8 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
                     providerItemId: itemId,
                     providerArrivedAtMs: Date.now(),
                     providerDeltaBytes: deltaBytes,
+                    providerEventSequence,
+                    contentIndex,
                   },
                   responseId,
                   itemId,
@@ -403,7 +413,24 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
     this.send({ type: "input_audio_buffer.commit" });
   }
   async createResponse() {
-    this.send({ type: "response.create" });
+    this.send({
+      type: "response.create",
+      response: {
+        output_modalities: ["audio"],
+        instructions:
+          "Отвечай только на русском языке. Перейди на другой язык только после явной просьбы клиента.",
+      },
+    });
+  }
+  async createRussianCorrection() {
+    this.send({
+      type: "response.create",
+      response: {
+        output_modalities: ["audio"],
+        instructions:
+          "Предыдущий ответ не озвучивай. Ответь заново естественно и только по-русски.",
+      },
+    });
   }
   async startInitialGreeting(text: string) {
     this.send({

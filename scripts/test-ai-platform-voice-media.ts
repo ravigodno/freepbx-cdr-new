@@ -216,7 +216,7 @@ assert.deepEqual(preRoll.snapshot().map(item=>item.sequence),[8,9,10,11,12,13,14
 preRoll.clear();
 assert.equal(preRoll.durationMs(),0);
 const pacedWrites:number[]=[];
-const playout=new AdaptivePlayoutBuffer(async()=>{pacedWrites.push(performance.now())},{initialPrebufferMs:60,minPrebufferMs:60,maxPrebufferMs:200,maximumBufferedMs:1000});
+const playout=new AdaptivePlayoutBuffer(async()=>{pacedWrites.push(performance.now())},{initialPrebufferMs:60,minPrebufferMs:60,maxPrebufferMs:200,maxSingleResponseAudioSeconds:60});
 for(let index=0;index<10;index++)playout.enqueue({...frame(index),direction:"egress"});
 await new Promise(resolve=>setTimeout(resolve,280));
 const pacedMetrics=playout.metrics();
@@ -224,9 +224,54 @@ assert.ok(pacedWrites.length>=8);
 assert.ok(pacedMetrics.egressPacketGapP95Ms!>=15);
 assert.ok(pacedMetrics.egressPacketGapP95Ms!<45);
 assert.ok(pacedMetrics.outputBursts>0);
-const discarded=playout.clear();
+const discarded=playout.clear(undefined,"barge_in");
 assert.ok(discarded>=0);
 playout.stop();
+const burstWrites:Array<{sequence:number;at:number;sample:number}>=[],
+  burstPlayout=new AdaptivePlayoutBuffer(async item=>{
+    burstWrites.push({sequence:item.sequence,at:performance.now(),sample:Buffer.from(item.payload).readInt16LE(0)});
+  },{initialPrebufferMs:60,minPrebufferMs:60,maxPrebufferMs:60,maxSingleResponseAudioSeconds:60});
+for(let index=0;index<500;index++){
+  const payload=Buffer.alloc(640);payload.writeInt16LE(index,0);
+  const accepted=burstPlayout.enqueue({...frame(index),direction:"egress",responseId:"response-fast",payload});
+  assert.equal(accepted.accepted,true);
+}
+await new Promise(resolve=>setTimeout(resolve,10180));
+const burstMetrics=burstPlayout.metrics();
+assert.equal(burstWrites.length,500);
+assert.deepEqual(burstWrites.map(item=>item.sequence),Array.from({length:500},(_,index)=>index));
+assert.deepEqual(burstWrites.map(item=>item.sample),Array.from({length:500},(_,index)=>index));
+assert.equal(burstMetrics.providerAudioFramesAccepted,500);
+assert.equal(burstMetrics.playoutFramesWritten,500);
+assert.equal(burstMetrics.queuedAudioMsPeak,10000);
+assert.equal(burstMetrics.bargeInDiscardedFrames,0);
+assert.equal(burstMetrics.sessionEndDiscardedFrames,0);
+assert.equal(burstMetrics.audioConservationMismatch,0);
+assert.ok(burstMetrics.egressPacketGapP95Ms!>=15&&burstMetrics.egressPacketGapP95Ms!<45);
+assert.equal(burstMetrics.realBurstEvents,1);
+burstPlayout.stop();
+const bounded=new AdaptivePlayoutBuffer(async()=>{},{
+  initialPrebufferMs:60,minPrebufferMs:60,maxPrebufferMs:60,maxSingleResponseAudioSeconds:5,
+});
+for(let index=0;index<250;index++)assert.equal(bounded.enqueue({...frame(index),direction:"egress",responseId:"bounded"}).accepted,true);
+assert.equal(bounded.enqueue({...frame(250),direction:"egress",responseId:"bounded"}).reason,"response_limit");
+bounded.stop();
+assert.equal(bounded.metrics().responseLimitRejectedFrames,1);
+assert.equal(bounded.metrics().sessionEndDiscardedFrames,250);
+assert.equal(bounded.metrics().audioConservationMismatch,0);
+const interruptedWrites:number[]=[],
+  interrupted=new AdaptivePlayoutBuffer(async item=>{interruptedWrites.push(item.sequence)},{
+    initialPrebufferMs:60,minPrebufferMs:60,maxPrebufferMs:60,maxSingleResponseAudioSeconds:60,
+  });
+for(let index=0;index<1000;index++)interrupted.enqueue({...frame(index),direction:"egress",responseId:"response-interrupted"});
+await new Promise(resolve=>setTimeout(resolve,4080));
+const interruptedDiscardedMs=interrupted.clear("response-interrupted","barge_in"),
+  interruptedMetrics=interrupted.metrics();
+assert.ok(interruptedWrites.length>=195&&interruptedWrites.length<=205);
+assert.ok(interruptedDiscardedMs>=15900&&interruptedDiscardedMs<=16100);
+assert.equal(interruptedMetrics.bargeInDiscardedFrames+interruptedMetrics.playoutFramesWritten,1000);
+assert.equal(interruptedMetrics.audioConservationMismatch,0);
+interrupted.stop();
 const jitter = new JitterBuffer(40, 80, 20);
 jitter.push(frame(1));
 jitter.push(frame(3));

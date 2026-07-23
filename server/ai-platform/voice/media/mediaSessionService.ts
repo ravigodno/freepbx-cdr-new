@@ -69,6 +69,10 @@ type Runtime = {
   durationEnding: boolean;
   syntheticSafetyLimit: boolean;
   preRoll: AudioPreRollBuffer;
+  preRollFramesCaptured: number;
+  preRollFramesCommitted: number;
+  preRollFramesDropped: number;
+  preRollDurationMsCommitted: number;
 };
 
 export class MediaSessionService {
@@ -140,6 +144,10 @@ export class MediaSessionService {
       durationEnding: false,
       syntheticSafetyLimit,
       preRoll: new AudioPreRollBuffer(240),
+      preRollFramesCaptured: 0,
+      preRollFramesCommitted: 0,
+      preRollFramesDropped: 0,
+      preRollDurationMsCommitted: 0,
     };
     runtime.ingressProcessor = new BoundedSerialProcessor(
       (frame) => this.processIngress(tenantId, id, frame, traceId),
@@ -592,7 +600,8 @@ export class MediaSessionService {
     const normalized = this.normalizer.toInternal(frame);
     const ready = runtime.jitter.push(normalized);
     for (const item of ready) {
-      runtime.preRoll.push(item);
+      runtime.preRollFramesDropped+=runtime.preRoll.push(item);
+      runtime.preRollFramesCaptured++;
       runtime.metrics.record(
         item.payload.byteLength,
         "ingress",
@@ -609,6 +618,9 @@ export class MediaSessionService {
         previous = runtime.vadState;
       runtime.vadState = runtime.vad.state();
       if (event.type === "speech_started") {
+        const preRollFrames=runtime.preRoll.snapshot();
+        runtime.preRollFramesCommitted+=preRollFrames.length;
+        runtime.preRollDurationMsCommitted+=preRollFrames.reduce((sum,frame)=>sum+frame.durationMs,0);
         for (const subscriber of runtime.vadSubscribers)
           await subscriber("speech_started");
         runtime.metrics.vadTransitions++;
@@ -769,18 +781,33 @@ export class MediaSessionService {
     if (!runtime || runtime.tenantId !== tenantId)
       throw new MediaError("not_found", 404, "Active media session not found");
     return runtime.adapter instanceof AudioSocketAdapter
-      ? runtime.adapter.subscribePlayout(handler)
+      ? runtime.adapter.subscribePlayout((frame)=>{
+          if(!runtime.barge.isPlaybackActive())runtime.barge.onPlaybackStarted();
+          handler(frame);
+        })
       : () => {};
+  }
+  getProtocolMetrics(tenantId: number, id: number) {
+    const runtime = this.runtimes.get(id);
+    if (!runtime || runtime.tenantId !== tenantId) return null;
+    return runtime.adapter.getProtocolMetrics?.() || null;
   }
   async enqueueEgress(tenantId: number, id: number, frame: AudioFrame) {
     const runtime = this.runtimes.get(id);
     if (!runtime || runtime.tenantId !== tenantId)
       throw new MediaError("not_found", 404, "Active media session not found");
-    const result = runtime.egressProcessor.enqueue({
+    const ownedFrame = {
       ...frame,
       direction: "egress",
       mediaSessionId: id,
-    });
+    } as AudioFrame;
+    const directResult =
+      runtime.adapter instanceof AudioSocketAdapter
+        ? await runtime.adapter.sendFrame(ownedFrame)
+        : null;
+    const result =
+      directResult ||
+      runtime.egressProcessor.enqueue(ownedFrame);
     runtime.metrics.record(
       frame.payload.byteLength,
       "egress",
@@ -802,16 +829,27 @@ export class MediaSessionService {
         .catch(() => {});
     }
     runtime.flusher.markDirty();
-    return result.accepted;
+    return {
+      accepted: result.accepted,
+      dropped: "dropped" in result ? result.dropped : false,
+      depth: "depth" in result ? result.depth : 0,
+      reason: "reason" in result ? result.reason : null,
+    };
   }
-  clearEgress(tenantId: number, id: number, responseId?: string) {
+  clearEgress(
+    tenantId: number,
+    id: number,
+    responseId?: string,
+    reason: "barge_in" | "session_end" = "barge_in",
+  ) {
     const runtime = this.runtimes.get(id);
     if (!runtime || runtime.tenantId !== tenantId) return 0;
     runtime.egressProcessor.clear();
     const discardedMs =
       runtime.adapter instanceof AudioSocketAdapter
-        ? runtime.adapter.clearPlayout(responseId)
+        ? runtime.adapter.clearPlayout(responseId, reason)
         : 0;
+    runtime.barge.onPlaybackStopped();
     runtime.flusher.markDirty();
     return discardedMs;
   }
@@ -929,6 +967,10 @@ export class MediaSessionService {
         metricsFlushFailures: flush.metricsFlushFailures,
         metricsLastFlushedAt: flush.metricsLastFlushedAt,
         vadPreRollMs: runtime.preRoll.durationMs(),
+        preRollFramesCaptured: runtime.preRollFramesCaptured,
+        preRollFramesCommitted: runtime.preRollFramesCommitted,
+        preRollFramesDropped: runtime.preRollFramesDropped,
+        preRollDurationMsCommitted: runtime.preRollDurationMsCommitted,
       }).value,
     });
   }

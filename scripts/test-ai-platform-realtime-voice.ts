@@ -15,7 +15,7 @@ import {
 import { normalizeOpenAIRealtimeEvent } from "../server/ai-platform/voice/providers/realtimeVoiceEventNormalizer.js";
 import type { AudioFrame } from "../server/ai-platform/voice/media/mediaTypes.js";
 import { estimateVoiceCost, projectSafeVoiceUsage } from "../server/ai-platform/voice/transcripts/voiceUsageProjection.js";
-import { containsInternalAgentDisclosure, customerSafeToolResult } from "../server/ai-platform/voice/providers/voiceOutputGuard.js";
+import { containsInternalAgentDisclosure, customerSafeToolResult, isUnexpectedEnglishVoiceResponse } from "../server/ai-platform/voice/providers/voiceOutputGuard.js";
 
 const format = {
   codec: "slin16" as const,
@@ -253,6 +253,9 @@ async function run() {
   assert.equal(containsInternalAgentDisclosure("У меня нет доступа к безопасному backend"),true);
   assert.equal(containsInternalAgentDisclosure("Мы разрабатываем публичный API для клиентов"),false);
   assert.equal(containsInternalAgentDisclosure("У нас есть API для интеграции клиентов"),false);
+  assert.equal(isUnexpectedEnglishVoiceResponse("Hi! I can hear you. What would you like help with today?"),true);
+  assert.equal(isUnexpectedEnglishVoiceResponse("Подключение к API компании работает штатно"),false);
+  assert.equal(isUnexpectedEnglishVoiceResponse("Перейдите на English, пожалуйста"),false);
   assert.match(customerSafeToolResult(false),/соединить вас с сотрудником/iu);
   assert.doesNotMatch(instructions.instructions, /password|api[_ -]?key/i);
   const openai = new OpenAIRealtimeAdapter();
@@ -285,6 +288,11 @@ async function run() {
   assert.match(transcriptService,/spoken_text_safe/);
   assert.match(transcriptService,/provider_item_ref/);
   assert.match(transcriptService,/current_partial_text_safe=CONCAT/);
+  assert.match(transcriptService,/logical_key/);
+  assert.match(transcriptService,/provider_audio_transcript_safe/);
+  assert.match(transcriptService,/transcript_accuracy/);
+  assert.match(migration,/ai\.voice_max_single_response_audio_seconds/);
+  assert.match(migration,/uniq_ai_voice_logical_utterance/);
   assert.match(transcriptService,/COALESCE\(last_delta_at,started_at\)/);
   assert.match(service,/speechEndToFirstAudioMs/);
   assert.match(transcriptService,/incomplete=1/);

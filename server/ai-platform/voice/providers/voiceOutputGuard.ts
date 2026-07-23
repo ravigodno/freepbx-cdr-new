@@ -10,3 +10,9 @@ export function customerSafeToolResult(ok: boolean) {
     ? "Я уточнил информацию и могу продолжить."
     : "Сейчас я не могу выполнить это действие. Я могу соединить вас с сотрудником.";
 }
+
+export function isUnexpectedEnglishVoiceResponse(text: string) {
+  const value=String(text||"").replace(/\b(?:API|SQL|PBXPuls|OpenAI|SIP)\b/giu," ");
+  const latin=(value.match(/[A-Za-z]/g)||[]).length,cyrillic=(value.match(/[А-Яа-яЁё]/g)||[]).length;
+  return latin>=8&&latin>cyrillic*2;
+}

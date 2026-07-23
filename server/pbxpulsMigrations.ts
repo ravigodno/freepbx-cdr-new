@@ -1079,6 +1079,12 @@ const MIGRATIONS: Migration[] = [
     key:'20260723_040_voice_continuity_barge_in',description:'Add adaptive voice playout and natural interruption settings',statements:[
       `INSERT IGNORE INTO settings(setting_key,setting_value,value_type,category,is_secret,description)VALUES('ai.voice_playout_prebuffer_ms','80','number','ai_platform',0,'Initial adaptive voice playout buffer, clamped to 60..200 ms'),('ai.voice_vad_preroll_ms','240','number','ai_platform',0,'Bounded local VAD pre-roll for interruption detection')`
     ]
+  },
+  {
+    key:'20260723_041_preserve_realtime_voice_playout',description:'Preserve response audio and align safe spoken transcripts',statements:[
+      `ALTER TABLE ai_voice_transcript_utterances ADD COLUMN logical_key CHAR(64) NULL,ADD COLUMN content_index INT UNSIGNED NOT NULL DEFAULT 0,ADD COLUMN provider_audio_transcript_safe TEXT NULL,ADD COLUMN played_audio_ms BIGINT UNSIGNED NULL,ADD COLUMN generated_audio_ms BIGINT UNSIGNED NULL,ADD COLUMN transcript_accuracy ENUM('exact','approximate','unavailable') NOT NULL DEFAULT 'unavailable',ADD COLUMN interrupted_by_hangup TINYINT(1) NOT NULL DEFAULT 0,ADD UNIQUE KEY uniq_ai_voice_logical_utterance(tenant_id,realtime_session_id,logical_key)`,
+      `INSERT IGNORE INTO settings(setting_key,setting_value,value_type,category,is_secret,description)VALUES('ai.voice_max_single_response_audio_seconds','60','number','ai_platform',0,'Maximum accepted audio per provider response, clamped to 5..180 seconds')`
+    ]
   }
 ];
 
