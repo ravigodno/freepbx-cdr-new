@@ -13,6 +13,7 @@ export type MediaWorkerEventType =
   | "ingress_audio"
   | "batch_accepted"
   | "frame_played"
+  | "queue_low"
   | "response_playout_started"
   | "response_playout_completed"
   | "response_playout_interrupted"

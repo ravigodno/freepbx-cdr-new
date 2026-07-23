@@ -75,9 +75,9 @@ export function receptionistResponseBudgets(config: unknown): ReceptionistRespon
       ? (config as any).voice
       : {};
   return {
-    response: clamp(voice.maxGeneratedUnits, 120, 80, 120),
-    retry: clamp(voice.retryGeneratedUnits, 240, 160, 320),
-    greeting: clamp(voice.greetingGeneratedUnits, 160, 120, 240),
+    response: clamp(voice.maxGeneratedUnits, 320, 160, 320),
+    retry: clamp(voice.retryGeneratedUnits, 512, 256, 640),
+    greeting: clamp(voice.greetingGeneratedUnits, 192, 160, 320),
   };
 }
 
@@ -93,6 +93,7 @@ export function decideResponseCompletion(input:{
   transcript:string;
   retryCount:number;
   fallbackResponse?:boolean;
+  framesSent?:number;
 }):{
   action:ResponseCompletionAction;
   semantic:SemanticCompletion;
@@ -107,7 +108,7 @@ export function decideResponseCompletion(input:{
   if(input.fallbackResponse)
     return {action:"discard",semantic,outputTokenLimitHit};
   return {
-    action:input.retryCount===0?"retry":"fallback",
+    action:input.retryCount===0&&Number(input.framesSent||0)===0?"retry":"play",
     semantic,
     outputTokenLimitHit,
   };

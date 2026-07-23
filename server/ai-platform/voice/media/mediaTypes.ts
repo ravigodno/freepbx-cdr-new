@@ -72,6 +72,11 @@ export interface AudioSocketProtocolMetrics {
   prebufferMsMin?: number;
   prebufferMsAvg?: number;
   prebufferMsMax?: number;
+  startupBufferMsActual?: number;
+  lowWaterEvents?: number;
+  starvationEvents?: number;
+  starvationDurationMs?: number;
+  providerDeliveryGapDuringPlayoutMs?: number;
   schedulerLateFrames?: number;
   schedulerLagAvgMs?: number | null;
   schedulerLagP95Ms?: number | null;

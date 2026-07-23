@@ -40,20 +40,37 @@ worker.send({version:1,type:"enqueue_response_audio",request_id:"batch",session_
 worker.send({version:1,type:"provider_response_done",request_id:"done",session_ref:sessionRef,response_ref:"response"});
 const blockedUntil=Date.now()+3000;while(Date.now()<blockedUntil){}
 await waitFor(event=>event.type==="response_playout_completed",15000);
+const isolationMetrics=(await waitFor(
+  event=>event.type==="frame_played"&&event.response_ref==="response"&&event.sequence===499,
+)).payload.metrics;
+worker.send({version:1,type:"enqueue_response_audio",request_id:"stream-start",session_ref:sessionRef,
+  payload:{frames:Array.from({length:25},(_,sequence)=>({response_ref:"streaming-response",item_ref:"item",sequence,pcm:Buffer.from(pcm)}))}});
+for(let batch=0;batch<15;batch++){
+  await new Promise(resolve=>setTimeout(resolve,batch===5?600:100));
+  worker.send({version:1,type:"enqueue_response_audio",request_id:`stream-${batch}`,session_ref:sessionRef,
+    payload:{frames:Array.from({length:5},(_,offset)=>({response_ref:"streaming-response",item_ref:"item",sequence:25+batch*5+offset,pcm:Buffer.from(pcm)}))}});
+}
+worker.send({version:1,type:"provider_response_done",request_id:"stream-done",session_ref:sessionRef,response_ref:"streaming-response"});
+await waitFor(event=>event.type==="response_playout_completed"&&event.response_ref==="streaming-response",6000);
 worker.send({version:1,type:"close_session",request_id:"close",session_ref:sessionRef});
-const closed=await waitFor(event=>event.type==="session_metrics"&&event.payload?.providerAudioFramesAccepted===500);
-assert.equal(closed.payload.providerAudioFramesAccepted,500);
-assert.equal(closed.payload.playoutFramesWritten,500);
+const closed=await waitFor(event=>event.type==="session_metrics"&&event.payload?.providerAudioFramesAccepted===600);
+assert.equal(closed.payload.providerAudioFramesAccepted,600);
+assert.equal(closed.payload.playoutFramesWritten,600);
 assert.equal(closed.payload.audioConservationMismatch,0);
-assert.ok(closed.payload.egressPacketGapP95Ms<35,`worker pacing p95 ${closed.payload.egressPacketGapP95Ms}`);
-assert.ok(closed.payload.egressPacketGapMaxMs<80,`worker pacing max ${closed.payload.egressPacketGapMaxMs}`);
-assert.ok(closed.payload.inResponsePacketGapP95Ms<35,`in-response p95 ${closed.payload.inResponsePacketGapP95Ms}`);
-assert.ok(closed.payload.inResponsePacketGapMaxMs<80,`in-response max ${closed.payload.inResponsePacketGapMaxMs}`);
-assert.equal(closed.payload.inResponseGapsOver80Ms,0);
-assert.equal(closed.payload.inResponseGapsOver150Ms,0);
-assert.equal(closed.payload.inResponseGapsOver300Ms,0);
-assert.equal(closed.payload.inResponseGapsOver500Ms,0);
-assert.equal(closed.payload.betweenResponseGapMaxMs,null);
+assert.equal(closed.payload.startupBufferMsActual,500);
+assert.ok(closed.payload.lowWaterEvents>=1);
+assert.ok(closed.payload.starvationEvents>=1);
+assert.ok(closed.payload.starvationDurationMs>0);
+assert.ok(closed.payload.providerDeliveryGapDuringPlayoutMs>=500);
+assert.ok(isolationMetrics.egressPacketGapP95Ms<35,`worker pacing p95 ${isolationMetrics.egressPacketGapP95Ms}`);
+assert.ok(isolationMetrics.egressPacketGapMaxMs<80,`worker pacing max ${isolationMetrics.egressPacketGapMaxMs}`);
+assert.ok(isolationMetrics.inResponsePacketGapP95Ms<35,`in-response p95 ${isolationMetrics.inResponsePacketGapP95Ms}`);
+assert.ok(isolationMetrics.inResponsePacketGapMaxMs<80,`in-response max ${isolationMetrics.inResponsePacketGapMaxMs}`);
+assert.equal(isolationMetrics.inResponseGapsOver80Ms,0);
+assert.equal(isolationMetrics.inResponseGapsOver150Ms,0);
+assert.equal(isolationMetrics.inResponseGapsOver300Ms,0);
+assert.equal(isolationMetrics.inResponseGapsOver500Ms,0);
+assert.equal(isolationMetrics.betweenResponseGapMaxMs,null);
 socket.destroy();
 worker.send({version:1,type:"shutdown",request_id:"shutdown"});
 await new Promise<void>((resolve)=>worker.once("exit",()=>resolve()));

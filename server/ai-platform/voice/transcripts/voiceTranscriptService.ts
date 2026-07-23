@@ -92,7 +92,7 @@ export class VoiceTranscriptService {
   }
   async interrupt(tenantId:number,realtimeSessionId:number,voiceSessionId:number,responseId?:string,playedAudioMs=0,byHangup=false) {
     const responseRef=eventRef(responseId);
-    await this.store.query(`UPDATE ai_voice_transcript_utterances SET interrupted=1,interrupted_by_hangup=?,played_audio_ms=?,spoken_text_safe=NULL,transcript_accuracy='approximate',ended_at=COALESCE(last_delta_at,ended_at,NOW()),incomplete=IF(is_final=0,1,incomplete),updated_at=NOW() WHERE tenant_id=? AND realtime_session_id=? AND speaker='ai' AND (? IS NULL OR provider_response_ref=?) ORDER BY sequence_no DESC LIMIT 1`,[byHangup?1:0,Math.max(0,Math.floor(playedAudioMs)),tenantId,realtimeSessionId,responseRef,responseRef]);
+    await this.store.query(`UPDATE ai_voice_transcript_utterances SET interrupted=1,interrupted_by_hangup=?,response_completion_reason=?,played_audio_ms=?,spoken_text_safe=NULL,transcript_accuracy='approximate',ended_at=COALESCE(last_delta_at,ended_at,NOW()),incomplete=IF(is_final=0,1,incomplete),updated_at=NOW() WHERE tenant_id=? AND realtime_session_id=? AND speaker='ai' AND (? IS NULL OR provider_response_ref=?) ORDER BY sequence_no DESC LIMIT 1`,[byHangup?1:0,byHangup?'hangup_interrupted':'caller_interrupted',Math.max(0,Math.floor(playedAudioMs)),tenantId,realtimeSessionId,responseRef,responseRef]);
     for(const key of [...this.active.keys()])if(key.startsWith(`${realtimeSessionId}:ai:`))this.active.delete(key); this.emit(voiceSessionId,{type:"interrupted",speaker:"ai"});
   }
   async finalizeResponse(tenantId:number,realtimeSessionId:number,responseId:string|undefined,playedAudioMs:number){
@@ -102,6 +102,18 @@ export class VoiceTranscriptService {
   async controlledLimit(tenantId:number,realtimeSessionId:number,responseId?:string){
     const responseRef=eventRef(responseId);
     await this.store.query(`UPDATE ai_voice_transcript_utterances SET incomplete=1,spoken_text_safe=NULL,transcript_accuracy='controlled_limit',updated_at=NOW() WHERE tenant_id=? AND realtime_session_id=? AND speaker='ai' AND (? IS NULL OR provider_response_ref=?) ORDER BY sequence_no DESC LIMIT 1`,[tenantId,realtimeSessionId,responseRef,responseRef]);
+  }
+  async completionReason(
+    tenantId:number,
+    realtimeSessionId:number,
+    responseId:string|undefined,
+    reason:"completed"|"provider_token_truncated"|"controlled_sentence_stop"|"controlled_hard_safety"|"caller_interrupted"|"hangup_interrupted",
+  ){
+    const responseRef=eventRef(responseId);
+    await this.store.query(
+      `UPDATE ai_voice_transcript_utterances SET response_completion_reason=?,updated_at=NOW() WHERE tenant_id=? AND realtime_session_id=? AND speaker='ai' AND (? IS NULL OR provider_response_ref=?) ORDER BY sequence_no DESC LIMIT 1`,
+      [reason,tenantId,realtimeSessionId,responseRef,responseRef],
+    );
   }
   async providerOutcome(
     tenantId:number,
@@ -122,8 +134,8 @@ export class VoiceTranscriptService {
         outcome.outputTokenLimitHit?1:0,
         outcome.semanticallyComplete?1:0,
         Math.max(0,Math.min(1,outcome.retryCount)),
-        outcome.semanticallyComplete?1:0,
-        outcome.semanticallyComplete?1:0,
+        outcome.semanticallyComplete&&!outcome.outputTokenLimitHit?1:0,
+        outcome.semanticallyComplete&&!outcome.outputTokenLimitHit?1:0,
         tenantId,
         realtimeSessionId,
         responseRef,
@@ -193,7 +205,7 @@ export class VoiceTranscriptService {
     await this.store.query(`INSERT INTO ai_voice_call_insights(tenant_id,voice_session_id,analysis_status,usage_json)VALUES(?,?,'disabled',?) ON DUPLICATE KEY UPDATE usage_json=VALUES(usage_json),updated_at=NOW()`,[tenantId,voiceSessionId,JSON.stringify(safe)]);
   }
   async list(tenantId:number,voiceSessionId:number) {
-    return this.store.query(`SELECT id,speaker,sequence_no sequence,started_at startedAt,ended_at endedAt,text_safe text,generated_text_safe generatedText,provider_audio_transcript_safe providerAudioTranscript,spoken_text_safe spokenText,played_audio_ms playedAudioMs,generated_audio_ms generatedAudioMs,transcript_accuracy transcriptAccuracy,is_final isFinal,interrupted,interrupted_by_hangup interruptedByHangup,incomplete,provider_finish_reason providerFinishReason,output_token_limit_hit outputTokenLimitHit,semantically_complete semanticallyComplete,superseded_by_retry supersededByRetry,retry_count retryCount,confidence,provider_event_ref providerEventRef,marker_type markerType FROM ai_voice_transcript_utterances WHERE tenant_id=? AND voice_session_id=? ORDER BY sequence_no,id`,[tenantId,voiceSessionId]);
+    return this.store.query(`SELECT id,speaker,sequence_no sequence,started_at startedAt,ended_at endedAt,text_safe text,generated_text_safe generatedText,provider_audio_transcript_safe providerAudioTranscript,spoken_text_safe spokenText,played_audio_ms playedAudioMs,generated_audio_ms generatedAudioMs,transcript_accuracy transcriptAccuracy,is_final isFinal,interrupted,interrupted_by_hangup interruptedByHangup,incomplete,provider_finish_reason providerFinishReason,response_completion_reason responseCompletionReason,output_token_limit_hit outputTokenLimitHit,semantically_complete semanticallyComplete,superseded_by_retry supersededByRetry,retry_count retryCount,confidence,provider_event_ref providerEventRef,marker_type markerType FROM ai_voice_transcript_utterances WHERE tenant_id=? AND voice_session_id=? ORDER BY sequence_no,id`,[tenantId,voiceSessionId]);
   }
   async cleanup(tenantId:number) {
     const rows=await this.store.query("SELECT setting_value FROM settings WHERE setting_key='ai.voice_transcripts_retention_days' LIMIT 1"),days=Number(rows[0]?.setting_value||30);

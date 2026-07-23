@@ -28,6 +28,14 @@ import {
   decideResponseCompletion,
   receptionistResponseBudgets,
 } from "../server/ai-platform/voice/providers/realtimeResponseCompletion.js";
+import {
+  createResponseStreamState,
+  delayedStreamingPolicy,
+  mayRetryBeforePlayout,
+  pushResponseFrame,
+  releaseResponseTail,
+  sentenceBoundaryAfterWarning,
+} from "../server/ai-platform/voice/providers/delayedResponseStream.js";
 
 const format = {
   codec: "slin16" as const,
@@ -157,17 +165,17 @@ async function run() {
         greetingGeneratedUnits:1,
       },
     }),
-    {response:80,retry:320,greeting:120},
+    {response:160,retry:640,greeting:160},
   );
   assert.deepEqual(
     receptionistResponseBudgets({
       voice:{
-        maxGeneratedUnits:120,
-        retryGeneratedUnits:240,
-        greetingGeneratedUnits:160,
+        maxGeneratedUnits:320,
+        retryGeneratedUnits:512,
+        greetingGeneratedUnits:192,
       },
     }),
-    {response:120,retry:240,greeting:160},
+    {response:320,retry:512,greeting:192},
   );
   assert.equal(decideResponseCompletion({
     providerStatus:"incomplete",
@@ -180,13 +188,63 @@ async function run() {
     finishReason:"max_output_tokens",
     transcript:"Хорошо, да",
     retryCount:1,
-  }).action,"fallback");
+  }).action,"play");
   assert.equal(decideResponseCompletion({
     providerStatus:"completed",
     finishReason:"completed",
     transcript:"Да, я вас хорошо слышу.",
     retryCount:1,
   }).action,"play");
+  const delayedPolicy=delayedStreamingPolicy({
+    voice:{
+      delayedPlayoutStartupMs:500,
+      softResponseSeconds:6,
+      maxResponseAudioSeconds:12,
+    },
+  });
+  assert.deepEqual(delayedPolicy,{
+    startupBufferMs:500,
+    warningMs:6000,
+    hardMs:12000,
+  });
+  const stream=createResponseStreamState(),released:number[]=[];
+  for(let index=0;index<200;index++){
+    const next={...frame("provider"),sequence:index,durationMs:20};
+    const result=pushResponseFrame(stream,next,500,index*20);
+    released.push(...result.release.map(item=>item.sequence));
+    if(index===24){
+      assert.equal(result.startupReady,true);
+      assert.equal(stream.framesSent,0);
+      stream.framesSent+=result.release.length;
+    }else if(result.release.length)stream.framesSent+=result.release.length;
+  }
+  assert.equal(released[0],0);
+  assert.equal(released.at(-1),199);
+  assert.deepEqual(released,Array.from({length:200},(_,index)=>index));
+  assert.equal(stream.startupBufferReadyAt,480);
+  assert.equal(releaseResponseTail(stream,4000).length,0);
+  assert.equal(mayRetryBeforePlayout({
+    providerStatus:"incomplete",
+    finishReason:"max_output_tokens",
+    transcript:"Да, вас",
+    retryCount:0,
+    framesSent:0,
+  }).retry,true);
+  assert.equal(mayRetryBeforePlayout({
+    providerStatus:"incomplete",
+    finishReason:"max_output_tokens",
+    transcript:"Да, вас",
+    retryCount:0,
+    framesSent:25,
+  }).retry,false);
+  const lengthState=createResponseStreamState();
+  lengthState.generatedMs=6000;
+  assert.equal(sentenceBoundaryAfterWarning(
+    lengthState,"Да, я вас хорошо слышу.",6000,
+  ),true);
+  assert.equal(sentenceBoundaryAfterWarning(
+    lengthState,"Следующее предложение.",6000,
+  ),false);
   const completionFixtures=[
     {input:"Меня слышно?",response:"Да, я вас хорошо слышу и готов помочь с вашим вопросом.",durationMs:2800},
     {input:"Запишите меня на приём",response:"На какой день и время вас записать к выбранному специалисту?",durationMs:3200},

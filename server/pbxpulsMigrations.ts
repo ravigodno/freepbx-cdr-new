@@ -1090,6 +1090,11 @@ const MIGRATIONS: Migration[] = [
     key:'20260723_042_voice_response_completion',description:'Track provider completion and controlled realtime retries',statements:[
       `ALTER TABLE ai_voice_transcript_utterances MODIFY transcript_accuracy ENUM('exact','approximate','unavailable','controlled_limit','provider_truncated') NOT NULL DEFAULT 'unavailable',ADD COLUMN provider_finish_reason VARCHAR(64) NULL,ADD COLUMN output_token_limit_hit TINYINT(1) NOT NULL DEFAULT 0,ADD COLUMN semantically_complete TINYINT(1) NULL,ADD COLUMN superseded_by_retry TINYINT(1) NOT NULL DEFAULT 0,ADD COLUMN retry_count TINYINT UNSIGNED NOT NULL DEFAULT 0`
     ]
+  },
+  {
+    key:'20260723_043_voice_streaming_completion',description:'Separate audible streaming completion from provider semantics',statements:[
+      `ALTER TABLE ai_voice_transcript_utterances ADD COLUMN response_completion_reason ENUM('completed','provider_token_truncated','controlled_sentence_stop','controlled_hard_safety','caller_interrupted','hangup_interrupted') NULL`
+    ]
   }
 ];
 
