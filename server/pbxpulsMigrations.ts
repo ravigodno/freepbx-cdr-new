@@ -1105,8 +1105,69 @@ const MIGRATIONS: Migration[] = [
     key:'20260723_045_voice_closing_outcome',description:'Persist safe deterministic voice hangup outcomes',statements:[
       `ALTER TABLE ai_voice_sessions ADD COLUMN hangup_action_ref_safe VARCHAR(96) NULL,ADD COLUMN hangup_requested_at DATETIME(3) NULL,ADD COLUMN hangup_confirmed_at DATETIME(3) NULL,ADD COLUMN hangup_latency_ms INT UNSIGNED NULL,ADD COLUMN hangup_ari_result VARCHAR(32) NULL,ADD COLUMN hangup_failure_code_safe VARCHAR(64) NULL`
     ]
+  },
+  {
+    key:'20260723_046_configurable_agent_skills',description:'Add versioned configurable AI employee skills',statements:[
+      `CREATE TABLE IF NOT EXISTS ai_skills(id BIGINT AUTO_INCREMENT PRIMARY KEY,tenant_id BIGINT NOT NULL,skill_key VARCHAR(64) NOT NULL,schema_version SMALLINT UNSIGNED NOT NULL DEFAULT 1,version_number INT UNSIGNED NOT NULL DEFAULT 1,name VARCHAR(191) NOT NULL,description TEXT NULL,intent_examples_json LONGTEXT NOT NULL,validation_rules_json LONGTEXT NOT NULL,escalation_policy_json LONGTEXT NOT NULL,completion_policy_json LONGTEXT NOT NULL,status ENUM('draft','published','archived') NOT NULL DEFAULT 'draft',checksum CHAR(64) NULL,created_by VARCHAR(191) NOT NULL,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at DATETIME NULL,published_at DATETIME NULL,UNIQUE KEY uniq_ai_skill_version(tenant_id,skill_key,version_number),INDEX idx_ai_skill_status(tenant_id,status),CONSTRAINT fk_ai_skill_tenant FOREIGN KEY(tenant_id)REFERENCES ai_tenants(id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS ai_entity_catalogs(id BIGINT AUTO_INCREMENT PRIMARY KEY,tenant_id BIGINT NOT NULL,catalog_key VARCHAR(64) NOT NULL,name VARCHAR(191) NOT NULL,entity_type VARCHAR(64) NOT NULL,source VARCHAR(64) NOT NULL DEFAULT 'manual',active TINYINT(1) NOT NULL DEFAULT 1,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at DATETIME NULL,UNIQUE KEY uniq_ai_catalog_key(tenant_id,catalog_key),CONSTRAINT fk_ai_catalog_tenant FOREIGN KEY(tenant_id)REFERENCES ai_tenants(id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS ai_entity_values(id BIGINT AUTO_INCREMENT PRIMARY KEY,tenant_id BIGINT NOT NULL,catalog_id BIGINT NOT NULL,value_text VARCHAR(191) NOT NULL,synonyms_json LONGTEXT NOT NULL,display_order INT NOT NULL DEFAULT 0,active TINYINT(1) NOT NULL DEFAULT 1,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,UNIQUE KEY uniq_ai_entity_value(tenant_id,catalog_id,value_text(128)),CONSTRAINT fk_ai_entity_value_tenant FOREIGN KEY(tenant_id)REFERENCES ai_tenants(id),CONSTRAINT fk_ai_entity_value_catalog FOREIGN KEY(catalog_id)REFERENCES ai_entity_catalogs(id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS ai_skill_fields(id BIGINT AUTO_INCREMENT PRIMARY KEY,tenant_id BIGINT NOT NULL,skill_id BIGINT NOT NULL,field_key VARCHAR(64) NOT NULL,label VARCHAR(191) NOT NULL,field_type ENUM('text','number','phone','date','time','datetime','enum','boolean','entity') NOT NULL,required TINYINT(1) NOT NULL DEFAULT 0,extraction_hints_json LONGTEXT NOT NULL,synonyms_json LONGTEXT NOT NULL,enum_source VARCHAR(64) NULL,validation_json LONGTEXT NOT NULL,confirmation_required TINYINT(1) NOT NULL DEFAULT 0,is_sensitive TINYINT(1) NOT NULL DEFAULT 0,display_order INT NOT NULL DEFAULT 0,ask_template TEXT NULL,UNIQUE KEY uniq_ai_skill_field(tenant_id,skill_id,field_key),CONSTRAINT fk_ai_skill_field_tenant FOREIGN KEY(tenant_id)REFERENCES ai_tenants(id),CONSTRAINT fk_ai_skill_field_skill FOREIGN KEY(skill_id)REFERENCES ai_skills(id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS ai_response_templates(id BIGINT AUTO_INCREMENT PRIMARY KEY,tenant_id BIGINT NOT NULL,skill_id BIGINT NOT NULL,template_key VARCHAR(64) NOT NULL,template_text TEXT NOT NULL,active TINYINT(1) NOT NULL DEFAULT 1,UNIQUE KEY uniq_ai_skill_template(tenant_id,skill_id,template_key),CONSTRAINT fk_ai_template_tenant FOREIGN KEY(tenant_id)REFERENCES ai_tenants(id),CONSTRAINT fk_ai_template_skill FOREIGN KEY(skill_id)REFERENCES ai_skills(id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS ai_skill_actions(id BIGINT AUTO_INCREMENT PRIMARY KEY,tenant_id BIGINT NOT NULL,skill_id BIGINT NOT NULL,action_key VARCHAR(64) NOT NULL,name VARCHAR(191) NOT NULL,description TEXT NULL,input_schema_json LONGTEXT NOT NULL,required_fields_json LONGTEXT NOT NULL,executor_key VARCHAR(100) NULL,permissions_json LONGTEXT NOT NULL,timeout_ms INT UNSIGNED NOT NULL DEFAULT 10000,retry_policy_json LONGTEXT NOT NULL,success_mapping_json LONGTEXT NOT NULL,failure_mapping_json LONGTEXT NOT NULL,active TINYINT(1) NOT NULL DEFAULT 1,UNIQUE KEY uniq_ai_skill_action(tenant_id,skill_id,action_key),CONSTRAINT fk_ai_skill_action_tenant FOREIGN KEY(tenant_id)REFERENCES ai_tenants(id),CONSTRAINT fk_ai_skill_action_skill FOREIGN KEY(skill_id)REFERENCES ai_skills(id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS ai_agent_skills(id BIGINT AUTO_INCREMENT PRIMARY KEY,tenant_id BIGINT NOT NULL,agent_version_id BIGINT NOT NULL,skill_id BIGINT NOT NULL,priority INT NOT NULL DEFAULT 100,enabled TINYINT(1) NOT NULL DEFAULT 1,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,UNIQUE KEY uniq_ai_agent_skill(tenant_id,agent_version_id,skill_id),CONSTRAINT fk_ai_agent_skill_tenant FOREIGN KEY(tenant_id)REFERENCES ai_tenants(id),CONSTRAINT fk_ai_agent_skill_version FOREIGN KEY(agent_version_id)REFERENCES ai_agent_versions(id),CONSTRAINT fk_ai_agent_skill_skill FOREIGN KEY(skill_id)REFERENCES ai_skills(id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS ai_task_state_snapshots(id BIGINT AUTO_INCREMENT PRIMARY KEY,tenant_id BIGINT NOT NULL,conversation_id BIGINT NULL,voice_session_id BIGINT NULL,agent_version_id BIGINT NOT NULL,active_skill_id BIGINT NULL,task_state_json LONGTEXT NOT NULL,masked_sensitive_json LONGTEXT NOT NULL,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,INDEX idx_ai_task_state_voice(tenant_id,voice_session_id,created_at),CONSTRAINT fk_ai_task_state_tenant FOREIGN KEY(tenant_id)REFERENCES ai_tenants(id),CONSTRAINT fk_ai_task_state_version FOREIGN KEY(agent_version_id)REFERENCES ai_agent_versions(id),CONSTRAINT fk_ai_task_state_skill FOREIGN KEY(active_skill_id)REFERENCES ai_skills(id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `INSERT IGNORE INTO permissions(permission_key,name,description,category)VALUES('view_ai_skills','View AI skills','View configured AI employee skills','ai_platform'),('manage_ai_skills','Manage AI skills','Create and edit draft AI employee skills','ai_platform'),('publish_ai_skills','Publish AI skills','Publish immutable AI employee skill versions','ai_platform')`,
+      `INSERT IGNORE INTO role_permissions(role_id,permission_id)SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key IN('view_ai_skills','manage_ai_skills','publish_ai_skills')WHERE r.role_key IN('su','admin')`
+    ],seed:seedConfigurableSkillFoundation
   }
 ];
+
+async function seedConfigurableSkillFoundation(connection:Connection):Promise<void>{
+  const [tenants]=await connection.query("SELECT id FROM ai_tenants WHERE tenant_key='installation' LIMIT 1");
+  const tenantId=Number((tenants as any[])[0]?.id||0);if(!tenantId)return;
+  await connection.execute(`INSERT INTO ai_entity_catalogs(tenant_id,catalog_key,name,entity_type,source) SELECT ?,'demo_specialists','Специалисты (демо)','specialist','template_pack' FROM DUAL WHERE NOT EXISTS(SELECT 1 FROM ai_entity_catalogs WHERE tenant_id=? AND catalog_key='demo_specialists')`,[tenantId,tenantId]);
+  const [catalogs]=await connection.query("SELECT id FROM ai_entity_catalogs WHERE tenant_id=? AND catalog_key='demo_specialists' LIMIT 1",[tenantId]);
+  const catalogId=Number((catalogs as any[])[0]?.id||0);
+  for(const value of ['невролог','терапевт','кардиолог'])
+    await connection.execute("INSERT IGNORE INTO ai_entity_values(tenant_id,catalog_id,value_text,synonyms_json)VALUES(?,?,?,'[]')",[tenantId,catalogId,value]);
+  await connection.execute(`INSERT INTO ai_skills(tenant_id,skill_key,schema_version,version_number,name,description,intent_examples_json,validation_rules_json,escalation_policy_json,completion_policy_json,status,created_by,published_at)
+    SELECT ?,'demo_appointment_booking',1,1,'Демонстрационная запись','Конфигурационный пример навыка','["записаться на приём","выбрать специалиста"]','{}','{"enabled":true}','{"actionSuccessRequired":true}','published','system',NOW() FROM DUAL WHERE NOT EXISTS(SELECT 1 FROM ai_skills WHERE tenant_id=? AND skill_key='demo_appointment_booking' AND version_number=1)`,[tenantId,tenantId]);
+  const [skills]=await connection.query("SELECT id FROM ai_skills WHERE tenant_id=? AND skill_key='demo_appointment_booking' AND version_number=1 LIMIT 1",[tenantId]);
+  const skillId=Number((skills as any[])[0]?.id||0);
+  const fields:any[]=[
+    ['date','Дата','date',1,null,'На какой день?'],
+    ['time','Время','time',1,null,'На какое время?'],
+    ['specialist','Специалист','entity',1,'demo_specialists','Какого специалиста выбрать?']
+  ];
+  for(let i=0;i<fields.length;i++)await connection.execute(`INSERT IGNORE INTO ai_skill_fields(tenant_id,skill_id,field_key,label,field_type,required,extraction_hints_json,synonyms_json,enum_source,validation_json,confirmation_required,display_order,ask_template)VALUES(?,?,?,?,?,?,'[]','[]',?,'{}',1,?,?)`,[tenantId,skillId,...fields[i].slice(0,5),i,fields[i][5]]);
+  const templates:any[]=[
+    ['ask_field','Уточните: {{field.label}}.'],['action_pending','Данные собраны. Осталось подтвердить действие.'],
+    ['action_success','Запись подтверждена.'],['action_failed','Не удалось подтвердить запись.'],
+    ['action_unavailable','Я пока не могу подтвердить запись. Соединить с сотрудником?'],
+    ['escalation_offer','Соединить с сотрудником?'],['farewell','До свидания, хорошего дня.'],
+    ['fallback','Не удалось выполнить действие.'],['clarification','Уточните, пожалуйста, ваш запрос.']
+  ];
+  for(const row of templates)await connection.execute("INSERT IGNORE INTO ai_response_templates(tenant_id,skill_id,template_key,template_text)VALUES(?,?,?,?)",[tenantId,skillId,row[0],row[1]]);
+  const [agents]=await connection.query("SELECT id,current_version_id FROM ai_agents WHERE tenant_id=? AND agent_key='receptionist_default' LIMIT 1",[tenantId]);
+  const agentId=Number((agents as any[])[0]?.id||0);
+  const [existingVersions]=agentId?await connection.query("SELECT id FROM ai_agent_versions WHERE tenant_id=? AND agent_id=? AND version_number=12 LIMIT 1",[tenantId,agentId]):[[] as any[]];
+  if(agentId&&!(existingVersions as any[]).length){
+    const [previous]=await connection.query("SELECT * FROM ai_agent_versions WHERE tenant_id=? AND agent_id=? ORDER BY version_number DESC LIMIT 1",[tenantId,agentId]);
+    const source=(previous as any[])[0];
+    if(source){
+      const config=JSON.parse(String(source.config_json||"{}"));delete config.taskState;delete config.responsePlanner;
+      config.skillEngine={schemaVersion:1,source:"database",dynamicFields:true,dynamicCatalogs:true,dynamicTemplates:true,configuredActions:true};
+      const configJson=JSON.stringify(config),checksum=crypto.createHash("sha256").update(`${configJson}\n${source.system_prompt}`).digest("hex");
+      const [inserted]:any=await connection.execute("INSERT INTO ai_agent_versions(tenant_id,agent_id,version_number,lifecycle_status,config_json,system_prompt,checksum,created_by,published_at)VALUES(?,?,12,'published',?,?,?,?,NOW())",[tenantId,agentId,configJson,source.system_prompt,checksum,"system"]);
+      const versionId=Number(inserted.insertId);
+      await connection.execute("INSERT INTO ai_agent_tools(tenant_id,agent_version_id,tool_id,enabled,config_json)SELECT tenant_id,?,tool_id,enabled,config_json FROM ai_agent_tools WHERE tenant_id=? AND agent_version_id=?",[versionId,tenantId,source.id]);
+      await connection.execute("INSERT INTO ai_agent_actions(tenant_id,agent_version_id,action_definition_id,enabled,config_json)SELECT tenant_id,?,action_definition_id,enabled,config_json FROM ai_agent_actions WHERE tenant_id=? AND agent_version_id=?",[versionId,tenantId,source.id]);
+      await connection.execute("INSERT INTO ai_agent_skills(tenant_id,agent_version_id,skill_id,priority,enabled)VALUES(?,?,?,100,1)",[tenantId,versionId,skillId]);
+      await connection.execute("UPDATE ai_agents SET current_version_id=?,updated_at=NOW() WHERE tenant_id=? AND id=?",[versionId,tenantId,agentId]);
+      await connection.execute("UPDATE ai_voice_route_bindings SET agent_version_id=?,updated_at=NOW() WHERE tenant_id=? AND agent_id=? AND route_mode='test' AND activation_state='draft'",[versionId,tenantId,agentId]);
+    }
+  }
+}
 
 async function seedAiKnowledgeTrainingFoundation(connection: Connection): Promise<void> {
   const [tenantRows]=await connection.query("SELECT id FROM ai_tenants WHERE tenant_key='installation' LIMIT 1");

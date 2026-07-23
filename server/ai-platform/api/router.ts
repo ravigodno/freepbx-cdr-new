@@ -58,6 +58,8 @@ import{VoiceAgentRouteService}from'../voice/management/voiceAgentRouteService.js
 import{registerVoiceAgentRouteRoutes}from'../voice/management/api/voiceAgentRouteRouter.js';
 import{startMediaWorker,stopMediaWorker}from'../voice/media-worker/mediaWorkerClient.js';
 import{startMainEventLoopDiagnostics}from'../voice/diagnostics/mainEventLoopDiagnostics.js';
+import{SkillService}from'../skills/skillService.js';
+import{registerSkillRoutes}from'../skills/api/registerSkillRoutes.js';
 
 type Checker=(req:Request,permission:string)=>Promise<boolean>;
 export interface AiPlatformRouterDeps { requireAuth:any; checkPermission:Checker; readLegacyDb:()=>Promise<any>; store?:AiPlatformStore; isEnabled?:()=>Promise<boolean>;sandboxProvider?:ProviderExecutor;pbxReadServices?:PBXReadServices;pbxTransferService?:PBXTransferService }
@@ -69,7 +71,7 @@ const wrap=(handler:(req:Request,res:Response)=>Promise<any>)=>async(req:Request
 
 export function registerAiPlatformRoutes(app:Express,deps:AiPlatformRouterDeps){
   startMainEventLoopDiagnostics();
-  const store=deps.store||sqlAiPlatformStore,audit=new AiAuditService(store),lifecycle=new AgentLifecycleService(store,audit),builder=new AgentBuilderService(store,audit),contextBuilder=new AgentContextBuilder(store);
+  const store=deps.store||sqlAiPlatformStore,audit=new AiAuditService(store),lifecycle=new AgentLifecycleService(store,audit),builder=new AgentBuilderService(store,audit),contextBuilder=new AgentContextBuilder(store),skills=new SkillService(store,audit);
   const readEnabled=deps.isEnabled||isAiPlatformCoreEnabled;
   const authenticated=[deps.requireAuth()];
   const permit=(permission:string)=>async(req:Request,res:Response,next:NextFunction)=>{
@@ -145,6 +147,7 @@ export function registerAiPlatformRoutes(app:Express,deps:AiPlatformRouterDeps){
   registerKnowledgeRoutes(app,domainRuntime);
   registerTrainingRoutes(app,domainRuntime);
   registerActionRoutes(app,domainRuntime);
+  registerSkillRoutes(app,domainRuntime,skills);
   registerVoiceRoutes(app,domainRuntime,voiceGateway,ariManager);
   registerVoiceMediaRoutes(app,domainRuntime,mediaSessions,mediaRegistry);
   registerRealtimeVoiceRoutes(app,domainRuntime,realtimeSessions,realtimeRegistry);

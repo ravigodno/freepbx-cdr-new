@@ -5,6 +5,8 @@ import {
   redactAiPlatformValue,
 } from "../../core/redaction.js";
 import { AgentContextBuilder } from "../../core/agentContextBuilder.js";
+import { SkillRepository } from "../../skills/skillRepository.js";
+import type { SkillSchema } from "../../skills/skillSchema.js";
 import type { ToolExecutor } from "../../tools/toolExecutor.js";
 import type { HumanTransferService } from "../../transfer/humanTransferService.js";
 import type { BusinessActionService } from "../../actions/businessActionService.js";
@@ -50,12 +52,12 @@ import {
   type ResponseStreamState,
 } from "./delayedResponseStream.js";
 import {
-  createTaskState,
+  createGenericTaskState,
   isFarewellIntent,
-  planReceptionistResponse,
-  updateTaskState,
-  type ReceptionistTaskState,
-} from "./receptionistConversationState.js";
+  planGenericResponse,
+  updateGenericTaskState,
+  type GenericConversationTaskState,
+} from "./genericConversationTaskState.js";
 import {
   ClosingCoordinator,
   type SafeHangupResult,
@@ -163,7 +165,8 @@ type Runtime = {
   fallbackPending:boolean;
   tokenLimitHitCount: number;
   semanticIncompleteCount: number;
-  taskState: ReceptionistTaskState;
+  taskState: GenericConversationTaskState;
+  skills: SkillSchema[];
   closing: ClosingCoordinator;
   commitDispatchMs: number | null;
   responseCreateDispatchMs: number | null;
@@ -402,6 +405,10 @@ export class RealtimeVoiceSessionService {
         input.tenantId,
         Number(source.agent_version_id),
       ),
+      skills = await new SkillRepository(this.store).forAgentVersion(
+        input.tenantId,
+        Number(source.agent_version_id),
+      ),
       instructions = composeRealtimeInstructions(
         context,
         String(source.language || "ru"),
@@ -606,7 +613,8 @@ export class RealtimeVoiceSessionService {
         fallbackPending:false,
         tokenLimitHitCount:0,
         semanticIncompleteCount:0,
-        taskState:createTaskState(),
+        taskState:createGenericTaskState(),
+        skills,
         closing:new ClosingCoordinator(`${input.tenantId}:${source.voice_session_id}`),
         commitDispatchMs:null,
         responseCreateDispatchMs:null,
@@ -1146,7 +1154,7 @@ export class RealtimeVoiceSessionService {
       return false;
     }
     const plan=runtime.receptionist
-      ? planReceptionistResponse(runtime.taskState)
+      ? planGenericResponse(runtime.taskState,runtime.skills)
       : null;
     const started=performance.now();
     if(plan?.text&&runtime.adapter.createPlannedResponse)
@@ -1375,7 +1383,7 @@ export class RealtimeVoiceSessionService {
         runtime.callerPartialText = (
           runtime.callerPartialText + text
         ).slice(0,1000);
-        updateTaskState(runtime.taskState,runtime.callerPartialText);
+        updateGenericTaskState(runtime.taskState,runtime.skills,runtime.callerPartialText);
         runtime.coordinator.updateQueuedAudio(
           this.media.getProtocolMetrics(
             runtime.tenantId,
@@ -1444,7 +1452,7 @@ export class RealtimeVoiceSessionService {
             runtime,id,traceId,finalDecision,
           );
         runtime.coordinator.callerSpeechEnded();
-        updateTaskState(runtime.taskState,text);
+        updateGenericTaskState(runtime.taskState,runtime.skills,text);
         const stop=extractStopCommand(text),
           category=classifyCallerSpeech(text),
           responseText=stop?.semanticRemainder||text;

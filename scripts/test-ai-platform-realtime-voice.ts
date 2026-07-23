@@ -43,13 +43,14 @@ import {
   validatePersonalityProfile,
 } from "../server/ai-platform/agents/agentPersonalityProfile.js";
 import {
-  compileTaskStateInstructions,
-  createTaskState,
+  compileGenericTaskInstructions,
+  createGenericTaskState,
   isFarewellIntent,
-  planReceptionistResponse,
-  setTaskActionState,
-  updateTaskState,
-} from "../server/ai-platform/voice/providers/receptionistConversationState.js";
+  planGenericResponse,
+  setGenericActionState,
+  updateGenericTaskState,
+} from "../server/ai-platform/voice/providers/genericConversationTaskState.js";
+import type { SkillSchema } from "../server/ai-platform/skills/skillSchema.js";
 import { ClosingCoordinator } from "../server/ai-platform/voice/providers/closingCoordinator.js";
 
 const format = {
@@ -95,25 +96,40 @@ async function run() {
   const personality=receptionistPersonalityV10();
   assert.deepEqual(validatePersonalityProfile(personality),[]);
   assert.match(compilePersonalityInstructions(personality),/говори немного быстрее/iu);
-  const task=createTaskState();
-  updateTaskState(task,"Запишите меня завтра в 12 к неврологу");
+  const skill:SkillSchema={id:1,schemaVersion:1,skillKey:"fixture_flow",name:"Fixture",description:"",intentExamples:["оформить запрос"],fields:[
+    {key:"date",label:"Дата",type:"date",required:true,extractionHints:[],synonyms:[],enumSource:null,validation:{},confirmationRequired:true,sensitive:false,displayOrder:1,askTemplate:"На какой день?"},
+    {key:"time",label:"Время",type:"time",required:true,extractionHints:[],synonyms:[],enumSource:null,validation:{},confirmationRequired:true,sensitive:false,displayOrder:2,askTemplate:"На какое время {{field.value}}?"},
+    {key:"resource",label:"Ресурс",type:"entity",required:true,extractionHints:[],synonyms:[],enumSource:"resources",validation:{},confirmationRequired:true,sensitive:false,displayOrder:3,askTemplate:"Какой ресурс выбрать?"},
+  ],actions:[],responseTemplates:{action_unavailable:"Действие пока недоступно. Соединить с сотрудником?",action_success:"Действие подтверждено.",fallback:"Не удалось выполнить действие."},validationRules:{},escalationPolicy:{enabled:true},completionPolicy:{},catalogs:[{catalogKey:"resources",name:"Resources",entityType:"resource",values:[{value:"вариант-а",synonyms:["альфа"]}]}],status:"published"};
+  const task=createGenericTaskState();
+  updateGenericTaskState(task,[skill],"Хочу оформить запрос завтра в 12, вариант альфа");
   assert.equal(task.collectedFields.date,"завтра");
   assert.equal(task.collectedFields.time,"12:00");
-  assert.equal(task.collectedFields.specialist,"невролог");
+  assert.equal(task.collectedFields.resource,"вариант-а");
   assert.deepEqual(task.missingFields,[]);
   assert.equal(task.taskStatus,"ready");
-  const unavailablePlan=planReceptionistResponse(task);
-  assert.equal(task.actionState,"unavailable");
+  const unavailablePlan=planGenericResponse(task,[skill]);
   assert.match(unavailablePlan.text||"",/соединить с сотрудником/iu);
   assert.doesNotMatch(unavailablePlan.text||"",/вы записаны|запись подтверждена/iu);
-  setTaskActionState(task,"succeeded");
-  assert.match(planReceptionistResponse(task).text||"",/запись подтверждена/iu);
-  const taskMissing=createTaskState();
-  updateTaskState(taskMissing,"Запишите меня завтра к неврологу");
+  setGenericActionState(task,[skill],"succeeded");
+  assert.match(planGenericResponse(task,[skill]).text||"",/действие подтверждено/iu);
+  const taskMissing=createGenericTaskState();
+  updateGenericTaskState(taskMissing,[skill],"Оформить запрос завтра, альфа");
   assert.deepEqual(taskMissing.missingFields,["time"]);
-  assert.match(taskMissing.nextQuestion||"",/какое время завтра/iu);
-  assert.doesNotMatch(taskMissing.nextQuestion||"",/день|специалист/iu);
-  assert.match(compileTaskStateInstructions(taskMissing),/missing=time/iu);
+  assert.equal(taskMissing.nextField,"time");
+  assert.match(compileGenericTaskInstructions(taskMissing,[skill]),/missing=time/iu);
+  const scenario=(id:number,key:string,fields:SkillSchema["fields"],catalogs:SkillSchema["catalogs"],utterance:string)=>{
+    const configured:SkillSchema={...skill,id,skillKey:key,intentExamples:[key.replaceAll("_"," ")],fields,catalogs};
+    const state=createGenericTaskState();updateGenericTaskState(state,[configured],utterance);
+    assert.equal(state.activeSkillId,id);assert.deepEqual(state.missingFields,[]);
+  };
+  const field=(key:string,type:any,enumSource:string|null=null):SkillSchema["fields"][number]=>({key,label:key,type,required:true,extractionHints:[],synonyms:[],enumSource,validation:{},confirmationRequired:false,sensitive:false,displayOrder:1,askTemplate:`Уточните ${key}`});
+  scenario(2,"vehicle_service",[field("vehicle","entity","vehicles"),field("service","entity","services"),field("date","date")],[{catalogKey:"vehicles",name:"v",entityType:"vehicle",values:[{value:"марка-а",synonyms:[]}]},{catalogKey:"services",name:"s",entityType:"service",values:[{value:"услуга-а",synonyms:[]}]}],"vehicle service марка-а услуга-а завтра");
+  scenario(3,"table_request",[field("date","date"),field("time","time"),field("guests","number")],[],"4 table request завтра в 19:30");
+  const issueField=field("issue","text");issueField.extractionHints=["issue"];
+  scenario(4,"support_request",[field("product","entity","products"),issueField,field("priority","entity","priorities")],[{catalogKey:"products",name:"p",entityType:"product",values:[{value:"продукт-а",synonyms:[]}]},{catalogKey:"priorities",name:"p",entityType:"priority",values:[{value:"высокий",synonyms:[]}]}],"support request продукт-а issue не запускается высокий");
+  const runtimeSource=fs.readFileSync(new URL("../server/ai-platform/voice/providers/genericConversationTaskState.ts",import.meta.url),"utf8");
+  assert.doesNotMatch(runtimeSource,/SPECIALISTS|requiredAppointmentFields|невролог|ветеринар|клиник/iu);
   assert.equal(isFarewellIntent("Спасибо, до свидания"),true);
   const closing=new ClosingCoordinator("session-safe");
   assert.equal(closing.detectIntent("turn-1").accepted,true);
@@ -613,7 +629,8 @@ async function run() {
   assert.match(instructions.instructions, /6–14 слов/);
   assert.match(instructions.instructions, /не обрывай/);
   assert.match(instructions.instructions, /замолчи и слушай/);
-  assert.match(instructions.instructions,/реальный сервис записи/);
+  assert.match(instructions.instructions,/templates активного skill/);
+  assert.doesNotMatch(instructions.instructions,/невролог|клиник|ветеринар/iu);
   assert.match(instructions.instructions,/выполняй молча/iu);
   assert.doesNotMatch(instructions.instructions,/пока безопасный backend/iu);
   assert.equal(containsInternalAgentDisclosure("У меня нет доступа к безопасному backend"),true);
