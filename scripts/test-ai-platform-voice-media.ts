@@ -21,6 +21,7 @@ import { ExternalMediaAdapter } from "../server/ai-platform/voice/media/transpor
 import { AudioSocketAdapter } from "../server/ai-platform/voice/media/transports/audioSocketAdapter.js";
 import { MediaSessionService } from "../server/ai-platform/voice/media/mediaSessionService.js";
 import type { AudioFrame } from "../server/ai-platform/voice/media/mediaTypes.js";
+import { readVoiceDurationPolicy } from "../server/ai-platform/voice/media/voiceDurationPolicy.js";
 import {
   decodeUlawToPcm16,
   encodePcm16ToUlaw,
@@ -502,6 +503,16 @@ assert.match(socket, /PBXPULS_AI_AUDIOSOCKET_PORT/);
 assert.match(socket, /127\.0\.0\.1/);
 assert.doesNotMatch(external + socket, /0\.0\.0\.0/);
 assert.match(mediaService, /INGRESS_CAPTURE_CAPACITY_FRAMES = 3000/);
+const productionPolicy=await readVoiceDurationPolicy({query:async()=>[
+  {setting_key:"ai.voice_max_call_duration_seconds",setting_value:"1800"},
+  {setting_key:"ai.voice_duration_warning_seconds",setting_value:"60"},
+]} as any);
+assert.equal(productionPolicy.maxCallDurationSeconds,1800);
+assert.equal((await readVoiceDurationPolicy({query:async()=>[{setting_key:"ai.voice_max_call_duration_seconds",setting_value:"99999"}]} as any)).maxCallDurationSeconds,7200);
+assert.equal((await readVoiceDurationPolicy({query:async()=>[{setting_key:"ai.voice_max_call_duration_seconds",setting_value:"1"}]} as any)).maxCallDurationSeconds,60);
+assert.match(mediaService,/runtime\.syntheticSafetyLimit && runtime\.events >= 3000/);
+assert.doesNotMatch(mediaService,/Date\\.now\\(\\) - runtime\\.started > 60_000/);
+assert.match(mediaService,/completion_reason='duration_limit'/);
 assert.match(mediaService, /jitterDropped: jitter\.dropped/);
 assert.match(mediaService, /egressQueueDropped: egressQueue\.dropped/);
 console.log("AI Platform Voice Media tests: OK");

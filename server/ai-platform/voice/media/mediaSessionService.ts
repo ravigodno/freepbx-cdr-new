@@ -23,6 +23,7 @@ import { AudioSocketAdapter } from "./transports/audioSocketAdapter.js";
 import type { MediaTransportAdapter } from "./mediaTransportAdapter.js";
 import { BoundedSerialProcessor } from "./boundedSerialProcessor.js";
 import { MetricsFlusher } from "./metricsFlusher.js";
+import { readVoiceDurationPolicy, type VoiceDurationPolicy } from "./voiceDurationPolicy.js";
 
 const transitions: Record<MediaSessionState, MediaSessionState[]> = {
   created: ["negotiating", "failed", "cancelled"],
@@ -62,6 +63,10 @@ type Runtime = {
   flushFailureReported: boolean;
   stopping: boolean;
   greetingStatus: string | null;
+  durationPolicy: VoiceDurationPolicy;
+  durationWarningSent: boolean;
+  durationEnding: boolean;
+  syntheticSafetyLimit: boolean;
 };
 
 export class MediaSessionService {
@@ -75,6 +80,9 @@ export class MediaSessionService {
         mediaSessionId: number,
         traceId: string,
       ) => Promise<unknown>)
+    | null = null;
+  private durationCloser:
+    | ((tenantId: number, mediaSessionId: number, traceId: string) => Promise<unknown>)
     | null = null;
   constructor(
     private readonly store: AiPlatformStore,
@@ -90,6 +98,11 @@ export class MediaSessionService {
     traceId: string,
     adapter: MediaTransportAdapter,
     aborter: AbortController,
+    durationPolicy: VoiceDurationPolicy = {
+      maxCallDurationSeconds: 60,
+      warningThresholdSeconds: 10,
+    },
+    syntheticSafetyLimit = false,
   ) {
     let runtime: Runtime;
     const reportError = (code: string) => (error: unknown) => {
@@ -120,6 +133,10 @@ export class MediaSessionService {
       flushFailureReported: false,
       stopping: false,
       greetingStatus: null,
+      durationPolicy,
+      durationWarningSent: false,
+      durationEnding: false,
+      syntheticSafetyLimit,
     };
     runtime.ingressProcessor = new BoundedSerialProcessor(
       (frame) => this.processIngress(tenantId, id, frame, traceId),
@@ -370,6 +387,8 @@ export class MediaSessionService {
       input.traceId,
       adapter,
       aborter,
+      { maxCallDurationSeconds: 60, warningThresholdSeconds: 10 },
+      true,
     );
     await adapter.createTransport({
       tenantId: input.tenantId,
@@ -444,7 +463,8 @@ export class MediaSessionService {
         409,
         "Active media session already exists",
       );
-    const format = this.codecs.preferredInternalFormat,
+    const durationPolicy = await readVoiceDurationPolicy(this.store),
+      format = this.codecs.preferredInternalFormat,
       id = await this.repo.create(
         input.tenantId,
         input.voiceSessionId,
@@ -459,7 +479,12 @@ export class MediaSessionService {
         input.traceId,
         adapter,
         aborter,
+        durationPolicy,
       );
+    await this.store.query(
+      "UPDATE ai_voice_media_sessions SET max_call_duration_seconds=?,warning_threshold_seconds=? WHERE tenant_id=? AND id=?",
+      [durationPolicy.maxCallDurationSeconds,durationPolicy.warningThresholdSeconds,input.tenantId,id],
+    );
     await this.transition(input.tenantId, id, "negotiating", input.traceId);
     await adapter.createTransport({
       tenantId: input.tenantId,
@@ -525,10 +550,38 @@ export class MediaSessionService {
   ) {
     const runtime = this.runtimes.get(id);
     if (!runtime || runtime.stopping) return;
-    if (Date.now() - runtime.started > 60_000 || runtime.events++ >= 3000) {
-      await this.fail(tenantId, id, traceId, "media_limit_exceeded");
+    const elapsedMs = Date.now() - runtime.started,
+      warningAtMs = Math.max(
+        0,
+        (runtime.durationPolicy.maxCallDurationSeconds -
+          runtime.durationPolicy.warningThresholdSeconds) *
+          1000,
+      );
+    if (!runtime.durationWarningSent && elapsedMs >= warningAtMs) {
+      runtime.durationWarningSent = true;
+      void this.audit.append({
+        tenantId,traceId,actorType:"service",eventType:"voice_duration_warning" as any,
+        entityType:"voice_media_session",entityId:String(id),decision:"warning",
+        details:{remainingSeconds:runtime.durationPolicy.warningThresholdSeconds},
+      }).catch(()=>{});
+    }
+    if (
+      elapsedMs >= runtime.durationPolicy.maxCallDurationSeconds * 1000 ||
+      (runtime.syntheticSafetyLimit && runtime.events >= 3000)
+    ) {
+      if (!runtime.durationEnding) {
+        runtime.durationEnding = true;
+        await this.store.query(
+          "UPDATE ai_voice_media_sessions SET completion_reason='duration_limit' WHERE tenant_id=? AND id=?",
+          [tenantId,id],
+        );
+        void (this.durationCloser
+          ? this.durationCloser(tenantId,id,traceId)
+          : this.stop(tenantId,id,traceId,"completed")).catch(()=>{});
+      }
       return;
     }
+    runtime.events++;
     if (Date.now() - frame.timestampMs > 5_000) {
       await this.fail(tenantId, id, traceId, "event_loop_lag");
       return;
@@ -955,6 +1008,11 @@ export class MediaSessionService {
     ) => Promise<unknown>,
   ) {
     this.providerCloser = closer;
+  }
+  setDurationCloser(
+    closer: (tenantId:number,mediaSessionId:number,traceId:string)=>Promise<unknown>,
+  ) {
+    this.durationCloser = closer;
   }
   async shutdown() {
     for (const [id, runtime] of [...this.runtimes])

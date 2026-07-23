@@ -8,6 +8,9 @@ import { buildLiveDialplanPreview } from "../server/ai-platform/voice/live/liveD
 import { readLiveVoiceConfig } from "../server/ai-platform/voice/live/liveVoiceConfig.js";
 import { enforceVoiceBindingPolicy } from "../server/ai-platform/voice/voiceSessionPolicy.js";
 import { buildVoiceRouteDialplanPreview } from "../server/ai-platform/voice/management/voiceRouteDialplan.js";
+import os from "node:os";
+import path from "node:path";
+import { findRecordingWithinRoot, safeRecordingReference } from "../server/ai-platform/voice/recordings/voiceRecordingReconciliationService.js";
 const freePort = () =>
     new Promise<number>((resolve, reject) => {
       const server = net.createServer();
@@ -37,6 +40,13 @@ const freePort = () =>
     return packets;
   };
 async function run() {
+  const recordingRoot=fs.mkdtempSync(path.join(os.tmpdir(),"pbxpuls-recording-test-")),recordingName="ai-123.45.wav",recordingPath=path.join(recordingRoot,recordingName);
+  fs.writeFileSync(recordingPath,Buffer.alloc(32));
+  assert.equal(findRecordingWithinRoot(recordingRoot,recordingName),recordingPath);
+  assert.equal(findRecordingWithinRoot(recordingRoot,"../outside.wav"),null);
+  assert.match(safeRecordingReference(1,recordingName),/^rec_[a-f0-9]{64}$/);
+  assert.equal(safeRecordingReference(1,recordingName),safeRecordingReference(1,recordingName));
+  fs.rmSync(recordingRoot,{recursive:true,force:true});
   assert.match(
     fs.readFileSync("server/ai-platform/voice/ari/ariClientAdapter.ts", "utf8"),
     /format: 'slin'/,

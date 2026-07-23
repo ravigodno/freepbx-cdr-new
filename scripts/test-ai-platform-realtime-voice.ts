@@ -14,6 +14,7 @@ import {
 } from "../server/ai-platform/voice/providers/realtimeVoicePolicy.js";
 import { normalizeOpenAIRealtimeEvent } from "../server/ai-platform/voice/providers/realtimeVoiceEventNormalizer.js";
 import type { AudioFrame } from "../server/ai-platform/voice/media/mediaTypes.js";
+import { estimateVoiceCost, projectSafeVoiceUsage } from "../server/ai-platform/voice/transcripts/voiceUsageProjection.js";
 
 const format = {
   codec: "slin16" as const,
@@ -81,6 +82,11 @@ async function run() {
   assert.equal(normalizeOpenAIRealtimeEvent({type:"conversation.item.input_audio_transcription.failed",error:{code:"transcription_failed"}},providerFrame)?.type,"transcript_unavailable");
   const usageEvent:any=normalizeOpenAIRealtimeEvent({type:"response.done",response:{status:"completed",usage:{input_token_details:{audio_tokens:12},output_token_details:{audio_tokens:8}}}},providerFrame);
   assert.equal(usageEvent.usage.input_token_details.audio_tokens,12);
+  const safeUsage=projectSafeVoiceUsage({total_tokens:30,input_tokens:20,output_tokens:10,input_token_details:{audio_tokens:12,cached_tokens:3},output_token_details:{audio_tokens:8},api_key:"must-not-project"},{inputSeconds:61,outputSeconds:22});
+  assert.equal(safeUsage.total_tokens,30);assert.equal(safeUsage.audio_tokens,20);assert.equal(safeUsage.cached_tokens,3);assert.equal((safeUsage as any).api_key,undefined);assert.equal(safeUsage.estimated_cost,null);
+  const priced=estimateVoiceCost(safeUsage,{version:"2026-07-test",currency:"USD",rates:{audio:.001}});
+  assert.equal(priced.estimated_cost,.02);assert.equal(priced.pricing_snapshot_version,"2026-07-test");
+  assert.equal(estimateVoiceCost(safeUsage,null).estimated_cost,null);
   assert.equal(Buffer.concat(providerChunks).equals(largeProviderDelta), true);
   assert.equal(
     normalizeOpenAIRealtimeEvent(
@@ -256,11 +262,17 @@ async function run() {
     /asterisk\s+-rx|external_host|createBridge|answerChannel/i,
   );
   assert.match(transcriptService,/spoken_text_safe/);
+  assert.match(transcriptService,/provider_item_ref/);
+  assert.match(transcriptService,/current_partial_text_safe=CONCAT/);
+  assert.match(transcriptService,/COALESCE\(last_delta_at,started_at\)/);
+  assert.match(service,/speechEndToFirstAudioMs/);
   assert.match(transcriptService,/incomplete=1/);
   assert.match(transcriptService,/redactAiPlatformText/);
   assert.doesNotMatch(transcriptService+transcriptRouter,/input_audio_buffer|base64|Authorization|OPENAI_API_KEY|raw PCM/i);
   assert.match(transcriptRouter,/text\/event-stream/);
   assert.match(transcriptRouter,/export_ai_voice_transcripts/);
+  assert.match(transcriptRouter,/voice_live_delivery_summary/);
+  assert.match(transcriptRouter,/recording_stream_url/);
   console.log("AI Platform realtime voice tests passed");
 }
 run().catch((error) => {

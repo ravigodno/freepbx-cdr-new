@@ -1064,6 +1064,16 @@ const MIGRATIONS: Migration[] = [
       `INSERT IGNORE INTO role_permissions(role_id,permission_id)SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key IN('view_ai_voice_agents','manage_ai_voice_agents','test_ai_voice_agents','manage_ai_voice_routes','view_ai_voice_transcripts','export_ai_voice_transcripts')WHERE r.role_key IN('su','admin')`,
       `INSERT IGNORE INTO role_permissions(role_id,permission_id)SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key IN('view_ai_voice_agents','test_ai_voice_agents','view_ai_voice_transcripts')WHERE r.role_key='manager'`
     ],seed:async()=>seedLegacyAiPlatformPermissions(['view_ai_voice_agents','manage_ai_voice_agents','test_ai_voice_agents','manage_ai_voice_routes','view_ai_voice_transcripts','export_ai_voice_transcripts'])
+  },
+  {
+    key:'20260723_039_finalize_voice_call_history',description:'Finalize voice media limits, recordings, transcript aggregation and usage',statements:[
+      `ALTER TABLE ai_voice_sessions ADD COLUMN completion_reason VARCHAR(64) NULL,ADD COLUMN recording_status ENUM('pending','available','unavailable','invalid') NOT NULL DEFAULT 'pending',ADD COLUMN recording_mime_type VARCHAR(64) NULL,ADD COLUMN recording_size_bytes BIGINT UNSIGNED NULL,ADD COLUMN recording_duration_ms BIGINT UNSIGNED NULL,ADD COLUMN cdr_billsec_seconds INT UNSIGNED NULL,ADD COLUMN cdr_duration_seconds INT UNSIGNED NULL,ADD COLUMN cdr_internal_ref CHAR(64) NULL`,
+      `ALTER TABLE ai_voice_media_sessions ADD COLUMN max_call_duration_seconds INT UNSIGNED NULL,ADD COLUMN warning_threshold_seconds INT UNSIGNED NULL,ADD COLUMN completion_reason VARCHAR(64) NULL`,
+      `ALTER TABLE ai_realtime_voice_sessions ADD COLUMN speech_end_to_first_audio_ms INT UNSIGNED NULL,ADD COLUMN commit_to_first_audio_ms INT UNSIGNED NULL,ADD COLUMN session_start_to_first_audio_ms INT UNSIGNED NULL`,
+      `ALTER TABLE ai_voice_transcript_utterances ADD COLUMN provider_item_ref CHAR(16) NULL,ADD COLUMN provider_response_ref CHAR(16) NULL,ADD COLUMN current_partial_text_safe TEXT NULL,ADD COLUMN final_text_safe TEXT NULL,ADD COLUMN last_delta_at DATETIME NULL,ADD INDEX idx_ai_voice_transcript_item(tenant_id,realtime_session_id,speaker,provider_item_ref)`,
+      `UPDATE ai_voice_transcript_utterances SET last_delta_at=COALESCE(ended_at,started_at),current_partial_text_safe=IF(is_final=0,text_safe,NULL),final_text_safe=IF(is_final=1,text_safe,NULL),ended_at=IF(is_final=0,COALESCE(updated_at,started_at),ended_at)`,
+      `INSERT IGNORE INTO settings(setting_key,setting_value,value_type,category,is_secret,description)VALUES('ai.voice_max_call_duration_seconds','1800','number','ai_platform',0,'Maximum voice call duration, clamped to 60..7200 seconds'),('ai.voice_duration_warning_seconds','60','number','ai_platform',0,'Warning lead time before graceful duration limit'),('ai.voice_pricing_snapshot_version','','string','ai_platform',0,'Versioned server-side voice pricing snapshot'),('ai.voice_pricing_currency','USD','string','ai_platform',0,'Voice pricing currency'),('ai.voice_pricing_rates_json','{}','json','ai_platform',0,'Versioned provider/model voice pricing rates per token')`
+    ]
   }
 ];
 

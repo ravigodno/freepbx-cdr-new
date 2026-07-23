@@ -27,6 +27,7 @@ import {
 import { readOpenAIRealtimeConfig } from "./adapters/openaiRealtimeAdapter.js";
 import { MetricsFlusher } from "../media/metricsFlusher.js";
 import type { VoiceTranscriptService } from "../transcripts/voiceTranscriptService.js";
+import { readVoiceDurationPolicy } from "../media/voiceDurationPolicy.js";
 
 const transitions: Record<RealtimeVoiceState, RealtimeVoiceState[]> = {
   created: ["connecting", "failed", "cancelled"],
@@ -59,7 +60,16 @@ type Runtime = {
   firstInputAt: number | null;
   firstOutputAt: number | null;
   commitAt: number | null;
+  speechEndAt: number | null;
+  startedMonotonic: number;
+  commitMonotonic: number | null;
+  speechEndMonotonic: number | null;
+  firstOutputMonotonic: number | null;
   firstResponseLatencyMs: number | null;
+  speechEndToFirstAudioMs: number | null;
+  commitToFirstAudioMs: number | null;
+  sessionStartToFirstAudioMs: number | null;
+  maxCallDurationMs: number;
   interruptions: number;
   toolCalls: number;
   transcripts: Array<{ kind: any; text: string }>;
@@ -147,6 +157,9 @@ export class RealtimeVoiceSessionService {
         row.first_response_latency_ms === null
           ? null
           : Number(row.first_response_latency_ms),
+      speechEndToFirstAudioMs: row.speech_end_to_first_audio_ms === null ? null : Number(row.speech_end_to_first_audio_ms),
+      commitToFirstAudioMs: row.commit_to_first_audio_ms === null ? null : Number(row.commit_to_first_audio_ms),
+      sessionStartToFirstAudioMs: row.session_start_to_first_audio_ms === null ? null : Number(row.session_start_to_first_audio_ms),
       interruptionCount: Number(row.interruption_count),
       toolCallCount: Number(row.tool_call_count),
       failureCode: row.failure_code || null,
@@ -399,7 +412,8 @@ export class RealtimeVoiceSessionService {
         instructionChecksum: instructions.checksum,
       },
     });
-    const aborter = new AbortController(),
+    const durationPolicy = await readVoiceDurationPolicy(this.store),
+      aborter = new AbortController(),
       runtime: Runtime = {
         tenantId: input.tenantId,
         voiceSessionId: Number(source.voice_session_id),
@@ -418,7 +432,16 @@ export class RealtimeVoiceSessionService {
         firstInputAt: null,
         firstOutputAt: null,
         commitAt: null,
+        speechEndAt: null,
+        startedMonotonic: performance.now(),
+        commitMonotonic: null,
+        speechEndMonotonic: null,
+        firstOutputMonotonic: null,
         firstResponseLatencyMs: null,
+        speechEndToFirstAudioMs: null,
+        commitToFirstAudioMs: null,
+        sessionStartToFirstAudioMs: null,
+        maxCallDurationMs: durationPolicy.maxCallDurationSeconds * 1000,
         interruptions: 0,
         toolCalls: 0,
         transcripts: [],
@@ -450,16 +473,18 @@ export class RealtimeVoiceSessionService {
       runtime.unsubscribeVad = this.media.subscribeVad(
         input.tenantId,
         input.mediaSessionId,
-        (event) =>
-          event === "speech_ended"
-            ? this.commit(input.tenantId, id, input.traceId).then(() => {})
-            : this.get(input.tenantId, id).then((current) =>
-                current.state === "responding"
-                  ? this.bargeIn(input.tenantId, id, input.traceId).then(
-                      () => {},
-                    )
-                  : undefined,
-              ),
+        (event) => {
+          if (event === "speech_ended") {
+            runtime.speechEndAt = Date.now();
+            runtime.speechEndMonotonic = performance.now();
+            return this.commit(input.tenantId, id, input.traceId).then(() => {});
+          }
+          return this.get(input.tenantId, id).then((current) =>
+            current.state === "responding"
+              ? this.bargeIn(input.tenantId, id, input.traceId).then(() => {})
+              : undefined,
+          );
+        },
       );
       await this.transition(input.tenantId, id, "listening", input.traceId);
       await this.store.query(
@@ -482,12 +507,9 @@ export class RealtimeVoiceSessionService {
   private async input(id: number, traceId: string, frame: AudioFrame) {
     const runtime = this.runtimes.get(id);
     if (!runtime || runtime.blocked) return;
-    if (
-      Date.now() - runtime.started > 60000 ||
-      runtime.inputFrames >= 3000 ||
-      Date.now() - frame.timestampMs > 5000
-    ) {
-      await this.fail(runtime.tenantId, id, traceId, "realtime_limit_exceeded");
+    if (Date.now() - runtime.started >= runtime.maxCallDurationMs) return;
+    if (Date.now() - frame.timestampMs > 5000) {
+      await this.fail(runtime.tenantId, id, traceId, "event_loop_lag");
       return;
     }
     runtime.inputFrames++;
@@ -510,6 +532,7 @@ export class RealtimeVoiceSessionService {
     if (current.state !== "listening") return this.get(tenantId, id);
     runtime.responsePending = true;
     runtime.commitAt = Date.now();
+    runtime.commitMonotonic = performance.now();
     try {
       await this.audit.append({
         tenantId,
@@ -669,9 +692,19 @@ export class RealtimeVoiceSessionService {
       runtime.outputFrames++;
       runtime.outputAudioMs += event.frame.durationMs;
       runtime.firstOutputAt ??= Date.now();
-      if (runtime.firstResponseLatencyMs === null && runtime.commitAt)
+      if (runtime.firstOutputMonotonic === null) {
+        runtime.firstOutputMonotonic = performance.now();
+        runtime.commitToFirstAudioMs = runtime.commitMonotonic === null
+          ? null : Math.max(1,Math.round(runtime.firstOutputMonotonic-runtime.commitMonotonic));
+        runtime.speechEndToFirstAudioMs = runtime.speechEndMonotonic === null
+          ? null : Math.max(1,Math.round(runtime.firstOutputMonotonic-runtime.speechEndMonotonic));
+        runtime.sessionStartToFirstAudioMs = Math.max(
+          1,
+          Math.round(runtime.firstOutputMonotonic-runtime.startedMonotonic),
+        );
         runtime.firstResponseLatencyMs =
-          runtime.firstOutputAt - runtime.commitAt;
+          runtime.speechEndToFirstAudioMs ?? runtime.commitToFirstAudioMs;
+      }
       await this.media.enqueueEgress(
         runtime.tenantId,
         Number(row.media_session_id),
@@ -700,7 +733,7 @@ export class RealtimeVoiceSessionService {
         runtime.transcripts.push({ kind: event.kind, text });
         if (runtime.transcripts.length > 20) runtime.transcripts.shift();
       }
-      if(this.transcriptService){const voice=(await this.store.query('SELECT route_binding_id,agent_id,agent_version_id FROM ai_voice_sessions WHERE tenant_id=? AND id=? LIMIT 1',[runtime.tenantId,runtime.voiceSessionId]))[0];if(voice)await this.transcriptService.transcript({tenantId:runtime.tenantId,voiceSessionId:runtime.voiceSessionId,mediaSessionId:runtime.mediaSessionId,realtimeSessionId:id,bindingId:voice.route_binding_id?Number(voice.route_binding_id):null,agentId:Number(voice.agent_id),agentVersionId:Number(voice.agent_version_id),kind:event.kind,text,eventId:event.eventId,confidence:event.confidence});}
+      if(this.transcriptService){const voice=(await this.store.query('SELECT route_binding_id,agent_id,agent_version_id FROM ai_voice_sessions WHERE tenant_id=? AND id=? LIMIT 1',[runtime.tenantId,runtime.voiceSessionId]))[0];if(voice)await this.transcriptService.transcript({tenantId:runtime.tenantId,voiceSessionId:runtime.voiceSessionId,mediaSessionId:runtime.mediaSessionId,realtimeSessionId:id,bindingId:voice.route_binding_id?Number(voice.route_binding_id):null,agentId:Number(voice.agent_id),agentVersionId:Number(voice.agent_version_id),kind:event.kind,text,eventId:event.eventId,itemId:event.itemId,responseId:event.responseId,confidence:event.confidence});}
       if (event.kind === "input_final") {
         if (!text.trim()) runtime.responsePending = false;
         else {
@@ -924,6 +957,9 @@ export class RealtimeVoiceSessionService {
         ? new Date(runtime.firstOutputAt)
         : null,
       firstResponseLatencyMs: runtime.firstResponseLatencyMs,
+      speechEndToFirstAudioMs: runtime.speechEndToFirstAudioMs,
+      commitToFirstAudioMs: runtime.commitToFirstAudioMs,
+      sessionStartToFirstAudioMs: runtime.sessionStartToFirstAudioMs,
       interruptions: runtime.interruptions,
       toolCalls: runtime.toolCalls,
       metadata: redactAiPlatformValue({

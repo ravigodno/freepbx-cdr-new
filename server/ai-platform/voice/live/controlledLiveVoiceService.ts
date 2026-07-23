@@ -12,6 +12,7 @@ import { LiveBridgeService } from "./liveBridgeService.js";
 import type { LiveReadiness, LiveRuntimeMetrics } from "./liveVoiceTypes.js";
 import { AiPlatformError } from "../../core/errors.js";
 import { readOpenAIRealtimeConfig } from "../providers/adapters/openaiRealtimeAdapter.js";
+import type { VoiceRecordingReconciliationService } from "../recordings/voiceRecordingReconciliationService.js";
 
 export class ControlledLiveVoiceService {
   private active = new Map<
@@ -32,6 +33,7 @@ export class ControlledLiveVoiceService {
     private media: MediaSessionService,
     private realtime: RealtimeVoiceSessionService,
     private bridges: LiveBridgeService,
+    private recordings: VoiceRecordingReconciliationService | null = null,
   ) {}
   async readiness(tenantId: number): Promise<LiveReadiness> {
     const config = await readLiveVoiceConfig(this.store),
@@ -370,6 +372,15 @@ export class ControlledLiveVoiceService {
       decision: "completed",
       details: {},
     });
+    this.recordings?.schedule(tenantId,voiceSessionId,traceId);
+  }
+  async durationLimit(tenantId:number,mediaSessionId:number,traceId:string){
+    const entry=[...this.active.entries()].find(([,value])=>value.tenantId===tenantId&&value.mediaSessionId===mediaSessionId);
+    if(!entry)return this.media.stop(tenantId,mediaSessionId,traceId,"completed");
+    const [voiceSessionId,active]=entry;
+    await this.store.query("UPDATE ai_voice_sessions SET completion_reason='duration_limit' WHERE tenant_id=? AND id=?",[tenantId,voiceSessionId]);
+    await this.cleanup(tenantId,voiceSessionId,traceId);
+    await this.bridges.releaseCaller(active.callerChannel).catch(()=>{});
   }
   async observe(event: {
     tenantId: number;
