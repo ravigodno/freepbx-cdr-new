@@ -60,6 +60,7 @@ import{startMediaWorker,stopMediaWorker}from'../voice/media-worker/mediaWorkerCl
 import{startMainEventLoopDiagnostics}from'../voice/diagnostics/mainEventLoopDiagnostics.js';
 import{SkillService}from'../skills/skillService.js';
 import{registerSkillRoutes}from'../skills/api/registerSkillRoutes.js';
+import{OPENAI_REALTIME_VOICES,DEFAULT_RUSSIAN_TEST_PHRASE,normalizeVoiceProfile,compileVoiceProfileInstructions}from'../voice/profiles/voiceProfile.js';
 
 type Checker=(req:Request,permission:string)=>Promise<boolean>;
 export interface AiPlatformRouterDeps { requireAuth:any; checkPermission:Checker; readLegacyDb:()=>Promise<any>; store?:AiPlatformStore; isEnabled?:()=>Promise<boolean>;sandboxProvider?:ProviderExecutor;pbxReadServices?:PBXReadServices;pbxTransferService?:PBXTransferService }
@@ -133,6 +134,51 @@ export function registerAiPlatformRoutes(app:Express,deps:AiPlatformRouterDeps){
   app.post('/api/ai-platform/agents/:id/versions',...authenticated,permit('manage_ai_agents'),enabled,wrap(async(req,res)=>{const tenant=await getInstallationTenant(store),id=positiveInt(req.params.id,'agent id');const data=await builder.createDraftVersion(tenant.id,id,{config:parseJsonObject(req.body?.config||{},'config'),systemPrompt:String(req.body?.systemPrompt||''),changeReason:String(req.body?.changeReason||'')},actor(req));res.status(201).json({success:true,data});}));
   app.post('/api/ai-platform/agents/:id/versions/:versionId/publish',...authenticated,permit('publish_ai_agents'),enabled,wrap(async(req,res)=>{const tenant=await getInstallationTenant(store);res.json({success:true,data:await lifecycle.publishVersion(tenant.id,positiveInt(req.params.id,'agent id'),positiveInt(req.params.versionId,'version id'),actor(req))});}));
   app.post('/api/ai-platform/agents/:id/versions/:versionId/archive',...authenticated,permit('manage_ai_agents'),enabled,wrap(async(req,res)=>{const tenant=await getInstallationTenant(store);res.json({success:true,data:await lifecycle.archiveVersion(tenant.id,positiveInt(req.params.id,'agent id'),positiveInt(req.params.versionId,'version id'),actor(req))});}));
+  app.get('/api/ai-platform/voice-profiles/options',...authenticated,permit('view_ai_platform'),enabled,wrap(async(_req,res)=>{
+    res.json({success:true,data:{provider:'openai_realtime',voices:OPENAI_REALTIME_VOICES,testPhrase:DEFAULT_RUSSIAN_TEST_PHRASE,providerApiFields:['voice','instructions'],auditoryReviewRequired:true}});
+  }));
+  app.post('/api/ai-platform/voice-profiles/preview-audio',...authenticated,permit('run_ai_test_sessions'),enabled,wrap(async(req,res)=>{
+    const profile=normalizeVoiceProfile(req.body?.voiceProfile||{}),external=readOpenAIRealtimeConfig();
+    if(!external.configured)throw new AiPlatformError('conflict',409,'Realtime voice provider is not configured');
+    const adapter=new OpenAIRealtimeAdapter(),chunks:Buffer[]=[];
+    const completed=new Promise<void>((resolve,reject)=>{
+      const timer=setTimeout(()=>reject(new Error('voice_preview_timeout')),20000);
+      adapter.subscribeEvents(event=>{
+        if(event.type==='output_audio')chunks.push(Buffer.from(event.frame.payload));
+        if(event.type==='response_completed'){clearTimeout(timer);resolve()}
+        if(event.type==='error'){clearTimeout(timer);reject(new Error('voice_preview_failed'))}
+      });
+    });
+    const config:any={providerKey:'openai_realtime',apiKey:external.apiKey,url:external.url,model:external.model,voice:profile.voiceId,language:profile.locale,instructions:compileVoiceProfileInstructions(profile),greetingOutputTokens:160,inputFormat:{codec:'slin16',sampleRate:16000,channels:1,frameDurationMs:20},outputFormat:{codec:'slin16',sampleRate:16000,channels:1,frameDurationMs:20},serverVad:false,tools:[],timeoutMs:10000};
+    try{await adapter.connect(config);await adapter.configureSession(config);await adapter.startInitialGreeting(DEFAULT_RUSSIAN_TEST_PHRASE);await completed}
+    finally{await adapter.close()}
+    const pcm=Buffer.concat(chunks),wav=Buffer.alloc(44+pcm.length);
+    wav.write('RIFF',0);wav.writeUInt32LE(36+pcm.length,4);wav.write('WAVEfmt ',8);wav.writeUInt32LE(16,16);wav.writeUInt16LE(1,20);wav.writeUInt16LE(1,22);wav.writeUInt32LE(16000,24);wav.writeUInt32LE(32000,28);wav.writeUInt16LE(2,32);wav.writeUInt16LE(16,34);wav.write('data',36);wav.writeUInt32LE(pcm.length,40);pcm.copy(wav,44);
+    res.type('audio/wav').send(wav);
+  }));
+  app.get('/api/ai-platform/agents/:id/voice-settings',...authenticated,permit('view_ai_platform'),enabled,wrap(async(req,res)=>{
+    const tenant=await getInstallationTenant(store),id=positiveInt(req.params.id,'agent id');
+    const rows=await store.query(`SELECT v.id version_id,v.version_number,v.lifecycle_status,v.config_json FROM ai_agent_versions v JOIN ai_agents a ON a.id=v.agent_id WHERE a.id=? AND a.tenant_id=? ORDER BY v.version_number DESC LIMIT 1`,[id,tenant.id]);
+    if(!rows.length)throw new AiPlatformError('not_found',404,'Agent not found');
+    const config:any=parseJsonObject(rows[0].config_json||{},'config_json');
+    res.json({success:true,data:{versionId:rows[0].version_id,versionNumber:rows[0].version_number,lifecycleStatus:rows[0].lifecycle_status,voiceProfile:config.voiceProfile||null,endOfTurnSilenceMs:Number(config.voice?.endOfTurnSilenceMs||450),pronunciationEntries:config.pronunciationEntries||[]}});
+  }));
+  app.post('/api/ai-platform/agents/:id/voice-settings/preview',...authenticated,permit('manage_ai_agents'),enabled,wrap(async(req,res)=>{
+    positiveInt(req.params.id,'agent id');
+    const profile=normalizeVoiceProfile(req.body?.voiceProfile||{}),vad=Math.max(300,Math.min(Number(req.body?.endOfTurnSilenceMs)||350,600));
+    const entries=Array.isArray(req.body?.pronunciationEntries)?req.body.pronunciationEntries.slice(0,100):[];
+    res.json({success:true,data:{voiceProfile:profile,endOfTurnSilenceMs:vad,compiledInstructions:compileVoiceProfileInstructions(profile,entries),testPhrase:DEFAULT_RUSSIAN_TEST_PHRASE,latencyEstimate:{vadMs:vad,startupBufferMs:500,providerDependent:true},changesApplied:false,auditoryReviewRequired:true}});
+  }));
+  app.post('/api/ai-platform/agents/:id/voice-settings/draft',...authenticated,permit('manage_ai_agents'),enabled,wrap(async(req,res)=>{
+    const tenant=await getInstallationTenant(store),id=positiveInt(req.params.id,'agent id'),profile=normalizeVoiceProfile(req.body?.voiceProfile||{});
+    const rows=await store.query('SELECT config_json,system_prompt FROM ai_agent_versions WHERE tenant_id=? AND agent_id=? ORDER BY version_number DESC LIMIT 1',[tenant.id,id]);
+    if(!rows.length)throw new AiPlatformError('not_found',404,'Agent not found');
+    const config:any=parseJsonObject(rows[0].config_json||{},'config_json'),vad=Math.max(300,Math.min(Number(req.body?.endOfTurnSilenceMs)||350,600));
+    config.voiceProfile=profile;config.voice={...(config.voice||{}),endOfTurnSilenceMs:vad,speakingRate:profile.speakingRate,pauseStyle:profile.pauseStyle};
+    config.pronunciationEntries=Array.isArray(req.body?.pronunciationEntries)?req.body.pronunciationEntries.slice(0,100):[];
+    const data=await builder.createDraftVersion(tenant.id,id,{config,systemPrompt:String(rows[0].system_prompt||''),changeReason:'Voice profile settings'},actor(req));
+    res.status(201).json({success:true,data});
+  }));
 
   app.get('/api/ai-platform/templates',...authenticated,permit('view_ai_platform'),enabled,wrap(async(req,res)=>{const tenant=await getInstallationTenant(store),p=page(req);const rows=await store.query(`SELECT id,tenant_id,template_key,name,description,agent_type,industry,default_behavior_profile_id,status,created_at,updated_at FROM ai_agent_templates WHERE tenant_id=? OR tenant_id IS NULL ORDER BY tenant_id IS NULL DESC,name LIMIT ? OFFSET ?`,[tenant.id,p.limit,p.offset]);res.json({success:true,rows,page:Math.floor(p.offset/p.limit)+1,limit:p.limit});}));
   app.post('/api/ai-platform/agents/from-template',...authenticated,permit('create_ai_agents'),enabled,wrap(async(req,res)=>{const tenant=await getInstallationTenant(store);const data=await builder.createFromTemplate(tenant.id,{templateId:positiveInt(req.body?.templateId,'template id'),agentKey:req.body?.agentKey,name:req.body?.name,role:req.body?.role,behaviorProfileId:req.body?.behaviorProfileId?positiveInt(req.body.behaviorProfileId,'behavior profile id'):undefined,permissionKeys:req.body?.permissionKeys,personality:req.body?.personality,voice:req.body?.voice,farewellPolicy:req.body?.farewellPolicy},actor(req));res.status(201).json({success:true,data});}));

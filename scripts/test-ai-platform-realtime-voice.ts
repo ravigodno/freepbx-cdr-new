@@ -23,6 +23,8 @@ import {
 } from "../server/ai-platform/voice/providers/voiceTurnCoordinator.js";
 import { ProviderSilenceTracker } from "../server/ai-platform/voice/providers/providerSilenceMetrics.js";
 import { VoiceTranscriptService } from "../server/ai-platform/voice/transcripts/voiceTranscriptService.js";
+import { VadDetector } from "../server/ai-platform/voice/media/vadDetector.js";
+import { OPENAI_REALTIME_VOICES,compileVoiceProfileInstructions,normalizeVoiceProfile } from "../server/ai-platform/voice/profiles/voiceProfile.js";
 import {
   assessSemanticCompletion,
   decideResponseCompletion,
@@ -101,6 +103,22 @@ const frame = (source: string): AudioFrame => ({
 });
 
 async function run() {
+  for(const silenceMs of [300,350,400]){
+    const vad=new VadDetector(700,2,silenceMs),speech=new Int16Array(160).fill(1800),quiet=new Int16Array(160);
+    vad.process(speech);vad.process(speech);
+    for(let elapsed=0;elapsed<250;elapsed+=20)assert.notEqual(vad.process(quiet).type,'speech_ended',`${silenceMs}ms VAD ended an internal 250ms pause`);
+    vad.process(speech);
+    let ended=0;
+    for(let elapsed=0;elapsed<450;elapsed+=20)if(vad.process(quiet).type==='speech_ended')ended++;
+    assert.equal(ended,1,`${silenceMs}ms VAD must commit the final pause exactly once`);
+  }
+  const voiceProfile=normalizeVoiceProfile({voiceId:'cedar',locale:'ru-RU'});
+  assert.equal(voiceProfile.voiceId,'cedar');
+  assert.ok(OPENAI_REALTIME_VOICES.includes('marin')&&OPENAI_REALTIME_VOICES.includes('cedar'));
+  const voiceInstructions=compileVoiceProfileInstructions(voiceProfile,[{source:'PBXPuls',pronunciation:'Пи-Би-Икс Пульс'}]);
+  assert.match(voiceInstructions,/нейтральное русское произношение/iu);
+  assert.match(voiceInstructions,/короткие естественные паузы/iu);
+  assert.match(voiceInstructions,/Пи-Би-Икс Пульс/u);
   const personality=receptionistPersonalityV10();
   assert.deepEqual(validatePersonalityProfile(personality),[]);
   assert.match(compilePersonalityInstructions(personality),/говори немного быстрее/iu);
@@ -767,6 +785,16 @@ async function run() {
   assert.match(migration,/output_token_limit_hit/);
   assert.match(transcriptService,/COALESCE\(last_delta_at,started_at\)/);
   assert.match(service,/speechEndToFirstAudioMs/);
+  assert.match(service,/deterministicFastPath/);
+  assert.match(service,/classifierSkipped/);
+  assert.match(service,/llmExtractionSkipped/);
+  assert.doesNotMatch(service,/await this\.transcriptService\.transcript/);
+  assert.doesNotMatch(service,/const current = await this\.row\(tenantId, id\)/);
+  assert.match(migration,/20260723_049_russian_voice_latency_v15/);
+  assert.match(migration,/ai_voice_profiles/);
+  assert.match(migration,/ai_pronunciation_dictionaries/);
+  assert.match(migration,/version_number=14/);
+  assert.match(migration,/endOfTurnSilenceMs:350/);
   assert.match(transcriptService,/incomplete=1/);
   assert.match(transcriptService,/redactAiPlatformText/);
   assert.doesNotMatch(transcriptService+transcriptRouter,/input_audio_buffer|base64|Authorization|OPENAI_API_KEY|raw PCM/i);

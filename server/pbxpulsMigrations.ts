@@ -1131,8 +1131,52 @@ const MIGRATIONS: Migration[] = [
     description:'Add configured skill routing and publish receptionist version 14',
     statements:[],
     seed:seedConfiguredSkillRouterV14
+  },
+  {
+    key:'20260723_049_russian_voice_latency_v15',
+    description:'Add versioned voice profiles and publish controlled receptionist version 15',
+    statements:[
+      `CREATE TABLE IF NOT EXISTS ai_voice_profiles(id BIGINT AUTO_INCREMENT PRIMARY KEY,tenant_id BIGINT NOT NULL,profile_key VARCHAR(64) NOT NULL,version_number INT UNSIGNED NOT NULL,name VARCHAR(191) NOT NULL,provider VARCHAR(64) NOT NULL,profile_json LONGTEXT NOT NULL,status ENUM('draft','published','archived') NOT NULL DEFAULT 'draft',created_by VARCHAR(191) NOT NULL,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,published_at DATETIME NULL,UNIQUE KEY uniq_ai_voice_profile_version(tenant_id,profile_key,version_number),CONSTRAINT fk_ai_voice_profile_tenant FOREIGN KEY(tenant_id)REFERENCES ai_tenants(id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS ai_pronunciation_dictionaries(id BIGINT AUTO_INCREMENT PRIMARY KEY,tenant_id BIGINT NOT NULL,dictionary_key VARCHAR(64) NOT NULL,version_number INT UNSIGNED NOT NULL,name VARCHAR(191) NOT NULL,scope ENUM('global','agent','skill') NOT NULL DEFAULT 'agent',agent_id BIGINT NULL,skill_id BIGINT NULL,status ENUM('draft','published','archived') NOT NULL DEFAULT 'draft',created_by VARCHAR(191) NOT NULL,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,published_at DATETIME NULL,UNIQUE KEY uniq_ai_pronunciation_dictionary_version(tenant_id,dictionary_key,version_number),CONSTRAINT fk_ai_pronunciation_tenant FOREIGN KEY(tenant_id)REFERENCES ai_tenants(id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS ai_pronunciation_entries(id BIGINT AUTO_INCREMENT PRIMARY KEY,tenant_id BIGINT NOT NULL,dictionary_id BIGINT NOT NULL,source_text VARCHAR(191) NOT NULL,pronunciation VARCHAR(255) NOT NULL,stress VARCHAR(191) NULL,aliases_json LONGTEXT NOT NULL,display_order INT NOT NULL DEFAULT 0,UNIQUE KEY uniq_ai_pronunciation_entry(tenant_id,dictionary_id,source_text),CONSTRAINT fk_ai_pronunciation_entry_tenant FOREIGN KEY(tenant_id)REFERENCES ai_tenants(id),CONSTRAINT fk_ai_pronunciation_entry_dictionary FOREIGN KEY(dictionary_id)REFERENCES ai_pronunciation_dictionaries(id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `INSERT IGNORE INTO permissions(permission_key,name,description,category)VALUES('view_ai_voice_profiles','View AI voice profiles','View versioned AI voice profiles','ai_platform'),('manage_ai_voice_profiles','Manage AI voice profiles','Create voice profile drafts and pronunciation dictionaries','ai_platform')`,
+      `INSERT IGNORE INTO role_permissions(role_id,permission_id)SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key IN('view_ai_voice_profiles','manage_ai_voice_profiles')WHERE r.role_key IN('su','admin')`
+    ],
+    seed:seedRussianVoiceLatencyV15
   }
 ];
+
+async function seedRussianVoiceLatencyV15(connection:Connection):Promise<void>{
+  const [tenants]=await connection.query("SELECT id FROM ai_tenants WHERE tenant_key='installation' LIMIT 1");
+  const tenantId=Number((tenants as any[])[0]?.id||0);if(!tenantId)return;
+  const [agents]=await connection.query("SELECT id FROM ai_agents WHERE tenant_id=? AND agent_key='receptionist_default' LIMIT 1",[tenantId]);
+  const agentId=Number((agents as any[])[0]?.id||0);if(!agentId)return;
+  const [dictionaryResult]:any=await connection.execute(`INSERT IGNORE INTO ai_pronunciation_dictionaries(tenant_id,dictionary_key,version_number,name,scope,agent_id,status,created_by,published_at)VALUES(?,'receptionist_ru',1,'Русское произношение receptionist','agent',?,'published','system',NOW())`,[tenantId,agentId]);
+  const [dictionaryRows]=await connection.query("SELECT id FROM ai_pronunciation_dictionaries WHERE tenant_id=? AND dictionary_key='receptionist_ru' AND version_number=1 LIMIT 1",[tenantId]);
+  const dictionaryId=Number((dictionaryRows as any[])[0]?.id||dictionaryResult.insertId||0);
+  const profile={schemaVersion:1,provider:"openai_realtime",voiceId:"cedar",language:"ru",locale:"ru-RU",pronunciationStyle:"native_neutral",speakingRate:"slightly_fast",pauseStyle:"short_natural",expressiveness:"warm_moderate",pitchStyle:"neutral",pronunciationDictionaryId:dictionaryId||null};
+  await connection.execute(`INSERT IGNORE INTO ai_voice_profiles(tenant_id,profile_key,version_number,name,provider,profile_json,status,created_by,published_at)VALUES(?,'receptionist_ru',1,'Receptionist ru-RU','openai_realtime',?,'published','system',NOW())`,[tenantId,JSON.stringify(profile)]);
+  const [profiles]=await connection.query("SELECT id FROM ai_voice_profiles WHERE tenant_id=? AND profile_key='receptionist_ru' AND version_number=1 LIMIT 1",[tenantId]);
+  const profileId=Number((profiles as any[])[0]?.id||0);
+  const [sources]=await connection.query("SELECT * FROM ai_agent_versions WHERE tenant_id=? AND agent_id=? AND version_number=14 AND lifecycle_status='published' LIMIT 1",[tenantId,agentId]);
+  const source=(sources as any[])[0];if(!source)return;
+  const [existing]=await connection.query("SELECT id FROM ai_agent_versions WHERE tenant_id=? AND agent_id=? AND version_number=15 LIMIT 1",[tenantId,agentId]);
+  let versionId=Number((existing as any[])[0]?.id||0);
+  if(!versionId){
+    const config=JSON.parse(String(source.config_json||"{}"));
+    config.voiceProfileId=profileId;
+    config.voiceProfile=profile;
+    config.voice={...(config.voice||{}),speakingRate:"slightly_fast",pauseStyle:"short_natural",endOfTurnSilenceMs:350};
+    config.latencyPipeline={schemaVersion:1,deterministicFastPath:true,persistenceOutsideCriticalPath:true,telemetryDecomposition:true};
+    const configJson=JSON.stringify(config),checksum=crypto.createHash("sha256").update(`${configJson}\n${source.system_prompt}`).digest("hex");
+    const [inserted]:any=await connection.execute("INSERT INTO ai_agent_versions(tenant_id,agent_id,version_number,lifecycle_status,config_json,system_prompt,checksum,created_by,published_at)VALUES(?,?,15,'published',?,?,?,?,NOW())",[tenantId,agentId,configJson,source.system_prompt,checksum,"system"]);
+    versionId=Number(inserted.insertId);
+    await connection.execute("INSERT INTO ai_agent_tools(tenant_id,agent_version_id,tool_id,enabled,config_json)SELECT tenant_id,?,tool_id,enabled,config_json FROM ai_agent_tools WHERE tenant_id=? AND agent_version_id=?",[versionId,tenantId,source.id]);
+    await connection.execute("INSERT INTO ai_agent_actions(tenant_id,agent_version_id,action_definition_id,enabled,config_json)SELECT tenant_id,?,action_definition_id,enabled,config_json FROM ai_agent_actions WHERE tenant_id=? AND agent_version_id=?",[versionId,tenantId,source.id]);
+    await connection.execute("INSERT INTO ai_agent_skills(tenant_id,agent_version_id,skill_id,priority,enabled)SELECT tenant_id,?,skill_id,priority,enabled FROM ai_agent_skills WHERE tenant_id=? AND agent_version_id=?",[versionId,tenantId,source.id]);
+  }
+  await connection.execute("UPDATE ai_agents SET current_version_id=?,updated_at=NOW() WHERE tenant_id=? AND id=?",[versionId,tenantId,agentId]);
+}
 
 async function seedConfiguredSkillRouterV14(connection:Connection):Promise<void>{
   const [columnRows]=await connection.query("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ai_skills'");

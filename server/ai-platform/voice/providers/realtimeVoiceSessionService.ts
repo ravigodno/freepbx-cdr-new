@@ -90,6 +90,9 @@ type Runtime = {
   tenantId: number;
   voiceSessionId: number;
   mediaSessionId: number;
+  routeBindingId: number | null;
+  agentId: number;
+  agentVersionId: number;
   adapter: any;
   flusher: MetricsFlusher;
   unsubscribeProvider: () => void;
@@ -184,6 +187,26 @@ type Runtime = {
     selectedAction: string | null;
     templateKey: string | null;
   } | null;
+  endOfTurnSilenceMs:number;
+  currentPipeline:{
+    actualSpeechEndEstimatedAt:number|null;
+    vadStopAt:number|null;
+    inputFinalAt:number|null;
+    routingStartedAt:number|null;
+    routingDoneAt:number|null;
+    extractionStartedAt:number|null;
+    extractionDoneAt:number|null;
+    plannerStartedAt:number|null;
+    plannerDoneAt:number|null;
+    responseCreateAt:number|null;
+    responseCreateDoneAt:number|null;
+    providerFirstDeltaAt:number|null;
+    startupBufferReadyAt:number|null;
+    audibleStartAt:number|null;
+    deterministicFastPath:boolean;
+    classifierSkipped:boolean;
+    llmExtractionSkipped:boolean;
+  }|null;
   closing: ClosingCoordinator;
   commitDispatchMs: number | null;
   responseCreateDispatchMs: number | null;
@@ -394,7 +417,7 @@ export class RealtimeVoiceSessionService {
       );
     const source = (
       await this.store.query(
-        `SELECT m.id media_id,m.voice_session_id,m.transport_mode,m.state media_state,v.agent_id,v.agent_version_id,v.conversation_id,v.language,v.state voice_state,av.lifecycle_status FROM ai_voice_media_sessions m JOIN ai_voice_sessions v ON v.id=m.voice_session_id AND v.tenant_id=m.tenant_id JOIN ai_agent_versions av ON av.id=v.agent_version_id AND av.tenant_id=v.tenant_id WHERE m.id=? AND m.tenant_id=? LIMIT 1`,
+        `SELECT m.id media_id,m.voice_session_id,m.transport_mode,m.state media_state,v.route_binding_id,v.agent_id,v.agent_version_id,v.conversation_id,v.language,v.state voice_state,av.lifecycle_status FROM ai_voice_media_sessions m JOIN ai_voice_sessions v ON v.id=m.voice_session_id AND v.tenant_id=m.tenant_id JOIN ai_agent_versions av ON av.id=v.agent_version_id AND av.tenant_id=v.tenant_id WHERE m.id=? AND m.tenant_id=? LIMIT 1`,
         [input.mediaSessionId, input.tenantId],
       )
     )[0];
@@ -492,8 +515,10 @@ export class RealtimeVoiceSessionService {
         input.providerKey === "openai_realtime"
           ? external.model
           : "synthetic-voice",
-      voice: input.providerKey === "openai_realtime" ? "marin" : "natural",
-      language: String(source.language || "ru"),
+      voice: input.providerKey === "openai_realtime"
+        ? String(context?.agent?.version?.config?.voiceProfile?.voiceId||"marin")
+        : "natural",
+      language: String(context?.agent?.version?.config?.voiceProfile?.locale||source.language||"ru"),
       instructions: instructions.instructions,
       maxOutputTokens: receptionist ? responseBudgets.response : undefined,
       retryOutputTokens: receptionist ? responseBudgets.retry : undefined,
@@ -559,6 +584,9 @@ export class RealtimeVoiceSessionService {
         tenantId: input.tenantId,
         voiceSessionId: Number(source.voice_session_id),
         mediaSessionId: input.mediaSessionId,
+        routeBindingId:source.route_binding_id?Number(source.route_binding_id):null,
+        agentId:Number(source.agent_id),
+        agentVersionId:Number(source.agent_version_id),
         adapter,
         flusher: null as any,
         unsubscribeProvider: () => {},
@@ -649,6 +677,8 @@ export class RealtimeVoiceSessionService {
         skillRoutingDecision:null,
         redactionCounts:{secrets:0,emails:0,ips:0,phones:0,paths:0,truncated:0},
         plannerDecision:null,
+        endOfTurnSilenceMs:config.endOfTurnSilenceMs||450,
+        currentPipeline:null,
         closing:new ClosingCoordinator(`${input.tenantId}:${source.voice_session_id}`),
         commitDispatchMs:null,
         responseCreateDispatchMs:null,
@@ -682,6 +712,16 @@ export class RealtimeVoiceSessionService {
             runtime.speechEndAt = Date.now();
             runtime.speechEndMonotonic = performance.now();
             runtime.speechAnchorSource = "local_vad";
+            runtime.currentPipeline={
+              actualSpeechEndEstimatedAt:runtime.speechEndMonotonic-runtime.endOfTurnSilenceMs,
+              vadStopAt:runtime.speechEndMonotonic,inputFinalAt:null,
+              routingStartedAt:null,routingDoneAt:null,
+              extractionStartedAt:null,extractionDoneAt:null,
+              plannerStartedAt:null,plannerDoneAt:null,
+              responseCreateAt:null,responseCreateDoneAt:null,
+              providerFirstDeltaAt:null,startupBufferReadyAt:null,audibleStartAt:null,
+              deterministicFastPath:false,classifierSkipped:false,llmExtractionSkipped:true,
+            };
             this.transcriptService?.turnDiagnostics(
               runtime.voiceSessionId,
               runtime.coordinator.snapshot(),
@@ -761,8 +801,7 @@ export class RealtimeVoiceSessionService {
       );
     if (runtime.blocked || runtime.responsePending)
       return this.get(tenantId, id);
-    const current = await this.row(tenantId, id);
-    if (!["listening","responding"].includes(current.state))
+    if (!["listening","listening_after_interrupt"].includes(runtime.turnState))
       return this.get(tenantId, id);
     runtime.responsePending = true;
     runtime.commitAt = Date.now();
@@ -970,6 +1009,29 @@ export class RealtimeVoiceSessionService {
     runtime.responsePlayedMs += frame.durationMs;
     if (runtime.currentTurnFirstOutputMonotonic !== null) return;
     const firstPlayout = performance.now();
+    let pipelineMetrics:Record<string,unknown>={};
+    if(runtime.currentPipeline){
+      runtime.currentPipeline.audibleStartAt=firstPlayout;
+      const p=runtime.currentPipeline,duration=(from:number|null,to:number|null)=>
+        from===null||to===null?null:Math.max(0,Math.round(to-from));
+      pipelineMetrics={
+        actualSpeechEndToVadStopMs:duration(p.actualSpeechEndEstimatedAt,p.vadStopAt),
+        vadStopToInputFinalMs:duration(p.vadStopAt,p.inputFinalAt),
+        inputFinalToRoutingDoneMs:duration(p.inputFinalAt,p.routingDoneAt),
+        routingDoneToResponseCreateMs:duration(p.routingDoneAt,p.responseCreateAt),
+        responseCreateToFirstDeltaMs:duration(p.responseCreateAt,p.providerFirstDeltaAt),
+        firstDeltaToStartupBufferReadyMs:duration(p.providerFirstDeltaAt,p.startupBufferReadyAt),
+        startupBufferReadyToAudibleMs:duration(p.startupBufferReadyAt,p.audibleStartAt),
+        firstDeltaToAudibleMs:duration(p.providerFirstDeltaAt,p.audibleStartAt),
+        totalSpeechEndToAudibleMs:duration(p.actualSpeechEndEstimatedAt,p.audibleStartAt),
+        routingDurationMs:duration(p.routingStartedAt,p.routingDoneAt),
+        extractionDurationMs:duration(p.extractionStartedAt,p.extractionDoneAt),
+        plannerDurationMs:duration(p.plannerStartedAt,p.plannerDoneAt),
+        deterministicFastPath:p.deterministicFastPath,
+        classifierSkipped:p.classifierSkipped,
+        llmExtractionSkipped:p.llmExtractionSkipped,
+      };
+    }
     runtime.currentTurnFirstOutputMonotonic = firstPlayout;
     runtime.firstOutputMonotonic ??= firstPlayout;
     runtime.firstOutputAt ??= Date.now();
@@ -1025,7 +1087,9 @@ export class RealtimeVoiceSessionService {
       queuedAudioAtFirstPlayoutMs: runtime.queuedAudioAtFirstPlayoutMs,
       speechAnchorSource: runtime.speechAnchorSource,
       commitAnchorSource: runtime.commitAnchorSource,
+      ...pipelineMetrics,
     });
+    runtime.currentPipeline=null;
     if (runtime.turnLatencies.length > 50) runtime.turnLatencies.shift();
     runtime.flusher.markDirty();
   }
@@ -1193,6 +1257,7 @@ export class RealtimeVoiceSessionService {
       runtime.responsePending=false;
       return false;
     }
+    if(runtime.currentPipeline)runtime.currentPipeline.plannerStartedAt=performance.now();
     let plan=runtime.receptionist
       ? planGenericResponse(runtime.taskState,runtime.skills)
       : null;
@@ -1218,7 +1283,9 @@ export class RealtimeVoiceSessionService {
       selectedAction:plan.selectedAction,
       templateKey:plan.templateKey,
     }:null;
+    if(runtime.currentPipeline)runtime.currentPipeline.plannerDoneAt=performance.now();
     const started=performance.now();
+    if(runtime.currentPipeline)runtime.currentPipeline.responseCreateAt=started;
     if(plan?.text){
       if(!runtime.adapter.createPlannedResponse)
         throw new RealtimeVoiceError("provider_not_ready",503,"Configured response renderer unavailable");
@@ -1226,6 +1293,7 @@ export class RealtimeVoiceSessionService {
     }else
       await runtime.adapter.createResponse?.(plan?.instructions);
     runtime.responseCreateDispatchMs=Math.round(performance.now()-started);
+    if(runtime.currentPipeline)runtime.currentPipeline.responseCreateDoneAt=performance.now();
     runtime.flusher.markDirty();
     void traceId;
     return true;
@@ -1302,6 +1370,8 @@ export class RealtimeVoiceSessionService {
         return;
       }
       runtime.providerFirstDeltaMonotonic ??= performance.now();
+      if(runtime.currentPipeline)
+        runtime.currentPipeline.providerFirstDeltaAt??=runtime.providerFirstDeltaMonotonic;
       if (
         responseId &&
         runtime.responseGeneratedMs + event.frame.durationMs >
@@ -1342,6 +1412,8 @@ export class RealtimeVoiceSessionService {
           voiceSessionId:Number(row.voice_session_id),
           mediaSessionId:Number(row.media_session_id),
         },runtime.streamingPolicy.startupBufferMs);
+        if(pushed.startupReady&&runtime.currentPipeline)
+          runtime.currentPipeline.startupBufferReadyAt??=performance.now();
         runtime.responseGeneratedMs+=event.frame.durationMs;
         if(pushed.release.length)
           await this.enqueueResponseFrames(
@@ -1497,7 +1569,14 @@ export class RealtimeVoiceSessionService {
         runtime.transcripts.push({ kind: event.kind, text });
         if (runtime.transcripts.length > 20) runtime.transcripts.shift();
       }
-      if(this.transcriptService){const voice=(await this.store.query('SELECT route_binding_id,agent_id,agent_version_id FROM ai_voice_sessions WHERE tenant_id=? AND id=? LIMIT 1',[runtime.tenantId,runtime.voiceSessionId]))[0];if(voice)await this.transcriptService.transcript({tenantId:runtime.tenantId,voiceSessionId:runtime.voiceSessionId,mediaSessionId:runtime.mediaSessionId,realtimeSessionId:id,bindingId:voice.route_binding_id?Number(voice.route_binding_id):null,agentId:Number(voice.agent_id),agentVersionId:Number(voice.agent_version_id),kind:event.kind,text,eventId:event.eventId,itemId:event.itemId,responseId:event.responseId,contentIndex:event.contentIndex,confidence:event.confidence});}
+      if(this.transcriptService)void this.transcriptService.transcript({
+        tenantId:runtime.tenantId,voiceSessionId:runtime.voiceSessionId,
+        mediaSessionId:runtime.mediaSessionId,realtimeSessionId:id,
+        bindingId:runtime.routeBindingId,agentId:runtime.agentId,
+        agentVersionId:runtime.agentVersionId,kind:event.kind,text,
+        eventId:event.eventId,itemId:event.itemId,responseId:event.responseId,
+        contentIndex:event.contentIndex,confidence:event.confidence,
+      }).catch(()=>{});
       if(
         event.kind==="output_final" &&
         event.responseId &&
@@ -1507,6 +1586,15 @@ export class RealtimeVoiceSessionService {
           runtime.tenantId,id,event.responseId,
         );
       if (event.kind === "input_final") {
+        if(!runtime.currentPipeline)runtime.currentPipeline={
+          actualSpeechEndEstimatedAt:null,vadStopAt:runtime.speechEndMonotonic,
+          inputFinalAt:null,routingStartedAt:null,routingDoneAt:null,
+          extractionStartedAt:null,extractionDoneAt:null,plannerStartedAt:null,
+          plannerDoneAt:null,responseCreateAt:null,responseCreateDoneAt:null,
+          providerFirstDeltaAt:null,startupBufferReadyAt:null,audibleStartAt:null,
+          deterministicFastPath:false,classifierSkipped:false,llmExtractionSkipped:true,
+        };
+        runtime.currentPipeline.inputFinalAt=performance.now();
         runtime.callerPartialText=extractionText;
         runtime.coordinator.updateQueuedAudio(
           this.media.getProtocolMetrics(
@@ -1521,9 +1609,16 @@ export class RealtimeVoiceSessionService {
           );
         runtime.coordinator.callerSpeechEnded();
         if(!runtime.taskState.activeSkillId){
+          runtime.currentPipeline.routingStartedAt=performance.now();
           runtime.skillRoutingDecision=await this.skillRouter.route(runtime.skills,extractionText);
+          runtime.currentPipeline.routingDoneAt=performance.now();
+          runtime.currentPipeline.deterministicFastPath=[
+            "trigger","intent_example","description","extraction_hint",
+          ].includes(runtime.skillRoutingDecision.classificationSource);
+          runtime.currentPipeline.classifierSkipped=
+            runtime.skillRoutingDecision.classificationSource!=="structured_classifier";
           applySkillRoutingDecision(runtime.taskState,runtime.skills,runtime.skillRoutingDecision);
-          await this.audit.append({
+          void this.audit.append({
             tenantId:runtime.tenantId,
             traceId,
             actorType:"service",
@@ -1532,9 +1627,16 @@ export class RealtimeVoiceSessionService {
             entityId:String(id),
             decision:runtime.skillRoutingDecision.skillId?"activated":runtime.skillRoutingDecision.requiresClarification?"ambiguous":"none",
             details:runtime.skillRoutingDecision,
-          });
+          }).catch(()=>{});
+        }else{
+          runtime.currentPipeline.routingStartedAt=runtime.currentPipeline.inputFinalAt;
+          runtime.currentPipeline.routingDoneAt=runtime.currentPipeline.inputFinalAt;
+          runtime.currentPipeline.deterministicFastPath=true;
+          runtime.currentPipeline.classifierSkipped=true;
         }
+        runtime.currentPipeline.extractionStartedAt=performance.now();
         updateGenericTaskState(runtime.taskState,runtime.skills,extractionText);
+        runtime.currentPipeline.extractionDoneAt=performance.now();
         const stop=extractStopCommand(text),
           category=classifyCallerSpeech(text),
           responseText=stop?.semanticRemainder||text;

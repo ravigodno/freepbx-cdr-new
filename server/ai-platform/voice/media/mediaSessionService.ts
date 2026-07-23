@@ -116,7 +116,7 @@ export class MediaSessionService {
   configureVad(tenantId:number,id:number,endSilenceMs:number){
     const runtime=this.runtimes.get(id);
     if(!runtime||runtime.tenantId!==tenantId)return false;
-    const silence=Math.max(350,Math.min(600,Math.round(endSilenceMs)));
+    const silence=Math.max(300,Math.min(600,Math.round(endSilenceMs)));
     runtime.vad=new VadDetector(700,2,silence);
     return true;
   }
