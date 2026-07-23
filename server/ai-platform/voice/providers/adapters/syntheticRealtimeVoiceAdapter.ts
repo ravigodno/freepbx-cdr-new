@@ -119,6 +119,9 @@ export class SyntheticRealtimeVoiceAdapter implements RealtimeVoiceProviderAdapt
     this.cancelled = false;
     await this.respond(text.slice(0, 160), "synthetic_greeting");
   }
+  async createResponseForRemainder(_itemId:string|undefined,text:string){
+    await this.respond(text.slice(0,160),"synthetic_semantic_remainder");
+  }
   async cancelResponse() {
     this.cancelled = true;
     this.state = "configured";

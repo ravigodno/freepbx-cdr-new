@@ -2,7 +2,7 @@ import { createRequire } from "module";
 import type { AudioFrame } from "../../media/mediaTypes.js";
 import { AudioPacketizer } from "../../media/audioPacketizer.js";
 import { AudioResampler } from "../../media/audioResampler.js";
-import { encodePcm16ToUlaw } from "../../media/g711.js";
+import { decodeUlawToPcm16, encodePcm16ToUlaw } from "../../media/g711.js";
 import type { RealtimeVoiceProviderAdapter } from "../realtimeVoiceProviderAdapter.js";
 import type {
   RealtimeVoiceConfig,
@@ -10,6 +10,7 @@ import type {
 } from "../realtimeVoiceTypes.js";
 import { RealtimeVoiceError } from "../realtimeVoiceErrors.js";
 import { normalizeOpenAIRealtimeEvent } from "../realtimeVoiceEventNormalizer.js";
+import { ProviderSilenceTracker } from "../providerSilenceMetrics.js";
 
 const PROVIDER_SAMPLE_RATE = 24000;
 const INTERNAL_SAMPLE_RATE = 16000;
@@ -56,6 +57,7 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
   private providerOutputGaps: number[] = [];
   private providerOutputBursts = 0;
   private providerEventSequence = 0;
+  private readonly providerSilence = new ProviderSilenceTracker();
   private pendingConfiguration: {
     resolve: () => void;
     reject: (error: Error) => void;
@@ -130,6 +132,7 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
     this.providerOutputGaps = [];
     this.providerOutputBursts = 0;
     this.providerEventSequence = 0;
+    this.providerSilence.reset();
     this.health = { state: "connecting", failureCode: null, connectedAt: null };
     const url = new URL(config.url!);
     url.searchParams.set("model", String(config.model));
@@ -226,6 +229,10 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
               while (this.ulawOutputRemainder.length >= ULAW_FRAME_BYTES) {
                 const payload = this.ulawOutputRemainder.subarray(0, ULAW_FRAME_BYTES);
                 this.ulawOutputRemainder = this.ulawOutputRemainder.subarray(ULAW_FRAME_BYTES);
+                this.providerSilence.record(
+                  responseId,
+                  decodeUlawToPcm16(payload),
+                );
                 void this.emit({
                   type: "output_audio",
                   frame: {
@@ -270,7 +277,11 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
                   mediaSessionId: 0,
                 },
               );
-              for (const frame of frames)
+              for (const frame of frames) {
+                this.providerSilence.record(
+                  responseId,
+                  decodePcm16(frame.payload),
+                );
                 void this.emit({
                   type: "output_audio",
                   frame: {
@@ -285,6 +296,7 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
                   responseId,
                   itemId,
                 });
+              }
             }
             return;
           }
@@ -360,6 +372,7 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
         type: "realtime",
         model: config.model,
         instructions: config.instructions,
+        max_output_tokens: config.maxOutputTokens || "inf",
         output_modalities: ["audio"],
         audio: {
           input: {
@@ -417,10 +430,26 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
       type: "response.create",
       response: {
         output_modalities: ["audio"],
+        max_output_tokens: this.config?.maxOutputTokens || "inf",
         instructions:
           "Отвечай только на русском языке. Перейди на другой язык только после явной просьбы клиента.",
       },
     });
+  }
+  async createResponseForRemainder(itemId: string | undefined, text: string) {
+    const remainder = text.trim().slice(0, 500);
+    if (!remainder) return;
+    if (itemId)
+      this.send({ type: "conversation.item.delete", item_id: itemId });
+    this.send({
+      type: "conversation.item.create",
+      item: {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: remainder }],
+      },
+    });
+    await this.createResponse();
   }
   async createRussianCorrection() {
     this.send({
@@ -497,6 +526,7 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
       providerOutputGapMaxMs: sorted.length ? sorted.at(-1)! : null,
       providerOutputPauses: sorted.filter((value) => value > 120).length,
       providerOutputBursts: this.providerOutputBursts,
+      providerSilence: this.providerSilence.metrics(),
     };
   }
   subscribeEvents(

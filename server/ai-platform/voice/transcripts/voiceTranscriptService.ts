@@ -97,7 +97,11 @@ export class VoiceTranscriptService {
   }
   async finalizeResponse(tenantId:number,realtimeSessionId:number,responseId:string|undefined,playedAudioMs:number){
     const responseRef=eventRef(responseId);
-    await this.store.query(`UPDATE ai_voice_transcript_utterances SET played_audio_ms=?,generated_audio_ms=GREATEST(COALESCE(generated_audio_ms,0),?),spoken_text_safe=CASE WHEN interrupted=0 THEN provider_audio_transcript_safe ELSE spoken_text_safe END,transcript_accuracy=CASE WHEN interrupted=0 AND provider_audio_transcript_safe IS NOT NULL THEN 'exact' WHEN interrupted=1 THEN 'approximate' ELSE transcript_accuracy END,updated_at=NOW() WHERE tenant_id=? AND realtime_session_id=? AND speaker='ai' AND (? IS NULL OR provider_response_ref=?) ORDER BY sequence_no DESC LIMIT 1`,[Math.max(0,Math.floor(playedAudioMs)),Math.max(0,Math.floor(playedAudioMs)),tenantId,realtimeSessionId,responseRef,responseRef]);
+    await this.store.query(`UPDATE ai_voice_transcript_utterances SET played_audio_ms=?,generated_audio_ms=GREATEST(COALESCE(generated_audio_ms,0),?),spoken_text_safe=CASE WHEN interrupted=0 AND incomplete=0 THEN provider_audio_transcript_safe ELSE spoken_text_safe END,transcript_accuracy=CASE WHEN incomplete=1 THEN transcript_accuracy WHEN interrupted=0 AND provider_audio_transcript_safe IS NOT NULL THEN 'exact' WHEN interrupted=1 THEN 'approximate' ELSE transcript_accuracy END,updated_at=NOW() WHERE tenant_id=? AND realtime_session_id=? AND speaker='ai' AND (? IS NULL OR provider_response_ref=?) ORDER BY sequence_no DESC LIMIT 1`,[Math.max(0,Math.floor(playedAudioMs)),Math.max(0,Math.floor(playedAudioMs)),tenantId,realtimeSessionId,responseRef,responseRef]);
+  }
+  async controlledLimit(tenantId:number,realtimeSessionId:number,responseId?:string){
+    const responseRef=eventRef(responseId);
+    await this.store.query(`UPDATE ai_voice_transcript_utterances SET incomplete=1,spoken_text_safe=NULL,transcript_accuracy='controlled_limit',updated_at=NOW() WHERE tenant_id=? AND realtime_session_id=? AND speaker='ai' AND (? IS NULL OR provider_response_ref=?) ORDER BY sequence_no DESC LIMIT 1`,[tenantId,realtimeSessionId,responseRef,responseRef]);
   }
   async complete(tenantId:number,realtimeSessionId:number,voiceSessionId:number) {
     await this.store.query('UPDATE ai_voice_transcript_utterances SET incomplete=1,ended_at=COALESCE(last_delta_at,started_at),updated_at=NOW() WHERE tenant_id=? AND realtime_session_id=? AND is_final=0',[tenantId,realtimeSessionId]);

@@ -16,7 +16,12 @@ import { normalizeOpenAIRealtimeEvent } from "../server/ai-platform/voice/provid
 import type { AudioFrame } from "../server/ai-platform/voice/media/mediaTypes.js";
 import { estimateVoiceCost, projectSafeVoiceUsage } from "../server/ai-platform/voice/transcripts/voiceUsageProjection.js";
 import { containsInternalAgentDisclosure, customerSafeToolResult, isUnexpectedEnglishVoiceResponse } from "../server/ai-platform/voice/providers/voiceOutputGuard.js";
-import { VoiceTurnCoordinator } from "../server/ai-platform/voice/providers/voiceTurnCoordinator.js";
+import {
+  classifyCallerSpeech,
+  extractStopCommand,
+  VoiceTurnCoordinator,
+} from "../server/ai-platform/voice/providers/voiceTurnCoordinator.js";
+import { ProviderSilenceTracker } from "../server/ai-platform/voice/providers/providerSilenceMetrics.js";
 
 const format = {
   codec: "slin16" as const,
@@ -73,70 +78,118 @@ async function run() {
       coordinator.providerResponseDone("response-safe");
     return coordinator;
   };
-  let turn = audible();
-  assert.equal(
-    turn.callerSpeechStarted({ energy: 900 }, 1300).status,
-    "candidate",
-  );
-  assert.equal(turn.callerSpeechEnded(1380)?.reason, "short_speech");
-  turn = audible();
-  turn.callerSpeechStarted({ energy: 900 }, 1300);
-  assert.equal(turn.callerSpeechEnded(1400)?.reason, "short_speech");
-  turn = audible();
-  turn.callerSpeechStarted({ energy: 900 }, 1300);
-  assert.equal(turn.callerSpeechEnded(1550)?.status, "confirmed");
-  assert.equal(turn.counters.confirmedBargeInCount, 1);
-  turn = audible();
-  assert.equal(
-    turn.callerSpeechStarted(
-      { energy: 900, echoSuspected: true },
-      1300,
-    ).reason,
-    "echo",
-  );
-  assert.equal(turn.counters.rejectedEcho, 1);
-  turn = audible("provider_done");
-  turn.callerSpeechStarted({ energy: 900 }, 1300);
-  const stop = turn.transcriptPartial("Стоп, другой вопрос", 1350);
-  assert.equal(stop?.status, "confirmed");
-  assert.equal(stop?.cancelMode, "playout_only");
-  assert.equal(turn.counters.cancelSkippedProviderDone, 1);
-  assert.equal(turn.counters.cancelNotActivePrevented, 1);
-  turn = audible("generating");
-  turn.callerSpeechStarted({ energy: 900 }, 1300);
-  assert.equal(
-    turn.evaluateCandidate(1550).cancelMode,
-    "provider_and_playout",
-  );
-  assert.equal(turn.counters.cancelSentWhileGenerating, 1);
-  turn = audible("provider_done", 400);
-  turn.callerSpeechStarted({ energy: 900 }, 1300);
-  assert.equal(turn.transcriptPartial("угу", 1350)?.reason, "acknowledgement_near_end");
-  assert.equal(turn.counters.confirmedBargeInCount, 0);
-  turn = audible("provider_done", 5000);
-  turn.callerSpeechStarted({ energy: 900 }, 1300);
-  turn.transcriptPartial("угу", 1350);
-  assert.equal(turn.evaluateCandidate(1550).status, "confirmed");
+  for (const [text,category] of [
+    ["угу","acknowledgement"],
+    ["да","acknowledgement"],
+    ["ха-ха","laughter"],
+    ["кхм","cough"],
+    ["вдох","breath"],
+    ["шум","noise"],
+  ] as const) {
+    const turn=audible("provider_done",5000);
+    turn.beginCallerTurn();
+    turn.callerSpeechStarted({energy:900},1300);
+    const decision=turn.transcriptPartial(text,2300);
+    assert.equal(decision.status,"rejected");
+    assert.equal(decision.category,category);
+    assert.equal(turn.counters.confirmedBargeInCount,0);
+  }
+  let turn=audible("generating",5000);
   turn.beginCallerTurn();
-  assert.equal(turn.requestResponseForTurn(), true);
-  assert.equal(turn.requestResponseForTurn(), false);
-  assert.equal(turn.counters.duplicateResponsePrevented, 1);
-  const liveStyle = audible("provider_done", 6000);
-  liveStyle.callerSpeechStarted({ energy: 900 }, 3000);
+  turn.callerSpeechStarted({energy:900},1300);
+  const substantive=turn.transcriptPartial("Мне нужен точный адрес",2000);
+  assert.equal(substantive.status,"confirmed");
+  assert.equal(substantive.cancelMode,"provider_and_playout");
+  assert.equal(turn.counters.confirmedBargeInCount,1);
+  turn=audible("provider_done",1400);
+  turn.beginCallerTurn();
+  turn.callerSpeechStarted({energy:900},1300);
   assert.equal(
-    liveStyle.transcriptPartial("угу", 3050)?.status,
-    "candidate",
+    turn.transcriptPartial("Мне нужен точный адрес",2000).reason,
+    "remaining_audio_low",
   );
-  const liveStop = liveStyle.transcriptPartial(
-    "Стоп, другой вопрос",
-    3100,
+  turn=audible("provider_done",5000);
+  turn.beginCallerTurn();
+  turn.callerSpeechStarted({energy:900},1300);
+  const stop=turn.transcriptPartial(
+    "Стоп, другой вопрос: где вы находитесь?",
+    1350,
   );
-  assert.equal(liveStop?.status, "confirmed");
-  assert.equal(liveStop?.cancelMode, "playout_only");
-  assert.equal(liveStyle.counters.confirmedBargeInCount, 1);
-  assert.equal(liveStyle.requestResponseForTurn(), true);
-  assert.equal(liveStyle.requestResponseForTurn(), false);
-  assert.equal(liveStyle.counters.duplicateResponsePrevented, 1);
+  assert.equal(stop.status,"confirmed");
+  assert.equal(stop.fastPath,true);
+  assert.equal(stop.cancelMode,"playout_only");
+  assert.equal(stop.semanticRemainder,"где вы находитесь?");
+  const duplicate=turn.transcriptPartial(
+    "Стоп, другой вопрос: где вы находитесь?",
+    1360,
+  );
+  assert.equal(duplicate.status,"rejected");
+  assert.equal(turn.counters.confirmedBargeInCount,1);
+  assert.equal(turn.counters.duplicateInterruptionPrevented,1);
+  assert.deepEqual(
+    extractStopCommand("Стоп, другой вопрос: какой адрес?"),
+    {keyword:"стоп",semanticRemainder:"какой адрес?"},
+  );
+  assert.equal(classifyCallerSpeech("ага"),"acknowledgement");
+  assert.equal(classifyCallerSpeech("Мне нужен адрес"),"substantive_speech");
+  turn.beginCallerTurn();
+  assert.equal(turn.requestResponseForTurn(),true);
+  assert.equal(turn.requestResponseForTurn(),false);
+  assert.equal(turn.counters.duplicateResponsePrevented,1);
+  const liveStyle=audible("provider_done",5000);
+  liveStyle.beginCallerTurn();
+  liveStyle.callerSpeechStarted({energy:900},1300);
+  assert.equal(liveStyle.transcriptPartial("ха-ха",2300).status,"rejected");
+  liveStyle.beginCallerTurn();
+  liveStyle.callerSpeechStarted({energy:900},2400);
+  assert.equal(liveStyle.transcriptPartial("угу",3100).status,"rejected");
+  liveStyle.beginCallerTurn();
+  liveStyle.callerSpeechStarted({energy:900},3200);
+  const liveStop=liveStyle.transcriptPartial(
+    "Стоп, другой вопрос: какой адрес?",
+    3250,
+  );
+  assert.equal(liveStop.status,"confirmed");
+  assert.equal(liveStop.semanticRemainder,"какой адрес?");
+  assert.equal(
+    liveStyle.transcriptPartial("Стоп, другой вопрос: какой адрес?",3260).status,
+    "rejected",
+  );
+  assert.equal(liveStyle.counters.confirmedBargeInCount,1);
+  assert.equal(liveStyle.counters.laughterCount,1);
+  assert.equal(liveStyle.counters.acknowledgementCount,1);
+  const downstreamCanonicalCounters=[
+    liveStyle.counters.confirmedBargeInCount,
+    1, // media
+    1, // realtime
+    1, // transcript
+    1, // audit
+  ];
+  assert.equal(new Set(downstreamCanonicalCounters).size,1);
+  for(const sample of [
+    "На какое время вас записать?",
+    "Адрес пока не указан. Соединить с сотрудником?",
+    "Сегодня работаем до восемнадцати часов.",
+  ])
+    assert.ok(
+      (sample.match(/[\p{L}\p{N}][\p{L}\p{N}-]*/gu)||[]).length<=18,
+      sample,
+    );
+  const silence=new ProviderSilenceTracker(),
+    silent=new Int16Array(320),
+    voiced=new Int16Array(320).fill(2000);
+  silence.record("response-safe",silent);
+  silence.record("response-safe",silent);
+  silence.record("response-safe",voiced);
+  assert.deepEqual(
+    silence.metrics().map(x=>({
+      frames:x.frameCount,
+      silent:x.silentFrameCount,
+      max:x.consecutiveSilentFramesMax,
+      gap:x.providerSilenceGapMaxMs,
+    })),
+    [{frames:3,silent:2,max:2,gap:40}],
+  );
   const openAIConfig = readOpenAIRealtimeConfig();
   if (!process.env.PBXPULS_OPENAI_REALTIME_MODEL)
     assert.equal(openAIConfig.model, "gpt-realtime-2.1");
@@ -327,10 +380,9 @@ async function run() {
     "ru",
   );
   assert.equal(instructions.checksum.length, 64);
-  assert.match(instructions.instructions, /максимум два/);
-  assert.match(instructions.instructions, /2–4 секунды/);
-  assert.match(instructions.instructions, /10 секунд/);
-  assert.match(instructions.instructions, /30 слов/);
+  assert.match(instructions.instructions, /одним коротким/);
+  assert.match(instructions.instructions, /12–18 слов/);
+  assert.match(instructions.instructions, /замолчи и слушай/);
   assert.match(instructions.instructions,/выполняй молча/iu);
   assert.doesNotMatch(instructions.instructions,/пока безопасный backend/iu);
   assert.equal(containsInternalAgentDisclosure("У меня нет доступа к безопасному backend"),true);
@@ -356,7 +408,12 @@ async function run() {
     service = fs.readFileSync(
       "server/ai-platform/voice/providers/realtimeVoiceSessionService.ts",
       "utf8",
-    ), transcriptService=fs.readFileSync("server/ai-platform/voice/transcripts/voiceTranscriptService.ts","utf8"), transcriptRouter=fs.readFileSync("server/ai-platform/voice/transcripts/api/voiceTranscriptRouter.ts","utf8");
+    ),
+    openaiAdapter=fs.readFileSync(
+      "server/ai-platform/voice/providers/adapters/openaiRealtimeAdapter.ts",
+      "utf8",
+    ),
+    transcriptService=fs.readFileSync("server/ai-platform/voice/transcripts/voiceTranscriptService.ts","utf8"), transcriptRouter=fs.readFileSync("server/ai-platform/voice/transcripts/api/voiceTranscriptRouter.ts","utf8");
   assert.match(router, /Raw audio payload is forbidden/);
   assert.doesNotMatch(router, /apiKey|Authorization|providerSessionIdHash/);
   assert.match(migration, /ai\.realtime_voice_enabled','false/);
@@ -364,6 +421,10 @@ async function run() {
   assert.match(service, /transferRequired\s*=\s*true/);
   assert.match(service, /toolCalls\s*>\s*2/);
   assert.match(service, /greetingStatus\s*!==\s*["']not_started["']/);
+  assert.match(service,/event\.kind===["']input_partial["']/);
+  assert.match(service,/createResponseForRemainder/);
+  assert.match(openaiAdapter,/max_output_tokens/);
+  assert.doesNotMatch(openaiAdapter,/max_response_output_tokens/);
   assert.doesNotMatch(
     service,
     /asterisk\s+-rx|external_host|createBridge|answerChannel/i,

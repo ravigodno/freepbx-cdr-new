@@ -16,6 +16,7 @@ export interface RealtimeVoiceProviderAdapter {
   appendAudio(frame: AudioFrame): Promise<void>;
   commitInput(): Promise<void>;
   createResponse?(): Promise<void>;
+  createResponseForRemainder?(itemId:string|undefined,text:string):Promise<void>;
   startInitialGreeting?(text: string): Promise<void>;
   cancelResponse(responseId?: string): Promise<void>;
   truncateResponse?(itemId: string, audioEndMs: number): Promise<void>;

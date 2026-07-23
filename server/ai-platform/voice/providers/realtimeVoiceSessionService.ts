@@ -30,6 +30,8 @@ import type { VoiceTranscriptService } from "../transcripts/voiceTranscriptServi
 import { readVoiceDurationPolicy } from "../media/voiceDurationPolicy.js";
 import { containsInternalAgentDisclosure, customerSafeToolResult, isUnexpectedEnglishVoiceResponse } from "./voiceOutputGuard.js";
 import {
+  classifyCallerSpeech,
+  extractStopCommand,
   VoiceTurnCoordinator,
   type InterruptionDecision,
 } from "./voiceTurnCoordinator.js";
@@ -117,6 +119,13 @@ type Runtime = {
   pendingCallerCommit: boolean;
   responseGeneratedMs: number;
   maxResponseAudioMs: number;
+  callerPartialText: string;
+  canonicalInterruptionKeys: Set<string>;
+  pendingStopRemainder: string | null;
+  pendingStopDetectedAt: number | null;
+  keywordToAudibleStopMs: number | null;
+  deferredResponse: { itemId?:string; text:string } | null;
+  controlledLimitResponseIds: Set<string>;
 };
 
 export class RealtimeVoiceSessionService {
@@ -396,6 +405,8 @@ export class RealtimeVoiceSessionService {
       voice: input.providerKey === "openai_realtime" ? "marin" : "natural",
       language: String(source.language || "ru"),
       instructions: instructions.instructions,
+      maxOutputTokens:
+        String(context?.agent?.type || "") === "receptionist" ? 28 : undefined,
       inputFormat,
       outputFormat,
       serverVad:
@@ -515,11 +526,18 @@ export class RealtimeVoiceSessionService {
         greetingStatus: "not_started",
         greetingStartedAt: null,
         greetingCompletedAt: null,
-        coordinator:new VoiceTurnCoordinator(),
+        coordinator:new VoiceTurnCoordinator({sessionRef:String(id)}),
         interruptionTimer:null,
         pendingCallerCommit:false,
         responseGeneratedMs:0,
         maxResponseAudioMs:String(context?.agent?.type||"")==="receptionist"?10000:60000,
+        callerPartialText:"",
+        canonicalInterruptionKeys:new Set(),
+        pendingStopRemainder:null,
+        pendingStopDetectedAt:null,
+        keywordToAudibleStopMs:null,
+        deferredResponse:null,
+        controlledLimitResponseIds:new Set(),
       };
     runtime.flusher = new MetricsFlusher(() => this.persist(id), 1000);
     runtime.unsubscribeProvider = adapter.subscribeEvents((event) =>
@@ -545,27 +563,16 @@ export class RealtimeVoiceSessionService {
             runtime.speechEndAt = Date.now();
             runtime.speechEndMonotonic = performance.now();
             runtime.speechAnchorSource = "local_vad";
-            if(runtime.interruptionTimer){
-              clearTimeout(runtime.interruptionTimer);
-              runtime.interruptionTimer=null;
-            }
-            const decision=runtime.coordinator.callerSpeechEnded();
             this.transcriptService?.turnDiagnostics(
               runtime.voiceSessionId,
               runtime.coordinator.snapshot(),
             );
-            if(decision?.status==="confirmed")
-              return this.applyCanonicalInterruption(runtime,id,input.traceId,decision)
-                .then(()=>this.commit(input.tenantId,id,input.traceId))
-                .then(()=>{});
-            if(runtime.coordinator.audibleActive){
-              runtime.pendingCallerCommit=true;
-              runtime.flusher.markDirty();
-              return;
-            }
             return this.commit(input.tenantId, id, input.traceId).then(() => {});
           }
           runtime.coordinator.beginCallerTurn();
+          runtime.callerPartialText="";
+          runtime.pendingStopRemainder=null;
+          runtime.pendingStopDetectedAt=null;
           runtime.coordinator.updateQueuedAudio(
             this.media.getProtocolMetrics(
               input.tenantId,
@@ -581,21 +588,6 @@ export class RealtimeVoiceSessionService {
             runtime.coordinator.snapshot(),
           );
           runtime.flusher.markDirty();
-          if(decision.status!=="candidate")return;
-          runtime.interruptionTimer=setTimeout(()=>{
-            runtime.interruptionTimer=null;
-            const confirmed=runtime.coordinator.evaluateCandidate();
-            if(confirmed.status==="confirmed")
-              void this.applyCanonicalInterruption(runtime,id,input.traceId,confirmed);
-            else {
-              this.transcriptService?.turnDiagnostics(
-                runtime.voiceSessionId,
-                runtime.coordinator.snapshot(),
-              );
-              runtime.flusher.markDirty();
-            }
-          },runtime.coordinator.options.minimumSpeechMs);
-          runtime.interruptionTimer.unref?.();
         },
       );
       runtime.unsubscribePlayout = this.media.subscribePlayout(
@@ -651,7 +643,8 @@ export class RealtimeVoiceSessionService {
     if (runtime.blocked || runtime.responsePending)
       return this.get(tenantId, id);
     const current = await this.row(tenantId, id);
-    if (current.state !== "listening") return this.get(tenantId, id);
+    if (!["listening","responding"].includes(current.state))
+      return this.get(tenantId, id);
     runtime.responsePending = true;
     runtime.commitAt = Date.now();
     runtime.commitMonotonic = performance.now();
@@ -754,7 +747,15 @@ export class RealtimeVoiceSessionService {
     decision:InterruptionDecision,
   ){
     if(decision.status!=="confirmed"||!runtime.activeResponseId)return;
+    const idempotencyKey=decision.idempotencyKey;
+    if(!idempotencyKey||runtime.canonicalInterruptionKeys.has(idempotencyKey)){
+      runtime.duplicateCancelIgnored++;
+      runtime.flusher.markDirty();
+      return;
+    }
+    runtime.canonicalInterruptionKeys.add(idempotencyKey);
     const started=performance.now(),tenantId=runtime.tenantId;
+    runtime.coordinator.markCancellationStarted();
     runtime.turnState = "cancelling";
     runtime.bargeInDetectedAt = Date.now();
     const responseId = runtime.activeResponseId,
@@ -767,6 +768,12 @@ export class RealtimeVoiceSessionService {
     );
     runtime.playoutStoppedAt = Date.now();
     runtime.audibleStopLatencyMs = Math.max(0,Math.round(performance.now()-started));
+    if(decision.detectedAt){
+      runtime.keywordToAudibleStopMs=Math.max(0,Date.now()-decision.detectedAt);
+      runtime.pendingStopDetectedAt=decision.detectedAt;
+    }
+    if(decision.fastPath)
+      runtime.pendingStopRemainder=decision.semanticRemainder||"";
     if(decision.cancelMode==="provider_and_playout"){
       await runtime.adapter.cancelResponse(responseId);
       runtime.cancelSentAt = Date.now();
@@ -802,6 +809,7 @@ export class RealtimeVoiceSessionService {
       await this.transition(tenantId, id, "listening", traceId);
     }
     runtime.turnState = "listening_after_interrupt";
+    runtime.coordinator.markCancellationCompleted();
     await this.liveObserver?.({
       tenantId,
       voiceSessionId: Number(row.voice_session_id),
@@ -820,7 +828,10 @@ export class RealtimeVoiceSessionService {
       details: {
         canonical:true,
         reason:decision.reason,
+        category:decision.category,
         cancelMode:decision.cancelMode,
+        keyword:decision.keyword,
+        keywordToAudibleStopMs:runtime.keywordToAudibleStopMs,
         cancelLatencyMs: runtime.cancelLatencyMs,
         audibleStopLatencyMs: runtime.audibleStopLatencyMs,
         discardedBufferedAudioMs: runtime.discardedBufferedAudioMs,
@@ -910,6 +921,15 @@ export class RealtimeVoiceSessionService {
       runtime.pendingCallerCommit=false;
       await this.commit(runtime.tenantId,id,traceId);
     }
+    if(runtime.deferredResponse&&!runtime.blocked){
+      const deferred=runtime.deferredResponse;
+      runtime.deferredResponse=null;
+      if(runtime.coordinator.requestResponseForTurn()){
+        runtime.responsePending=true;
+        await runtime.adapter.createResponse?.();
+      }
+      void deferred;
+    }
     runtime.flusher.markDirty();
   }
   private async handleEvent(
@@ -971,6 +991,7 @@ export class RealtimeVoiceSessionService {
       ) {
         if (!runtime.cancelledResponseIds.has(responseId)) {
           runtime.cancelledResponseIds.add(responseId);
+          runtime.controlledLimitResponseIds.add(responseId);
           runtime.responseLimitCancelCount++;
           if (runtime.coordinator.providerState === "generating") {
             await runtime.adapter.cancelResponse(responseId);
@@ -999,6 +1020,7 @@ export class RealtimeVoiceSessionService {
         if (enqueue.reason === "response_limit" && responseId) {
           if (!runtime.cancelledResponseIds.has(responseId)) {
             runtime.cancelledResponseIds.add(responseId);
+            runtime.controlledLimitResponseIds.add(responseId);
             runtime.responseLimitCancelCount++;
             if (runtime.coordinator.providerState === "generating") {
               await runtime.adapter.cancelResponse(responseId);
@@ -1048,14 +1070,19 @@ export class RealtimeVoiceSessionService {
     ) runtime.activeItemId = event.itemId;
     if (event.type === "transcript") {
       const text = redactAiPlatformText(event.text).slice(0, 1000);
-      if(event.kind.endsWith("partial")){
+      if(event.kind==="input_partial"){
+        runtime.callerPartialText = (
+          runtime.callerPartialText + text
+        ).slice(0,1000);
         runtime.coordinator.updateQueuedAudio(
           this.media.getProtocolMetrics(
             runtime.tenantId,
             runtime.mediaSessionId,
           )?.queuedAudioMsCurrent || 0,
         );
-        const decision=runtime.coordinator.transcriptPartial(text);
+        const decision=runtime.coordinator.transcriptPartial(
+          runtime.callerPartialText,
+        );
         this.transcriptService?.turnDiagnostics(
           runtime.voiceSessionId,
           runtime.coordinator.snapshot(),
@@ -1093,12 +1120,62 @@ export class RealtimeVoiceSessionService {
         if (runtime.transcripts.length > 20) runtime.transcripts.shift();
       }
       if(this.transcriptService){const voice=(await this.store.query('SELECT route_binding_id,agent_id,agent_version_id FROM ai_voice_sessions WHERE tenant_id=? AND id=? LIMIT 1',[runtime.tenantId,runtime.voiceSessionId]))[0];if(voice)await this.transcriptService.transcript({tenantId:runtime.tenantId,voiceSessionId:runtime.voiceSessionId,mediaSessionId:runtime.mediaSessionId,realtimeSessionId:id,bindingId:voice.route_binding_id?Number(voice.route_binding_id):null,agentId:Number(voice.agent_id),agentVersionId:Number(voice.agent_version_id),kind:event.kind,text,eventId:event.eventId,itemId:event.itemId,responseId:event.responseId,contentIndex:event.contentIndex,confidence:event.confidence});}
+      if(
+        event.kind==="output_final" &&
+        event.responseId &&
+        runtime.controlledLimitResponseIds.has(event.responseId)
+      )
+        await this.transcriptService?.controlledLimit(
+          runtime.tenantId,id,event.responseId,
+        );
       if (event.kind === "input_final") {
-        if (!text.trim()) runtime.responsePending = false;
-        else {
-          if (detectRealtimeTransfer(text))
-            await this.transfer(runtime, id, traceId, row, text);
-          else if (callbackIntent(text)) runtime.callbackOfferRequired = true;
+        runtime.callerPartialText=text;
+        runtime.coordinator.updateQueuedAudio(
+          this.media.getProtocolMetrics(
+            runtime.tenantId,
+            runtime.mediaSessionId,
+          )?.queuedAudioMsCurrent || 0,
+        );
+        const finalDecision=runtime.coordinator.transcriptPartial(text);
+        if(finalDecision.status==="confirmed")
+          await this.applyCanonicalInterruption(
+            runtime,id,traceId,finalDecision,
+          );
+        runtime.coordinator.callerSpeechEnded();
+        const stop=extractStopCommand(text),
+          category=classifyCallerSpeech(text),
+          responseText=stop?.semanticRemainder||text;
+        if(!text.trim()){
+          runtime.responsePending=false;
+        }else if(stop){
+          runtime.pendingStopRemainder=responseText;
+          if(!responseText){
+            runtime.responsePending=false;
+          }else if(
+            !runtime.blocked &&
+            runtime.coordinator.requestResponseForTurn()
+          ){
+            runtime.responsePending=true;
+            if(runtime.adapter.createResponseForRemainder)
+              await runtime.adapter.createResponseForRemainder(
+                event.itemId,
+                responseText,
+              );
+            else await runtime.adapter.createResponse?.();
+          }
+        }else if(
+          ["acknowledgement","laughter","cough","breath","noise"]
+            .includes(category)
+        ){
+          runtime.responsePending=false;
+        }else if(runtime.coordinator.audibleActive){
+          runtime.deferredResponse={itemId:event.itemId,text:responseText};
+          runtime.responsePending=false;
+        }else{
+          if (detectRealtimeTransfer(responseText))
+            await this.transfer(runtime, id, traceId, row, responseText);
+          else if (callbackIntent(responseText))
+            runtime.callbackOfferRequired = true;
           if (
             !runtime.blocked &&
             runtime.responsePending &&
@@ -1367,6 +1444,11 @@ export class RealtimeVoiceSessionService {
         pendingCallerCommit: runtime.pendingCallerCommit,
         responseGeneratedMs: runtime.responseGeneratedMs,
         maxResponseAudioMs: runtime.maxResponseAudioMs,
+        canonicalInterruptionCount: runtime.canonicalInterruptionKeys.size,
+        pendingStopRemainderPresent: Boolean(runtime.pendingStopRemainder),
+        pendingStopDetectedAt: runtime.pendingStopDetectedAt,
+        keywordToAudibleStopMs: runtime.keywordToAudibleStopMs,
+        controlledLimitCount: runtime.controlledLimitResponseIds.size,
         speechEndToProviderFirstDeltaMs:
           runtime.speechEndMonotonic === null ||
           runtime.providerFirstDeltaMonotonic === null
