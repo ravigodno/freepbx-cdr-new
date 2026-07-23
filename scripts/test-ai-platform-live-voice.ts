@@ -145,6 +145,7 @@ async function run() {
     bridges = new LiveBridgeService(ari);
   await bridges.create(7, "trusted-caller", "127.0.0.1:9999", "uuid", "app");
   await bridges.answer(7, "trusted-caller");
+  await bridges.hangupCaller("trusted-caller");
   await bridges.cleanup(7);
   await bridges.cleanup(7);
   assert.deepEqual(operations, [
@@ -153,6 +154,7 @@ async function run() {
     "bridge:add",
     "bridge:add",
     "answer",
+    "hangup",
     "hangup",
     "bridge:destroy",
   ]);

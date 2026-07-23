@@ -389,7 +389,21 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
               model: "gpt-4o-transcribe",
               language: config.language.split("-")[0] || "ru",
             },
-            turn_detection: config.serverVad ? { type: "server_vad" } : null,
+            turn_detection: config.semanticVad
+              ? {
+                  type: "semantic_vad",
+                  eagerness: config.responseEagerness || "medium",
+                  create_response: false,
+                  interrupt_response: false,
+                }
+              : config.serverVad
+                ? {
+                    type: "server_vad",
+                    silence_duration_ms: config.endOfTurnSilenceMs || 500,
+                    create_response: false,
+                    interrupt_response: false,
+                  }
+                : null,
           },
           output: {
             format:
@@ -429,10 +443,19 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
   async commitInput() {
     this.send({ type: "input_audio_buffer.commit" });
   }
-  async createResponse() {
+  async createResponse(contextInstructions?:string) {
     this.sendResponse(
       this.config?.maxOutputTokens,
-      "Отвечай только на русском языке. Дай одно законченное короткое предложение и сразу замолчи.",
+      [
+        "Отвечай только на русском языке. Дай одно законченное короткое предложение и сразу замолчи.",
+        contextInstructions || "",
+      ].filter(Boolean).join("\n"),
+    );
+  }
+  async createFarewellResponse() {
+    this.sendResponse(
+      this.config?.greetingOutputTokens || 192,
+      "Произнеси только одно короткое тёплое прощание: «Спасибо за звонок. До свидания!» Не добавляй, что звонок уже завершён.",
     );
   }
   async retryResponse(itemId: string | undefined, maxOutputTokens: number) {

@@ -34,8 +34,20 @@ import {
   mayRetryBeforePlayout,
   pushResponseFrame,
   releaseResponseTail,
+  releaseAfterPlayoutStarted,
   sentenceBoundaryAfterWarning,
 } from "../server/ai-platform/voice/providers/delayedResponseStream.js";
+import {
+  compilePersonalityInstructions,
+  receptionistPersonalityV10,
+  validatePersonalityProfile,
+} from "../server/ai-platform/agents/agentPersonalityProfile.js";
+import {
+  compileTaskStateInstructions,
+  createTaskState,
+  isFarewellIntent,
+  updateTaskState,
+} from "../server/ai-platform/voice/providers/receptionistConversationState.js";
 
 const format = {
   codec: "slin16" as const,
@@ -77,6 +89,17 @@ const frame = (source: string): AudioFrame => ({
 });
 
 async function run() {
+  const personality=receptionistPersonalityV10();
+  assert.deepEqual(validatePersonalityProfile(personality),[]);
+  assert.match(compilePersonalityInstructions(personality),/говори немного быстрее/iu);
+  const task=createTaskState();
+  updateTaskState(task,"Запишите меня к врачу завтра");
+  assert.equal(task.collectedFields.date,"завтра");
+  assert.equal(task.nextBestQuestion,"На какое время вас записать?");
+  updateTaskState(task,"Завтра в 14:30");
+  assert.equal(task.nextBestQuestion,null);
+  assert.match(compileTaskStateInstructions(task),/не спрашивай повторно/iu);
+  assert.equal(isFarewellIntent("Спасибо, до свидания"),true);
   const audible = (
     providerState: "generating" | "provider_done" = "generating",
     queuedAudioMs = 5000,
@@ -219,7 +242,10 @@ async function run() {
     }else if(result.release.length)stream.framesSent+=result.release.length;
   }
   assert.equal(released[0],0);
-  assert.equal(released.at(-1),199);
+  assert.equal(released.at(-1),24);
+  const afterStart=releaseAfterPlayoutStarted(stream);
+  released.push(...afterStart.map(item=>item.sequence));
+  stream.framesSent+=afterStart.length;
   assert.deepEqual(released,Array.from({length:200},(_,index)=>index));
   assert.equal(stream.startupBufferReadyAt,480);
   assert.equal(releaseResponseTail(stream,4000).length,0);
@@ -545,9 +571,10 @@ async function run() {
   );
   assert.equal(instructions.checksum.length, 64);
   assert.match(instructions.instructions, /одним законченным/);
-  assert.match(instructions.instructions, /8–16 слов/);
+  assert.match(instructions.instructions, /6–14 слов/);
   assert.match(instructions.instructions, /не обрывай/);
   assert.match(instructions.instructions, /замолчи и слушай/);
+  assert.match(instructions.instructions,/реальный сервис записи/);
   assert.match(instructions.instructions,/выполняй молча/iu);
   assert.doesNotMatch(instructions.instructions,/пока безопасный backend/iu);
   assert.equal(containsInternalAgentDisclosure("У меня нет доступа к безопасному backend"),true);
@@ -610,6 +637,7 @@ async function run() {
   assert.match(migration,/ai\.voice_max_single_response_audio_seconds/);
   assert.match(migration,/uniq_ai_voice_logical_utterance/);
   assert.match(migration,/20260723_042_voice_response_completion/);
+  assert.match(migration,/20260723_044_agent_personality_profile/);
   assert.match(migration,/provider_finish_reason/);
   assert.match(migration,/output_token_limit_hit/);
   assert.match(transcriptService,/COALESCE\(last_delta_at,started_at\)/);

@@ -382,6 +382,17 @@ export class ControlledLiveVoiceService {
     await this.cleanup(tenantId,voiceSessionId,traceId);
     await this.bridges.releaseCaller(active.callerChannel).catch(()=>{});
   }
+  async deterministicHangup(tenantId:number,voiceSessionId:number,traceId:string){
+    const active=this.active.get(voiceSessionId);
+    if(!active||active.tenantId!==tenantId)return;
+    await this.audit.append({
+      tenantId,traceId,actorType:"service",
+      eventType:"live_voice_hangup_requested" as any,
+      entityType:"voice_session",entityId:String(voiceSessionId),
+      decision:"requested",details:{policy:"controlled_farewell"},
+    });
+    await this.bridges.hangupCaller(active.callerChannel);
+  }
   async observe(event: {
     tenantId: number;
     voiceSessionId: number;

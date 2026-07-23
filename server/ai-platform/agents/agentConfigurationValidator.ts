@@ -1,6 +1,7 @@
 import { AiPlatformError } from '../core/errors.js';
 import { parseJsonObject } from '../core/redaction.js';
 import type { AiPlatformStore } from '../storage/aiPlatformStore.js';
+import { validatePersonalityProfile } from './agentPersonalityProfile.js';
 
 export interface AgentValidationResult { valid:boolean; errors:string[] }
 export const containsAiConfigSecrets=(value:unknown):boolean=>Boolean(value&&typeof value==='object'&&Object.entries(value as Record<string,unknown>).some(([key,child])=>/(?:api.?key|authorization|password|secret|token|credential|ami|ari|sip)/i.test(key)||containsAiConfigSecrets(child)));
@@ -13,6 +14,7 @@ export class AgentConfigurationValidator {
     let config:Record<string,unknown>={};
     try{config=parseJsonObject(input.config,'config')}catch{errors.push('invalid_config')}
     if(containsAiConfigSecrets(config))errors.push('secrets_not_allowed');
+    errors.push(...validatePersonalityProfile(config.personality));
     if(!String(input.prompt||'').trim())errors.push('prompt_required');
     if(input.requireChecksum&&!String(input.checksum||'').trim())errors.push('checksum_required');
     if(input.templateId){const rows=await this.store.query('SELECT id FROM ai_agent_templates WHERE id=? AND (tenant_id=? OR tenant_id IS NULL) AND status=? LIMIT 1',[input.templateId,tenantId,'active']);if(!rows.length)errors.push('template_not_found')}

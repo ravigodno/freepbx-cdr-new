@@ -113,6 +113,13 @@ export class MediaSessionService {
   ) {
     this.repo = new MediaSessionRepository(store);
   }
+  configureVad(tenantId:number,id:number,endSilenceMs:number){
+    const runtime=this.runtimes.get(id);
+    if(!runtime||runtime.tenantId!==tenantId)return false;
+    const silence=Math.max(350,Math.min(600,Math.round(endSilenceMs)));
+    runtime.vad=new VadDetector(700,2,silence);
+    return true;
+  }
   private runtime(
     tenantId: number,
     id: number,

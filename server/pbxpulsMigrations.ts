@@ -1095,6 +1095,11 @@ const MIGRATIONS: Migration[] = [
     key:'20260723_043_voice_streaming_completion',description:'Separate audible streaming completion from provider semantics',statements:[
       `ALTER TABLE ai_voice_transcript_utterances ADD COLUMN response_completion_reason ENUM('completed','provider_token_truncated','controlled_sentence_stop','controlled_hard_safety','caller_interrupted','hangup_interrupted') NULL`
     ]
+  },
+  {
+    key:'20260723_044_agent_personality_profile',description:'Add versioned structured AI agent personality profiles',statements:[
+      `ALTER TABLE ai_behavior_profiles ADD COLUMN personality_schema_version SMALLINT UNSIGNED NOT NULL DEFAULT 1,ADD COLUMN personality_profile_json LONGTEXT NULL`
+    ]
   }
 ];
 

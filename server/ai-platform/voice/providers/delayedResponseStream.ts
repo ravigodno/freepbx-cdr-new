@@ -13,6 +13,7 @@ export type ResponseStreamState = {
   warningReached: boolean;
   sentenceStopRequested: boolean;
   hardSafetyReached: boolean;
+  playoutStarted: boolean;
 };
 
 const clamp = (value: unknown, fallback: number, min: number, max: number) => {
@@ -29,8 +30,8 @@ export function delayedStreamingPolicy(config: unknown) {
       : {};
   return {
     startupBufferMs: clamp(voice.delayedPlayoutStartupMs, 500, 400, 600),
-    warningMs: clamp(Number(voice.softResponseSeconds) * 1000, 6000, 4000, 8000),
-    hardMs: clamp(Number(voice.maxResponseAudioSeconds) * 1000, 12000, 8000, 12000),
+    warningMs: clamp(Number(voice.softResponseSeconds) * 1000, 5000, 4000, 8000),
+    hardMs: clamp(Number(voice.maxResponseAudioSeconds) * 1000, 9000, 8000, 12000),
   };
 }
 
@@ -47,6 +48,7 @@ export function createResponseStreamState(): ResponseStreamState {
     warningReached: false,
     sentenceStopRequested: false,
     hardSafetyReached: false,
+    playoutStarted: false,
   };
 }
 
@@ -58,8 +60,13 @@ export function pushResponseFrame(
 ) {
   state.firstDeltaAt ??= now;
   state.generatedMs += frame.durationMs;
-  if (state.framesSent > 0)
+  if (state.framesSent > 0 && state.playoutStarted)
     return { release: [frame], startupReady: false };
+  if (state.framesSent > 0) {
+    state.buffered.push(frame);
+    state.bufferedMs += frame.durationMs;
+    return { release: [] as AudioFrame[], startupReady: false };
+  }
   state.buffered.push(frame);
   state.bufferedMs += frame.durationMs;
   if (state.bufferedMs < startupBufferMs)
@@ -68,6 +75,13 @@ export function pushResponseFrame(
   const release = state.buffered.splice(0);
   state.bufferedMs = 0;
   return { release, startupReady: true };
+}
+
+export function releaseAfterPlayoutStarted(state: ResponseStreamState) {
+  state.playoutStarted = true;
+  const release = state.buffered.splice(0);
+  state.bufferedMs = 0;
+  return release;
 }
 
 export function releaseResponseTail(

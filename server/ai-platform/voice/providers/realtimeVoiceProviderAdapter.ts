@@ -15,7 +15,8 @@ export interface RealtimeVoiceProviderAdapter {
   configureSession(config: RealtimeVoiceConfig): Promise<void>;
   appendAudio(frame: AudioFrame): Promise<void>;
   commitInput(): Promise<void>;
-  createResponse?(): Promise<void>;
+  createResponse?(instructions?:string): Promise<void>;
+  createFarewellResponse?(): Promise<void>;
   createResponseForRemainder?(itemId:string|undefined,text:string):Promise<void>;
   retryResponse?(itemId:string|undefined,maxOutputTokens:number):Promise<void>;
   createFallbackResponse?(itemId:string|undefined):Promise<void>;

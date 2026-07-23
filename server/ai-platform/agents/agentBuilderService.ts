@@ -6,6 +6,7 @@ import { insertId } from '../storage/aiPlatformStore.js';
 import type { AiAuditService } from '../audit/aiAuditService.js';
 import { AgentLifecycleService, type LifecycleActor } from './agentLifecycleService.js';
 import { AgentConfigurationValidator } from './agentConfigurationValidator.js';
+import { normalizePersonalityProfile, receptionistPersonalityV10 } from './agentPersonalityProfile.js';
 
 const safeKey=(value:unknown)=>{const key=String(value||'').trim().toLowerCase().replace(/[^a-z0-9_-]+/g,'_');if(!/^[a-z][a-z0-9_-]{2,99}$/.test(key))throw new AiPlatformError('invalid_request',400,'Invalid agent key');return key};
 const safeName=(value:unknown)=>{const name=String(value||'').trim();if(!name||name.length>191)throw new AiPlatformError('invalid_request',400,'Invalid agent name');return name};
@@ -15,12 +16,13 @@ export class AgentBuilderService {
   private readonly validator:AgentConfigurationValidator;
   constructor(private readonly store:AiPlatformStore,private readonly audit:AiAuditService){this.lifecycle=new AgentLifecycleService(store,audit);this.validator=new AgentConfigurationValidator(store)}
 
-  async createFromTemplate(tenantId:number,input:{templateId:number;agentKey:unknown;name:unknown;role?:unknown;behaviorProfileId?:number;permissionKeys?:unknown},actor:LifecycleActor){
+  async createFromTemplate(tenantId:number,input:{templateId:number;agentKey:unknown;name:unknown;role?:unknown;behaviorProfileId?:number;permissionKeys?:unknown;personality?:unknown;voice?:unknown;farewellPolicy?:unknown},actor:LifecycleActor){
     const templates=await this.store.query(`SELECT id,template_key,agent_type,default_prompt,default_behavior_profile_id,default_tools_json,default_permissions_json FROM ai_agent_templates WHERE id=? AND (tenant_id=? OR tenant_id IS NULL) AND status='active' LIMIT 1`,[input.templateId,tenantId]);
     const template=templates[0];if(!template)throw new AiPlatformError('not_found',404,'Agent template not found');
     const toolIds=(parseJsonObject(template.default_tools_json,'default_tools_json').toolIds as unknown[])||[];
     const defaultPermissions=(parseJsonObject(template.default_permissions_json,'default_permissions_json').permissionKeys as unknown[])||[];
-    const config={templateId:Number(template.id),templateKey:String(template.template_key),role:String(input.role||template.agent_type),behaviorProfileId:Number(input.behaviorProfileId||template.default_behavior_profile_id||0),toolIds,permissionKeys:Array.isArray(input.permissionKeys)?input.permissionKeys:defaultPermissions,knowledgeSourceIds:[]};
+    const receptionist=String(template.agent_type)==='receptionist';
+    const config={templateId:Number(template.id),templateKey:String(template.template_key),role:String(input.role||template.agent_type),behaviorProfileId:Number(input.behaviorProfileId||template.default_behavior_profile_id||0),toolIds,permissionKeys:Array.isArray(input.permissionKeys)?input.permissionKeys:defaultPermissions,knowledgeSourceIds:[],...(receptionist?{personality:normalizePersonalityProfile(input.personality||receptionistPersonalityV10()),voice:input.voice&&typeof input.voice==='object'?input.voice:{speakingRate:'slightly_fast',pauseStyle:'short_natural',responseEagerness:'high',endOfTurnSilenceMs:450,allowSemanticVad:false},farewellPolicy:input.farewellPolicy&&typeof input.farewellPolicy==='object'?input.farewellPolicy:{maxFarewells:1,hangupAfterPlayout:true}}:{})};
     await this.validator.assertValid(tenantId,{templateId:Number(template.id),behaviorProfileId:config.behaviorProfileId,config,prompt:template.default_prompt});
     const created=await this.lifecycle.createAgentDraft(tenantId,{agentKey:safeKey(input.agentKey),name:safeName(input.name),agentType:String(template.agent_type),config,systemPrompt:String(template.default_prompt)},actor);
     await this.createPromptVersion(tenantId,created.version.id,String(template.default_prompt),'Created from template',actor.actorId);
