@@ -46,8 +46,11 @@ import {
   compileTaskStateInstructions,
   createTaskState,
   isFarewellIntent,
+  planReceptionistResponse,
+  setTaskActionState,
   updateTaskState,
 } from "../server/ai-platform/voice/providers/receptionistConversationState.js";
+import { ClosingCoordinator } from "../server/ai-platform/voice/providers/closingCoordinator.js";
 
 const format = {
   codec: "slin16" as const,
@@ -93,13 +96,48 @@ async function run() {
   assert.deepEqual(validatePersonalityProfile(personality),[]);
   assert.match(compilePersonalityInstructions(personality),/говори немного быстрее/iu);
   const task=createTaskState();
-  updateTaskState(task,"Запишите меня к врачу завтра");
+  updateTaskState(task,"Запишите меня завтра в 12 к неврологу");
   assert.equal(task.collectedFields.date,"завтра");
-  assert.equal(task.nextBestQuestion,"На какое время вас записать?");
-  updateTaskState(task,"Завтра в 14:30");
-  assert.equal(task.nextBestQuestion,null);
-  assert.match(compileTaskStateInstructions(task),/не спрашивай повторно/iu);
+  assert.equal(task.collectedFields.time,"12:00");
+  assert.equal(task.collectedFields.specialist,"невролог");
+  assert.deepEqual(task.missingFields,[]);
+  assert.equal(task.taskStatus,"ready");
+  const unavailablePlan=planReceptionistResponse(task);
+  assert.equal(task.actionState,"unavailable");
+  assert.match(unavailablePlan.text||"",/соединить с сотрудником/iu);
+  assert.doesNotMatch(unavailablePlan.text||"",/вы записаны|запись подтверждена/iu);
+  setTaskActionState(task,"succeeded");
+  assert.match(planReceptionistResponse(task).text||"",/запись подтверждена/iu);
+  const taskMissing=createTaskState();
+  updateTaskState(taskMissing,"Запишите меня завтра к неврологу");
+  assert.deepEqual(taskMissing.missingFields,["time"]);
+  assert.match(taskMissing.nextQuestion||"",/какое время завтра/iu);
+  assert.doesNotMatch(taskMissing.nextQuestion||"",/день|специалист/iu);
+  assert.match(compileTaskStateInstructions(taskMissing),/missing=time/iu);
   assert.equal(isFarewellIntent("Спасибо, до свидания"),true);
+  const closing=new ClosingCoordinator("session-safe");
+  assert.equal(closing.detectIntent("turn-1").accepted,true);
+  assert.equal(closing.detectIntent("turn-2").duplicate,true);
+  assert.equal(closing.canCreateFarewell(false,false),true);
+  assert.equal(closing.farewellRequested(),true);
+  assert.equal(closing.farewellRequested(),false);
+  assert.equal(closing.bindFarewellResponse("response-safe"),true);
+  assert.equal(closing.playoutStarted("response-safe"),true);
+  assert.equal(closing.playoutCompleted("response-safe"),true);
+  assert.equal(closing.hangupRequested(),true);
+  assert.equal(closing.hangupRequested(),false);
+  assert.equal(closing.hangupConfirmed({
+    actionRefSafe:"hangup_safe",requestedAt:100,confirmedAt:120,
+    latencyMs:20,ariResult:"confirmed",failureCodeSafe:null,
+  }),true);
+  assert.deepEqual(
+    {
+      farewell:closing.farewellResponseCount,
+      requested:closing.hangupRequestedCount,
+      confirmed:closing.hangupConfirmedCount,
+    },
+    {farewell:1,requested:1,confirmed:1},
+  );
   const audible = (
     providerState: "generating" | "provider_done" = "generating",
     queuedAudioMs = 5000,
@@ -503,6 +541,7 @@ async function run() {
   await adapter.configureSession(config);
   await adapter.appendAudio(frame("question"));
   await adapter.commitInput();
+  await adapter.createResponse();
   assert(events.some((event) => event.type === "output_audio"));
   assert(
     events.some(

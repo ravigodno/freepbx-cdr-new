@@ -458,6 +458,13 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
       "Произнеси только одно короткое тёплое прощание: «Спасибо за звонок. До свидания!» Не добавляй, что звонок уже завершён.",
     );
   }
+  async createPlannedResponse(text:string,instructions:string) {
+    const safeText=String(text||"").trim().slice(0,500);
+    this.sendResponse(
+      this.config?.maxOutputTokens,
+      `${instructions}\nПроизнеси дословно и полностью, без дополнений: «${safeText}»`,
+    );
+  }
   async retryResponse(itemId: string | undefined, maxOutputTokens: number) {
     if (itemId)
       this.send({ type: "conversation.item.delete", item_id: itemId });

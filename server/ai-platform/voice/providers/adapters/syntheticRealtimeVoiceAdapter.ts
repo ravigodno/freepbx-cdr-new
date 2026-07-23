@@ -103,11 +103,6 @@ export class SyntheticRealtimeVoiceAdapter implements RealtimeVoiceProviderAdapt
         callId: "synthetic-tool-1",
       });
     if (this.cancelled) return;
-    await this.respond(
-      this.lastSource === "callback_request"
-        ? "Могу зафиксировать просьбу о звонке после вашего согласия."
-        : "Это synthetic голосовой ответ.",
-    );
   }
   async startInitialGreeting(text: string) {
     if (!this.config || this.state !== "configured")
@@ -121,6 +116,19 @@ export class SyntheticRealtimeVoiceAdapter implements RealtimeVoiceProviderAdapt
   }
   async createResponseForRemainder(_itemId:string|undefined,text:string){
     await this.respond(text.slice(0,160),"synthetic_semantic_remainder");
+  }
+  async createResponse(){
+    await this.respond(
+      this.lastSource === "callback_request"
+        ? "Могу зафиксировать просьбу о звонке после вашего согласия."
+        : "Это synthetic голосовой ответ.",
+    );
+  }
+  async createPlannedResponse(text:string){
+    await this.respond(text.slice(0,500),"synthetic_planned_response");
+  }
+  async createFarewellResponse(){
+    await this.respond("До свидания, хорошего дня.","synthetic_farewell");
   }
   async retryResponse(_itemId:string|undefined,_maxOutputTokens:number){
     await this.respond(

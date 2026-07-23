@@ -1100,6 +1100,11 @@ const MIGRATIONS: Migration[] = [
     key:'20260723_044_agent_personality_profile',description:'Add versioned structured AI agent personality profiles',statements:[
       `ALTER TABLE ai_behavior_profiles ADD COLUMN personality_schema_version SMALLINT UNSIGNED NOT NULL DEFAULT 1,ADD COLUMN personality_profile_json LONGTEXT NULL`
     ]
+  },
+  {
+    key:'20260723_045_voice_closing_outcome',description:'Persist safe deterministic voice hangup outcomes',statements:[
+      `ALTER TABLE ai_voice_sessions ADD COLUMN hangup_action_ref_safe VARCHAR(96) NULL,ADD COLUMN hangup_requested_at DATETIME(3) NULL,ADD COLUMN hangup_confirmed_at DATETIME(3) NULL,ADD COLUMN hangup_latency_ms INT UNSIGNED NULL,ADD COLUMN hangup_ari_result VARCHAR(32) NULL,ADD COLUMN hangup_failure_code_safe VARCHAR(64) NULL`
+    ]
   }
 ];
 

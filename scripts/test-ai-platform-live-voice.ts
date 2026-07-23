@@ -277,6 +277,7 @@ async function run() {
       "server/ai-platform/voice/live/controlledLiveVoiceService.ts",
       "utf8",
     ),
+    migration=fs.readFileSync("server/pbxpulsMigrations.ts","utf8"),
     audio = fs.readFileSync(
       "server/ai-platform/voice/media/transports/audioSocketAdapter.ts",
       "utf8",
@@ -286,6 +287,10 @@ async function run() {
   assert.match(service, /ai\.voice_live_test_enabled/);
   assert.match(service, /allowedCallers/);
   assert.match(service, /lifecycle_status\s*===\s*["']published["']/);
+  assert.match(service,/ai_deterministic_hangup/);
+  assert.match(service,/live_voice_hangup_confirmed/);
+  assert.match(service,/hangup_action_ref_safe/);
+  assert.match(migration,/20260723_045_voice_closing_outcome/);
   assert.doesNotMatch(service, /JSON_EXTRACT/);
   assert.match(
     service,

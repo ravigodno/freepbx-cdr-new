@@ -17,6 +17,7 @@ export interface RealtimeVoiceProviderAdapter {
   commitInput(): Promise<void>;
   createResponse?(instructions?:string): Promise<void>;
   createFarewellResponse?(): Promise<void>;
+  createPlannedResponse?(text:string,instructions:string):Promise<void>;
   createResponseForRemainder?(itemId:string|undefined,text:string):Promise<void>;
   retryResponse?(itemId:string|undefined,maxOutputTokens:number):Promise<void>;
   createFallbackResponse?(itemId:string|undefined):Promise<void>;

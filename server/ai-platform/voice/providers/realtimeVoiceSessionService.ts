@@ -50,13 +50,16 @@ import {
   type ResponseStreamState,
 } from "./delayedResponseStream.js";
 import {
-  compileTaskStateInstructions,
   createTaskState,
   isFarewellIntent,
+  planReceptionistResponse,
   updateTaskState,
-  type CallClosingState,
   type ReceptionistTaskState,
 } from "./receptionistConversationState.js";
+import {
+  ClosingCoordinator,
+  type SafeHangupResult,
+} from "./closingCoordinator.js";
 
 const transitions: Record<RealtimeVoiceState, RealtimeVoiceState[]> = {
   created: ["connecting", "failed", "cancelled"],
@@ -161,10 +164,7 @@ type Runtime = {
   tokenLimitHitCount: number;
   semanticIncompleteCount: number;
   taskState: ReceptionistTaskState;
-  closingState: CallClosingState;
-  farewellResponseId: string | null;
-  farewellCount: number;
-  hangupActionCount: number;
+  closing: ClosingCoordinator;
   commitDispatchMs: number | null;
   responseCreateDispatchMs: number | null;
 };
@@ -182,7 +182,7 @@ export class RealtimeVoiceSessionService {
       }) => Promise<void>)
     | null = null;
   private controlledHangup:
-    | ((event:{tenantId:number;voiceSessionId:number;traceId:string})=>Promise<void>)
+    | ((event:{tenantId:number;voiceSessionId:number;traceId:string})=>Promise<SafeHangupResult>)
     | null = null;
   constructor(
     private store: AiPlatformStore,
@@ -198,7 +198,7 @@ export class RealtimeVoiceSessionService {
     this.repo = new RealtimeVoiceSessionRepository(store);
     void businessActions;
   }
-  setControlledHangupHandler(handler:(event:{tenantId:number;voiceSessionId:number;traceId:string})=>Promise<void>){
+  setControlledHangupHandler(handler:(event:{tenantId:number;voiceSessionId:number;traceId:string})=>Promise<SafeHangupResult>){
     this.controlledHangup=handler;
   }
   private async row(tenantId: number, id: number) {
@@ -607,10 +607,7 @@ export class RealtimeVoiceSessionService {
         tokenLimitHitCount:0,
         semanticIncompleteCount:0,
         taskState:createTaskState(),
-        closingState:"active",
-        farewellResponseId:null,
-        farewellCount:0,
-        hangupActionCount:0,
+        closing:new ClosingCoordinator(`${input.tenantId}:${source.voice_session_id}`),
         commitDispatchMs:null,
         responseCreateDispatchMs:null,
       };
@@ -733,18 +730,6 @@ export class RealtimeVoiceSessionService {
       const dispatchStarted=performance.now();
       await runtime.adapter.commitInput();
       runtime.commitDispatchMs=Math.round(performance.now()-dispatchStarted);
-      if(runtime.coordinator.requestResponseForTurn()){
-        const responseStarted=performance.now();
-        if(runtime.receptionist&&isFarewellIntent(runtime.callerPartialText)){
-          runtime.closingState="closing_requested";
-          runtime.farewellCount=1;
-          await runtime.adapter.createFarewellResponse?.();
-        }else
-          await runtime.adapter.createResponse?.(
-            compileTaskStateInstructions(runtime.taskState),
-          );
-        runtime.responseCreateDispatchMs=Math.round(performance.now()-responseStarted);
-      }
       void this.audit.append({
         tenantId,
         traceId,
@@ -1070,26 +1055,15 @@ export class RealtimeVoiceSessionService {
         itemRef:runtime.activeItemId||undefined,
         queuedAudioMs:mediaMetrics?.queuedAudioMsCurrent,
       });
+      runtime.closing.playoutStarted(event.responseId);
       runtime.flusher.markDirty();
       return;
     }
+    let farewellCompleted=false;
     if(event.type==="completed"){
       await this.transcriptService?.finalizeResponse(runtime.tenantId,id,event.responseId,event.playedAudioMs);
       if(event.responseId)runtime.responseStreams.delete(event.responseId);
-      if(
-        runtime.closingState==="closing_requested" &&
-        event.responseId===runtime.farewellResponseId
-      ){
-        runtime.closingState="farewell_spoken";
-        runtime.closingState="hangup_requested";
-        runtime.hangupActionCount++;
-        await this.controlledHangup?.({
-          tenantId:runtime.tenantId,
-          voiceSessionId:runtime.voiceSessionId,
-          traceId,
-        });
-        runtime.closingState="hangup_confirmed";
-      }
+      farewellCompleted=runtime.closing.playoutCompleted(event.responseId);
     }
     runtime.coordinator.playoutFinished(event.type==="interrupted");
     if(
@@ -1108,13 +1082,81 @@ export class RealtimeVoiceSessionService {
     if(runtime.deferredResponse&&!runtime.blocked){
       const deferred=runtime.deferredResponse;
       runtime.deferredResponse=null;
-      if(runtime.coordinator.requestResponseForTurn()){
+      if(runtime.closing.allowsNormalResponse()){
         runtime.responsePending=true;
-        await runtime.adapter.createResponse?.();
+        await this.createPlannedResponse(runtime,traceId);
       }
       void deferred;
     }
+    if(farewellCompleted&&runtime.closing.hangupRequested()){
+      try{
+        const result=await this.controlledHangup?.({
+          tenantId:runtime.tenantId,
+          voiceSessionId:runtime.voiceSessionId,
+          traceId,
+        });
+        if(result)runtime.closing.hangupConfirmed(result);
+        else runtime.closing.fail();
+      }catch{
+        runtime.closing.fail();
+      }
+    }else if(
+      runtime.closing.state==="farewell_pending" &&
+      !runtime.blocked
+    ){
+      await this.maybeStartFarewell(runtime,traceId);
+    }
     runtime.flusher.markDirty();
+  }
+  private async maybeStartFarewell(runtime:Runtime,traceId:string){
+    const providerActive=runtime.coordinator.providerState==="generating";
+    const audibleActive=runtime.coordinator.audibleActive||Boolean(runtime.activeResponseId);
+    if(!runtime.closing.canCreateFarewell(providerActive,audibleActive))return false;
+    if(!runtime.closing.farewellRequested())return false;
+    runtime.responsePending=true;
+    const started=performance.now();
+    try{
+      await runtime.adapter.createFarewellResponse?.();
+      runtime.responseCreateDispatchMs=Math.round(performance.now()-started);
+      runtime.flusher.markDirty();
+      return true;
+    }catch(error){
+      runtime.responsePending=false;
+      runtime.closing.fail();
+      throw error;
+    }
+  }
+  private async createPlannedResponse(runtime:Runtime,traceId:string){
+    if(!runtime.closing.allowsNormalResponse()){
+      runtime.closing.duplicateResponsePrevented++;
+      runtime.responsePending=false;
+      return false;
+    }
+    if(
+      runtime.coordinator.providerState==="generating" ||
+      runtime.coordinator.audibleActive ||
+      runtime.activeResponseId
+    ){
+      runtime.closing.duplicateResponsePrevented++;
+      runtime.responsePending=false;
+      return false;
+    }
+    if(!runtime.coordinator.requestResponseForTurn()){
+      runtime.responsePending=false;
+      return false;
+    }
+    const plan=runtime.receptionist
+      ? planReceptionistResponse(runtime.taskState)
+      : null;
+    const started=performance.now();
+    if(plan?.text&&runtime.adapter.createPlannedResponse)
+      await runtime.adapter.createPlannedResponse(plan.text,plan.instructions);
+    else
+      await runtime.adapter.createResponse?.(plan?.instructions);
+    runtime.responseCreateDispatchMs=Math.round(performance.now()-started);
+    runtime.flusher.markDirty();
+    void traceId;
+    return true;
   }
   private async handleEvent(
     id: number,
@@ -1146,12 +1188,12 @@ export class RealtimeVoiceSessionService {
       (row.state === "listening" ||
         (row.state === "responding" &&
           (runtime.retryPendingFromResponseId ||
-            (runtime.closingState==="closing_requested"&&!runtime.farewellResponseId))))
+            runtime.closing.state==="farewell_generating")))
     ) {
       runtime.responsePending = false;
       runtime.activeResponseId = event.responseId || null;
-      if(runtime.closingState==="closing_requested"&&!runtime.farewellResponseId)
-        runtime.farewellResponseId=event.responseId||null;
+      if(runtime.closing.state==="farewell_generating")
+        runtime.closing.bindFarewellResponse(event.responseId);
       runtime.activeItemId = null;
       runtime.responsePlayedMs = 0;
       runtime.currentTurnFirstOutputMonotonic = null;
@@ -1407,18 +1449,13 @@ export class RealtimeVoiceSessionService {
           category=classifyCallerSpeech(text),
           responseText=stop?.semanticRemainder||text;
         if(runtime.receptionist&&isFarewellIntent(text)){
-          if(runtime.closingState==="active"){
-            runtime.closingState="closing_requested";
-            runtime.farewellCount=1;
-            if(runtime.activeResponseId&&runtime.coordinator.providerState==="generating"){
-              await runtime.adapter.cancelResponse(runtime.activeResponseId);
-              runtime.cancelledResponseIds.add(runtime.activeResponseId);
-              await this.media.clearEgress(runtime.tenantId,runtime.mediaSessionId,runtime.activeResponseId,"barge_in");
-            }
-            runtime.responsePending=true;
-            await runtime.adapter.createFarewellResponse?.();
-          }
-        }else if(runtime.closingState!=="active"){
+          const intent=runtime.closing.detectIntent(
+            event.eventId||`${runtime.coordinator.callerTurnRef}:${text}`,
+          );
+          runtime.responsePending=false;
+          if(intent.accepted)await this.maybeStartFarewell(runtime,traceId);
+        }else if(!runtime.closing.allowsNormalResponse()){
+          runtime.closing.duplicateResponsePrevented++;
           runtime.responsePending=false;
         }else if(!text.trim()){
           runtime.responsePending=false;
@@ -1454,9 +1491,9 @@ export class RealtimeVoiceSessionService {
           if (
             !runtime.blocked &&
             runtime.responsePending &&
-            runtime.coordinator.requestResponseForTurn()
+            runtime.closing.allowsNormalResponse()
           )
-            await runtime.adapter.createResponse?.();
+            await this.createPlannedResponse(runtime,traceId);
         }
       }
     }
@@ -1591,6 +1628,10 @@ export class RealtimeVoiceSessionService {
       }else{
         runtime.responsePending = false;
         runtime.turnState="listening_after_interrupt";
+        runtime.activeResponseId=null;
+        runtime.activeItemId=null;
+        if(runtime.closing.state==="farewell_pending")
+          await this.maybeStartFarewell(runtime,traceId);
       }
     }
     if(event.type==='transcript_unavailable'&&this.transcriptService){const voice=(await this.store.query('SELECT route_binding_id,agent_id,agent_version_id FROM ai_voice_sessions WHERE tenant_id=? AND id=? LIMIT 1',[runtime.tenantId,runtime.voiceSessionId]))[0];if(voice)await this.transcriptService.marker({tenantId:runtime.tenantId,voiceSessionId:runtime.voiceSessionId,mediaSessionId:runtime.mediaSessionId,realtimeSessionId:id,bindingId:voice.route_binding_id?Number(voice.route_binding_id):null,agentId:Number(voice.agent_id),agentVersionId:Number(voice.agent_version_id),markerType:'transcript_unavailable',text:event.errorCode})}
@@ -1832,9 +1873,10 @@ export class RealtimeVoiceSessionService {
         sentenceStoppedCount:runtime.sentenceStoppedResponseIds.size,
         personalitySchemaVersion:1,
         taskState:runtime.taskState,
-        callClosingState:runtime.closingState,
-        farewellCount:runtime.farewellCount,
-        hangupActionCount:runtime.hangupActionCount,
+        closing:runtime.closing.snapshot(),
+        callClosingState:runtime.closing.state,
+        farewellCount:runtime.closing.farewellResponseCount,
+        hangupActionCount:runtime.closing.hangupRequestedCount,
         commitDispatchMs:runtime.commitDispatchMs,
         responseCreateDispatchMs:runtime.responseCreateDispatchMs,
         speechEndToProviderFirstDeltaMs:
@@ -1926,6 +1968,7 @@ export class RealtimeVoiceSessionService {
       );
     if (runtime) {
       runtime.blocked = true;
+      runtime.closing.close();
       runtime.coordinator.callEnding();
       if(runtime.interruptionTimer){
         clearTimeout(runtime.interruptionTimer);

@@ -384,14 +384,65 @@ export class ControlledLiveVoiceService {
   }
   async deterministicHangup(tenantId:number,voiceSessionId:number,traceId:string){
     const active=this.active.get(voiceSessionId);
-    if(!active||active.tenantId!==tenantId)return;
+    if(!active||active.tenantId!==tenantId)
+      throw new AiPlatformError("not_found",404,"Controlled live voice session is unavailable");
+    const requestedAt=Date.now(),
+      actionRefSafe=`hangup_${voiceHash(tenantId,`${voiceSessionId}:${requestedAt}`).slice(0,24)}`;
     await this.audit.append({
       tenantId,traceId,actorType:"service",
       eventType:"live_voice_hangup_requested" as any,
       entityType:"voice_session",entityId:String(voiceSessionId),
-      decision:"requested",details:{policy:"controlled_farewell"},
+      decision:"requested",details:{
+        policy:"controlled_farewell",
+        hangupActionRefSafe:actionRefSafe,
+      },
     });
-    await this.bridges.hangupCaller(active.callerChannel);
+    await this.store.query(
+      "UPDATE ai_voice_sessions SET completion_reason='ai_deterministic_hangup',hangup_action_ref_safe=?,hangup_requested_at=NOW(3) WHERE tenant_id=? AND id=?",
+      [actionRefSafe,tenantId,voiceSessionId],
+    );
+    try{
+      await this.bridges.hangupCaller(active.callerChannel);
+    }catch{
+      await this.store.query(
+        "UPDATE ai_voice_sessions SET hangup_ari_result='failed',hangup_failure_code_safe='ari_hangup_failed' WHERE tenant_id=? AND id=?",
+        [tenantId,voiceSessionId],
+      );
+      await this.audit.append({
+        tenantId,traceId,actorType:"service",
+        eventType:"live_voice_hangup_failed" as any,
+        entityType:"voice_session",entityId:String(voiceSessionId),
+        decision:"failed",details:{
+          hangupActionRefSafe:actionRefSafe,
+          failureCodeSafe:"ari_hangup_failed",
+        },
+      });
+      throw new AiPlatformError("internal_error",502,"Controlled hangup failed");
+    }
+    const confirmedAt=Date.now(),latencyMs=confirmedAt-requestedAt;
+    await this.store.query(
+      "UPDATE ai_voice_sessions SET hangup_confirmed_at=NOW(3),hangup_latency_ms=?,hangup_ari_result='confirmed',hangup_failure_code_safe=NULL WHERE tenant_id=? AND id=?",
+      [latencyMs,tenantId,voiceSessionId],
+    );
+    await this.audit.append({
+      tenantId,traceId,actorType:"service",
+      eventType:"live_voice_hangup_confirmed" as any,
+      entityType:"voice_session",entityId:String(voiceSessionId),
+      decision:"confirmed",details:{
+        policy:"controlled_farewell",
+        hangupActionRefSafe:actionRefSafe,
+        latencyMs,
+        ariResult:"confirmed",
+      },
+    });
+    return {
+      actionRefSafe,
+      requestedAt,
+      confirmedAt,
+      latencyMs,
+      ariResult:"confirmed" as const,
+      failureCodeSafe:null,
+    };
   }
   async observe(event: {
     tenantId: number;
