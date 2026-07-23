@@ -247,7 +247,8 @@ async function run() {
     "ru",
   );
   assert.equal(instructions.checksum.length, 64);
-  assert.match(instructions.instructions, /1–3/);
+  assert.match(instructions.instructions, /максимум два/);
+  assert.match(instructions.instructions, /2–6 секунд/);
   assert.match(instructions.instructions,/выполняй молча/iu);
   assert.doesNotMatch(instructions.instructions,/пока безопасный backend/iu);
   assert.equal(containsInternalAgentDisclosure("У меня нет доступа к безопасному backend"),true);

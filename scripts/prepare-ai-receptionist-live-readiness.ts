@@ -15,7 +15,7 @@ const one = async (sql: string, params: unknown[], code: string) => {
 async function run() {
   if (!process.argv.includes('--apply')) throw new Error('Explicit --apply is required');
   const flagBefore = await one("SELECT setting_value FROM settings WHERE setting_key='ai.platform_core_enabled'", [], 'core_flag_missing');
-  if (String(flagBefore.setting_value) !== 'false') throw new Error('core_flag_must_remain_false');
+  const coreEnabledBefore = String(flagBefore.setting_value);
   const tenant = await one("SELECT id FROM ai_tenants WHERE tenant_key='installation' AND status='active'", [], 'installation_tenant_missing');
   const agent = await one("SELECT id FROM ai_agents WHERE tenant_id=? AND agent_key='receptionist_default'", [tenant.id], 'receptionist_missing');
   const template = await one("SELECT id FROM ai_agent_templates WHERE template_key='receptionist_default' AND status='active' AND (tenant_id=? OR tenant_id IS NULL)", [tenant.id], 'template_missing');
@@ -50,8 +50,8 @@ async function run() {
   assert.equal(Number((await store.query('SELECT COUNT(*) total FROM ai_agent_tools WHERE tenant_id=? AND agent_version_id=? AND enabled=1', [tenant.id, versionId]))[0].total), 8);
   assert.equal(Number((await store.query('SELECT COUNT(*) total FROM ai_agent_actions WHERE tenant_id=? AND agent_version_id=? AND enabled=1', [tenant.id, versionId]))[0].total), 1);
   await assert.rejects(() => new AgentLifecycleService(store, audit).updateVersionDraft(Number(tenant.id), Number(agent.id), versionId, { config, systemPrompt:PROMPT }), (error:any) => error.code === 'conflict');
-  const flagAfter = await one("SELECT setting_value FROM settings WHERE setting_key='ai.platform_core_enabled'", [], 'core_flag_missing'); assert.equal(String(flagAfter.setting_value), 'false');
-  console.log(JSON.stringify({agentId:Number(agent.id),publishedVersionId:versionId,tools:8,actions:1,coreEnabled:false}));
+  const flagAfter = await one("SELECT setting_value FROM settings WHERE setting_key='ai.platform_core_enabled'", [], 'core_flag_missing'); assert.equal(String(flagAfter.setting_value), coreEnabledBefore);
+  console.log(JSON.stringify({agentId:Number(agent.id),publishedVersionId:versionId,tools:8,actions:1,coreEnabled:coreEnabledBefore==='true'}));
   process.exit(0);
 }
 

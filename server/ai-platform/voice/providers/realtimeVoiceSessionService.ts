@@ -53,6 +53,7 @@ type Runtime = {
   unsubscribeMedia: () => void;
   unsubscribeVad: () => void;
   unsubscribePlayout: () => void;
+  unsubscribePlayoutLifecycle: () => void;
   aborter: AbortController;
   started: number;
   inputFrames: number;
@@ -83,6 +84,7 @@ type Runtime = {
   activeResponseId: string | null;
   activeItemId: string | null;
   cancelledResponseIds: Set<string>;
+  providerDoneResponseIds: Set<string>;
   responsePlayedMs: number;
   bargeInDetectedAt: number | null;
   cancelSentAt: number | null;
@@ -449,6 +451,7 @@ export class RealtimeVoiceSessionService {
         unsubscribeMedia: () => {},
         unsubscribeVad: () => {},
         unsubscribePlayout: () => {},
+        unsubscribePlayoutLifecycle: () => {},
         aborter,
         started: Date.now(),
         inputFrames: 0,
@@ -479,6 +482,7 @@ export class RealtimeVoiceSessionService {
         activeResponseId: null,
         activeItemId: null,
         cancelledResponseIds: new Set(),
+        providerDoneResponseIds: new Set(),
         responsePlayedMs: 0,
         bargeInDetectedAt: null,
         cancelSentAt: null,
@@ -540,6 +544,11 @@ export class RealtimeVoiceSessionService {
         input.tenantId,
         input.mediaSessionId,
         (frame) => this.onPlayout(id, frame),
+      );
+      runtime.unsubscribePlayoutLifecycle = this.media.subscribePlayoutLifecycle(
+        input.tenantId,
+        input.mediaSessionId,
+        (event) => { void this.onPlayoutLifecycle(id,input.traceId,event); },
       );
       await this.transition(input.tenantId, id, "listening", input.traceId);
       await this.store.query(
@@ -685,19 +694,22 @@ export class RealtimeVoiceSessionService {
     runtime.turnState = "cancelling";
     runtime.bargeInDetectedAt = Date.now();
     const responseId = runtime.activeResponseId,
-      itemId = runtime.activeItemId;
-    await runtime.adapter.cancelResponse(responseId);
-    runtime.cancelSentAt = Date.now();
-    runtime.cancelLatencyMs = Math.max(0, Math.round(performance.now() - started));
-    runtime.responsePending = false;
+      itemId = runtime.activeItemId,
+      providerWasDone = runtime.providerDoneResponseIds.has(responseId);
     const row = await this.row(tenantId, id);
-    runtime.discardedBufferedAudioMs = this.media.clearEgress(
+    runtime.discardedBufferedAudioMs = await this.media.clearEgress(
       tenantId,
       Number(row.media_session_id),
       responseId,
     );
     runtime.playoutStoppedAt = Date.now();
     runtime.audibleStopLatencyMs = Math.max(0,Math.round(performance.now()-started));
+    if(!providerWasDone){
+      await runtime.adapter.cancelResponse(responseId).catch(()=>{});
+      runtime.cancelSentAt = Date.now();
+      runtime.cancelLatencyMs = Math.max(0, Math.round(performance.now() - started));
+    }
+    runtime.responsePending = false;
     if (itemId && runtime.adapter.truncateResponse) {
       await runtime.adapter.truncateResponse(itemId, runtime.responsePlayedMs);
       runtime.truncateSentCount++;
@@ -789,6 +801,29 @@ export class RealtimeVoiceSessionService {
       commitAnchorSource: runtime.commitAnchorSource,
     });
     if (runtime.turnLatencies.length > 50) runtime.turnLatencies.shift();
+    runtime.flusher.markDirty();
+  }
+  private async onPlayoutLifecycle(
+    id:number,
+    traceId:string,
+    event:{type:"started"|"completed"|"interrupted";responseId?:string;playedAudioMs:number;discardedAudioMs?:number},
+  ){
+    const runtime=this.runtimes.get(id);if(!runtime)return;
+    if(event.type==="started")return;
+    if(event.type==="interrupted"){
+      await this.transcriptService?.interrupt(runtime.tenantId,id,runtime.voiceSessionId,event.responseId,event.playedAudioMs);
+    }else{
+      await this.transcriptService?.finalizeResponse(runtime.tenantId,id,event.responseId,event.playedAudioMs);
+    }
+    if(
+      event.type!=="interrupted" &&
+      (!event.responseId||event.responseId===runtime.activeResponseId)
+    ){
+      runtime.responsePending=false;runtime.turnState="listening";
+      runtime.activeResponseId=null;runtime.activeItemId=null;
+      const current=await this.row(runtime.tenantId,id);
+      if(current.state==="responding")await this.transition(runtime.tenantId,id,"listening",traceId);
+    }
     runtime.flusher.markDirty();
   }
   private async handleEvent(
@@ -911,7 +946,7 @@ export class RealtimeVoiceSessionService {
         runtime.languageCorrectedResponses.add(rejectedResponse);
         await runtime.adapter.cancelResponse(rejectedResponse);
         runtime.cancelledResponseIds.add(rejectedResponse);
-        this.media.clearEgress(runtime.tenantId,runtime.mediaSessionId,rejectedResponse,"barge_in");
+        await this.media.clearEgress(runtime.tenantId,runtime.mediaSessionId,rejectedResponse,"barge_in");
         runtime.responsePending=true;
         await runtime.adapter.createRussianCorrection?.();
         return;
@@ -945,17 +980,11 @@ export class RealtimeVoiceSessionService {
       });
     if (event.type === "response_completed") {
       if(event.usage&&this.transcriptService)await this.transcriptService.usage(runtime.tenantId,runtime.voiceSessionId,event.usage);
-      await this.transcriptService?.finalizeResponse(runtime.tenantId,id,event.responseId,runtime.responsePlayedMs);
-      runtime.responsePending = false;
       if (event.responseId && event.responseId !== runtime.activeResponseId)
         return;
-      runtime.turnState = "listening";
-      runtime.activeResponseId = null;
-      runtime.activeItemId = null;
-      const current = await this.row(runtime.tenantId, id);
-      if (current.state === "responding") {
-        await this.transition(runtime.tenantId, id, "listening", traceId);
-        await this.audit.append({
+      if(event.responseId)runtime.providerDoneResponseIds.add(event.responseId);
+      if(event.responseId)await this.media.providerResponseDone(runtime.tenantId,runtime.mediaSessionId,event.responseId);
+      await this.audit.append({
           tenantId: runtime.tenantId,
           traceId,
           actorType: "service",
@@ -965,7 +994,6 @@ export class RealtimeVoiceSessionService {
           decision: "completed",
           details: {},
         });
-      }
     }
     if (event.type === "response_cancelled") {
       if(event.responseId&&runtime.activeResponseId&&event.responseId!==runtime.activeResponseId){
@@ -992,7 +1020,7 @@ export class RealtimeVoiceSessionService {
     runtime.transferRequired = true;
     runtime.blocked = true;
     await runtime.adapter.cancelResponse();
-    this.media.clearEgress(runtime.tenantId, Number(row.media_session_id));
+    await this.media.clearEgress(runtime.tenantId, Number(row.media_session_id));
     await this.liveObserver?.({
       tenantId: runtime.tenantId,
       voiceSessionId: Number(row.voice_session_id),
@@ -1278,11 +1306,12 @@ export class RealtimeVoiceSessionService {
     if (runtime) {
       runtime.blocked = true;
       if(runtime.activeResponseId)await this.transcriptService?.interrupt(tenantId,id,runtime.voiceSessionId,runtime.activeResponseId,runtime.responsePlayedMs,true);
-      this.media.clearEgress(tenantId,runtime.mediaSessionId,runtime.activeResponseId||undefined,"session_end");
+      await this.media.clearEgress(tenantId,runtime.mediaSessionId,runtime.activeResponseId||undefined,"session_end");
       runtime.aborter.abort();
       runtime.unsubscribeMedia();
       runtime.unsubscribeVad();
       runtime.unsubscribePlayout();
+      runtime.unsubscribePlayoutLifecycle();
       runtime.unsubscribeProvider();
       await runtime.adapter.close();
       await runtime.flusher.final(1000);

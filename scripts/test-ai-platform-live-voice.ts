@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import net from "node:net";
 import { AudioSocketAdapter } from "../server/ai-platform/voice/media/transports/audioSocketAdapter.js";
+import { stopMediaWorker } from "../server/ai-platform/voice/media-worker/mediaWorkerClient.js";
 import { SyntheticRealtimeVoiceAdapter } from "../server/ai-platform/voice/providers/adapters/syntheticRealtimeVoiceAdapter.js";
 import { LiveBridgeService } from "../server/ai-platform/voice/live/liveBridgeService.js";
 import { buildLiveDialplanPreview } from "../server/ai-platform/voice/live/liveDialplanPreview.js";
@@ -275,6 +276,7 @@ async function run() {
   );
   assert.match(audio, /127\.0\.0\.1/);
   assert.doesNotMatch(audio, /0\.0\.0\.0|writeFile|appendFile|spawn\(|exec\(/);
+  await stopMediaWorker();
   console.log("AI Platform controlled live voice tests: OK");
 }
 run().catch((error) => {

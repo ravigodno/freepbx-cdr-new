@@ -787,6 +787,28 @@ export class MediaSessionService {
         })
       : () => {};
   }
+  subscribePlayoutLifecycle(
+    tenantId: number,
+    id: number,
+    handler: (event: {
+      type: "started" | "completed" | "interrupted";
+      responseId?: string;
+      playedAudioMs: number;
+      discardedAudioMs?: number;
+    }) => void,
+  ) {
+    const runtime = this.runtimes.get(id);
+    if (!runtime || runtime.tenantId !== tenantId)
+      throw new MediaError("not_found", 404, "Active media session not found");
+    return runtime.adapter instanceof AudioSocketAdapter
+      ? runtime.adapter.subscribePlayoutLifecycle(handler)
+      : () => {};
+  }
+  async providerResponseDone(tenantId:number,id:number,responseId:string){
+    const runtime=this.runtimes.get(id);
+    if(runtime?.tenantId===tenantId&&runtime.adapter instanceof AudioSocketAdapter)
+      await runtime.adapter.providerResponseDone(responseId);
+  }
   getProtocolMetrics(tenantId: number, id: number) {
     const runtime = this.runtimes.get(id);
     if (!runtime || runtime.tenantId !== tenantId) return null;
@@ -836,7 +858,7 @@ export class MediaSessionService {
       reason: "reason" in result ? result.reason : null,
     };
   }
-  clearEgress(
+  async clearEgress(
     tenantId: number,
     id: number,
     responseId?: string,
@@ -847,7 +869,7 @@ export class MediaSessionService {
     runtime.egressProcessor.clear();
     const discardedMs =
       runtime.adapter instanceof AudioSocketAdapter
-        ? runtime.adapter.clearPlayout(responseId, reason)
+        ? await runtime.adapter.clearPlayoutAsync(responseId, reason)
         : 0;
     runtime.barge.onPlaybackStopped();
     runtime.flusher.markDirty();

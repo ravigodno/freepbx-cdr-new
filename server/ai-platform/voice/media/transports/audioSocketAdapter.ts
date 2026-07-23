@@ -1,24 +1,10 @@
-import net from "node:net";
 import crypto from "node:crypto";
 import type { MediaTransportAdapter } from "../mediaTransportAdapter.js";
 import type { AudioFrame, MediaTransportContext } from "../mediaTypes.js";
 import { MediaError } from "../mediaErrors.js";
-import {
-  AudioResampler,
-  StreamingPcm16To8Downsampler,
-} from "../audioResampler.js";
-import {
-  AudioPacketizer,
-  PACKETIZATION_ERROR_THRESHOLD,
-} from "../audioPacketizer.js";
-import { decodeUlawToPcm16 } from "../g711.js";
-import { AdaptivePlayoutBuffer } from "../adaptivePlayoutBuffer.js";
+import { mediaWorkerClient } from "../../media-worker/mediaWorkerClient.js";
+import type { MediaWorkerEnvelope } from "../../media-worker/mediaWorkerProtocol.js";
 
-const TYPE_TERMINATE = 0x00,
-  TYPE_UUID = 0x01,
-  TYPE_SLIN8 = 0x10,
-  TYPE_SLIN16_16K = 0x12,
-  TYPE_ERROR = 0xff;
 export interface AudioSocketServerConfig {
   host: "127.0.0.1" | "::1";
   port: number;
@@ -26,432 +12,141 @@ export interface AudioSocketServerConfig {
   transportFormat: "ast18_slin8" | "slin16";
 }
 export function readAudioSocketServerConfig(): AudioSocketServerConfig {
-  const host =
-      process.env.PBXPULS_AI_AUDIOSOCKET_HOST === "::1" ? "::1" : "127.0.0.1",
-    port = Number(process.env.PBXPULS_AI_AUDIOSOCKET_PORT || 0),
-    transportFormat =
-      process.env.PBXPULS_AI_AUDIOSOCKET_PACKET_MODE === "slin16"
-        ? "slin16"
-        : "ast18_slin8";
+  const host = process.env.PBXPULS_AI_AUDIOSOCKET_HOST === "::1" ? "::1" : "127.0.0.1";
+  const configured = Number(process.env.PBXPULS_AI_AUDIOSOCKET_PORT || 0);
   return {
     host,
-    port: Number.isInteger(port) && port >= 1024 && port <= 65535 ? port : 0,
+    port: Number.isInteger(configured) && configured >= 1024 && configured <= 65535 ? configured : 0,
     connectionTimeoutMs: 5000,
-    transportFormat,
+    transportFormat: process.env.PBXPULS_AI_AUDIOSOCKET_PACKET_MODE === "slin16"
+      ? "slin16" : "ast18_slin8",
   };
 }
-const packet = (type: number, payload: Uint8Array) => {
-  const result = Buffer.allocUnsafe(3 + payload.byteLength);
-  result[0] = type;
-  result.writeUInt16BE(payload.byteLength, 1);
-  Buffer.from(payload).copy(result, 3);
-  return result;
+
+export type PlayoutLifecycleEvent = {
+  type: "started" | "completed" | "interrupted";
+  responseId?: string;
+  itemId?: string;
+  playedAudioMs: number;
+  discardedAudioMs?: number;
 };
 
 export class AudioSocketAdapter implements MediaTransportAdapter {
-  private server: net.Server | null = null;
-  private socket: net.Socket | null = null;
   private context: MediaTransportContext | null = null;
+  private sessionRef = crypto.randomUUID();
+  private connectionId = "";
+  private externalHost = "";
+  private authenticated = false;
+  private unsubscribeWorker: (() => void) | null = null;
   private handlers = new Set<(frame: AudioFrame) => void>();
   private playoutHandlers = new Set<(frame: AudioFrame) => void>();
-  private buffer = Buffer.alloc(0);
-  private connectionId = crypto.randomUUID();
-  private authenticated = false;
-  private readonly playout = new AdaptivePlayoutBuffer(
-    async (frame) => {
-      await this.writeFrame(frame);
-      for (const handler of this.playoutHandlers) handler(frame);
-    },
-    {
-      initialPrebufferMs: Math.max(
-        60,
-        Math.min(Number(process.env.PBXPULS_AI_PLAYOUT_PREBUFFER_MS || 80), 200),
-      ),
-      minPrebufferMs: 60,
-      maxPrebufferMs: 200,
-      maxSingleResponseAudioSeconds: Math.max(
-        5,
-        Math.min(
-          Number(process.env.PBXPULS_AI_MAX_SINGLE_RESPONSE_AUDIO_SECONDS || 60),
-          180,
-        ),
-      ),
-    },
-  );
-  private readyResolve: (() => void) | null = null;
-  private readyReject: ((error: Error) => void) | null = null;
-  private readonly resampler = new AudioResampler();
-  private readonly egressDownsampler = new StreamingPcm16To8Downsampler();
-  private readonly packetizer = new AudioPacketizer(
-    readAudioSocketServerConfig().transportFormat === "ast18_slin8"
-      ? 8000
-      : 16000,
-  );
-  private metrics = {
-    audiosocketIngressPackets: 0,
-    audiosocketEgressPackets: 0,
-    ingressPacketType: null as string | null,
-    egressPacketType: null as string | null,
-    ingressSourceSampleRate: null as number | null,
-    egressTargetSampleRate: null as number | null,
-    ingressResampledFrames: 0,
-    egressResampledFrames: 0,
-    unknownPacketTypes: 0,
-    malformedPackets: 0,
-    unsupportedAudioPackets: 0,
-    protocolErrors: 0,
-    firstIngressAudioAt: null as string | null,
-    firstEgressAudioAt: null as string | null,
-    egressSocketBackpressureCount: 0,
-    audioSocketWriteErrors: 0,
-  };
+  private lifecycleHandlers = new Set<(event: PlayoutLifecycleEvent) => void>();
+  private metrics: Record<string, any> = {};
+  private pending: Array<{response_ref:string;item_ref:string;sequence:number;pcm:Buffer}> = [];
+  private flushScheduled = false;
+  private ingressStartedAt: number | null = null;
+
   getCapabilities() {
-    const config = readAudioSocketServerConfig(),
-      ast18 = config.transportFormat === "ast18_slin8";
-    return {
-      mode: "audiosocket" as const,
-      available: true,
-      live: true,
-      network: true,
-      codecs: ["slin16"] as const,
-      audioSocketProtocol: {
-        supportedInboundPacketTypes: [TYPE_SLIN8, TYPE_SLIN16_16K],
-        supportedOutboundPacketTypes: ast18 ? [TYPE_SLIN8] : [TYPE_SLIN16_16K],
-        preferredAsteriskPacketType: ast18 ? TYPE_SLIN8 : TYPE_SLIN16_16K,
-        preferredAsteriskSampleRate: ast18 ? 8000 : 16000,
-        internalSampleRate: ast18 ? 8000 : 16000,
-        resamplingRequired: false,
-        transportFormat: config.transportFormat,
-      },
-    };
+    const config = readAudioSocketServerConfig(), ast18 = config.transportFormat === "ast18_slin8";
+    return { mode:"audiosocket" as const, available:true, live:true, network:true,
+      codecs:["slin16"] as const,
+      audioSocketProtocol:{supportedInboundPacketTypes:[0x10,0x12],
+        supportedOutboundPacketTypes:ast18?[0x10]:[0x12],
+        preferredAsteriskPacketType:ast18?0x10:0x12,
+        preferredAsteriskSampleRate:ast18?8000:16000,
+        internalSampleRate:ast18?8000:16000,resamplingRequired:false,
+        transportFormat:config.transportFormat}};
   }
-  async validateConfig() {
-    const config = readAudioSocketServerConfig();
-    return {
-      valid: config.port > 0,
-      errorCode: config.port > 0 ? undefined : "live_media_not_configured",
-    };
-  }
+  async validateConfig(){const c=readAudioSocketServerConfig();return{valid:c.port>0,errorCode:c.port>0?undefined:"live_media_not_configured"}}
   async createTransport(context: MediaTransportContext) {
-    if (this.server)
-      throw new MediaError(
-        "conflict",
-        409,
-        "AudioSocket transport already exists",
-      );
-    const config = readAudioSocketServerConfig();
-    if (!config.port)
-      throw new MediaError(
-        "feature_disabled",
-        503,
-        "AudioSocket port is not configured",
-      );
-    this.context = context;
-    this.server = net.createServer((socket) => this.accept(socket));
-    this.server.maxConnections = 1;
-    await new Promise<void>((resolve, reject) => {
-      this.server!.once("error", reject);
-      this.server!.listen(config.port, config.host, () => {
-        this.server!.off("error", reject);
-        resolve();
+    const config=readAudioSocketServerConfig();
+    if(!config.port)throw new MediaError("feature_disabled",503,"AudioSocket port is not configured");
+    this.context=context;
+    this.unsubscribeWorker=mediaWorkerClient.subscribe(this.sessionRef,(event)=>this.event(event));
+    const ready=await mediaWorkerClient.request({version:1,type:"create_session",session_ref:this.sessionRef,
+      payload:{host:config.host,port:config.port,transport_format:config.transportFormat,
+        prebuffer_ms:Number(process.env.PBXPULS_AI_PLAYOUT_PREBUFFER_MS||80),
+        max_response_seconds:Number(process.env.PBXPULS_AI_MAX_SINGLE_RESPONSE_AUDIO_SECONDS||60)}});
+    const payload=ready.payload as any;
+    this.externalHost=payload.external_host;
+    this.connectionId=payload.connection_id;
+  }
+  async start(){
+    if(this.authenticated)return;
+    await new Promise<void>((resolve,reject)=>{
+      const timeout=setTimeout(()=>reject(new MediaError("provider_not_configured",504,"AudioSocket connection timed out")),5000);
+      const off=this.subscribeLifecycleInternal((event)=>{
+        if(event.type==="connected"){clearTimeout(timeout);off();resolve()}
       });
     });
   }
-  async start() {
-    const config = readAudioSocketServerConfig();
-    if (this.authenticated) return;
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.readyResolve = null;
-        this.readyReject = null;
-        reject(
-          new MediaError(
-            "provider_not_configured",
-            504,
-            "AudioSocket connection timed out",
-          ),
-        );
-      }, config.connectionTimeoutMs);
-      this.readyResolve = () => {
-        clearTimeout(timer);
-        resolve();
-      };
-      this.readyReject = (error) => {
-        clearTimeout(timer);
-        reject(error);
-      };
-    });
-  }
-  private accept(socket: net.Socket) {
-    if (this.socket) {
-      socket.destroy();
-      return;
+  private connectedHandlers=new Set<(event:{type:"connected"})=>void>();
+  private subscribeLifecycleInternal(handler:(event:{type:"connected"})=>void){this.connectedHandlers.add(handler);return()=>this.connectedHandlers.delete(handler)}
+  private event(event:MediaWorkerEnvelope){
+    const payload=event.payload as any;
+    if(event.type==="session_ready"&&payload?.authenticated){
+      this.authenticated=true;for(const handler of this.connectedHandlers)handler({type:"connected"});
+    } else if(event.type==="ingress_audio"&&this.context){
+      if(this.ingressStartedAt===null)this.ingressStartedAt=Date.now()-Number(event.sequence||0)*20;
+      const frame:AudioFrame={codec:"slin16",sampleRate:Number(payload.sample_rate),channels:1,
+        durationMs:20,payload:new Uint8Array(payload.pcm),sequence:Number(event.sequence||0),
+        timestampMs:this.ingressStartedAt+Number(event.sequence||0)*20,source:Number(payload.sample_rate)===8000?"audiosocket_ast18_slin8":"audiosocket_slin16",traceId:this.context.traceId,
+        voiceSessionId:this.context.voiceSessionId,mediaSessionId:this.context.mediaSessionId};
+      for(const handler of this.handlers)handler(frame);
+    } else if(event.type==="frame_played"&&this.context){
+      const frame:AudioFrame={codec:"slin16",sampleRate:16000,channels:1,durationMs:20,
+        payload:new Uint8Array(),sequence:Number(event.sequence||0),timestampMs:Date.now(),
+        source:"audiosocket_worker",traceId:this.context.traceId,voiceSessionId:this.context.voiceSessionId,
+        mediaSessionId:this.context.mediaSessionId,responseId:event.response_ref,itemId:event.item_ref};
+      for(const handler of this.playoutHandlers)handler(frame);
+    } else if(event.type==="response_playout_started"||event.type==="response_playout_completed"||event.type==="response_playout_interrupted"){
+      const mapped:PlayoutLifecycleEvent={type:event.type==="response_playout_started"?"started":event.type==="response_playout_completed"?"completed":"interrupted",
+        responseId:event.response_ref,itemId:event.item_ref,playedAudioMs:Number(payload?.played_audio_ms||0),
+        discardedAudioMs:Number(payload?.discarded_audio_ms||0)};
+      for(const handler of this.lifecycleHandlers)handler(mapped);
     }
-    socket.setNoDelay(true);
-    socket.setTimeout(65000, () => socket.destroy());
-    this.socket = socket;
-    this.egressDownsampler.reset();
-    socket.on("data", (chunk) => this.parse(chunk));
-    socket.on("error", () =>
-      this.readyReject?.(
-        new MediaError("internal_error", 502, "AudioSocket connection failed"),
-      ),
-    );
-    socket.on("close", () => {
-      this.socket = null;
-      this.authenticated = false;
-    });
+    if(payload?.metrics)this.metrics=payload.metrics;
+    if(event.type==="session_metrics")this.metrics=payload||this.metrics;
   }
-  private parse(chunk: Buffer) {
-    this.buffer = Buffer.concat([this.buffer, chunk]);
-    while (this.buffer.length >= 3) {
-      const type = this.buffer[0],
-        length = this.buffer.readUInt16BE(1);
-      if (length > 6400) {
-        this.metrics.malformedPackets++;
-        this.metrics.protocolErrors++;
-        this.socket?.destroy();
-        return;
-      }
-      if (this.buffer.length < 3 + length) return;
-      const payload = this.buffer.subarray(3, 3 + length);
-      this.buffer = this.buffer.subarray(3 + length);
-      if (type === TYPE_TERMINATE) {
-        this.socket?.end();
-        return;
-      }
-      if (type === TYPE_ERROR) {
-        this.metrics.protocolErrors++;
-        continue;
-      }
-      if (type === TYPE_UUID) {
-        const expected = this.connectionId.replace(/-/g, "").toLowerCase(),
-          received = payload.toString("hex").toLowerCase();
-        if (length !== 16 || received !== expected) {
-          this.metrics.protocolErrors++;
-          this.readyReject?.(
-            new MediaError(
-              "permission_denied",
-              403,
-              "AudioSocket identity rejected",
-            ),
-          );
-          this.socket?.destroy();
-          return;
-        }
-        this.authenticated = true;
-        this.readyResolve?.();
-        this.readyResolve = null;
-        this.readyReject = null;
-        continue;
-      }
-      if (!this.authenticated || !this.context) {
-        this.metrics.protocolErrors++;
-        continue;
-      }
-      if (type !== TYPE_SLIN8 && type !== TYPE_SLIN16_16K) {
-        this.metrics.unknownPacketTypes++;
-        if (type >= 0x10 && type <= 0x18)
-          this.metrics.unsupportedAudioPackets++;
-        continue;
-      }
-      const sourceRate = type === TYPE_SLIN8 ? 8000 : 16000,
-        before = this.packetizer.getMetrics(),
-        frames = this.packetizer.pushPcm(
-          payload,
-          { codec: "slin16", sampleRate: sourceRate, channels: 1 },
-          Date.now(),
-          {
-            source:
-              type === TYPE_SLIN8
-                ? "audiosocket_ast18_slin8"
-                : "audiosocket_slin16",
-            traceId: this.context.traceId,
-            voiceSessionId: this.context.voiceSessionId,
-            mediaSessionId: this.context.mediaSessionId,
-          },
-        ),
-        after = this.packetizer.getMetrics();
-      if (after.packetizationErrors > before.packetizationErrors) {
-        this.metrics.malformedPackets++;
-        if (
-          after.consecutivePacketizationErrors >= PACKETIZATION_ERROR_THRESHOLD
-        ) {
-          this.metrics.protocolErrors++;
-          this.socket?.destroy();
-          return;
-        }
-        continue;
-      }
-      const now = new Date().toISOString();
-      this.metrics.audiosocketIngressPackets++;
-      this.metrics.ingressPacketType = this.packetLabel(type);
-      this.metrics.ingressSourceSampleRate = sourceRate;
-      this.metrics.firstIngressAudioAt ??= now;
-      const ingressTargetRate =
-        readAudioSocketServerConfig().transportFormat === "ast18_slin8"
-          ? 8000
-          : 16000;
-      if (sourceRate !== ingressTargetRate)
-        this.metrics.ingressResampledFrames++;
-      for (const frame of frames) {
-        for (const handler of this.handlers) {
-          try {
-            handler(frame);
-          } catch {
-            this.metrics.protocolErrors++;
-          }
-        }
-      }
+  async sendFrame(frame:AudioFrame){
+    if(!this.authenticated)throw new MediaError("provider_not_configured",503,"AudioSocket is not connected");
+    const expectedBytes=frame.sampleRate===8000?320:640;
+    if(frame.codec!=="slin16"||![8000,16000].includes(frame.sampleRate)||frame.payload.byteLength!==expectedBytes)
+      throw new MediaError("invalid_request",400,"Invalid AudioSocket output frame");
+    this.pending.push({response_ref:frame.responseId||"unscoped",item_ref:frame.itemId||"",
+      sequence:frame.sequence,pcm:Buffer.from(frame.payload)});
+    if(!this.flushScheduled){this.flushScheduled=true;setImmediate(()=>void this.flush())}
+    return {accepted:true as const};
+  }
+  private async flush(){
+    this.flushScheduled=false;
+    while(this.pending.length){
+      const frames=this.pending.splice(0,20);
+      const result=await mediaWorkerClient.request({version:1,type:"enqueue_response_audio",
+        session_ref:this.sessionRef,payload:{frames}});
+      const payload=result.payload as any;if(payload?.metrics)this.metrics=payload.metrics;
     }
   }
-  async sendFrame(frame: AudioFrame) {
-    if (!this.socket || this.socket.destroyed || !this.authenticated)
-      throw new MediaError(
-        "provider_not_configured",
-        503,
-        "AudioSocket is not connected",
-      );
-    if (
-      !(
-        (frame.codec === "slin16" && frame.sampleRate === 16000) ||
-        (frame.codec === "ulaw" && frame.sampleRate === 8000)
-      ) ||
-      frame.payload.byteLength > 4096 ||
-      frame.payload.byteLength % 2 !== 0
-    )
-      throw new MediaError(
-        "invalid_request",
-        400,
-        "Invalid AudioSocket output frame",
-      );
-    return this.playout.enqueue(frame);
+  subscribeFrames(handler:(frame:AudioFrame)=>void){this.handlers.add(handler);return()=>this.handlers.delete(handler)}
+  subscribePlayout(handler:(frame:AudioFrame)=>void){this.playoutHandlers.add(handler);return()=>this.playoutHandlers.delete(handler)}
+  subscribePlayoutLifecycle(handler:(event:PlayoutLifecycleEvent)=>void){this.lifecycleHandlers.add(handler);return()=>this.lifecycleHandlers.delete(handler)}
+  async providerResponseDone(responseId:string){await mediaWorkerClient.request({version:1,type:"provider_response_done",session_ref:this.sessionRef,response_ref:responseId})}
+  async clearPlayoutAsync(responseId?:string,reason:"barge_in"|"session_end"="barge_in"){
+    if(reason==="session_end")return 0;
+    const result=await mediaWorkerClient.request({version:1,type:"cancel_response",session_ref:this.sessionRef,response_ref:responseId});
+    const payload=result.payload as any;if(payload?.metrics)this.metrics=payload.metrics;
+    return Number(payload?.discarded_audio_ms||0);
   }
-  private async writeFrame(frame: AudioFrame) {
-    if (!this.socket || this.socket.destroyed || !this.authenticated) return;
-    const config = readAudioSocketServerConfig(),
-      type =
-        config.transportFormat === "ast18_slin8" ? TYPE_SLIN8 : TYPE_SLIN16_16K,
-      source =
-        frame.codec === "ulaw"
-          ? decodeUlawToPcm16(frame.payload)
-          : new Int16Array(
-              frame.payload.buffer.slice(
-                frame.payload.byteOffset,
-                frame.payload.byteOffset + frame.payload.byteLength,
-              ),
-            ),
-      targetRate = type === TYPE_SLIN8 ? 8000 : 16000,
-      converted =
-        frame.sampleRate === targetRate
-          ? source
-          : this.egressDownsampler.process(source),
-      payload = new Uint8Array(converted.buffer);
-    if (payload.byteLength > 4096)
-      throw new MediaError(
-        "invalid_request",
-        400,
-        "Invalid AudioSocket output frame",
-      );
-    let writable = false;
-    try {
-      writable = this.socket.write(packet(type, payload));
-    } catch (error) {
-      this.metrics.audioSocketWriteErrors++;
-      throw error;
-    }
-    if (!writable) {
-      this.metrics.egressSocketBackpressureCount++;
-      await new Promise<void>((resolve, reject) => {
-        const socket = this.socket!;
-        const cleanup = () => {
-            socket.off("drain", drained);
-            socket.off("close", closed);
-            socket.off("error", closed);
-          },
-          drained = () => {
-            cleanup();
-            resolve();
-          },
-          closed = () => {
-            cleanup();
-            reject(
-              new MediaError(
-                "provider_not_configured",
-                503,
-                "AudioSocket closed during backpressure",
-              ),
-            );
-          };
-        socket.once("drain", drained);
-        socket.once("close", closed);
-        socket.once("error", closed);
-      });
-    }
-    this.metrics.audiosocketEgressPackets++;
-    this.metrics.egressPacketType = this.packetLabel(type);
-    this.metrics.egressTargetSampleRate = targetRate;
-    this.metrics.firstEgressAudioAt ??= new Date().toISOString();
-    if (frame.sampleRate !== targetRate) this.metrics.egressResampledFrames++;
-  }
-  subscribeFrames(handler: (frame: AudioFrame) => void) {
-    this.handlers.add(handler);
-    return () => this.handlers.delete(handler);
-  }
-  subscribePlayout(handler: (frame: AudioFrame) => void) {
-    this.playoutHandlers.add(handler);
-    return () => this.playoutHandlers.delete(handler);
-  }
-  getHealth() {
-    return {
-      state: this.socket ? "connected" : this.server ? "listening" : "disabled",
-      failureCode: null,
-    };
-  }
-  getProtocolMetrics() {
-    return {
-      ...this.metrics,
-      ...this.packetizer.getMetrics(),
-      ...this.playout.metrics(),
-    };
-  }
-  clearPlayout(
-    responseId?: string,
-    reason: "barge_in" | "session_end" = "barge_in",
-  ) {
-    return this.playout.clear(responseId, reason);
-  }
-  private packetLabel(type: number) {
-    return type === TYPE_SLIN8
-      ? "0x10_slin8"
-      : type === TYPE_SLIN16_16K
-        ? "0x12_slin16"
-        : `0x${type.toString(16).padStart(2, "0")}_unsupported`;
-  }
-  getEndpoint() {
-    const config = readAudioSocketServerConfig();
-    return {
-      externalHost: `${config.host}:${config.port}`,
-      connectionId: this.connectionId,
-    };
-  }
-  async stop() {
-    this.packetizer.flush();
-    if (this.socket && !this.socket.destroyed) {
-      this.socket.write(packet(TYPE_TERMINATE, new Uint8Array()));
-      this.socket.destroy();
-    }
-    await new Promise<void>((resolve) =>
-      this.server ? this.server.close(() => resolve()) : resolve(),
-    );
-    this.server = null;
-    this.socket = null;
-    this.context = null;
-    this.buffer = Buffer.alloc(0);
-    this.authenticated = false;
-    this.playout.stop();
-    this.egressDownsampler.reset();
-    this.handlers.clear();
-    this.playoutHandlers.clear();
+  clearPlayout(){return 0}
+  getHealth(){return{state:this.authenticated?"connected":this.externalHost?"listening":"disabled",failureCode:null,worker:mediaWorkerClient.getHealth()}}
+  getProtocolMetrics(){return{...this.metrics,worker:mediaWorkerClient.getHealth()}}
+  getEndpoint(){return{externalHost:this.externalHost,connectionId:this.connectionId}}
+  async stop(){
+    try{await this.flush()}catch{}
+    try{await mediaWorkerClient.request({version:1,type:"close_session",session_ref:this.sessionRef},1500)}catch{}
+    this.unsubscribeWorker?.();this.unsubscribeWorker=null;this.authenticated=false;this.context=null;
+    this.externalHost="";this.connectionId="";
+    this.ingressStartedAt=null;
+    this.handlers.clear();this.playoutHandlers.clear();this.lifecycleHandlers.clear();this.connectedHandlers.clear();
   }
 }
