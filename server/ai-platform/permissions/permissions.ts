@@ -16,6 +16,7 @@ export const AI_PLATFORM_PERMISSIONS = [
   ,'view_ai_voice_profiles','manage_ai_voice_profiles','view_ai_voice_catalog','manage_ai_voice_catalog','generate_ai_voice_preview'
   ,'view_ai_extensions','create_ai_extensions','update_ai_extensions','publish_ai_extensions','delete_ai_extensions'
   ,'view_ai_handoff','configure_ai_handoff','test_ai_handoff','publish_ai_handoff'
+  ,'view_ai_agents','edit_ai_agents','view_ai_telephony','configure_ai_telephony','ai_platform_expert_mode'
 ] as const;
 
 export type AiPlatformPermission = typeof AI_PLATFORM_PERMISSIONS[number];

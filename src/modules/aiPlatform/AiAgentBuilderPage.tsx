@@ -1,61 +1,52 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Bot, Plus, ShieldCheck, X } from 'lucide-react';
-import AgentKnowledgeTrainingPage from './AgentKnowledgeTrainingPage';
-import AgentSandboxPanel from './AgentSandboxPanel';
-import TransferRequestsPanel from './TransferRequestsPanel';
-import BusinessActionsPanel from './BusinessActionsPanel';
-import VoiceGatewayPanel from './VoiceGatewayPanel';
-import VoiceMediaPanel from './VoiceMediaPanel';
-import RealtimeVoicePanel from './RealtimeVoicePanel';
-import LiveVoiceTestPanel from './LiveVoiceTestPanel';
-import VoiceAgentsManagementPage from './VoiceAgentsManagementPage';
-import SkillBuilderPanel from './SkillBuilderPanel';
-import VoiceSettingsPanel from './VoiceSettingsPanel';
-import VoiceDiagnosticsPanel from './VoiceDiagnosticsPanel';
-import AiExtensionPanel from './AiExtensionPanel';
+import React,{useEffect,useMemo,useState}from'react';
+import{Activity,BookOpen,ChevronDown,KeyRound,Plug,Settings2,Volume2}from'lucide-react';
+import AiPlatformNavigation,{type AiPlatformSection}from'./AiPlatformNavigation';
+import AiPlatformAgentList from'./AiPlatformAgentList';
+import AiAgentEditor from'./AiAgentEditor';
+import SkillBuilderPanel from'./SkillBuilderPanel';
+import AgentKnowledgeTrainingPage from'./AgentKnowledgeTrainingPage';
+import VoiceAgentsManagementPage from'./VoiceAgentsManagementPage';
+import VoiceSettingsPanel from'./VoiceSettingsPanel';
+import VoiceDiagnosticsPanel from'./VoiceDiagnosticsPanel';
+import AgentSandboxPanel from'./AgentSandboxPanel';
+import TransferRequestsPanel from'./TransferRequestsPanel';
+import BusinessActionsPanel from'./BusinessActionsPanel';
+import VoiceGatewayPanel from'./VoiceGatewayPanel';
+import VoiceMediaPanel from'./VoiceMediaPanel';
+import RealtimeVoicePanel from'./RealtimeVoicePanel';
 
-interface Props { token:string; canCreate:boolean;canViewKnowledge:boolean;canViewTraining:boolean;canViewTransfers:boolean;canTestTransfer:boolean;canViewCallbacks:boolean;canManageCallbacks:boolean;canAssignActions:boolean;canViewVoice:boolean;canManageVoice:boolean;canTestVoice:boolean;canViewMedia:boolean;canTestMedia:boolean;canViewRealtime:boolean;canTestRealtime:boolean;canViewLive:boolean;canConfigureLive:boolean;canEnableLive:boolean;canCheckLive:boolean;canViewVoiceAgents:boolean;canManageVoiceAgents:boolean;canTestVoiceAgents:boolean;canViewVoiceTranscripts:boolean;canExportVoiceTranscripts:boolean;canViewVoiceSettings:boolean;canManageVoiceSettings:boolean;canViewAiExtensions:boolean;canCreateAiExtensions:boolean;canUpdateAiExtensions:boolean;canPublishAiExtensions:boolean;canViewHandoff:boolean;canConfigureHandoff:boolean;canPublishHandoff:boolean }
-interface Template { id:number;template_key:string;name:string;description:string;agent_type:string }
-const FALLBACK_TEMPLATES:Template[]=[
-  {id:0,template_key:'receptionist_default',name:'AI Receptionist',description:'Виртуальный администратор компании, принимающий обращения клиентов',agent_type:'receptionist'},
-  {id:0,template_key:'pbx_admin_default',name:'AI PBXPuls Administrator',description:'Помощник администратора телефонии PBXPuls',agent_type:'telephony_admin'},
-  {id:0,template_key:'sales_manager_default',name:'AI Sales Manager',description:'AI менеджер первичных продаж',agent_type:'sales_manager'}
-];
-
-export default function AiAgentBuilderPage({token,canCreate,canViewKnowledge,canViewTraining,canViewTransfers,canTestTransfer,canViewCallbacks,canManageCallbacks,canAssignActions,canViewVoice,canManageVoice,canTestVoice,canViewMedia,canTestMedia,canViewRealtime,canTestRealtime,canViewLive,canConfigureLive,canEnableLive,canCheckLive,canViewVoiceAgents,canManageVoiceAgents,canTestVoiceAgents,canViewVoiceTranscripts,canExportVoiceTranscripts,canViewVoiceSettings,canManageVoiceSettings,canViewAiExtensions,canCreateAiExtensions,canUpdateAiExtensions,canPublishAiExtensions,canViewHandoff,canConfigureHandoff,canPublishHandoff}:Props){
-  const [templates,setTemplates]=useState<Template[]>([]),[enabled,setEnabled]=useState(false),[wizard,setWizard]=useState(false),[step,setStep]=useState(1),[selected,setSelected]=useState<Template|null>(null),[name,setName]=useState(''),[role,setRole]=useState(''),[message,setMessage]=useState('');
-  const [warmth,setWarmth]=useState('high'),[attentiveness,setAttentiveness]=useState('very_high'),[energy,setEnergy]=useState('medium_high'),[formality,setFormality]=useState('medium'),[brevity,setBrevity]=useState('high'),[interruptionSensitivity,setInterruptionSensitivity]=useState('conservative');
-  const headers=useMemo(()=>({Authorization:`Bearer ${token}`,'Content-Type':'application/json'}),[token]);
-  useEffect(()=>{void fetch('/api/ai-platform/status',{headers}).then(r=>r.json()).then(data=>{setEnabled(Boolean(data.enabled));if(data.enabled)return fetch('/api/ai-platform/templates',{headers}).then(r=>r.json()).then(value=>setTemplates(value.rows||[]))}).catch(()=>setEnabled(false))},[headers]);
-  const cards=templates.length?templates:FALLBACK_TEMPLATES;
-  const choose=(item:Template)=>{setSelected(item);setName(item.name);setRole(item.agent_type);setStep(2)};
-  const create=async()=>{if(!selected?.id)return;setMessage('');const agentKey=`${selected.agent_type}_${Date.now()}`;const personality={schemaVersion:1,warmth,attentiveness,energy,empathy:'medium',formality,brevity,initiative:'medium',humor:'low',patience:'very_high',persistence:'low',speakingStyle:'friendly_confident',selfDescription:'receptionist',responsePacing:'concise_natural',enthusiasm:'warm',emotionalDistance:'low'};const voice={interruptionSensitivity,responseEagerness:'high',endOfTurnSilenceMs:450,allowSemanticVad:false};const response=await fetch('/api/ai-platform/agents/from-template',{method:'POST',headers,body:JSON.stringify({templateId:selected.id,agentKey,name,role,personality,voice,farewellPolicy:{maxFarewells:1,hangupAfterPlayout:true}})});const body=await response.json();if(!response.ok){setMessage(body.error||'Не удалось создать draft');return}setMessage('Draft агента создан');setWizard(false)};
-  const agentRoute=window.location.pathname.match(/^\/ai-platform\/agents\/(\d+)\/(knowledge|voice|diagnostics)$/),agentId=agentRoute?Number(agentRoute[1]):0,agentSection=agentRoute?.[2]||'';
-  return <section className="space-y-5">
-    <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-      <div><h2 className="text-xl font-black text-slate-900 dark:text-white">AI Platform</h2><p className="mt-1 text-sm text-slate-500">Конструктор конфигураций AI-сотрудников без запуска runtime</p></div>
-      <button disabled={!enabled||!canCreate} onClick={()=>{setWizard(true);setStep(1)}} className="flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-40"><Plus className="h-4 w-4"/>Создать агента</button>
-    </div>
-    {!enabled&&<div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">AI Platform Core выключен настройкой <code>ai.platform_core_enabled=false</code>. Шаблоны показаны только для ознакомления.</div>}
-    {!agentId&&<VoiceAgentsManagementPage token={token} canView={canViewVoiceAgents} canManage={canManageVoiceAgents} canTest={canTestVoiceAgents} canViewTranscripts={canViewVoiceTranscripts} canExportTranscripts={canExportVoiceTranscripts} canConfigureVoice={canViewVoiceSettings}/>}
-    {message&&<div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{message}</div>}
-    {agentId>0&&<nav className="flex flex-wrap gap-2 rounded-2xl border bg-white p-3" aria-label="Разделы AI-сотрудника"><a className="rounded-lg px-3 py-2 text-sm font-bold hover:bg-slate-100" href="/ai-platform/agents">Основное</a><a className={`rounded-lg px-3 py-2 text-sm font-bold ${agentSection==='knowledge'?'bg-blue-600 text-white':'hover:bg-slate-100'}`} href={`/ai-platform/agents/${agentId}/knowledge`}>Навыки</a><a className={`rounded-lg px-3 py-2 text-sm font-bold ${agentSection==='voice'?'bg-blue-600 text-white':'hover:bg-slate-100'}`} href={`/ai-platform/agents/${agentId}/voice`}>Голос и произношение</a><a className="rounded-lg px-3 py-2 text-sm font-bold text-slate-500" href="#publication">Публикация</a><a className={`rounded-lg px-3 py-2 text-sm font-bold ${agentSection==='diagnostics'?'bg-blue-600 text-white':'hover:bg-slate-100'}`} href={`/ai-platform/agents/${agentId}/diagnostics`}>Диагностика</a></nav>}
-    {agentId>0&&agentSection==='knowledge'&&<SkillBuilderPanel token={token} agentId={agentId} enabled={enabled} canManage={canCreate}/>}
-    {agentId>0&&agentSection==='voice'&&canViewVoiceSettings&&<VoiceSettingsPanel token={token} agentId={agentId} canManage={canManageVoiceSettings}/>}
-    {agentId>0&&agentSection==='voice'&&<AiExtensionPanel token={token} agentId={agentId} canView={canViewAiExtensions} canCreate={canCreateAiExtensions} canUpdate={canUpdateAiExtensions} canApply={canPublishAiExtensions} canViewHandoff={canViewHandoff} canConfigureHandoff={canConfigureHandoff} canPublishHandoff={canPublishHandoff}/>}
-    {agentId>0&&agentSection==='voice'&&!canViewVoiceSettings&&<div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">Недостаточно прав для просмотра каталога голосов.</div>}
-    {agentId>0&&agentSection==='knowledge'&&<AgentKnowledgeTrainingPage token={token} agentId={agentId} enabled={enabled} canViewKnowledge={canViewKnowledge} canViewTraining={canViewTraining}/>}
-    {agentId>0&&agentSection==='diagnostics'&&<><VoiceDiagnosticsPanel/><AgentSandboxPanel token={token} agentId={agentId}/><TransferRequestsPanel token={token} enabled={enabled} canView={canViewTransfers} canTest={canTestTransfer}/><BusinessActionsPanel token={token} enabled={enabled} agentId={agentId} canView={canViewCallbacks} canManage={canManageCallbacks} canAssign={canAssignActions}/><VoiceGatewayPanel token={token} canView={canViewVoice} canManage={canManageVoice} canTest={canTestVoice}/><VoiceMediaPanel token={token} canView={canViewMedia} canTest={canTestMedia}/><RealtimeVoicePanel token={token} canView={canViewRealtime} canTest={canTestRealtime}/><LiveVoiceTestPanel token={token} canView={canViewLive} canConfigure={canConfigureLive} canEnable={canEnableLive} canCheck={canCheckLive}/></>}
-    {!agentId&&<>
-    <div className="grid gap-4 md:grid-cols-3">{cards.map(item=><article key={item.template_key} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800"><Bot className="mb-4 h-8 w-8 text-blue-600"/><h3 className="font-black text-slate-900 dark:text-white">{item.name}</h3><p className="mt-2 min-h-12 text-sm text-slate-500">{item.description}</p><div className="mt-4 flex items-center gap-2 text-xs font-semibold text-slate-500"><ShieldCheck className="h-4 w-4"/>Draft only · runtime off</div></article>)}</div>
-    {wizard&&<div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/50 p-4"><div className="w-full max-w-xl rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-800"><div className="flex items-center justify-between"><h3 className="text-lg font-black">Создание AI-сотрудника · шаг {step}/6</h3><button onClick={()=>setWizard(false)}><X/></button></div>
-      {step===1&&<div className="mt-5 space-y-2">{templates.map(item=><button key={item.id} onClick={()=>choose(item)} className="w-full rounded-xl border p-3 text-left hover:border-blue-500"><b>{item.name}</b><div className="text-xs text-slate-500">{item.description}</div></button>)}</div>}
-      {step===2&&<label className="mt-5 block text-sm font-bold">Имя<input value={name} onChange={e=>setName(e.target.value)} className="mt-2 w-full rounded-xl border p-3 font-normal"/></label>}
-      {step===3&&<label className="mt-5 block text-sm font-bold">Роль<input value={role} onChange={e=>setRole(e.target.value)} className="mt-2 w-full rounded-xl border p-3 font-normal"/></label>}
-      {step===4&&<div className="mt-5 grid grid-cols-2 gap-3 rounded-xl bg-slate-50 p-4 text-sm"><label>Теплота<select className="mt-1 w-full rounded border p-2" value={warmth} onChange={e=>setWarmth(e.target.value)}><option value="high">Высокая</option><option value="medium">Средняя</option></select></label><label>Внимательность<select className="mt-1 w-full rounded border p-2" value={attentiveness} onChange={e=>setAttentiveness(e.target.value)}><option value="very_high">Очень высокая</option><option value="high">Высокая</option></select></label><label>Энергия<select className="mt-1 w-full rounded border p-2" value={energy} onChange={e=>setEnergy(e.target.value)}><option value="medium_high">Бодрая</option><option value="medium">Спокойная</option></select></label><label>Формальность<select className="mt-1 w-full rounded border p-2" value={formality} onChange={e=>setFormality(e.target.value)}><option value="medium">Средняя</option><option value="high">Высокая</option></select></label><label>Краткость<select className="mt-1 w-full rounded border p-2" value={brevity} onChange={e=>setBrevity(e.target.value)}><option value="high">Высокая</option><option value="medium">Средняя</option></select></label><label>Перебивания<select className="mt-1 w-full rounded border p-2" value={interruptionSensitivity} onChange={e=>setInterruptionSensitivity(e.target.value)}><option value="conservative">Осторожно</option><option value="normal">Обычно</option></select></label><p className="col-span-2 text-xs text-slate-500">Темп и паузы настраиваются только в Voice Profile. Настройки сохраняются в draft; после публикации версия неизменяема.</p></div>}
-      {step===5&&<div className="mt-5 rounded-xl bg-slate-50 p-4 text-sm">Права и tools берутся из системного шаблона и повторно проверяются backend.</div>}
-      {step===6&&<div className="mt-5 rounded-xl bg-slate-50 p-4 text-sm"><b>{name}</b><br/>{selected?.name} · {role}<br/>Будет создан только draft без запуска AI.</div>}
-      {step>1&&<div className="mt-6 flex justify-between"><button onClick={()=>setStep(step-1)} className="rounded-xl border px-4 py-2 text-sm font-bold">Назад</button>{step<6?<button disabled={(step===2&&!name.trim())||(step===3&&!role.trim())} onClick={()=>setStep(step+1)} className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-40">Далее</button>:<button onClick={()=>void create()} className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white">Создать draft</button>}</div>}
-    </div></div>}</>}
-  </section>
+interface Props{
+ token:string;canCreate:boolean;canViewKnowledge:boolean;canViewTraining:boolean;canViewTransfers:boolean;canTestTransfer:boolean;canViewCallbacks:boolean;canManageCallbacks:boolean;canAssignActions:boolean;canViewVoice:boolean;canManageVoice:boolean;canTestVoice:boolean;canViewMedia:boolean;canTestMedia:boolean;canViewRealtime:boolean;canTestRealtime:boolean;canViewLive:boolean;canConfigureLive:boolean;canEnableLive:boolean;canCheckLive:boolean;canViewVoiceAgents:boolean;canManageVoiceAgents:boolean;canTestVoiceAgents:boolean;canViewVoiceTranscripts:boolean;canExportVoiceTranscripts:boolean;canViewVoiceSettings:boolean;canManageVoiceSettings:boolean;canViewAiExtensions:boolean;canCreateAiExtensions:boolean;canUpdateAiExtensions:boolean;canPublishAiExtensions:boolean;canViewHandoff:boolean;canConfigureHandoff:boolean;canPublishHandoff:boolean;canPublishAgents?:boolean;canExpertMode?:boolean;
 }
+const sectionFromPath=():AiPlatformSection=>location.pathname.startsWith('/ai-platform/skills')?'skills':location.pathname.startsWith('/ai-platform/knowledge')?'knowledge':location.pathname.startsWith('/ai-platform/conversations')?'conversations':location.pathname.startsWith('/ai-platform/settings')||location.pathname.startsWith('/ai-platform/diagnostics')||/\/agents\/\d+\/diagnostics$/.test(location.pathname)?'settings':'agents';
+
+export default function AiAgentBuilderPage(props:Props){
+ const{token}=props,[section]=useState(sectionFromPath),agentId=Number(location.pathname.match(/^\/ai-platform\/agents\/(\d+)/)?.[1]||0),[expertMode,setExpertMode]=useState(()=>props.canExpertMode&&localStorage.getItem('pbxpuls_ai_expert_mode')==='true');
+ useEffect(()=>{if(props.canExpertMode)localStorage.setItem('pbxpuls_ai_expert_mode',String(expertMode))},[expertMode,props.canExpertMode]);
+ const permissions=useMemo(()=>({...props,canEdit:props.canCreate,canPublishAgents:props.canPublishAgents}),[props]);
+ return <section className="mx-auto max-w-[1440px] space-y-4">
+  <header className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div><h1 className="text-xl font-black">AI Platform</h1><p className="text-sm text-slate-500">AI-сотрудники для вашей телефонии</p></div>{props.canExpertMode&&<label className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-bold"><input type="checkbox" checked={Boolean(expertMode)} onChange={e=>setExpertMode(e.target.checked)}/>Показать расширенные настройки</label>}</header>
+  <div className="grid gap-4 lg:grid-cols-[210px_minmax(0,1fr)]"><aside><AiPlatformNavigation active={section}/></aside><main className="min-w-0">
+   {section==='agents'&&!agentId&&<AiPlatformAgentList token={token} canEdit={props.canCreate}/>}
+   {section==='agents'&&agentId>0&&<AiAgentEditor token={token} agentId={agentId} expertMode={Boolean(expertMode)} permissions={permissions}/>}
+   {section==='skills'&&<SimpleSurface title="Навыки" text="Настройте, что AI-сотрудники умеют делать."><SkillBuilderPanel token={token} agentId={1} enabled canManage={props.canCreate}/></SimpleSurface>}
+   {section==='knowledge'&&<SimpleSurface title="Базы знаний" text="Подключите инструкции, ответы и справочники."><AgentKnowledgeTrainingPage token={token} agentId={1} enabled canViewKnowledge={props.canViewKnowledge} canViewTraining={props.canViewTraining}/></SimpleSurface>}
+   {section==='conversations'&&<SimpleSurface title="Разговоры" text="Каждый звонок показан одной понятной записью."><VoiceAgentsManagementPage token={token} canView={props.canViewVoiceAgents} canManage={false} canTest={props.canTestVoiceAgents} canViewTranscripts={props.canViewVoiceTranscripts} canExportTranscripts={props.canExportVoiceTranscripts} canConfigureVoice={false} simpleMode={!expertMode}/></SimpleSurface>}
+   {section==='settings'&&<SettingsWorkspace {...props} expertMode={Boolean(expertMode)}/>}
+  </main></div>
+ </section>
+}
+
+function SimpleSurface({title,text,children}:{title:string;text:string;children:React.ReactNode}){return <section className="space-y-4"><div><h1 className="text-2xl font-black">{title}</h1><p className="mt-1 text-sm text-slate-500">{text}</p></div>{children}</section>}
+function SettingsWorkspace(props:Props&{expertMode:boolean}){
+ const[sub,setSub]=useState<'voices'|'providers'|'integrations'|'access'|'diagnostics'>(()=>location.pathname.startsWith('/ai-platform/diagnostics')?'diagnostics':'voices');
+ const tabs=[['voices','Голоса',Volume2],['providers','Провайдеры',Activity],['integrations','Интеграции',Plug],['access','Права доступа',KeyRound],...(props.canExpertMode?[['diagnostics','Диагностика',Settings2] as const]:[]) ] as const;
+ return <section className="space-y-4"><div><h1 className="text-2xl font-black">Настройки</h1><p className="text-sm text-slate-500">Голоса, подключения и права доступа.</p></div><div className="flex flex-wrap gap-2">{tabs.map(([key,label,Icon])=><button key={key} onClick={()=>setSub(key)} className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-bold ${sub===key?'bg-blue-600 text-white':'border bg-white'}`}><Icon className="h-4 w-4"/>{label}</button>)}</div>
+  {sub==='voices'&&<VoiceSettingsPanel token={props.token} agentId={1} canManage={props.canManageVoiceSettings} expertMode={props.expertMode}/>}
+  {sub==='providers'&&<InfoCard title="Голосовой сервис" text="OpenAI Realtime · подключено"/>}
+  {sub==='integrations'&&<InfoCard title="Интеграции" text="Телефония FreePBX и действия AI управляются через безопасные подключения."/>}
+  {sub==='access'&&<InfoCard title="Права доступа" text="Права назначаются ролям в разделе управления пользователями."/>}
+  {sub==='diagnostics'&&props.canExpertMode&&<details open={props.expertMode} className="rounded-2xl border bg-white p-4"><summary className="flex cursor-pointer items-center gap-2 font-black"><ChevronDown className="h-4 w-4"/>Техническая диагностика</summary><div className="mt-4 space-y-4"><VoiceDiagnosticsPanel/><AgentSandboxPanel token={props.token} agentId={1}/><TransferRequestsPanel token={props.token} enabled canView={props.canViewTransfers} canTest={props.canTestTransfer}/><BusinessActionsPanel token={props.token} enabled agentId={1} canView={props.canViewCallbacks} canManage={props.canManageCallbacks} canAssign={props.canAssignActions}/><VoiceGatewayPanel token={props.token} canView={props.canViewVoice} canManage={props.canManageVoice} canTest={props.canTestVoice}/><VoiceMediaPanel token={props.token} canView={props.canViewMedia} canTest={props.canTestMedia}/><RealtimeVoicePanel token={props.token} canView={props.canViewRealtime} canTest={props.canTestRealtime}/></div></details>}
+ </section>
+}
+function InfoCard({title,text}:{title:string;text:string}){return <div className="rounded-2xl border bg-white p-5"><h2 className="font-black">{title}</h2><p className="mt-1 text-sm text-slate-500">{text}</p></div>}

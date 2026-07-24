@@ -1289,6 +1289,22 @@ const MIGRATIONS: Migration[] = [
       `ALTER TABLE ai_handoff_configs
        ADD COLUMN ai_offer_requires_confirmation TINYINT(1) NOT NULL DEFAULT 1 AFTER direct_request_requires_confirmation`
     ]
+  },
+  {
+    key:'20260724_056_ai_platform_simple_ux_permissions',
+    description:'Add simple AI agent management and expert mode permissions',
+    statements:[
+      `INSERT IGNORE INTO permissions(permission_key,name,description,category)VALUES
+       ('view_ai_agents','View AI agents','View the simplified AI agent workspace','ai_platform'),
+       ('edit_ai_agents','Edit AI agents','Edit AI agent drafts in the guided workspace','ai_platform'),
+       ('view_ai_telephony','View AI telephony','View AI extension and handoff settings','ai_platform'),
+       ('configure_ai_telephony','Configure AI telephony','Preview AI extension and handoff changes','ai_platform'),
+       ('ai_platform_expert_mode','AI Platform expert mode','View technical AI Platform diagnostics and identifiers','ai_platform')`,
+      `INSERT IGNORE INTO role_permissions(role_id,permission_id)
+       SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key IN(
+       'view_ai_agents','edit_ai_agents','view_ai_telephony','configure_ai_telephony','ai_platform_expert_mode')
+       WHERE r.role_key IN('su','admin')`
+    ]
   }
 ];
 

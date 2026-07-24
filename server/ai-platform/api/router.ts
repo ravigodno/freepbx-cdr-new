@@ -96,12 +96,17 @@ export function registerAiPlatformRoutes(app:Express,deps:AiPlatformRouterDeps){
     try{const tenant=await getInstallationTenant(store);await audit.append({tenantId:tenant.id,...actor(req),eventType:'permission_denied',entityType:'api',entityId:req.path,decision:'denied',details:{permission}})}catch{}
     return res.status(403).json({success:false,error:'Access denied: insufficient permissions',code:'permission_denied'});
   };
+  const permitAny=(permissions:string[])=>async(req:Request,res:Response,next:NextFunction)=>{
+    for(const permission of permissions)if(await deps.checkPermission(req,permission))return next();
+    try{const tenant=await getInstallationTenant(store);await audit.append({tenantId:tenant.id,...actor(req),eventType:'permission_denied',entityType:'api',entityId:req.path,decision:'denied',details:{permissions}})}catch{}
+    return res.status(403).json({success:false,error:'Access denied: insufficient permissions',code:'permission_denied'});
+  };
   const enabled=async(req:Request,res:Response,next:NextFunction)=>{
     if(await readEnabled())return next();
     try{const tenant=await getInstallationTenant(store);await audit.append({tenantId:tenant.id,...actor(req),eventType:'feature_flag_blocked',entityType:'api',entityId:req.path,decision:'blocked',details:{flag:'ai.platform_core_enabled'}})}catch{}
     return res.status(503).json({success:false,error:'AI Platform Core is disabled',code:'feature_disabled'});
   };
-  const domainRuntime={authenticated,permit,enabled,wrap,getTenantId:async()=>(await getInstallationTenant(store)).id,actor,store,audit,positiveInt,page};
+  const domainRuntime={authenticated,permit,permitAny,enabled,wrap,getTenantId:async()=>(await getInstallationTenant(store)).id,actor,store,audit,positiveInt,page};
   const toolExecutor=deps.pbxReadServices?new ToolExecutor(store,audit,createPBXReadExecutorRegistry(deps.pbxReadServices),{isCoreEnabled:readEnabled}):null;
   const voiceGateway=new VoiceGatewayService(store,audit);
   const mediaRegistry=new MediaTransportRegistry();mediaRegistry.register(new SyntheticMediaAdapter());mediaRegistry.register(new ExternalMediaAdapter());mediaRegistry.register(new AudioSocketAdapter());

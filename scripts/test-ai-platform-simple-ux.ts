@@ -1,0 +1,13 @@
+import assert from'node:assert/strict';
+import fs from'node:fs';
+const read=(file:string)=>fs.readFileSync(file,'utf8');
+const page=read('src/modules/aiPlatform/AiAgentBuilderPage.tsx'),nav=read('src/modules/aiPlatform/AiPlatformNavigation.tsx'),editor=read('src/modules/aiPlatform/AiAgentEditor.tsx'),list=read('src/modules/aiPlatform/AiPlatformAgentList.tsx'),app=read('src/App.tsx'),migration=read('server/pbxpulsMigrations.ts');
+for(const label of['AI-сотрудники','Навыки','Базы знаний','Разговоры','Настройки'])assert.match(nav,new RegExp(label));
+assert.equal((nav.match(/key:'/g)||[]).length,5);
+for(const step of['Основное','Телефония','Навыки и знания','Голос','Тестирование','Публикация'])assert.match(editor,new RegExp(step));
+assert.match(editor,/max-w-\[1120px\]/);assert.match(editor,/Есть несохранённые изменения/);assert.match(editor,/Виртуальный внутренний номер\. SIP-регистрация не требуется/);assert.match(editor,/Качество произношения зависит от голосовой модели и языка/);assert.match(editor,/Опубликовать изменения/);
+assert.match(list,/Внутренний номер/);assert.match(list,/Передача сотруднику/);assert.doesNotMatch(list,/binding ID|version DB ID|pbxpuls-ai|AudioSocket|Stasis|linkedid/i);
+assert.match(page,/pbxpuls_ai_expert_mode/);assert.match(page,/canExpertMode&&/);assert.match(page,/Техническая диагностика/);
+for(const path of['skills','knowledge','conversations','settings','diagnostics'])assert.match(app,new RegExp(path));
+for(const permission of['view_ai_agents','edit_ai_agents','view_ai_telephony','configure_ai_telephony','ai_platform_expert_mode'])assert.match(migration,new RegExp(permission));
+console.log('AI Platform simple UX tests: OK');
