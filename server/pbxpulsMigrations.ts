@@ -1391,6 +1391,91 @@ const MIGRATIONS: Migration[] = [
     statements:[
       `ALTER TABLE ai_handoff_configs MODIFY ai_extension_id BIGINT NULL`
     ]
+  },
+  {
+    key:'20260724_060_secure_crm_connectors',
+    description:'Add secure normalized CRM and webhook connector platform',
+    statements:[
+      `CREATE TABLE IF NOT EXISTS ai_integrations(
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,tenant_id BIGINT NOT NULL,name VARCHAR(191) NOT NULL,
+        provider_type VARCHAR(32) NOT NULL,connector_type VARCHAR(64) NOT NULL,base_url VARCHAR(512) NULL,
+        auth_type VARCHAR(40) NOT NULL DEFAULT 'none',credential_reference VARCHAR(191) NULL,
+        status VARCHAR(32) NOT NULL DEFAULT 'draft',enabled TINYINT(1) NOT NULL DEFAULT 0,
+        environment VARCHAR(32) NOT NULL DEFAULT 'sandbox',timeout_ms INT NOT NULL DEFAULT 8000,
+        retry_policy_json TEXT NOT NULL,rate_limit_policy_json TEXT NOT NULL,allowed_hosts_json TEXT NOT NULL,
+        allow_private TINYINT(1) NOT NULL DEFAULT 0,created_by VARCHAR(191) NULL,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NULL,last_checked_at DATETIME NULL,
+        health_status VARCHAR(32) NOT NULL DEFAULT 'disabled',health_error_code VARCHAR(64) NULL,
+        KEY idx_ai_integrations_tenant_status(tenant_id,status),
+        CONSTRAINT fk_ai_integrations_tenant FOREIGN KEY(tenant_id) REFERENCES ai_tenants(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS ai_integration_credentials(
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,tenant_id BIGINT NOT NULL,integration_id BIGINT NOT NULL,
+        auth_type VARCHAR(40) NOT NULL,encrypted_value LONGTEXT NOT NULL,key_version VARCHAR(32) NOT NULL,
+        masked_identifier VARCHAR(64) NULL,updated_by VARCHAR(191) NULL,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_ai_integration_credential(tenant_id,integration_id),
+        CONSTRAINT fk_ai_integration_credential_tenant FOREIGN KEY(tenant_id) REFERENCES ai_tenants(id),
+        CONSTRAINT fk_ai_integration_credential_integration FOREIGN KEY(integration_id) REFERENCES ai_integrations(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS ai_integration_mappings(
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,tenant_id BIGINT NOT NULL,integration_id BIGINT NOT NULL,action_id VARCHAR(100) NOT NULL,
+        http_method VARCHAR(10) NOT NULL,path_template VARCHAR(255) NOT NULL,request_mapping_json LONGTEXT NOT NULL,
+        response_mapping_json LONGTEXT NOT NULL,timeout_ms INT NOT NULL DEFAULT 8000,enabled TINYINT(1) NOT NULL DEFAULT 1,
+        UNIQUE KEY uniq_ai_integration_mapping(tenant_id,integration_id,action_id),
+        CONSTRAINT fk_ai_mapping_tenant FOREIGN KEY(tenant_id) REFERENCES ai_tenants(id),
+        CONSTRAINT fk_ai_mapping_integration FOREIGN KEY(integration_id) REFERENCES ai_integrations(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS ai_agent_integration_policies(
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,tenant_id BIGINT NOT NULL,agent_id BIGINT NOT NULL,integration_id BIGINT NOT NULL,
+        enabled TINYINT(1) NOT NULL DEFAULT 1,allowed_actions_json LONGTEXT NOT NULL,allowed_fields_json LONGTEXT NOT NULL,
+        confirmation_policy_json TEXT NOT NULL,max_calls_per_conversation INT NOT NULL DEFAULT 10,rate_limit_json TEXT NOT NULL,
+        allowed_stages_json TEXT NOT NULL,fallback_policy VARCHAR(64) NOT NULL DEFAULT 'safe_message',
+        can_read_personal_data TINYINT(1) NOT NULL DEFAULT 0,can_write_data TINYINT(1) NOT NULL DEFAULT 0,
+        UNIQUE KEY uniq_ai_agent_integration(tenant_id,agent_id,integration_id),
+        CONSTRAINT fk_ai_agent_integration_tenant FOREIGN KEY(tenant_id) REFERENCES ai_tenants(id),
+        CONSTRAINT fk_ai_agent_integration_agent FOREIGN KEY(agent_id) REFERENCES ai_agents(id),
+        CONSTRAINT fk_ai_agent_integration_integration FOREIGN KEY(integration_id) REFERENCES ai_integrations(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS ai_integration_executions(
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,tenant_id BIGINT NOT NULL,request_id VARCHAR(64) NOT NULL,idempotency_key VARCHAR(191) NULL,
+        integration_id BIGINT NOT NULL,agent_id BIGINT NULL,agent_version_id BIGINT NULL,conversation_id VARCHAR(100) NULL,
+        action_id VARCHAR(100) NOT NULL,side_effect_level VARCHAR(32) NOT NULL,confirmation_status VARCHAR(32) NOT NULL,
+        status VARCHAR(32) NOT NULL,input_fields_json TEXT NOT NULL,input_masked_json LONGTEXT NOT NULL,result_json LONGTEXT NULL,
+        external_object_id VARCHAR(191) NULL,latency_ms INT NULL,error_code VARCHAR(64) NULL,started_at DATETIME NOT NULL,completed_at DATETIME NULL,
+        UNIQUE KEY uniq_ai_integration_request(tenant_id,request_id),UNIQUE KEY uniq_ai_integration_idempotency(tenant_id,integration_id,idempotency_key),
+        KEY idx_ai_integration_execution(tenant_id,integration_id,status,started_at),
+        CONSTRAINT fk_ai_execution_tenant FOREIGN KEY(tenant_id) REFERENCES ai_tenants(id),
+        CONSTRAINT fk_ai_execution_integration FOREIGN KEY(integration_id) REFERENCES ai_integrations(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS ai_integration_post_call_jobs(
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,tenant_id BIGINT NOT NULL,integration_id BIGINT NOT NULL,conversation_id VARCHAR(100) NOT NULL,
+        action_id VARCHAR(100) NOT NULL,idempotency_key VARCHAR(191) NOT NULL,input_masked_json LONGTEXT NOT NULL,status VARCHAR(32) NOT NULL,
+        attempt_count INT NOT NULL DEFAULT 0,next_attempt_at DATETIME NULL,error_code VARCHAR(64) NULL,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        completed_at DATETIME NULL,UNIQUE KEY uniq_ai_post_call_idempotency(tenant_id,idempotency_key),
+        KEY idx_ai_post_call_queue(tenant_id,status,next_attempt_at),
+        CONSTRAINT fk_ai_post_call_tenant FOREIGN KEY(tenant_id) REFERENCES ai_tenants(id),
+        CONSTRAINT fk_ai_post_call_integration FOREIGN KEY(integration_id) REFERENCES ai_integrations(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `INSERT IGNORE INTO permissions(permission_key,name,description,category)VALUES
+       ('view_integrations','View integrations','View safe CRM integration metadata','ai_platform'),
+       ('create_integrations','Create integrations','Create managed CRM integrations','ai_platform'),
+       ('edit_integrations','Edit integrations','Edit mappings and connector policies','ai_platform'),
+       ('delete_integrations','Delete integrations','Disable or delete dependency-free integrations','ai_platform'),
+       ('test_integrations','Test integrations','Run health checks and controlled previews','ai_platform'),
+       ('manage_integration_credentials','Manage integration credentials','Set and rotate encrypted credentials','ai_platform'),
+       ('assign_integrations_to_agents','Assign integrations','Assign normalized actions to AI agents','ai_platform'),
+       ('execute_write_integration_tests','Execute write integration tests','Run explicitly confirmed controlled write tests','ai_platform')`,
+      `INSERT IGNORE INTO role_permissions(role_id,permission_id)
+       SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key IN('view_integrations','create_integrations','edit_integrations','delete_integrations','test_integrations','manage_integration_credentials','assign_integrations_to_agents','execute_write_integration_tests')
+      WHERE r.role_key IN('su','admin')`
+    ]
+  },
+  {
+    key:'20260724_061_encrypt_integration_post_call_payloads',
+    description:'Encrypt pending CRM post-call job payloads at rest',
+    statements:[
+      `ALTER TABLE ai_integration_post_call_jobs ADD COLUMN input_encrypted LONGTEXT NULL AFTER input_masked_json`
+    ]
   }
 ];
 

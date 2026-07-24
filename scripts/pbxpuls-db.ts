@@ -20,7 +20,9 @@ const requiredTables = [
   'ai_action_definitions', 'ai_actions', 'ai_agent_actions', 'ai_callback_requests', 'ai_voice_sessions', 'ai_voice_route_bindings', 'ai_voice_media_sessions', 'ai_realtime_voice_sessions',
   'ai_extensions', 'ai_extension_previews', 'ai_agent_creation_drafts', 'ai_agent_creation_previews',
   'ai_agent_deletion_previews', 'ai_deleted_agent_snapshots'
-  ,'ai_handoff_configs','ai_handoff_previews','ai_handoff_events'
+  ,'ai_handoff_configs','ai_handoff_previews','ai_handoff_events',
+  'ai_integrations','ai_integration_credentials','ai_integration_mappings','ai_agent_integration_policies',
+  'ai_integration_executions','ai_integration_post_call_jobs'
 ];
 
 function parseFreePBXConfig(): Record<string, string> {
