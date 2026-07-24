@@ -267,8 +267,9 @@ export class ControlledLiveVoiceService {
         providerKey: config.provider,
         traceId: input.traceId,
         actorId: "voice-live",
+        restoreTaskState:Boolean(input.resumeHandoff),
       });
-      await this.bridges.answer(input.session.id, callerChannel);
+      if(!input.resumeHandoff)await this.bridges.answer(input.session.id, callerChannel);
       const metrics = {
         startupMs: Date.now() - started,
         firstAudioMs: null,
@@ -301,7 +302,9 @@ export class ControlledLiveVoiceService {
         input.tenantId,
         realtime.id,
         input.traceId,
-        "Здравствуйте. Чем могу помочь?",
+        input.resumeHandoff
+          ? String(input.returnMessage||"Сотрудник сейчас не ответил. Чем ещё могу помочь?")
+          : "Здравствуйте. Чем могу помочь?",
       );
     } catch (error) {
       if (mediaSessionId)
@@ -443,6 +446,81 @@ export class ControlledLiveVoiceService {
       ariResult:"confirmed" as const,
       failureCodeSafe:null,
     };
+  }
+  async humanHandoff(input:{tenantId:number;voiceSessionId:number;traceId:string;config:any;coordinator:any}){
+    const active=this.active.get(input.voiceSessionId);if(!active||active.tenantId!==input.tenantId)throw new AiPlatformError("not_found",404,"Controlled live voice session is unavailable");
+    const voice=(await this.store.query("SELECT state,ari_channel_id_hash FROM ai_voice_sessions WHERE tenant_id=? AND id=? LIMIT 1",[input.tenantId,input.voiceSessionId]))[0];if(voice?.state!=="active")throw new AiPlatformError("conflict",409,"Caller channel is not transferable");
+    await this.gateway.sessions.transition(input.tenantId,input.voiceSessionId,"transferring",input.traceId);
+    const created:any=await this.store.query("INSERT INTO ai_handoff_events(tenant_id,config_id,voice_session_id,linkedid_hash,state,destination_type,destination_ref_safe,requested_at,announcement_finished_at,dialing_at,metadata_json)VALUES(?,?,?,?,?,?,?,NOW(3),NOW(3),NOW(3),'{}') ON DUPLICATE KEY UPDATE announcement_finished_at=VALUES(announcement_finished_at),dialing_at=VALUES(dialing_at),state='transferring'",[input.tenantId,input.config.id,input.voiceSessionId,voice.ari_channel_id_hash,"transferring",input.config.primary_destination_type,input.config.primary_destination_safe]);
+    void created;
+    try{
+      await this.realtime.stop(input.tenantId,active.realtimeSessionId,input.traceId,"completed");
+      await this.media.stop(input.tenantId,active.mediaSessionId,input.traceId,"completed");
+      this.active.delete(input.voiceSessionId);
+      await this.bridges.continueCaller(input.voiceSessionId,active.callerChannel,String(input.config.dialplan_token));
+      input.coordinator.ringing();
+      await this.store.query("UPDATE ai_voice_sessions SET transfer_state='ringing',completion_reason='human_handoff_requested' WHERE tenant_id=? AND id=?",[input.tenantId,input.voiceSessionId]);
+      await this.store.query("UPDATE ai_handoff_events SET state='ringing',dial_status='RINGING' WHERE tenant_id=? AND config_id=? AND voice_session_id=?",[input.tenantId,input.config.id,input.voiceSessionId]);
+    }catch(error){
+      await this.store.query("UPDATE ai_handoff_events SET state='failed',dial_status='FAILED',failure_cause='ARI_CONTINUE_FAILED',ended_at=NOW(3),outcome='direction_unavailable' WHERE tenant_id=? AND config_id=? AND voice_session_id=?",[input.tenantId,input.config.id,input.voiceSessionId]);
+      throw error;
+    }
+  }
+  async resumeHandoff(input:{tenantId:number;session:any;event:any;traceId:string;token:string;dialStatus:string}){
+    const status=String(input.dialStatus||"").toUpperCase();
+    if(!["NOANSWER","BUSY","CONGESTION","CHANUNAVAIL"].includes(status))
+      throw new AiPlatformError("conflict",409,"Unsupported handoff return status");
+    const event=(await this.store.query(
+      `SELECT e.id,e.config_id,c.unavailable_template,c.on_no_answer,c.on_busy
+       FROM ai_handoff_events e JOIN ai_handoff_configs c ON c.id=e.config_id AND c.tenant_id=e.tenant_id
+       WHERE e.tenant_id=? AND e.voice_session_id=? AND c.dialplan_token=? AND e.state='ringing'
+       ORDER BY e.id DESC LIMIT 1`,
+      [input.tenantId,input.session.id,input.token],
+    ))[0];
+    if(!event)throw new AiPlatformError("not_found",404,"Active handoff attempt not found");
+    const policy=status==="BUSY"?event.on_busy:event.on_no_answer;
+    if(policy!=="return_to_ai")throw new AiPlatformError("conflict",409,"Configured handoff return policy is not supported in controlled stage");
+    await this.store.query(
+      "UPDATE ai_handoff_events SET state=?,dial_status=?,failure_cause=?,ended_at=NOW(3),outcome='returned_to_ai' WHERE tenant_id=? AND id=?",
+      [status==="BUSY"?"busy":"no_answer",status,status,input.tenantId,event.id],
+    );
+    await this.gateway.sessions.transition(input.tenantId,input.session.id,"active",input.traceId);
+    await this.store.query(
+      "UPDATE ai_voice_sessions SET transfer_state='returned_to_ai',completion_reason=NULL WHERE tenant_id=? AND id=?",
+      [input.tenantId,input.session.id],
+    );
+    await this.start({...input,session:{...input.session,state:"active"},resumeHandoff:true,returnMessage:event.unavailable_template});
+    await this.audit.append({
+      tenantId:input.tenantId,traceId:input.traceId,actorType:"service",
+      eventType:"human_handoff_returned_to_ai" as any,entityType:"voice_session",
+      entityId:String(input.session.id),decision:"returned",
+      details:{dialStatus:status,taskStateRestored:true,greetingRepeated:false},
+    });
+  }
+  async completeHandoff(input:{tenantId:number;session:any;event:any;traceId:string;token:string;dialStatus:string}){
+    const row=(await this.store.query(
+      `SELECT e.id FROM ai_handoff_events e JOIN ai_handoff_configs c ON c.id=e.config_id AND c.tenant_id=e.tenant_id
+       WHERE e.tenant_id=? AND e.voice_session_id=? AND c.dialplan_token=? AND e.state='ringing'
+       ORDER BY e.id DESC LIMIT 1`,
+      [input.tenantId,input.session.id,input.token],
+    ))[0];
+    if(!row)throw new AiPlatformError("not_found",404,"Active handoff attempt not found");
+    await this.store.query(
+      "UPDATE ai_handoff_events SET state='completed',dial_status='ANSWER',answered_at=COALESCE(answered_at,dialing_at),ended_at=NOW(3),outcome='transferred_to_human' WHERE tenant_id=? AND id=?",
+      [input.tenantId,row.id],
+    );
+    await this.store.query(
+      "UPDATE ai_voice_sessions SET transfer_state='completed',completion_reason='human_handoff_completed' WHERE tenant_id=? AND id=?",
+      [input.tenantId,input.session.id],
+    );
+    await this.gateway.sessions.transition(input.tenantId,input.session.id,"ending",input.traceId);
+    await this.bridges.releaseCaller(input.event.trustedChannelRef);
+    await this.audit.append({
+      tenantId:input.tenantId,traceId:input.traceId,actorType:"service",
+      eventType:"human_transfer_completed" as any,entityType:"voice_session",
+      entityId:String(input.session.id),decision:"completed",
+      details:{dialStatus:"ANSWER",providerAudioAfterAnswer:false},
+    });
   }
   async observe(event: {
     tenantId: number;

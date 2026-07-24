@@ -80,6 +80,7 @@ import {
   ClosingCoordinator,
   type SafeHangupResult,
 } from "./closingCoordinator.js";
+import{HumanHandoffCoordinator}from"../../handoff/humanHandoffCoordinator.js";
 
 const transitions: Record<RealtimeVoiceState, RealtimeVoiceState[]> = {
   created: ["connecting", "failed", "cancelled"],
@@ -221,6 +222,8 @@ type Runtime = {
     llmExtractionSkipped:boolean;
   }|null;
   closing: ClosingCoordinator;
+  handoff:HumanHandoffCoordinator;
+  handoffConfig:any|null;
   commitDispatchMs: number | null;
   responseCreateDispatchMs: number | null;
 };
@@ -240,6 +243,8 @@ export class RealtimeVoiceSessionService {
   private controlledHangup:
     | ((event:{tenantId:number;voiceSessionId:number;traceId:string})=>Promise<SafeHangupResult>)
     | null = null;
+  private handoffConfigResolver:((input:{tenantId:number;agentId:number;agentVersionId:number})=>Promise<any|null>)|null=null;
+  private controlledHandoff:((input:{tenantId:number;voiceSessionId:number;traceId:string;config:any;coordinator:HumanHandoffCoordinator})=>Promise<void>)|null=null;
   private skillRouter = new SkillRouter();
   constructor(
     private store: AiPlatformStore,
@@ -258,6 +263,7 @@ export class RealtimeVoiceSessionService {
   setControlledHangupHandler(handler:(event:{tenantId:number;voiceSessionId:number;traceId:string})=>Promise<SafeHangupResult>){
     this.controlledHangup=handler;
   }
+  setHandoffHandlers(config:(input:{tenantId:number;agentId:number;agentVersionId:number})=>Promise<any|null>,execute:(input:{tenantId:number;voiceSessionId:number;traceId:string;config:any;coordinator:HumanHandoffCoordinator})=>Promise<void>){this.handoffConfigResolver=config;this.controlledHandoff=execute}
   setSkillClassifier(classifier:StructuredSkillClassifier|null){
     this.skillRouter.setClassifier(classifier);
   }
@@ -401,6 +407,7 @@ export class RealtimeVoiceSessionService {
     providerKey: string;
     traceId: string;
     actorId: string;
+    restoreTaskState?: boolean;
   }) {
     if (!(await this.isEnabled()))
       throw new RealtimeVoiceError(
@@ -601,6 +608,9 @@ export class RealtimeVoiceSessionService {
     });
     const durationPolicy = await readVoiceDurationPolicy(this.store),
       aborter = new AbortController(),
+      restoredTaskState=input.restoreTaskState
+        ? await this.restoreTaskState(input.tenantId,Number(source.voice_session_id))
+        : null,
       runtime: Runtime = {
         tenantId: input.tenantId,
         voiceSessionId: Number(source.voice_session_id),
@@ -694,7 +704,7 @@ export class RealtimeVoiceSessionService {
         fallbackPending:false,
         tokenLimitHitCount:0,
         semanticIncompleteCount:0,
-        taskState:createGenericTaskState(),
+        taskState:restoredTaskState||createGenericTaskState(),
         skills,
         conversationIntentRoutes,
         pendingConversationIntentPlan:null,
@@ -706,6 +716,8 @@ export class RealtimeVoiceSessionService {
         endOfTurnSilenceMs:config.endOfTurnSilenceMs||450,
         currentPipeline:null,
         closing:new ClosingCoordinator(`${input.tenantId}:${source.voice_session_id}`),
+        handoff:new HumanHandoffCoordinator(`${input.tenantId}:${source.voice_session_id}`),
+        handoffConfig:null,
         commitDispatchMs:null,
         responseCreateDispatchMs:null,
       };
@@ -802,6 +814,17 @@ export class RealtimeVoiceSessionService {
       );
       throw error;
     }
+  }
+  private async restoreTaskState(tenantId:number,voiceSessionId:number){
+    const rows=await this.store.query(
+      "SELECT metadata_json FROM ai_realtime_voice_sessions WHERE tenant_id=? AND voice_session_id=? ORDER BY id DESC LIMIT 1",
+      [tenantId,voiceSessionId],
+    );
+    try{
+      const value=JSON.parse(String(rows[0]?.metadata_json||"{}"))?.taskState;
+      if(!value||typeof value!=="object"||typeof value.collectedFields!=="object")return null;
+      return{...createGenericTaskState(),...value,collectedFields:{...value.collectedFields}};
+    }catch{return null}
   }
   private async input(id: number, traceId: string, frame: AudioFrame) {
     const runtime = this.runtimes.get(id);
@@ -1188,6 +1211,7 @@ export class RealtimeVoiceSessionService {
         queuedAudioMs:mediaMetrics?.queuedAudioMsCurrent,
       });
       runtime.closing.playoutStarted(event.responseId);
+      runtime.handoff.playoutStarted(event.responseId);
       runtime.flusher.markDirty();
       return;
     }
@@ -1196,6 +1220,10 @@ export class RealtimeVoiceSessionService {
       await this.transcriptService?.finalizeResponse(runtime.tenantId,id,event.responseId,event.playedAudioMs);
       if(event.responseId)runtime.responseStreams.delete(event.responseId);
       farewellCompleted=runtime.closing.playoutCompleted(event.responseId);
+      if(runtime.handoff.playoutCompleted(event.responseId)&&runtime.handoff.transferRequested()){
+        runtime.blocked=true;runtime.responsePending=false;
+        if(runtime.controlledHandoff&&runtime.handoffConfig)await this.controlledHandoff({tenantId:runtime.tenantId,voiceSessionId:runtime.voiceSessionId,traceId,config:runtime.handoffConfig,coordinator:runtime.handoff});
+      }
     }
     runtime.coordinator.playoutFinished(event.type==="interrupted");
     if(
@@ -1365,6 +1393,8 @@ export class RealtimeVoiceSessionService {
       runtime.activeResponseId = event.responseId || null;
       if(runtime.closing.state==="farewell_generating")
         runtime.closing.bindFarewellResponse(event.responseId);
+      if(runtime.handoff.state==="announcement_generating")
+        runtime.handoff.bindAnnouncement(event.responseId);
       runtime.activeItemId = null;
       runtime.responsePlayedMs = 0;
       runtime.currentTurnFirstOutputMonotonic = null;
@@ -1524,6 +1554,14 @@ export class RealtimeVoiceSessionService {
         const finalKey=event.itemId||event.eventId||`${runtime.coordinator.callerTurnRef}:${extractionText}`;
         if(runtime.canonicalInputFinalKeys.has(finalKey))return;
         runtime.canonicalInputFinalKeys.add(finalKey);
+        if(runtime.handoff.state==="awaiting_confirmation"){
+          const decision=runtime.handoff.confirmation(extractionText);
+          runtime.responsePending=false;
+          if(decision==="confirmed")await this.startHandoffAnnouncement(runtime,id,traceId);
+          else if(decision==="declined"){runtime.handoffConfig=null;runtime.responsePending=true;await runtime.adapter.createPlannedResponse?.("Хорошо. Чем ещё могу помочь?","Произнеси только указанную фразу.")}
+          else if(decision==="ambiguous"){runtime.responsePending=true;await runtime.adapter.createPlannedResponse?.("Соединить вас с сотрудником? Ответьте, пожалуйста, да или нет.","Произнеси только указанную фразу.")}
+          runtime.flusher.markDirty();return;
+        }
       }
       if(event.kind.startsWith("input_"))
         redactAiPlatformText(extractionText,runtime.redactionCounts);
@@ -1904,12 +1942,12 @@ export class RealtimeVoiceSessionService {
   ) {
     const transferStarted = Date.now();
     runtime.transferRequired = true;
-    runtime.blocked = true;
-    if(runtime.coordinator.providerState==="generating"){
-      await runtime.adapter.cancelResponse(runtime.activeResponseId||undefined);
-      runtime.coordinator.providerResponseCancelled(runtime.activeResponseId||undefined);
-    }
-    await this.media.clearEgress(runtime.tenantId, Number(row.media_session_id));
+    if(runtime.closing.state!=="active"||runtime.handoff.state!=="idle")return;
+    const config=await this.handoffConfigResolver?.({tenantId:runtime.tenantId,agentId:runtime.agentId,agentVersionId:runtime.agentVersionId});
+    if(!config){runtime.transferRequired=false;runtime.responsePending=true;await runtime.adapter.createPlannedResponse?.("Сейчас я не могу перевести звонок на сотрудника.","Произнеси только указанную фразу.");return}
+    runtime.handoffConfig=config;
+    const requested=runtime.handoff.request(Boolean(config.confirmation_required));
+    if(!requested.accepted)return;
     await this.liveObserver?.({
       tenantId: runtime.tenantId,
       voiceSessionId: Number(row.voice_session_id),
@@ -1927,49 +1965,16 @@ export class RealtimeVoiceSessionService {
       decision: "transfer_required",
       details: {},
     });
-    if (!this.humanTransfer) return;
-    const voice = (
-        await this.store.query(
-          "SELECT agent_id,agent_version_id,conversation_id FROM ai_voice_sessions WHERE tenant_id=? AND id=?",
-          [runtime.tenantId, row.voice_session_id],
-        )
-      )[0],
-      media = (
-        await this.store.query(
-          "SELECT transport_mode FROM ai_voice_media_sessions WHERE tenant_id=? AND id=?",
-          [runtime.tenantId, row.media_session_id],
-        )
-      )[0],
-      liveTransfer =
-        media?.transport_mode === "audiosocket" &&
-        process.env.PBXPULS_AI_VOICE_LIVE_TRANSFER_TEST_ENABLED === "true";
-    if (liveTransfer)
-      await this.audit.append({
-        tenantId: runtime.tenantId,
-        traceId,
-        actorType: "service",
-        eventType: "live_voice_transfer_requested",
-        entityType: "voice_session",
-        entityId: String(row.voice_session_id),
-        decision: "requested",
-        details: {},
-      });
-    if (voice)
-      await this.humanTransfer
-        .request({
-          tenantId: runtime.tenantId,
-          traceId,
-          conversationId: Number(voice.conversation_id) || null,
-          voiceSessionId: Number(row.voice_session_id),
-          agentId: Number(voice.agent_id),
-          agentVersionId: Number(voice.agent_version_id),
-          requestedByType: "service",
-          requestedById: null,
-          triggerType: "explicit_human_request",
-          triggerText: text,
-          dryRun: !liveTransfer,
-        })
-        .catch(() => null);
+    if(requested.needsConfirmation){runtime.responsePending=true;await runtime.adapter.createPlannedResponse?.("Соединить вас с сотрудником?","Произнеси только указанную фразу.");return}
+    await this.startHandoffAnnouncement(runtime,id,traceId);
+  }
+  private async startHandoffAnnouncement(runtime:Runtime,id:number,traceId:string){
+    if(!runtime.handoff.announcementRequested())return false;
+    if(runtime.coordinator.providerState==="generating"){await runtime.adapter.cancelResponse(runtime.activeResponseId||undefined);runtime.coordinator.providerResponseCancelled(runtime.activeResponseId||undefined)}
+    await this.media.clearEgress(runtime.tenantId,runtime.mediaSessionId,runtime.activeResponseId||undefined,"session_end");
+    runtime.responsePending=true;runtime.activeResponseId=null;
+    await runtime.adapter.createPlannedResponse?.(String(runtime.handoffConfig?.announcement_template||"Хорошо, соединяю вас с сотрудником."),"Произнеси только указанную фразу и после неё не добавляй ничего.");
+    await this.audit.append({tenantId:runtime.tenantId,traceId,actorType:"service",eventType:"human_transfer_started",entityType:"realtime_voice_session",entityId:String(id),decision:"announcement_generating",details:{}});return true
   }
   private async toolCall(
     runtime: Runtime,

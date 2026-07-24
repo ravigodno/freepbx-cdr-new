@@ -15,7 +15,7 @@ export interface AriClientAdapter {
   getChannel(id: string): Promise<unknown>;
   answerChannel(id: string): Promise<void>;
   hangupChannel(id: string): Promise<void>;
-  continueChannel(id: string): Promise<void>;
+  continueChannel(id: string,input?:{context:string;extension:string;priority:number}): Promise<void>;
   getBridge(id: string): Promise<unknown>;
   createBridge(id: string): Promise<void>;
   addChannelToBridge(bridgeId: string, channelId: string): Promise<void>;
@@ -98,7 +98,7 @@ export class ObserverAriClientAdapter implements AriClientAdapter {
   listApplications() { return this.request('/ari/applications'); }
   answerChannel(id: string) { return this.request(`/ari/channels/${encodeURIComponent(id)}/answer`, 'POST').then(() => {}); }
   hangupChannel(id: string) { return this.request(`/ari/channels/${encodeURIComponent(id)}`, 'DELETE').then(() => {}); }
-  continueChannel(id: string) { return this.request(`/ari/channels/${encodeURIComponent(id)}/continue`, 'POST').then(() => {}); }
+  continueChannel(id: string,input?:{context:string;extension:string;priority:number}) { const query=input?`?${new URLSearchParams({context:input.context,extension:input.extension,priority:String(input.priority)})}`:"";return this.request(`/ari/channels/${encodeURIComponent(id)}/continue${query}`, 'POST').then(() => {}); }
   createBridge(id: string) { return this.request(`/ari/bridges?type=mixing&bridgeId=${encodeURIComponent(id)}`, 'POST').then(() => {}); }
   addChannelToBridge(bridgeId: string, channelId: string) { return this.request(`/ari/bridges/${encodeURIComponent(bridgeId)}/addChannel?channel=${encodeURIComponent(channelId)}`, 'POST').then(() => {}); }
   destroyBridge(id: string) { return this.request(`/ari/bridges/${encodeURIComponent(id)}`, 'DELETE').then(() => {}); }

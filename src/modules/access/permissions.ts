@@ -129,7 +129,11 @@ export type PermissionKey =
   | 'create_ai_extensions'
   | 'update_ai_extensions'
   | 'publish_ai_extensions'
-  | 'delete_ai_extensions';
+  | 'delete_ai_extensions'
+  | 'view_ai_handoff'
+  | 'configure_ai_handoff'
+  | 'test_ai_handoff'
+  | 'publish_ai_handoff';
 
 export type UserPermissions = Partial<Record<PermissionKey, boolean>>;
 

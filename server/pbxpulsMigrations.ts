@@ -1230,6 +1230,55 @@ const MIGRATIONS: Migration[] = [
     statements:[
       `ALTER TABLE ai_extensions MODIFY status ENUM('draft','preview_ready','applying','verifying','active','disabled','conflict','sync_failed','archived') NOT NULL DEFAULT 'draft'`
     ]
+  },
+  {
+    key:'20260724_054_ai_handoff_runtime',
+    description:'Add controlled human handoff configuration and runtime history',
+    statements:[
+      `CREATE TABLE IF NOT EXISTS ai_handoff_configs(
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,tenant_id BIGINT NOT NULL,ai_extension_id BIGINT NOT NULL,agent_id BIGINT NOT NULL,agent_version_id BIGINT NOT NULL,
+        enabled TINYINT(1) NOT NULL DEFAULT 0,status ENUM('draft','preview_ready','applying','verifying','active','sync_failed','disabled','archived') NOT NULL DEFAULT 'draft',
+        primary_destination_type ENUM('extension','queue','ring_group','ivr','custom_destination','external_allowed','ai_extension') NOT NULL,
+        primary_destination_ref VARCHAR(100) NOT NULL,primary_destination_safe VARCHAR(191) NOT NULL,
+        after_hours_destination_json LONGTEXT NULL,backup_destination_json LONGTEXT NULL,answer_timeout_seconds INT NOT NULL DEFAULT 20,
+        on_no_answer ENUM('return_to_ai','backup','callback','announce_hangup') NOT NULL DEFAULT 'return_to_ai',
+        on_busy ENUM('return_to_ai','backup','callback','announce_hangup') NOT NULL DEFAULT 'return_to_ai',
+        on_congestion ENUM('return_to_ai','backup','callback','announce_hangup') NOT NULL DEFAULT 'return_to_ai',
+        offer_before_transfer TINYINT(1) NOT NULL DEFAULT 1,confirmation_required TINYINT(1) NOT NULL DEFAULT 1,
+        announcement_template VARCHAR(500) NOT NULL,unavailable_template VARCHAR(500) NOT NULL,intent_phrases_json LONGTEXT NOT NULL,
+        dialplan_token VARCHAR(64) NOT NULL,sync_status VARCHAR(32) NOT NULL DEFAULT 'not_synced',sync_error_code VARCHAR(64) NULL,
+        created_by VARCHAR(191) NOT NULL,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at DATETIME NULL,last_synced_at DATETIME NULL,
+        UNIQUE KEY uniq_ai_handoff_extension(ai_extension_id),UNIQUE KEY uniq_ai_handoff_token(tenant_id,dialplan_token),
+        CONSTRAINT fk_ai_handoff_tenant FOREIGN KEY(tenant_id) REFERENCES ai_tenants(id),
+        CONSTRAINT fk_ai_handoff_extension FOREIGN KEY(ai_extension_id) REFERENCES ai_extensions(id),
+        CONSTRAINT fk_ai_handoff_agent FOREIGN KEY(agent_id) REFERENCES ai_agents(id),
+        CONSTRAINT fk_ai_handoff_version FOREIGN KEY(agent_version_id) REFERENCES ai_agent_versions(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS ai_handoff_previews(
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,tenant_id BIGINT NOT NULL,config_id BIGINT NOT NULL,idempotency_key VARCHAR(100) NOT NULL,
+        preview_json LONGTEXT NOT NULL,status ENUM('ready','blocked','applied','expired') NOT NULL,created_by VARCHAR(191) NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,expires_at DATETIME NOT NULL,applied_at DATETIME NULL,
+        UNIQUE KEY uniq_ai_handoff_preview(tenant_id,idempotency_key),
+        CONSTRAINT fk_ai_handoff_preview_tenant FOREIGN KEY(tenant_id) REFERENCES ai_tenants(id),
+        CONSTRAINT fk_ai_handoff_preview_config FOREIGN KEY(config_id) REFERENCES ai_handoff_configs(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS ai_handoff_events(
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,tenant_id BIGINT NOT NULL,config_id BIGINT NOT NULL,voice_session_id BIGINT NOT NULL,linkedid_hash CHAR(64) NULL,
+        state VARCHAR(64) NOT NULL,destination_type VARCHAR(32) NOT NULL,destination_ref_safe VARCHAR(191) NOT NULL,
+        requested_at DATETIME(3) NOT NULL,announcement_finished_at DATETIME(3) NULL,dialing_at DATETIME(3) NULL,answered_at DATETIME(3) NULL,ended_at DATETIME(3) NULL,
+        dial_status VARCHAR(32) NULL,failure_cause VARCHAR(64) NULL,outcome VARCHAR(64) NULL,metadata_json LONGTEXT NOT NULL,
+        UNIQUE KEY uniq_ai_handoff_voice(config_id,voice_session_id),KEY idx_ai_handoff_history(tenant_id,requested_at),
+        CONSTRAINT fk_ai_handoff_event_tenant FOREIGN KEY(tenant_id) REFERENCES ai_tenants(id),
+        CONSTRAINT fk_ai_handoff_event_config FOREIGN KEY(config_id) REFERENCES ai_handoff_configs(id),
+        CONSTRAINT fk_ai_handoff_event_voice FOREIGN KEY(voice_session_id) REFERENCES ai_voice_sessions(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `INSERT IGNORE INTO permissions(permission_key,name,description,category)VALUES
+       ('view_ai_handoff','View AI handoff','View AI human handoff configuration and history','ai_platform'),
+       ('configure_ai_handoff','Configure AI handoff','Create and update AI handoff drafts','ai_platform'),
+       ('test_ai_handoff','Test AI handoff readiness','Validate controlled AI handoff readiness','ai_platform'),
+       ('publish_ai_handoff','Publish AI handoff','Apply reviewed AI handoff configuration','ai_platform')`,
+      `INSERT IGNORE INTO role_permissions(role_id,permission_id)SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key IN('view_ai_handoff','configure_ai_handoff','test_ai_handoff','publish_ai_handoff') WHERE r.role_key IN('su','admin')`
+    ]
   }
 ];
 
