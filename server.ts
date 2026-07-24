@@ -61,6 +61,7 @@ import {
 import {
   createDirectoryContactSql,
   deleteDirectoryContactSql,
+  deleteDirectoryContactsSql,
   isDirectorySqlWriteLayerAvailable,
   updateDirectoryContactSql
 } from './server/pbxpulsDirectoryWrite.js';
@@ -3401,6 +3402,76 @@ const applyDirectoryAccessAndFilters = (entries: any[], req: Request, localDb: a
       responsibleUserLabel: getDirectoryResponsibleUserLabel(entry.responsibleUserId, localDb),
       canEdit: canEditDirectoryEntry(entry, authUser, dbUser, localDb.settings)
     }));
+};
+
+type DirectoryBulkDeleteScope = 'filtered' | 'all';
+type DirectoryBulkDeletePreview = {
+  id: string;
+  createdBy: string;
+  scope: DirectoryBulkDeleteScope;
+  filters: Record<string, string>;
+  contactIds: string[];
+  snapshotHash: string;
+  createdAt: string;
+  expiresAt: string;
+  status: 'preview_ready' | 'applying' | 'completed' | 'failed';
+  result?: { deleted: number; source: string; favoritesRemoved: number; mappingsRemoved: number };
+  errorCode?: string;
+};
+
+const directoryBulkDeletePreviews = new Map<string, DirectoryBulkDeletePreview>();
+const DIRECTORY_BULK_DELETE_PREVIEW_TTL_MS = 10 * 60 * 1000;
+const DIRECTORY_BULK_DELETE_FILTER_KEYS = ['q', 'type', 'spamMode', 'visibilityMode', 'department', 'company', 'status', 'responsible'] as const;
+
+const sanitizeDirectoryBulkDeleteFilters = (value: unknown, scope: DirectoryBulkDeleteScope): Record<string, string> => {
+  if (scope === 'all') return { type: 'all', spamMode: 'all', visibilityMode: 'all' };
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const filters: Record<string, string> = {};
+  for (const key of DIRECTORY_BULK_DELETE_FILTER_KEYS) {
+    const text = String(source[key] ?? '').trim().slice(0, 255);
+    if (text) filters[key] = text;
+  }
+  if (!filters.spamMode) filters.spamMode = 'exclude_spam';
+  if (!filters.visibilityMode) filters.visibilityMode = 'all';
+  if (!filters.type) filters.type = 'all';
+  return filters;
+};
+
+const getDirectoryBulkDeleteActor = (req: Request): string => {
+  const user = (req as any).user || {};
+  return String(user.id || user.username || 'su').slice(0, 100);
+};
+
+const hashDirectoryContactIds = (ids: string[]): string => crypto
+  .createHash('sha256')
+  .update([...ids].sort().join('\n'))
+  .digest('hex');
+
+const selectDirectoryBulkDeleteContacts = (contacts: any[], req: Request, localDb: any, filters: Record<string, string>): any[] => {
+  const filteredReq = { query: { ...filters }, user: (req as any).user } as any;
+  return applyDirectoryAccessAndFilters(contacts, filteredReq as Request, localDb);
+};
+
+const cleanupDirectoryBulkDeleteReferences = (localDb: any, deletedIds: Set<string>): { favoritesRemoved: number; mappingsRemoved: number } => {
+  let favoritesRemoved = 0;
+  const favoritesByUser = localDb.directoryFavoritesByUser && typeof localDb.directoryFavoritesByUser === 'object'
+    ? localDb.directoryFavoritesByUser
+    : {};
+  for (const [userId, values] of Object.entries(favoritesByUser)) {
+    const current = Array.isArray(values) ? values.map(String) : [];
+    const next = current.filter(id => !deletedIds.has(id));
+    favoritesRemoved += current.length - next.length;
+    favoritesByUser[userId] = next;
+  }
+  localDb.directoryFavoritesByUser = favoritesByUser;
+  const mappings = Array.isArray(localDb.contactSyncMappings) ? localDb.contactSyncMappings : [];
+  const nextMappings = mappings.filter((mapping: any) => {
+    const contactId = String(mapping?.contactId || mapping?.localContactId || mapping?.directoryContactId || '');
+    return !contactId || !deletedIds.has(contactId);
+  });
+  const mappingsRemoved = mappings.length - nextMappings.length;
+  localDb.contactSyncMappings = nextMappings;
+  return { favoritesRemoved, mappingsRemoved };
 };
 
 const buildDirectoryPaginatedResponse = (entries: any[], req: Request, localDb: any) => {
@@ -12533,6 +12604,144 @@ app.post('/api/directory/:id/blacklist', requireAuth(), async (req, res) => {
     res.json({ success: true, entry, amiResults });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/directory/bulk-delete/preview', requireAuth(), async (req, res) => {
+  try {
+    const authUser = (req as any).user;
+    if (authUser?.role !== 'su') return res.status(403).json({ error: 'Массовое удаление справочника доступно только su' });
+    const scope: DirectoryBulkDeleteScope = req.body?.scope === 'all' ? 'all' : 'filtered';
+    const filters = sanitizeDirectoryBulkDeleteFilters(req.body?.filters, scope);
+    const localDb = await readLocalDb();
+    const runtime = await getDirectoryRuntimeSnapshotForRequest(localDb, req);
+    const contacts = selectDirectoryBulkDeleteContacts(runtime.contacts || [], req, localDb, filters);
+    const contactIds = contacts.map((entry: any) => String(entry.id || '')).filter(Boolean);
+    const deletedIds = new Set(contactIds);
+    const refs = cleanupDirectoryBulkDeleteReferences(JSON.parse(JSON.stringify({
+      directoryFavoritesByUser: localDb.directoryFavoritesByUser || {},
+      contactSyncMappings: localDb.contactSyncMappings || []
+    })), deletedIds);
+    const now = Date.now();
+    const preview: DirectoryBulkDeletePreview = {
+      id: crypto.randomUUID(),
+      createdBy: getDirectoryBulkDeleteActor(req),
+      scope,
+      filters,
+      contactIds,
+      snapshotHash: hashDirectoryContactIds(contactIds),
+      createdAt: new Date(now).toISOString(),
+      expiresAt: new Date(now + DIRECTORY_BULK_DELETE_PREVIEW_TTL_MS).toISOString(),
+      status: 'preview_ready'
+    };
+    for (const [id, value] of directoryBulkDeletePreviews) {
+      if (Date.parse(value.expiresAt) <= now) directoryBulkDeletePreviews.delete(id);
+    }
+    directoryBulkDeletePreviews.set(preview.id, preview);
+    const byType = contacts.reduce((result: Record<string, number>, entry: any) => {
+      const key = String(entry.type || 'client');
+      result[key] = (result[key] || 0) + 1;
+      return result;
+    }, {});
+    const byVisibility = contacts.reduce((result: Record<string, number>, entry: any) => {
+      const key = entry.visibility === 'private' ? 'private' : 'shared';
+      result[key] = (result[key] || 0) + 1;
+      return result;
+    }, {});
+    await writePBXPulsSystemEvent({
+      event_type: 'directory_bulk_delete_preview_created',
+      severity: 'warning',
+      source: 'pbxpuls_directory',
+      message: 'Directory bulk delete preview created',
+      details: { previewId: preview.id, scope, count: contactIds.length, filters, actor: preview.createdBy }
+    });
+    res.json({
+      previewId: preview.id,
+      status: preview.status,
+      scope,
+      filters,
+      count: contactIds.length,
+      byType,
+      byVisibility,
+      favoritesToRemove: refs.favoritesRemoved,
+      mappingsToRemove: refs.mappingsRemoved,
+      sample: contacts.slice(0, 20).map((entry: any) => ({
+        id: entry.id,
+        name: entry.name,
+        company: entry.company,
+        phone: entry.number || entry.phones?.[0] || '',
+        type: entry.type,
+        visibility: entry.visibility
+      })),
+      confirmationPhrase: scope === 'all' ? 'ОЧИСТИТЬ СПРАВОЧНИК' : 'УДАЛИТЬ',
+      expiresAt: preview.expiresAt,
+      storageSource: runtime.source || 'legacy',
+      liveChanges: false
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Не удалось подготовить массовое удаление' });
+  }
+});
+
+app.post('/api/directory/bulk-delete/apply', requireAuth(), async (req, res) => {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su') return res.status(403).json({ error: 'Массовое удаление справочника доступно только su' });
+  const previewId = String(req.body?.previewId || '').trim();
+  const preview = directoryBulkDeletePreviews.get(previewId);
+  if (!preview || preview.createdBy !== getDirectoryBulkDeleteActor(req)) return res.status(404).json({ error: 'Preview не найден или принадлежит другому пользователю' });
+  if (preview.status === 'completed' && preview.result) return res.json({ success: true, idempotent: true, previewId, ...preview.result });
+  if (preview.status === 'applying') return res.status(409).json({ error: 'Удаление уже выполняется' });
+  if (Date.parse(preview.expiresAt) <= Date.now()) return res.status(409).json({ error: 'Preview истёк. Выполните проверку повторно.' });
+  const requiredPhrase = preview.scope === 'all' ? 'ОЧИСТИТЬ СПРАВОЧНИК' : 'УДАЛИТЬ';
+  if (String(req.body?.confirmation || '').trim() !== requiredPhrase) return res.status(400).json({ error: `Введите подтверждение: ${requiredPhrase}` });
+
+  preview.status = 'applying';
+  try {
+    const localDb = await readLocalDb();
+    const runtime = await getDirectoryRuntimeSnapshotForRequest(localDb, req);
+    const currentContacts = selectDirectoryBulkDeleteContacts(runtime.contacts || [], req, localDb, preview.filters);
+    const currentIds = currentContacts.map((entry: any) => String(entry.id || '')).filter(Boolean);
+    if (hashDirectoryContactIds(currentIds) !== preview.snapshotHash) {
+      preview.status = 'failed';
+      preview.errorCode = 'DIRECTORY_CHANGED_AFTER_PREVIEW';
+      return res.status(409).json({ error: 'Справочник изменился после preview. Повторите проверку.', errorCode: preview.errorCode });
+    }
+    const actor = getDirectoryStorageModeActor(req);
+    const writeDecision = await getDirectoryWriteRuntimeDecision('delete', actor);
+    let deleted = 0;
+    let source = '';
+    if (writeDecision.useSql === true && writeDecision.blocked === false) {
+      const result = await deleteDirectoryContactsSql(preview.contactIds, actor);
+      deleted = result.deleted;
+      source = 'pbxpuls_sql';
+    } else if (writeDecision.useLegacy) {
+      const deletedIds = new Set(preview.contactIds);
+      const before = Array.isArray(localDb.directory) ? localDb.directory.length : 0;
+      localDb.directory = (localDb.directory || []).filter((entry: any) => !deletedIds.has(String(entry.id || '')));
+      deleted = before - localDb.directory.length;
+      source = 'data/db.json';
+      if (deleted !== preview.contactIds.length) throw new Error('Directory contacts changed after delete preview');
+    } else {
+      preview.status = 'failed';
+      preview.errorCode = 'DIRECTORY_WRITE_BLOCKED';
+      return res.status(409).json(buildBlockedDirectoryWriteEndpointResponse(writeDecision));
+    }
+    const references = cleanupDirectoryBulkDeleteReferences(localDb, new Set(preview.contactIds));
+    await writeLocalDb(localDb);
+    preview.status = 'completed';
+    preview.result = { deleted, source, ...references };
+    await writePBXPulsSystemEvent({
+      event_type: 'directory_bulk_delete_completed',
+      severity: 'warning',
+      source: 'pbxpuls_directory',
+      message: 'Directory bulk delete completed',
+      details: { previewId, scope: preview.scope, deleted, source, actor: preview.createdBy, ...references }
+    });
+    res.json({ success: true, idempotent: false, previewId, ...preview.result });
+  } catch (error: any) {
+    preview.status = 'failed';
+    preview.errorCode = 'DIRECTORY_BULK_DELETE_FAILED';
+    res.status(500).json({ error: error.message || 'Массовое удаление не выполнено', errorCode: preview.errorCode });
   }
 });
 

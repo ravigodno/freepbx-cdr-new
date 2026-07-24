@@ -55,6 +55,7 @@
     ,"test:ai-platform-human-handoff-runtime": "tsx scripts/test-ai-platform-human-handoff-runtime.ts"
     ,"test:ai-platform-integrations": "tsx scripts/test-ai-platform-integrations.ts"
     ,"test:directory-import-validation": "tsx scripts/test-directory-import-validation.ts"
+    ,"test:directory-bulk-delete": "tsx scripts/test-directory-bulk-delete.ts"
     ,"test:ai-platform-simple-ux": "tsx scripts/test-ai-platform-simple-ux.ts"
     ,"test:ai-agent-creation-wizard": "tsx scripts/test-ai-agent-creation-wizard.ts"
     ,"test:ai-agent-deletion": "tsx scripts/test-ai-agent-deletion.ts"

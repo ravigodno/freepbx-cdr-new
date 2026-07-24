@@ -81,6 +81,13 @@ export interface DirectorySqlWriteResult {
   warnings: string[];
 }
 
+export interface DirectorySqlBulkDeleteResult {
+  ok: boolean;
+  requested: number;
+  deleted: number;
+  warnings: string[];
+}
+
 type ExistingCustomField = {
   id: string;
   field_key: string;
@@ -244,6 +251,54 @@ export async function deleteDirectoryContactSql(id: string, actor: DirectorySqlA
   } catch (error: any) {
     if (connection) await rollbackQuietly(connection);
     throw new Error(`Directory SQL contact delete failed: ${sanitizePBXPulsDbError(error)}`);
+  } finally {
+    if (connection) await connection.end();
+  }
+}
+
+export async function deleteDirectoryContactsSql(ids: string[], actor: DirectorySqlActor | string): Promise<DirectorySqlBulkDeleteResult> {
+  const contactIds = Array.from(new Set(ids.map(id => safeText(id, 64)).filter(Boolean)));
+  if (!contactIds.length) return { ok: true, requested: 0, deleted: 0, warnings: [] };
+
+  let connection: Connection | null = null;
+  try {
+    connection = await createPBXPulsConnection();
+    await connection.beginTransaction();
+    let existing = 0;
+    for (let offset = 0; offset < contactIds.length; offset += 500) {
+      const batch = contactIds.slice(offset, offset + 500);
+      const placeholders = batch.map(() => '?').join(', ');
+      const [rows] = await connection.execute<any[]>(
+        `SELECT id FROM directory_contacts WHERE id IN (${placeholders}) FOR UPDATE`,
+        batch
+      );
+      existing += rows.length;
+    }
+    if (existing !== contactIds.length) {
+      throw new Error('Directory contacts changed after delete preview');
+    }
+    let deleted = 0;
+    for (let offset = 0; offset < contactIds.length; offset += 500) {
+      const batch = contactIds.slice(offset, offset + 500);
+      const placeholders = batch.map(() => '?').join(', ');
+      const [result] = await connection.execute<ResultSetHeader>(
+        `DELETE FROM directory_contacts WHERE id IN (${placeholders})`,
+        batch
+      );
+      deleted += Number(result.affectedRows || 0);
+    }
+    await connection.commit();
+    await writePBXPulsSystemEvent({
+      event_type: 'directory_sql_contacts_bulk_deleted',
+      severity: 'warning',
+      source: 'pbxpuls_directory_write',
+      message: 'Directory SQL bulk delete completed',
+      details: { requested: contactIds.length, deleted, actor: getActorLabel(actor) }
+    });
+    return { ok: true, requested: contactIds.length, deleted, warnings: [] };
+  } catch (error: any) {
+    if (connection) await rollbackQuietly(connection);
+    throw new Error(`Directory SQL bulk delete failed: ${sanitizePBXPulsDbError(error)}`);
   } finally {
     if (connection) await connection.end();
   }

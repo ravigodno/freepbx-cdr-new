@@ -148,6 +148,26 @@ export async function deleteDirectoryEntry(token: string, id: string) {
   return resp.json();
 }
 
+export async function previewDirectoryBulkDelete(token: string, scope: 'filtered' | 'all', filters: DirectoryFetchFilters) {
+  const resp = await fetch('/api/directory/bulk-delete/preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ scope, filters })
+  });
+  const data = await parseDirectorySettingsResponse(resp, 'Не удалось проверить массовое удаление.');
+  return data;
+}
+
+export async function applyDirectoryBulkDelete(token: string, previewId: string, confirmation: string) {
+  const resp = await fetch('/api/directory/bulk-delete/apply', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ previewId, confirmation })
+  });
+  const data = await parseDirectorySettingsResponse(resp, 'Не удалось выполнить массовое удаление.');
+  return data;
+}
+
 export async function toggleDirectoryBlacklist(
   token: string,
   id: string,
@@ -219,7 +239,10 @@ export async function previewDirectoryImport(token: string, entries: any[]) {
   const data = await resp.json().catch(() => ({}));
 
   if (!resp.ok) {
-    throw new Error(data.error || 'Не удалось выполнить предпросмотр импорта.');
+    if (resp.status === 413) {
+      throw new Error('Пакет предпросмотра превышает допустимый размер сервера.');
+    }
+    throw new Error(data.message || data.error || `Не удалось выполнить предпросмотр импорта (HTTP ${resp.status}).`);
   }
 
   return data;

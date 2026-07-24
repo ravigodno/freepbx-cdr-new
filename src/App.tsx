@@ -92,7 +92,7 @@ import QualityTab from './modules/monitoring/tabs/monitoring/QualityTab';
 import DevicesMapTab from './modules/monitoring/tabs/monitoring/DevicesMapTab';
 import HealthReportTab from './modules/monitoring/tabs/monitoring/HealthReportTab';
 import { DirectoryStatusIcon } from './modules/directory/components/DirectoryStatusIcon';
-import { fetchDirectory, fetchDirectoryAll, saveDirectoryEntry, deleteDirectoryEntry, toggleDirectoryBlacklist, toggleDirectorySpam, previewDirectoryImport, fetchDirectoryColumnSettings, saveMyDirectoryColumnSettings, resetMyDirectoryColumnSettings, saveGlobalDirectoryColumnSettings, resetGlobalDirectoryColumnSettings, setDirectoryFavorite } from './modules/directory/services/directoryApi';
+import { fetchDirectory, fetchDirectoryAll, saveDirectoryEntry, deleteDirectoryEntry, toggleDirectoryBlacklist, toggleDirectorySpam, previewDirectoryImport, previewDirectoryBulkDelete, applyDirectoryBulkDelete, fetchDirectoryColumnSettings, saveMyDirectoryColumnSettings, resetMyDirectoryColumnSettings, saveGlobalDirectoryColumnSettings, resetGlobalDirectoryColumnSettings, setDirectoryFavorite } from './modules/directory/services/directoryApi';
 import CDRPage from './modules/cdr/pages/CDRPage';
 import LegacyCDRTable from './modules/cdr/components/LegacyCDRTable';
 import CDRProcessModal from './modules/cdr/components/CDRProcessModal';
@@ -895,6 +895,12 @@ export default function App() {
   const [dirTotal, setDirTotal] = useState(0);
   const [dirTotalPages, setDirTotalPages] = useState(1);
   const [dirListError, setDirListError] = useState('');
+  const [isDirectoryBulkDeleteOpen, setIsDirectoryBulkDeleteOpen] = useState(false);
+  const [directoryBulkDeleteScope, setDirectoryBulkDeleteScope] = useState<'filtered' | 'all'>('filtered');
+  const [directoryBulkDeletePreview, setDirectoryBulkDeletePreview] = useState<any>(null);
+  const [directoryBulkDeleteConfirmation, setDirectoryBulkDeleteConfirmation] = useState('');
+  const [directoryBulkDeleteStatus, setDirectoryBulkDeleteStatus] = useState('');
+  const [isDirectoryBulkDeleteBusy, setIsDirectoryBulkDeleteBusy] = useState(false);
   const [dirFormShowAllFields, setDirFormShowAllFields] = useState(false);
   const [isDirectoryColumnsPanelOpen, setIsDirectoryColumnsPanelOpen] = useState(false);
   const [selectedDirectoryVisibleColumns, setSelectedDirectoryVisibleColumns] = useState<DirectoryVisibleColumnKey[]>(loadDirectoryVisibleColumns);
@@ -948,6 +954,10 @@ export default function App() {
   const [importDuplicateCount, setImportDuplicateCount] = useState(0);
   const [showImportDiagnostics, setShowImportDiagnostics] = useState(false);
   const [importDiagnosticReason, setImportDiagnosticReason] = useState('all');
+  const [importFileName, setImportFileName] = useState('');
+  const [importProgress, setImportProgress] = useState({ stage: 'idle' as 'idle' | 'reading' | 'parsing' | 'validating' | 'importing' | 'complete' | 'error', processed: 0, total: 0, message: '' });
+  const [importRowFilter, setImportRowFilter] = useState<'all' | 'errors' | 'duplicates' | 'valid'>('all');
+  const [importPreviewPage, setImportPreviewPage] = useState(1);
   const [isNormalizingDb, setIsNormalizingDb] = useState(false);
   const [normalizedCount, setNormalizedCount] = useState<number | null>(null);
 
@@ -1187,11 +1197,27 @@ export default function App() {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    setImportFileName(file.name);
+    setImportFileError('');
+    setImportProgress({ stage: 'reading', processed: 0, total: file.size, message: 'Чтение файла' });
     const reader = new FileReader();
+    reader.onprogress = event => {
+      if (event.lengthComputable) setImportProgress({ stage: 'reading', processed: event.loaded, total: event.total, message: 'Чтение файла' });
+    };
     reader.onload = (event) => {
       const text = event.target?.result as string;
       setImportText(text);
-      handleParseImport(text);
+      setImportProgress({ stage: 'parsing', processed: 0, total: 1, message: 'Разбор строк и столбцов' });
+      window.requestAnimationFrame(() => {
+        handleParseImport(text);
+        setImportPreviewPage(1);
+        setImportProgress({ stage: 'complete', processed: 1, total: 1, message: 'Файл подготовлен к проверке' });
+        setIsImportOpen(false);
+      });
+    };
+    reader.onerror = () => {
+      setImportProgress({ stage: 'error', processed: 0, total: file.size, message: 'Не удалось прочитать файл' });
+      setImportFileError('Не удалось прочитать выбранный файл.');
     };
     reader.readAsText(file, 'UTF-8');
   };
@@ -1839,48 +1865,87 @@ export default function App() {
       return;
     }
     setIsImporting(true);
+    setImportFileError('');
+    setImportProgress({ stage: 'importing', processed: 0, total: parsedImportEntries.length, message: 'Импорт контактов' });
     try {
-      const resp = await fetch('/api/directory/import', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session?.token}`
-        },
-        body: JSON.stringify({
-          entries: parsedImportEntries,
-          overwrite: importOverwriteMode
-        })
-      });
-      if (resp.status === 401) {
-        handleAuthError(resp);
-        return;
+      let importedCount = 0;
+      const batchSize = 500;
+      for (let offset = 0; offset < parsedImportEntries.length; offset += batchSize) {
+        const batch = parsedImportEntries.slice(offset, offset + batchSize).map(toDirectoryImportPayload);
+        const resp = await fetch('/api/directory/import', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session?.token}`
+          },
+          body: JSON.stringify({ entries: batch, overwrite: importOverwriteMode && offset === 0 })
+        });
+        if (resp.status === 401) {
+          handleAuthError(resp);
+          return;
+        }
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+          const reason = resp.status === 413
+            ? 'Пакет превышает допустимый размер сервера.'
+            : data.message || data.error || `Сервер вернул HTTP ${resp.status}.`;
+          throw new Error(`Импорт остановлен на строке ${offset + 2}: ${reason}`);
+        }
+        importedCount += Number(data.count || batch.length);
+        setImportProgress({ stage: 'importing', processed: Math.min(offset + batch.length, parsedImportEntries.length), total: parsedImportEntries.length, message: 'Импорт контактов' });
       }
-      const data = await resp.json();
-      if (resp.ok) {
-        setImportSuccessCount(data.count);
-        setImportText('');
-        setParsedImportEntries([]);
-        setImportPreviewRows([]);
-        setImportDuplicateCount(0);
-        setDirPage(1);
-        await loadDirectory(1);
-        await loadDirectoryLookup();
-        loadCalls(page);
-        setTimeout(() => {
-          setImportSuccessCount(null);
-        }, 3000);
-      } else {
-        setImportFileError(data.error || 'Ошибка при импортировании.');
-      }
+      setImportSuccessCount(importedCount);
+      setImportProgress({ stage: 'complete', processed: parsedImportEntries.length, total: parsedImportEntries.length, message: 'Импорт завершён' });
+      setImportText('');
+      setParsedImportEntries([]);
+      setImportPreviewRows([]);
+      setImportDuplicateCount(0);
+      setDirPage(1);
+      await loadDirectory(1);
+      await loadDirectoryLookup();
+      loadCalls(page);
+      setTimeout(() => setImportSuccessCount(null), 3000);
     } catch (e: any) {
-      setImportFileError('Не удалось установить соединение с сервером.');
+      const message = e?.message || 'Сервер недоступен. Проверьте соединение и повторите попытку.';
+      setImportFileError(message);
+      setImportProgress(current => ({ ...current, stage: 'error', message }));
     } finally {
       setIsImporting(false);
     }
   };
 
-  const importDiagnostics=[...parsedImportEntries.flatMap((entry:any)=>(entry._importDiagnostics||[]).map((diagnostic:DirectoryImportDiagnostic)=>({...diagnostic,name:entry.name||entry.company||'',email:entry.email||''}))),...importPreviewRows.filter((row:any)=>row.duplicateId).map((row:any)=>{const entry=parsedImportEntries[row.index]||{},raw=String(entry.number||'');return{rowNumber:entry._csvRowNumber||row.index+2,field:'phone',raw,trimmed:raw.trim(),normalized:normalizeDirectoryPhoneInput(raw).digits,digitLength:normalizeDirectoryPhoneInput(raw).digits.length,codePoints:normalizeDirectoryPhoneInput(raw).codePoints,reason:'duplicate_in_database',duplicateInFile:false,suggestedValue:null,name:entry.name||entry.company||'',email:entry.email||'',duplicateName:row.duplicateName}})];
+  const importDiagnostics=useMemo(()=>[...parsedImportEntries.flatMap((entry:any)=>(entry._importDiagnostics||[]).map((diagnostic:DirectoryImportDiagnostic)=>({...diagnostic,name:entry.name||entry.company||'',email:entry.email||''}))),...importPreviewRows.filter((row:any)=>row.duplicateId).map((row:any)=>{const entry=parsedImportEntries[row.index]||{},raw=String(entry.number||'');return{rowNumber:entry._csvRowNumber||row.index+2,field:'phone',raw,trimmed:raw.trim(),normalized:normalizeDirectoryPhoneInput(raw).digits,digitLength:normalizeDirectoryPhoneInput(raw).digits.length,codePoints:normalizeDirectoryPhoneInput(raw).codePoints,reason:'duplicate_in_database',duplicateInFile:false,suggestedValue:null,name:entry.name||entry.company||'',email:entry.email||'',duplicateName:row.duplicateName}})],[parsedImportEntries,importPreviewRows]);
   const filteredImportDiagnostics=importDiagnosticReason==='all'?importDiagnostics:importDiagnostics.filter((item:any)=>item.reason===importDiagnosticReason);
+  const importPreviewByIndex = useMemo(()=>new Map(importPreviewRows.map((row: any) => [Number(row.index), row])),[importPreviewRows]);
+  const importRowsWithState = useMemo(()=>parsedImportEntries.map((entry: any, index: number) => {
+    const preview: any = importPreviewByIndex.get(index);
+    const diagnostics = [...(entry._importDiagnostics || []), ...(preview?.errors || []).map((message: string) => ({ field: 'row', reason: message }))];
+    return { entry, index, preview, diagnostics, hasErrors: (entry._importErrors || []).length > 0 || (preview?.errors || []).length > 0, duplicate: !!preview?.duplicateId };
+  }),[parsedImportEntries,importPreviewByIndex]);
+  const filteredImportRows = useMemo(()=>importRowsWithState.filter(row => importRowFilter === 'all'
+    || (importRowFilter === 'errors' && row.hasErrors)
+    || (importRowFilter === 'duplicates' && row.duplicate)
+    || (importRowFilter === 'valid' && !row.hasErrors && !row.duplicate)),[importRowsWithState,importRowFilter]);
+  const importPreviewPageSize = 100;
+  const importPreviewPageCount = Math.max(1, Math.ceil(filteredImportRows.length / importPreviewPageSize));
+  const visibleImportRows = filteredImportRows.slice((importPreviewPage - 1) * importPreviewPageSize, importPreviewPage * importPreviewPageSize);
+  const importProgressPercent = importProgress.total > 0 ? Math.min(100, Math.round(importProgress.processed / importProgress.total * 100)) : 0;
+  const importColumnDefinitions = [
+    ['type','Тип',(row:any)=>row.type],['visibility','Видимость',(row:any)=>row.visibility],['isSpam','Спам',(row:any)=>row.isSpam?'Да':'Нет'],
+    ['organization','Организация',(row:any)=>row.company],['fullName','ФИО',(row:any)=>row.name],['position','Должность',(row:any)=>row.position],
+    ['phone','Телефон',(row:any)=>row.number],['phone2','Доп. телефон',(row:any)=>row.phones?.[1]],['email','Email',(row:any)=>row.email],
+    ['website','Сайт',(row:any)=>row.website],['inn','ИНН',(row:any)=>row.inn],['kpp','КПП',(row:any)=>row.kpp],['ogrn','ОГРН',(row:any)=>row.ogrn],
+    ['address','Адрес',(row:any)=>row.address],['comment','Комментарий',(row:any)=>row.comment],['department','Отдел',(row:any)=>row.department],
+    ['group','Группа',(row:any)=>row.group],['tags','Теги',(row:any)=>(row.tags||[]).join('; ')],['internalExtension','Внутренний номер',(row:any)=>row.internalExtension],
+    ['linkedExternalNumber','Связанный номер',(row:any)=>row.linkedExternalNumber],['responsibleUserId','Ответственный',(row:any)=>row.responsibleUserId]
+  ] as const;
+  const importReasonLabel = (reason: string) => ({
+    invalid_length:'Неверная длина',invalid_characters:'Недопустимые символы',unsupported_prefix:'Недопустимый префикс',
+    duplicate_in_file:'Дубль в файле',duplicate_in_row:'Повтор в строке',duplicate_in_database:'Уже есть в справочнике',
+    parser_column_mismatch:'Количество столбцов не совпадает',invalid_type:'Неверный тип',invalid_visibility:'Неверная видимость',
+    invalid_boolean:'Ожидается да/нет',scientific_notation:'Научная запись числа',hidden_unicode:'Скрытый Unicode-символ',
+    bom:'BOM',whitespace:'Лишние пробелы'
+  } as Record<string,string>)[reason] || reason;
   const downloadImportDiagnostics=(errorsOnly:boolean)=>{
     const rows=errorsOnly?filteredImportDiagnostics:importDiagnostics,quote=(value:unknown)=>`"${String(value??'').replace(/"/g,'""')}"`;
     const csv=['row,name,field,raw,trimmed,normalized,digitLength,reason,duplicateInFile,suggestedValue,codePoints',...rows.map((item:any)=>[item.rowNumber,item.name,item.field,item.raw,item.trimmed,item.normalized,item.digitLength,item.reason,item.duplicateInFile,item.suggestedValue||'',item.codePoints.join(' ')].map(quote).join(','))].join('\r\n');
@@ -2383,6 +2448,51 @@ export default function App() {
     }
   };
 
+  const handlePreviewDirectoryBulkDelete = async () => {
+    if (!session?.token || session.role !== 'su') return;
+    setIsDirectoryBulkDeleteBusy(true);
+    setDirectoryBulkDeleteStatus('');
+    setDirectoryBulkDeletePreview(null);
+    setDirectoryBulkDeleteConfirmation('');
+    try {
+      const preview = await previewDirectoryBulkDelete(session.token, directoryBulkDeleteScope, {
+        q: dirSearchQuery,
+        type: dirTypeFilter,
+        spamMode: dirSpamMode,
+        visibilityMode: dirVisibilityMode
+      });
+      setDirectoryBulkDeletePreview(preview);
+      setDirectoryBulkDeleteStatus(preview.count > 0 ? 'Preview готов. Проверьте состав удаления.' : 'По выбранным условиям контактов не найдено.');
+    } catch (error: any) {
+      if (error?.message === 'UNAUTHORIZED') handleAuthError();
+      else setDirectoryBulkDeleteStatus(error?.message || 'Не удалось проверить массовое удаление.');
+    } finally {
+      setIsDirectoryBulkDeleteBusy(false);
+    }
+  };
+
+  const handleApplyDirectoryBulkDelete = async () => {
+    if (!session?.token || session.role !== 'su' || !directoryBulkDeletePreview?.previewId) return;
+    setIsDirectoryBulkDeleteBusy(true);
+    setDirectoryBulkDeleteStatus('Удаление выполняется. Не закрывайте окно.');
+    try {
+      const result = await applyDirectoryBulkDelete(session.token, directoryBulkDeletePreview.previewId, directoryBulkDeleteConfirmation);
+      setDirectoryBulkDeleteStatus(`Удалено контактов: ${Number(result.deleted || 0).toLocaleString('ru-RU')}.`);
+      setDirNotice(`Массовое удаление завершено. Удалено контактов: ${Number(result.deleted || 0).toLocaleString('ru-RU')}.`);
+      setDirPage(1);
+      await loadDirectory(1);
+      await loadDirectoryLookup();
+      setIsDirectoryBulkDeleteOpen(false);
+      setDirectoryBulkDeletePreview(null);
+      setDirectoryBulkDeleteConfirmation('');
+    } catch (error: any) {
+      if (error?.message === 'UNAUTHORIZED') handleAuthError();
+      else setDirectoryBulkDeleteStatus(error?.message || 'Массовое удаление не выполнено.');
+    } finally {
+      setIsDirectoryBulkDeleteBusy(false);
+    }
+  };
+
   const openDirectoryImportPage = () => {
     setDirectoryPageMode('import');
     setActiveView('directory');
@@ -2411,20 +2521,57 @@ export default function App() {
     window.history.pushState({}, '', '/');
   };
 
+  const toDirectoryImportPayload = (entry: any) => ({
+    name: entry.name,
+    number: entry.number,
+    phones: entry.phones,
+    company: entry.company,
+    position: entry.position,
+    email: entry.email,
+    website: entry.website,
+    tags: entry.tags,
+    type: entry.type,
+    visibility: entry.visibility,
+    comment: entry.comment,
+    inn: entry.inn,
+    kpp: entry.kpp,
+    ogrn: entry.ogrn,
+    address: entry.address,
+    department: entry.department,
+    group: entry.group,
+    internalExtension: entry.internalExtension,
+    linkedExternalNumber: entry.linkedExternalNumber,
+    responsibleUserId: entry.responsibleUserId,
+    isSpam: entry.isSpam,
+    isBlacklisted: entry.isBlacklisted
+  });
+
   const handlePreviewImport = async () => {
     if (!session?.token || parsedImportEntries.length === 0) return;
     setIsImporting(true);
     setImportFileError('');
+    setImportProgress({ stage: 'validating', processed: 0, total: parsedImportEntries.length, message: 'Проверка ошибок и дублей' });
     try {
-      const data = await previewDirectoryImport(session.token, parsedImportEntries);
-      setImportPreviewRows(Array.isArray(data.rows) ? data.rows : []);
-      setImportDuplicateCount(Number(data.duplicateCount || 0));
+      const rows: any[] = [];
+      let duplicateCount = 0;
+      const batchSize = 500;
+      for (let offset = 0; offset < parsedImportEntries.length; offset += batchSize) {
+        const batch = parsedImportEntries.slice(offset, offset + batchSize).map(toDirectoryImportPayload);
+        const data = await previewDirectoryImport(session.token, batch);
+        rows.push(...(Array.isArray(data.rows) ? data.rows.map((row: any) => ({ ...row, index: offset + Number(row.index || 0) })) : []));
+        duplicateCount += Number(data.duplicateCount || 0);
+        setImportProgress({ stage: 'validating', processed: Math.min(offset + batch.length, parsedImportEntries.length), total: parsedImportEntries.length, message: 'Проверка ошибок и дублей' });
+      }
+      setImportPreviewRows(rows);
+      setImportDuplicateCount(duplicateCount);
+      setImportProgress({ stage: 'complete', processed: parsedImportEntries.length, total: parsedImportEntries.length, message: 'Проверка завершена' });
     } catch (e: any) {
       if (e?.message === 'UNAUTHORIZED') {
         handleAuthError();
         return;
       }
       setImportFileError(e.message || 'Не удалось выполнить предпросмотр импорта.');
+      setImportProgress({ stage: 'error', processed: 0, total: parsedImportEntries.length, message: e.message || 'Ошибка проверки' });
     } finally {
       setIsImporting(false);
     }
@@ -6351,96 +6498,55 @@ export default function App() {
             </div>
           </div>
 
-          <div className="grid min-w-0 grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
-            <div className="min-w-0 space-y-4">
-              <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-                <h3 className="mb-3 text-sm font-black text-slate-900">Поля файла</h3>
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[720px] text-left text-xs text-slate-600">
-                    <thead className="border-b border-slate-200 bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500">
-                      <tr><th className="px-3 py-2">Поле</th><th className="px-3 py-2">CSV header</th><th className="px-3 py-2">Обязательность</th><th className="px-3 py-2">Пример</th></tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {[
-                        ['Тип контакта', 'type', 'обязательно', 'client / supplier / government'],
-                        ['Видимость', 'visibility', 'опционально, по умолчанию shared', 'shared — общий, private — личный'],
-                        ['Спам', 'isSpam', 'опционально, по умолчанию false', 'true / false / 1 / 0 / yes / no / да / нет'],
-                        ['Организация', 'organization', 'организация или ФИО', 'ООО Ромашка'],
-                        ['ФИО', 'fullName', 'организация или ФИО', 'Иван Иванов'],
-                        ['Должность', 'position', 'опционально', 'директор'],
-                        ['Телефон', 'phone', 'телефон или email', '+79781234567; от 2 до 11 цифр'],
-                        ['Доп. телефон', 'phone2', 'опционально', '365200000'],
-                        ['Email', 'email', 'телефон или email', 'mail@example.com'],
-                        ['Сайт', 'website', 'опционально', 'example.com'],
-                        ['ИНН / КПП / ОГРН', 'inn, kpp, ogrn', 'опционально', '9102000000'],
-                        ['Адрес', 'address', 'опционально', 'Симферополь'],
-                        ['Комментарий', 'comment', 'опционально', 'источник контакта'],
-                        ['Отдел / группа', 'department, group', 'опционально', 'Продажи'],
-                        ['Теги', 'tags', 'опционально', 'VIP; тендер'],
-                        ['Внутренний номер', 'internalExtension', 'опционально', '101'],
-                        ['Связанный внешний номер', 'linkedExternalNumber', 'опционально', '7978...'],
-                        ['Ответственный сотрудник', 'responsibleUserId', 'опционально', 'u1']
-                      ].map(([label, header, required, example]) => (
-                        <tr key={label}><td className="px-3 py-2 font-semibold text-slate-800">{label}</td><td className="px-3 py-2 font-mono">{header}</td><td className="px-3 py-2">{required}</td><td className="px-3 py-2">{example}</td></tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+          <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 p-4">
+              <div>
+                <h3 className="text-sm font-black text-slate-900">{importFileName || 'Файл не выбран'}</h3>
+                <p className="mt-1 text-xs text-slate-500">{parsedImportEntries.length ? `${parsedImportEntries.length.toLocaleString('ru-RU')} строк · ${importColumnDefinitions.length} столбец` : 'Загрузите CSV, чтобы открыть полноэкранный предпросмотр.'}</p>
               </div>
-
-              <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-                <h3 className="mb-2 text-sm font-black text-slate-900">Пример CSV</h3>
-                <div className="overflow-x-auto rounded-lg border border-slate-200 bg-slate-950 p-3 text-[11px] text-slate-100">
-                  <code className="whitespace-pre">type,visibility,isSpam,organization,fullName,position,phone,phone2,email,website,inn,kpp,ogrn,address,comment,department,group,tags,internalExtension,linkedExternalNumber,responsibleUserId{'\n'}client,shared,false,ООО Ромашка,Иван Иванов,директор,+79781234567,365200000,test@mail.ru,example.com,9102000000,910201001,1234567890123,Симферополь,обычный контакт,Продажи,Клиенты,"VIP; тендер",101,79781234567,u1{'\n'}supplier,private,false,ООО Личный,Петр Петров,менеджер,100,,private@mail.ru,,,,,Севастополь,личный контакт с внутренним номером,Закупки,Поставщики,личный,100,,{'\n'}government,shared,true,ФНС,Спам Контакт,,99999999999,,spam@mail.ru,,,,,Симферополь,спам-тест,Госорганы,Проверка,спам,,,</code>
-                </div>
+              <div className="flex flex-wrap gap-2">
+                <button type="button" onClick={() => setIsImportOpen(true)} className="rounded-lg border border-blue-200 bg-white px-3 py-2 text-xs font-bold text-blue-700 hover:bg-blue-50"><Upload className="mr-1 inline h-3.5 w-3.5" />{parsedImportEntries.length ? 'Загрузить другой файл' : 'Загрузить файл'}</button>
+                <button type="button" onClick={handlePreviewImport} disabled={isImporting || !parsedImportEntries.length} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50">Проверить ошибки и дубли</button>
+                <button type="button" onClick={handleExecuteImport} disabled={isImporting || !parsedImportEntries.length || importRowsWithState.some(row => row.hasErrors)} className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-50">Импортировать ({parsedImportEntries.length.toLocaleString('ru-RU')})</button>
               </div>
             </div>
 
-            <div className="min-w-0 space-y-4">
-              <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-                <h3 className="mb-3 text-sm font-black text-slate-900">Загрузка файла</h3>
-                {importFileError && <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 break-words"><div>{importFileError}</div>{importDiagnostics.length>0&&<button type="button" onClick={()=>setShowImportDiagnostics(value=>!value)} className="mt-2 rounded border border-amber-300 bg-white px-3 py-1.5 font-bold">Показать строки с ошибками</button>}</div>}
-                {importSuccessCount !== null && <div className="mb-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-800">Контакты успешно импортированы: {importSuccessCount}</div>}
-                <div className="relative rounded-xl border-2 border-dashed border-slate-200 p-5 text-center hover:border-blue-300">
-                  <input type="file" accept=".csv,.txt" onChange={handleFileUpload} className="absolute inset-0 h-full w-full cursor-pointer opacity-0" />
-                  <Upload className="mx-auto mb-2 h-6 w-6 text-slate-400" />
-                  <div className="text-xs font-bold text-slate-700">Загрузите CSV или TXT-файл с контактами</div>
-                  <div className="mt-1 text-[11px] text-slate-500">CSV/XLSX: XLSX будет добавлен отдельным этапом, сейчас используйте CSV.</div>
+            {importProgress.stage !== 'idle' && <div className="border-b border-slate-200 px-4 py-3">
+              <div className="mb-1.5 flex items-center justify-between text-xs"><span className={importProgress.stage==='error'?'font-bold text-rose-700':'font-bold text-slate-700'}>{importProgress.message}</span><span className="tabular-nums text-slate-500">{importProgressPercent}%{importProgress.total>1?` · ${importProgress.processed.toLocaleString('ru-RU')} из ${importProgress.total.toLocaleString('ru-RU')}`:''}</span></div>
+              <div className="h-2 overflow-hidden rounded-full bg-slate-100"><div className={`h-full rounded-full transition-all ${importProgress.stage==='error'?'bg-rose-500':importProgress.stage==='complete'?'bg-emerald-500':'bg-blue-600'}`} style={{width:`${importProgressPercent}%`}} /></div>
+            </div>}
+
+            {importFileError && <div className="m-4 rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800"><div className="font-bold">{importFileError}</div>{importDiagnostics.length>0&&<button type="button" onClick={()=>{setShowImportDiagnostics(true);setImportRowFilter('errors');setImportPreviewPage(1)}} className="mt-2 rounded border border-rose-300 bg-white px-3 py-1.5 font-bold">Показать строки с ошибками</button>}</div>}
+            {importSuccessCount !== null && <div className="m-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs font-bold text-emerald-800">Контакты успешно импортированы: {importSuccessCount}</div>}
+
+            {parsedImportEntries.length > 0 ? <>
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 p-3">
+                <div className="flex flex-wrap gap-1.5">
+                  {([['all','Все',parsedImportEntries.length],['errors','Ошибки',importRowsWithState.filter(row=>row.hasErrors).length],['duplicates','Дубли',importRowsWithState.filter(row=>row.duplicate).length],['valid','Готовы',importRowsWithState.filter(row=>!row.hasErrors&&!row.duplicate).length]] as const).map(([value,label,count])=><button type="button" key={value} onClick={()=>{setImportRowFilter(value);setImportPreviewPage(1)}} className={`rounded-lg px-3 py-1.5 text-xs font-bold ${importRowFilter===value?'bg-blue-600 text-white':'border border-slate-200 bg-white text-slate-600'}`}>{label} · {count.toLocaleString('ru-RU')}</button>)}
                 </div>
-                <textarea value={importText} onChange={(e) => { setImportText(e.target.value); handleParseImport(e.target.value); }} rows={7} placeholder="Вставьте CSV сюда для предпросмотра" className="mt-3 w-full resize-none rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-[11px] text-slate-800" />
-                <div className="mt-3 flex flex-wrap justify-end gap-2">
-                  <button type="button" onClick={handlePreviewImport} disabled={isImporting || parsedImportEntries.length === 0} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50">Проверить ошибки и дубли</button>
-                  <button type="button" onClick={handleExecuteImport} disabled={isImporting || parsedImportEntries.length === 0} className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-50">Импортировать ({parsedImportEntries.length})</button>
+                <div className="flex flex-wrap gap-2">
+                  {importDiagnostics.length>0&&<button type="button" onClick={()=>setShowImportDiagnostics(value=>!value)} className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-bold text-amber-800">Отчёт об ошибках</button>}
+                  <button type="button" onClick={handleDownloadTemplate} className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-600">Скачать шаблон</button>
                 </div>
-                {showImportDiagnostics&&importDiagnostics.length>0&&<div className="mt-4 rounded-xl border border-amber-200 bg-amber-50/40 p-3"><div className="flex flex-wrap items-center justify-between gap-2"><div><h4 className="text-xs font-black text-slate-900">Диагностика строк ({importDiagnostics.length})</h4><p className="text-[11px] text-slate-500">Показаны первые 50 записей. Проверка не выполняет импорт.</p></div><div className="flex flex-wrap gap-2"><select value={importDiagnosticReason} onChange={event=>setImportDiagnosticReason(event.target.value)} className="rounded border bg-white px-2 py-1.5 text-xs"><option value="all">Все причины</option>{Array.from(new Set(importDiagnostics.map((item:any)=>item.reason))).map(reason=><option key={reason} value={reason}>{reason}</option>)}</select><button type="button" onClick={()=>downloadImportDiagnostics(true)} className="rounded border bg-white px-2 py-1.5 text-xs font-bold">Скачать CSV с ошибками</button><button type="button" onClick={()=>downloadImportDiagnostics(false)} className="rounded border bg-white px-2 py-1.5 text-xs font-bold">Скачать диагностический отчёт</button></div></div><div className="mt-3 overflow-x-auto"><table className="w-full min-w-[920px] text-left text-[11px]"><thead><tr className="border-b">{['Строка','ФИО','Поле','Исходное значение','После trim','Нормализация','Длина','Причина','Предложение'].map(label=><th key={label} className="px-2 py-1.5">{label}</th>)}</tr></thead><tbody>{filteredImportDiagnostics.slice(0,50).map((item:any,index:number)=><tr key={`${item.rowNumber}-${item.field}-${index}`} className="border-b border-amber-100"><td className="px-2 py-1.5">{item.rowNumber}</td><td className="max-w-[160px] truncate px-2 py-1.5">{item.name||'—'}</td><td className="px-2 py-1.5 font-mono">{item.field}</td><td className="max-w-[180px] truncate px-2 py-1.5 font-mono" title={item.codePoints.join(' ')}>{item.raw||'—'}</td><td className="px-2 py-1.5 font-mono">{item.trimmed||'—'}</td><td className="px-2 py-1.5 font-mono">{item.normalized||'—'}</td><td className="px-2 py-1.5">{item.digitLength}</td><td className="px-2 py-1.5 font-bold text-rose-700">{item.reason}</td><td className="px-2 py-1.5 font-mono">{item.suggestedValue||'—'}</td></tr>)}</tbody></table></div></div>}
               </div>
 
-              <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-                <div className="mb-3 flex items-center justify-between gap-2">
-                  <h3 className="text-sm font-black text-slate-900">Предпросмотр импорта</h3>
-                  <span className="text-[11px] text-slate-500">Дубли: {importDuplicateCount}</span>
-                </div>
-                <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
-                  {parsedImportEntries.length === 0 ? (
-                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-5 text-center text-xs text-slate-400">Нет данных для предпросмотра</div>
-                  ) : parsedImportEntries.slice(0, 50).map((item, idx) => {
-                    const preview = importPreviewRows.find((row: any) => row.index === idx);
-                    const errors = [...(item._importErrors || []), ...(preview?.errors || [])];
-                    return (
-                      <div key={idx} className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs">
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0"><div className="truncate font-bold text-slate-900">{item.name || item.company || 'Без имени'}</div><div className="truncate text-slate-500">{item.number || item.email || '—'}</div></div>
-                          <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-slate-600">{item.type || 'client'}</span>
-                        </div>
-                        {errors.length > 0 && <div className="mt-2 text-[11px] text-rose-600">{errors.join('; ')}</div>}
-                        {preview?.duplicateId && <div className="mt-2 text-[11px] text-amber-700">Найден возможный дубль: {preview.duplicateName}</div>}
-                      </div>
-                    );
-                  })}
-                </div>
+              <div className="max-h-[calc(100vh-330px)] overflow-auto">
+                <table className="min-w-[3100px] border-separate border-spacing-0 text-left text-[11px]">
+                  <thead className="sticky top-0 z-20 bg-slate-100 text-slate-600"><tr><th className="sticky left-0 z-30 w-20 border-b border-r border-slate-200 bg-slate-100 px-3 py-2">Строка</th><th className="w-28 border-b border-r border-slate-200 px-3 py-2">Статус</th>{importColumnDefinitions.map(([key,label])=><th key={key} className="min-w-[140px] border-b border-r border-slate-200 px-3 py-2"><div className="font-bold">{label}</div><div className="font-mono text-[9px] font-normal text-slate-400">{key}</div></th>)}</tr></thead>
+                  <tbody>{visibleImportRows.map(({entry,index,preview,diagnostics,hasErrors,duplicate})=><tr key={index} className={hasErrors?'bg-rose-50/70':duplicate?'bg-amber-50/70':'hover:bg-blue-50/40'}>
+                    <td className="sticky left-0 z-10 border-b border-r border-slate-200 bg-inherit px-3 py-2 font-mono">{entry._csvRowNumber||index+2}</td>
+                    <td className="border-b border-r border-slate-200 px-3 py-2">{hasErrors?<span className="font-bold text-rose-700">Ошибка</span>:duplicate?<span className="font-bold text-amber-700">Дубль</span>:<span className="font-bold text-emerald-700">Готово</span>}{preview?.duplicateName&&<div className="mt-1 max-w-[120px] truncate text-[9px]" title={preview.duplicateName}>{preview.duplicateName}</div>}</td>
+                    {importColumnDefinitions.map(([key,,getter])=>{const cellErrors=diagnostics.filter((item:any)=>item.field===key||(key==='fullName'&&item.field==='name'));const value=getter(entry);return <td key={key} title={cellErrors.map((item:any)=>importReasonLabel(item.reason)).join('; ')||String(value??'')} className={`max-w-[240px] truncate border-b border-r px-3 py-2 ${cellErrors.length?'border-rose-300 bg-rose-100 font-bold text-rose-800':'border-slate-200'}`}>{String(value??'')||'—'}{cellErrors.length>0&&<div className="mt-1 text-[9px] text-rose-700">{cellErrors.map((item:any)=>importReasonLabel(item.reason)).join('; ')}</div>}</td>})}
+                  </tr>)}</tbody>
+                </table>
               </div>
-            </div>
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 p-3 text-xs text-slate-500"><span>Показано {visibleImportRows.length} из {filteredImportRows.length.toLocaleString('ru-RU')} · по 100 строк на странице</span><div className="flex items-center gap-2"><button type="button" disabled={importPreviewPage<=1} onClick={()=>setImportPreviewPage(page=>Math.max(1,page-1))} className="rounded border px-2 py-1 disabled:opacity-40"><ChevronLeft className="h-4 w-4"/></button><span>{importPreviewPage} / {importPreviewPageCount}</span><button type="button" disabled={importPreviewPage>=importPreviewPageCount} onClick={()=>setImportPreviewPage(page=>Math.min(importPreviewPageCount,page+1))} className="rounded border px-2 py-1 disabled:opacity-40"><ChevronRight className="h-4 w-4"/></button></div></div>
+            </> : <button type="button" onClick={()=>setIsImportOpen(true)} className="m-6 flex min-h-[280px] w-[calc(100%-3rem)] flex-col items-center justify-center rounded-xl border-2 border-dashed border-slate-200 text-slate-500 hover:border-blue-300 hover:bg-blue-50/30"><Upload className="mb-3 h-10 w-10"/><span className="text-sm font-black">Выбрать CSV-файл</span><span className="mt-1 text-xs">Загрузка откроется в отдельном окне</span></button>}
           </div>
+
+          {showImportDiagnostics&&importDiagnostics.length>0&&<div className="rounded-xl border border-amber-200 bg-amber-50/40 p-4"><div className="flex flex-wrap items-center justify-between gap-2"><div><h4 className="text-sm font-black">Ошибки по строкам и столбцам ({importDiagnostics.length})</h4><p className="text-xs text-slate-500">Щёлкните фильтр «Ошибки», чтобы увидеть ячейки в общей таблице.</p></div><div className="flex gap-2"><select value={importDiagnosticReason} onChange={event=>setImportDiagnosticReason(event.target.value)} className="rounded border bg-white px-2 py-1.5 text-xs"><option value="all">Все причины</option>{Array.from(new Set(importDiagnostics.map((item:any)=>item.reason))).map(reason=><option key={reason} value={reason}>{importReasonLabel(reason)}</option>)}</select><button type="button" onClick={()=>downloadImportDiagnostics(true)} className="rounded border bg-white px-2 py-1.5 text-xs font-bold">Скачать CSV ошибок</button><button type="button" onClick={()=>downloadImportDiagnostics(false)} className="rounded border bg-white px-2 py-1.5 text-xs font-bold">Скачать отчёт</button></div></div><div className="mt-3 max-h-72 overflow-auto"><table className="w-full min-w-[900px] text-left text-xs"><thead className="sticky top-0 bg-amber-50"><tr>{['Строка','ФИО','Столбец','Исходное значение','После нормализации','Причина','Исправление'].map(label=><th key={label} className="border-b px-2 py-2">{label}</th>)}</tr></thead><tbody>{filteredImportDiagnostics.slice(0,500).map((item:any,index:number)=><tr key={`${item.rowNumber}-${item.field}-${index}`} className="border-b border-amber-100"><td className="px-2 py-1.5">{item.rowNumber}</td><td className="px-2 py-1.5">{item.name||'—'}</td><td className="px-2 py-1.5 font-mono">{item.field}</td><td className="px-2 py-1.5 font-mono">{item.raw||'—'}</td><td className="px-2 py-1.5 font-mono">{item.normalized||'—'}</td><td className="px-2 py-1.5 font-bold text-rose-700">{importReasonLabel(item.reason)}</td><td className="px-2 py-1.5">{item.suggestedValue||'Исправьте значение в исходном CSV'}</td></tr>)}</tbody></table></div></div>}
+
+          {isImportOpen&&<div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm"><div role="dialog" aria-modal="true" aria-label="Загрузка CSV-файла" className="w-full max-w-2xl rounded-2xl bg-white p-5 shadow-2xl"><div className="flex items-start justify-between gap-3"><div><h3 className="text-lg font-black text-slate-900">Загрузка файла</h3><p className="mt-1 text-xs text-slate-500">Выберите CSV или вставьте текст. После разбора предпросмотр откроется на весь экран.</p></div><button type="button" onClick={()=>setIsImportOpen(false)} className="rounded-lg border px-3 py-1.5 text-xs font-bold">Закрыть</button></div><label className="relative mt-5 flex min-h-44 cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-blue-200 bg-blue-50/40 p-5 text-center hover:border-blue-400"><input type="file" accept=".csv,.txt,text/csv,text/plain" onChange={handleFileUpload} className="absolute inset-0 h-full w-full cursor-pointer opacity-0"/><Upload className="mb-2 h-8 w-8 text-blue-600"/><span className="text-sm font-black text-slate-800">Выбрать CSV или TXT</span><span className="mt-1 text-xs text-slate-500">Большие файлы проверяются пакетами по 500 строк</span></label><div className="my-3 text-center text-xs text-slate-400">или вставьте CSV</div><textarea value={importText} onChange={event=>setImportText(event.target.value)} rows={6} placeholder="Вставьте содержимое CSV" className="w-full resize-none rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs"/><div className="mt-4 flex justify-end gap-2"><button type="button" onClick={()=>setIsImportOpen(false)} className="rounded-lg border px-4 py-2 text-xs font-bold">Отмена</button><button type="button" disabled={!importText.trim()} onClick={()=>{setImportProgress({stage:'parsing',processed:0,total:1,message:'Разбор строк и столбцов'});window.requestAnimationFrame(()=>{handleParseImport(importText);setImportPreviewPage(1);setImportProgress({stage:'complete',processed:1,total:1,message:'Файл подготовлен к проверке'});setIsImportOpen(false)})}} className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-40">Открыть предпросмотр</button></div></div></div>}
         </section>
       )}
 
@@ -6514,6 +6620,20 @@ export default function App() {
                   </button>
                   </>
                   )}
+                  {session?.role === 'su' && <button
+                    type="button"
+                    onClick={() => {
+                      setDirectoryBulkDeleteScope('filtered');
+                      setDirectoryBulkDeletePreview(null);
+                      setDirectoryBulkDeleteConfirmation('');
+                      setDirectoryBulkDeleteStatus('');
+                      setIsDirectoryBulkDeleteOpen(true);
+                    }}
+                    className="flex items-center gap-1.5 rounded-lg border border-rose-200 bg-white px-3.5 py-2 text-xs font-semibold text-rose-700 shadow-xs transition-all hover:bg-rose-50 active:scale-95"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    Массовое удаление
+                  </button>}
                 </div>
 
                 {/* Normalization result banner feedback */}
@@ -7573,6 +7693,37 @@ export default function App() {
             </div>
           )}
         </footer>
+      )}
+
+      {isDirectoryBulkDeleteOpen && session?.role === 'su' && (
+        <div className="fixed inset-0 z-[85] flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
+          <div role="dialog" aria-modal="true" aria-label="Массовое удаление контактов" className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white shadow-2xl">
+            <div className="sticky top-0 z-10 flex items-start justify-between gap-3 border-b border-slate-200 bg-white p-5">
+              <div><h3 className="flex items-center gap-2 text-lg font-black text-slate-900"><Trash2 className="h-5 w-5 text-rose-600"/>Массовое удаление</h3><p className="mt-1 text-xs text-slate-500">Доступно только su. Сначала создаётся preview, удаление автоматически не запускается.</p></div>
+              <button type="button" disabled={isDirectoryBulkDeleteBusy} onClick={()=>setIsDirectoryBulkDeleteOpen(false)} className="rounded-lg border px-3 py-1.5 text-xs font-bold disabled:opacity-40">Закрыть</button>
+            </div>
+            <div className="space-y-4 p-5">
+              {!directoryBulkDeletePreview && <>
+                <label className={`block cursor-pointer rounded-xl border p-4 ${directoryBulkDeleteScope==='filtered'?'border-blue-400 bg-blue-50':'border-slate-200'}`}><input type="radio" className="mr-2" checked={directoryBulkDeleteScope==='filtered'} onChange={()=>setDirectoryBulkDeleteScope('filtered')}/><span className="text-sm font-black">Удалить по текущим фильтрам</span><div className="mt-2 grid gap-1 text-xs text-slate-600 sm:grid-cols-2"><span>Поиск: <b>{dirSearchQuery||'не задан'}</b></span><span>Тип: <b>{dirTypeFilter}</b></span><span>Спам: <b>{dirSpamMode}</b></span><span>Видимость: <b>{dirVisibilityMode}</b></span></div><p className="mt-2 text-[11px] text-slate-500">Будут удалены все совпадения, а не только контакты на текущей странице.</p></label>
+                <label className={`block cursor-pointer rounded-xl border p-4 ${directoryBulkDeleteScope==='all'?'border-rose-400 bg-rose-50':'border-slate-200'}`}><input type="radio" className="mr-2" checked={directoryBulkDeleteScope==='all'} onChange={()=>setDirectoryBulkDeleteScope('all')}/><span className="text-sm font-black text-rose-800">Полностью очистить справочник</span><p className="mt-2 text-xs text-rose-700">Удаляет общие, личные, внутренние, спам-контакты и все остальные записи независимо от фильтров.</p></label>
+                <div className="flex justify-end"><button type="button" disabled={isDirectoryBulkDeleteBusy} onClick={handlePreviewDirectoryBulkDelete} className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-black text-white disabled:opacity-40">{isDirectoryBulkDeleteBusy?'Проверка...':'Проверить состав удаления'}</button></div>
+              </>}
+
+              {directoryBulkDeletePreview && <>
+                <div className={`rounded-xl border p-4 ${directoryBulkDeletePreview.scope==='all'?'border-rose-300 bg-rose-50':'border-amber-300 bg-amber-50'}`}>
+                  <div className="text-xs font-bold uppercase tracking-wide text-slate-500">Preview ID: {directoryBulkDeletePreview.previewId}</div>
+                  <div className="mt-2 text-3xl font-black text-slate-900">{Number(directoryBulkDeletePreview.count||0).toLocaleString('ru-RU')}</div>
+                  <div className="text-sm font-bold text-slate-700">контактов будет удалено</div>
+                  <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2"><div>Типы: {Object.entries(directoryBulkDeletePreview.byType||{}).map(([key,value])=>`${key}: ${value}`).join(', ')||'—'}</div><div>Видимость: {Object.entries(directoryBulkDeletePreview.byVisibility||{}).map(([key,value])=>`${key}: ${value}`).join(', ')||'—'}</div><div>Избранное: удалить ссылок {directoryBulkDeletePreview.favoritesToRemove||0}</div><div>Sync mappings: удалить {directoryBulkDeletePreview.mappingsToRemove||0}</div><div>Хранилище: {directoryBulkDeletePreview.storageSource}</div><div>Preview действует до: {new Date(directoryBulkDeletePreview.expiresAt).toLocaleTimeString('ru-RU')}</div></div>
+                </div>
+                {directoryBulkDeletePreview.sample?.length>0&&<div><h4 className="mb-2 text-xs font-black">Примеры удаляемых контактов</h4><div className="max-h-52 overflow-auto rounded-lg border"><table className="w-full text-left text-xs"><thead className="sticky top-0 bg-slate-100"><tr><th className="p-2">ФИО / организация</th><th className="p-2">Телефон</th><th className="p-2">Тип</th><th className="p-2">Видимость</th></tr></thead><tbody>{directoryBulkDeletePreview.sample.map((item:any)=><tr key={item.id} className="border-t"><td className="p-2">{item.name||item.company||'Без имени'}</td><td className="p-2 font-mono">{item.phone||'—'}</td><td className="p-2">{item.type}</td><td className="p-2">{item.visibility}</td></tr>)}</tbody></table></div></div>}
+                {Number(directoryBulkDeletePreview.count||0)>0&&<div className="rounded-xl border border-rose-200 p-4"><label className="text-xs font-bold text-slate-700">Для подтверждения введите: <span className="font-mono text-rose-700">{directoryBulkDeletePreview.confirmationPhrase}</span></label><input value={directoryBulkDeleteConfirmation} onChange={event=>setDirectoryBulkDeleteConfirmation(event.target.value)} className="mt-2 w-full rounded-lg border border-rose-200 px-3 py-2 font-mono text-sm outline-none focus:border-rose-500" autoComplete="off"/></div>}
+                <div className="flex flex-wrap justify-between gap-2"><button type="button" disabled={isDirectoryBulkDeleteBusy} onClick={()=>{setDirectoryBulkDeletePreview(null);setDirectoryBulkDeleteConfirmation('');setDirectoryBulkDeleteStatus('')}} className="rounded-lg border px-4 py-2 text-xs font-bold">Назад</button><button type="button" disabled={isDirectoryBulkDeleteBusy||Number(directoryBulkDeletePreview.count||0)===0||directoryBulkDeleteConfirmation!==directoryBulkDeletePreview.confirmationPhrase} onClick={handleApplyDirectoryBulkDelete} className="rounded-lg bg-rose-600 px-4 py-2 text-xs font-black text-white disabled:opacity-40">{isDirectoryBulkDeleteBusy?'Удаление...':directoryBulkDeletePreview.scope==='all'?'Очистить справочник':'Удалить выбранные контакты'}</button></div>
+              </>}
+              {directoryBulkDeleteStatus&&<div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs font-bold text-slate-700">{directoryBulkDeleteStatus}</div>}
+            </div>
+          </div>
+        </div>
       )}
 
       {/* CALL ROUTING CHRONOLOGY TIMELINE DIALOG MODAL PANEL */}

@@ -10,4 +10,7 @@ const lines=['fullName,phone,phone2,internalExtension,linkedExternalNumber'];for
 const parsed=parseDirectoryCsv(lines.join('\r\n')+'\r\n');assert.equal(parsed.rows.length,100001);let errors=0;const seen=new Set<string>();for(const row of parsed.rows.slice(1)){const result=validateDirectoryPhone(row.values[1]);if(!result.valid)errors++;assert.equal(seen.has(result.digits),false);seen.add(result.digits)}assert.equal(errors,0);assert.equal(seen.size,100000);
 for(const boundary of[9999,10000,19999,20000,99999])assert.equal(validateDirectoryPhone(parsed.rows[boundary+1].values[1]).valid,true);
 const frontend=fs.readFileSync('src/App.tsx','utf8'),backend=fs.readFileSync('server.ts','utf8');assert.match(frontend,/validateDirectoryPhone\(value\)/);assert.match(backend,/validateSharedDirectoryPhone\(value\)/);
-console.log(JSON.stringify({ok:true,rows:100000,valid:100000,errors:0,delimiter:parsed.delimiter,chunkBoundaries:'ok',frontendBackendParity:true}));
+assert.match(frontend,/const batchSize = 500/);assert.match(frontend,/\.map\(toDirectoryImportPayload\)/);assert.doesNotMatch(frontend,/entries: parsedImportEntries/);
+assert.ok(frontend.includes('Загрузка файла'));assert.ok(frontend.includes('Ошибки по строкам и столбцам'));assert.ok(frontend.includes('max-h-[calc(100vh-330px)]'));
+const batchPayload=JSON.stringify({entries:parsed.rows.slice(1,501).map(row=>({name:row.values[0],phones:[row.values[1]]}))});assert.ok(Buffer.byteLength(batchPayload)<25*1024*1024);
+console.log(JSON.stringify({ok:true,rows:100000,valid:100000,errors:0,delimiter:parsed.delimiter,chunkBoundaries:'ok',batchSize:500,batchBytes:Buffer.byteLength(batchPayload),frontendBackendParity:true,fullScreenPreview:true}));
