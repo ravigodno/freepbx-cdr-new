@@ -11,7 +11,7 @@ const items:Array<{key:AiPlatformSection;label:string;icon:any;href:string}>=[
 ];
 
 export default function AiPlatformNavigation({active}:{active:AiPlatformSection}){
-  return <nav aria-label="AI Platform" className="flex flex-wrap gap-1 rounded-xl border border-slate-200 bg-white p-1.5 shadow-sm lg:flex-col">
+  return <nav aria-label="AI Platform" className="flex flex-wrap gap-1 overflow-x-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-sm">
     {items.map(item=>{const Icon=item.icon;return <a key={item.key} href={item.href} className={`flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-bold ${active===item.key?'bg-blue-600 text-white':'text-slate-600 hover:bg-slate-100'}`}><Icon className="h-4 w-4"/>{item.label}</a>})}
   </nav>;
 }
