@@ -5,7 +5,7 @@ const transitions:Record<AiExtensionSyncState,ReadonlySet<AiExtensionSyncState>>
   preview_ready:new Set(["applying","conflict","archived"]),
   applying:new Set(["verifying","sync_failed"]),
   verifying:new Set(["active","sync_failed"]),
-  active:new Set(["disabled","preview_ready","sync_failed"]),
+  active:new Set(["applying","disabled","preview_ready","sync_failed"]),
   disabled:new Set(["preview_ready","archived"]),
   conflict:new Set(["preview_ready","archived"]),
   sync_failed:new Set(["preview_ready","applying","archived"]),

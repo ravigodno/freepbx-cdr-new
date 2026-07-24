@@ -710,6 +710,27 @@ async function run() {
     ),
   );
   events.length = 0;
+  assert.equal(detectRealtimeTransfer("Переключи на оператора."),true);
+  assert.equal(detectRealtimeTransfer("Переведите меня на сотрудника."),true);
+  assert.equal(detectRealtimeTransfer("Позовите человека."),true);
+  assert.equal(detectRealtimeTransfer("Переключила сотрудника."),true);
+  assert.equal(detectRealtimeTransfer("Переключи меня на внутренний номер 299."),true);
+  assert.equal(detectRealtimeTransfer("Свяжите с дежурным.",["свяжите с дежурным"]),true);
+  for(const phrase of[
+    "Можно мне поговорить с живым человеком?",
+    "Дайте, пожалуйста, оператора.",
+    "Мне нужен сотрудник.",
+    "Позовите администратора, пожалуйста.",
+    "Можете перенаправить мой звонок на специалиста?",
+    "Я хочу связаться с менеджером.",
+    "Мне бы с человеком поговорить.",
+    "Соедините, пожалуйста, с 299.",
+  ])assert.equal(detectRealtimeTransfer(phrase),true,phrase);
+  assert.equal(detectRealtimeTransfer("Запишите меня на приём."),false);
+  assert.equal(detectRealtimeTransfer("Сотрудник записал меня на приём."),false);
+  assert.equal(detectRealtimeTransfer("Оператор уже звонил вчера."),false);
+  assert.equal(detectRealtimeTransfer("Не соединяйте меня с оператором."),false);
+  assert.equal(detectRealtimeTransfer("Да."),false);
   await adapter.appendAudio(frame("transfer_request"));
   await adapter.commitInput();
   assert(

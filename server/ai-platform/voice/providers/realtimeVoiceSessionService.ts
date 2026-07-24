@@ -481,6 +481,11 @@ export class RealtimeVoiceSessionService {
         [input.tenantId],
       ),
       conversationIntentRoutes=rowsToConfiguredConversationIntents(conversationIntentRows),
+      handoffConfig=await this.handoffConfigResolver?.({
+        tenantId:input.tenantId,
+        agentId:Number(source.agent_id),
+        agentVersionId:Number(source.agent_version_id),
+      })||null,
       skillErrors = validateConfiguredSkillSet(
         skills,
         (context?.agent?.version?.config || {}) as Record<string, unknown>,
@@ -717,7 +722,7 @@ export class RealtimeVoiceSessionService {
         currentPipeline:null,
         closing:new ClosingCoordinator(`${input.tenantId}:${source.voice_session_id}`),
         handoff:new HumanHandoffCoordinator(`${input.tenantId}:${source.voice_session_id}`),
-        handoffConfig:null,
+        handoffConfig,
         commitDispatchMs:null,
         responseCreateDispatchMs:null,
       };
@@ -1195,40 +1200,71 @@ export class RealtimeVoiceSessionService {
     event:{type:"started"|"completed"|"interrupted";responseId?:string;playedAudioMs:number;discardedAudioMs?:number},
   ){
     const runtime=this.runtimes.get(id);if(!runtime)return;
+    const lifecycleResponseId=event.responseId||runtime.activeResponseId||undefined;
     if(event.type==="started"){
-      if(event.responseId){
-        const stream=runtime.responseStreams.get(event.responseId);
+      if(lifecycleResponseId){
+        const stream=runtime.responseStreams.get(lifecycleResponseId);
         if(stream){
           const tail=releaseAfterPlayoutStarted(stream);
           if(tail.length)
-            await this.enqueueResponseFrames(runtime,id,event.responseId,traceId,tail);
+            await this.enqueueResponseFrames(runtime,id,lifecycleResponseId,traceId,tail);
         }
       }
       const mediaMetrics=this.media.getProtocolMetrics(runtime.tenantId,runtime.mediaSessionId);
       runtime.coordinator.playoutStarted({
-        responseRef:event.responseId,
+        responseRef:lifecycleResponseId,
         itemRef:runtime.activeItemId||undefined,
         queuedAudioMs:mediaMetrics?.queuedAudioMsCurrent,
       });
-      runtime.closing.playoutStarted(event.responseId);
-      runtime.handoff.playoutStarted(event.responseId);
+      runtime.closing.playoutStarted(lifecycleResponseId);
+      runtime.handoff.playoutStarted(lifecycleResponseId);
       runtime.flusher.markDirty();
       return;
     }
     let farewellCompleted=false;
     if(event.type==="completed"){
-      await this.transcriptService?.finalizeResponse(runtime.tenantId,id,event.responseId,event.playedAudioMs);
-      if(event.responseId)runtime.responseStreams.delete(event.responseId);
-      farewellCompleted=runtime.closing.playoutCompleted(event.responseId);
-      if(runtime.handoff.playoutCompleted(event.responseId)&&runtime.handoff.transferRequested()){
+      await this.transcriptService?.finalizeResponse(runtime.tenantId,id,lifecycleResponseId,event.playedAudioMs);
+      if(lifecycleResponseId)runtime.responseStreams.delete(lifecycleResponseId);
+      farewellCompleted=runtime.closing.playoutCompleted(lifecycleResponseId);
+      const handoffStateBeforePlayout=runtime.handoff.state;
+      const boundAnnouncementResponseId=runtime.handoff.announcementResponseId||undefined;
+      const handoffResponseId=
+        ["announcement_generating","announcement_playing"].includes(handoffStateBeforePlayout) &&
+        boundAnnouncementResponseId
+          ? boundAnnouncementResponseId
+          : lifecycleResponseId;
+      const handoffPlayoutCompleted=runtime.handoff.playoutCompleted(handoffResponseId);
+      if(["announcement_generating","announcement_playing"].includes(handoffStateBeforePlayout)){
+        await this.audit.append({
+          tenantId:runtime.tenantId,
+          traceId,
+          actorType:"service",
+          eventType:"human_handoff_playout_completed" as any,
+          entityType:"realtime_voice_session",
+          entityId:String(id),
+          decision:handoffPlayoutCompleted?"accepted":"ignored",
+          details:{
+            stateBefore:handoffStateBeforePlayout,
+            mediaResponseIdPresent:Boolean(event.responseId),
+            mediaResponseMatchedBound:
+              Boolean(event.responseId&&boundAnnouncementResponseId) &&
+              event.responseId===boundAnnouncementResponseId,
+            usedBoundAnnouncementResponseId:
+              Boolean(boundAnnouncementResponseId) &&
+              handoffResponseId===boundAnnouncementResponseId,
+            playedAudioMs:event.playedAudioMs,
+          },
+        });
+      }
+      if(handoffPlayoutCompleted&&runtime.handoff.transferRequested()){
         runtime.blocked=true;runtime.responsePending=false;
-        if(runtime.controlledHandoff&&runtime.handoffConfig)await this.controlledHandoff({tenantId:runtime.tenantId,voiceSessionId:runtime.voiceSessionId,traceId,config:runtime.handoffConfig,coordinator:runtime.handoff});
+        if(this.controlledHandoff&&runtime.handoffConfig)await this.controlledHandoff({tenantId:runtime.tenantId,voiceSessionId:runtime.voiceSessionId,traceId,config:runtime.handoffConfig,coordinator:runtime.handoff});
       }
     }
     runtime.coordinator.playoutFinished(event.type==="interrupted");
     if(
       event.type!=="interrupted" &&
-      (!event.responseId||event.responseId===runtime.activeResponseId)
+      (!lifecycleResponseId||lifecycleResponseId===runtime.activeResponseId)
     ){
       runtime.responsePending=false;runtime.turnState="listening";
       runtime.activeResponseId=null;runtime.activeItemId=null;
@@ -1420,7 +1456,11 @@ export class RealtimeVoiceSessionService {
         await this.transition(runtime.tenantId, id, "responding", traceId);
     }
     if (event.type === "output_audio" && !runtime.blocked) {
-      const responseId = event.responseId || event.frame.responseId;
+      const responseId =
+        event.responseId ||
+        event.frame.responseId ||
+        runtime.activeResponseId ||
+        undefined;
       if (
         responseId &&
         (runtime.cancelledResponseIds.has(responseId) ||
@@ -1469,6 +1509,7 @@ export class RealtimeVoiceSessionService {
         runtime.responseStreams.set(responseId,stream);
         const pushed=pushResponseFrame(stream,{
           ...event.frame,
+          responseId,
           traceId,
           voiceSessionId:Number(row.voice_session_id),
           mediaSessionId:Number(row.media_session_id),
@@ -1488,6 +1529,7 @@ export class RealtimeVoiceSessionService {
         Number(row.media_session_id),
         {
           ...event.frame,
+          responseId,
           traceId,
           voiceSessionId: Number(row.voice_session_id),
           mediaSessionId: Number(row.media_session_id),
@@ -1682,6 +1724,11 @@ export class RealtimeVoiceSessionService {
             runtime,id,traceId,finalDecision,
           );
         runtime.coordinator.callerSpeechEnded();
+        if(detectRealtimeTransfer(extractionText,this.handoffIntentPhrases(runtime))){
+          await this.transfer(runtime,id,traceId,row,extractionText,"direct_request");
+          runtime.flusher.markDirty();
+          return;
+        }
         if(!runtime.taskState.activeSkillId){
           runtime.currentPipeline.routingStartedAt=performance.now();
           runtime.skillRoutingDecision=await this.skillRouter.route(runtime.skills,extractionText);
@@ -1776,9 +1823,11 @@ export class RealtimeVoiceSessionService {
           runtime.deferredResponse={itemId:event.itemId,text:responseText};
           runtime.responsePending=false;
         }else{
-          if (detectRealtimeTransfer(responseText))
-            await this.transfer(runtime, id, traceId, row, responseText);
-          else if (callbackIntent(responseText))
+          if (detectRealtimeTransfer(responseText,this.handoffIntentPhrases(runtime))){
+            await this.transfer(runtime, id, traceId, row, responseText,"ai_offer");
+            runtime.flusher.markDirty();
+            return;
+          }else if (callbackIntent(responseText))
             runtime.callbackOfferRequired = true;
           if (
             !runtime.blocked &&
@@ -1939,14 +1988,17 @@ export class RealtimeVoiceSessionService {
     traceId: string,
     row: any,
     text: string,
+    trigger:"direct_request"|"ai_offer",
   ) {
     const transferStarted = Date.now();
     runtime.transferRequired = true;
     if(runtime.closing.state!=="active"||runtime.handoff.state!=="idle")return;
-    const config=await this.handoffConfigResolver?.({tenantId:runtime.tenantId,agentId:runtime.agentId,agentVersionId:runtime.agentVersionId});
+    const config=runtime.handoffConfig||await this.handoffConfigResolver?.({tenantId:runtime.tenantId,agentId:runtime.agentId,agentVersionId:runtime.agentVersionId});
     if(!config){runtime.transferRequired=false;runtime.responsePending=true;await runtime.adapter.createPlannedResponse?.("Сейчас я не могу перевести звонок на сотрудника.","Произнеси только указанную фразу.");return}
     runtime.handoffConfig=config;
-    const requested=runtime.handoff.request(Boolean(config.confirmation_required));
+    const directConfirmation=Boolean(Number(config.direct_request_requires_confirmation??config.confirmation_required??0));
+    const offerConfirmation=Boolean(Number(config.ai_offer_requires_confirmation??1));
+    const requested=runtime.handoff.request({trigger,confirmationRequired:trigger==="ai_offer"?offerConfirmation:directConfirmation});
     if(!requested.accepted)return;
     await this.liveObserver?.({
       tenantId: runtime.tenantId,
@@ -1967,6 +2019,12 @@ export class RealtimeVoiceSessionService {
     });
     if(requested.needsConfirmation){runtime.responsePending=true;await runtime.adapter.createPlannedResponse?.("Соединить вас с сотрудником?","Произнеси только указанную фразу.");return}
     await this.startHandoffAnnouncement(runtime,id,traceId);
+  }
+  private handoffIntentPhrases(runtime:Runtime){
+    try{
+      const parsed=JSON.parse(String(runtime.handoffConfig?.intent_phrases_json||"[]"));
+      return Array.isArray(parsed)?parsed.map(String).slice(0,50):[];
+    }catch{return[]}
   }
   private async startHandoffAnnouncement(runtime:Runtime,id:number,traceId:string){
     if(!runtime.handoff.announcementRequested())return false;

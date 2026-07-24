@@ -1279,6 +1279,16 @@ const MIGRATIONS: Migration[] = [
        ('publish_ai_handoff','Publish AI handoff','Apply reviewed AI handoff configuration','ai_platform')`,
       `INSERT IGNORE INTO role_permissions(role_id,permission_id)SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key IN('view_ai_handoff','configure_ai_handoff','test_ai_handoff','publish_ai_handoff') WHERE r.role_key IN('su','admin')`
     ]
+  },
+  {
+    key:'20260724_055_ai_handoff_confirmation_policy',
+    description:'Separate direct request and AI offer handoff confirmation policies',
+    statements:[
+      `ALTER TABLE ai_handoff_configs
+       ADD COLUMN direct_request_requires_confirmation TINYINT(1) NOT NULL DEFAULT 0 AFTER confirmation_required`,
+      `ALTER TABLE ai_handoff_configs
+       ADD COLUMN ai_offer_requires_confirmation TINYINT(1) NOT NULL DEFAULT 1 AFTER direct_request_requires_confirmation`
+    ]
   }
 ];
 

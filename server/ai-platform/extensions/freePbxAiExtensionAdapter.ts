@@ -10,7 +10,13 @@ export interface FreePbxAiExtensionInspection{
   customDestination:any[];miscApplication:any[];legacyRoutePresent:boolean;
   managedBlockPresent:boolean;dependencies:Array<{type:string;name:string}>;
   dialplanFile:{path:string;owner:string;group:string;mode:string|null;includedBy:string};
-  plannedDialplan:{atomicWrite:boolean;owner:string;group:string;mode:string;context:string;extension:string;legacyRoutePresent:boolean;preservedCustomContexts:string[]};
+  plannedDialplan:{
+    atomicWrite:boolean;owner:string;group:string;mode:string;context:string;extension:string;
+    continuousRecording:boolean;recordingStartsBeforeStasis:boolean;
+    recordingPersistsAcrossHandoff:boolean;recordingFilenamePattern:string;
+    duplicateRecordingSuppression:string;legacyRoutePresent:boolean;
+    preservedCustomContexts:string[];
+  };
 }
 
 export class FreePbxAiExtensionAdapter{

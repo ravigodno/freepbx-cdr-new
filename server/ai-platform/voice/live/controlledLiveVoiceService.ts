@@ -13,8 +13,10 @@ import type { LiveReadiness, LiveRuntimeMetrics } from "./liveVoiceTypes.js";
 import { AiPlatformError } from "../../core/errors.js";
 import { readOpenAIRealtimeConfig } from "../providers/adapters/openaiRealtimeAdapter.js";
 import type { VoiceRecordingReconciliationService } from "../recordings/voiceRecordingReconciliationService.js";
+import type { PBXTransferService } from "../../../services/pbxTransferService.js";
 
 export class ControlledLiveVoiceService {
+  private handoffCleanupTimers = new Map<number, NodeJS.Timeout>();
   private active = new Map<
     number,
     {
@@ -34,6 +36,7 @@ export class ControlledLiveVoiceService {
     private realtime: RealtimeVoiceSessionService,
     private bridges: LiveBridgeService,
     private recordings: VoiceRecordingReconciliationService | null = null,
+    private pbxTransfer: PBXTransferService | null = null,
   ) {}
   async readiness(tenantId: number): Promise<LiveReadiness> {
     const config = await readLiveVoiceConfig(this.store),
@@ -344,6 +347,8 @@ export class ControlledLiveVoiceService {
     }
   }
   async cleanup(tenantId: number, voiceSessionId: number, traceId: string) {
+    const handoffTimer=this.handoffCleanupTimers.get(voiceSessionId);
+    if(handoffTimer){clearTimeout(handoffTimer);this.handoffCleanupTimers.delete(voiceSessionId)}
     const active = this.active.get(voiceSessionId);
     if (!active || active.tenantId !== tenantId) {
       await this.bridges.cleanup(voiceSessionId);
@@ -376,6 +381,29 @@ export class ControlledLiveVoiceService {
       details: {},
     });
     this.recordings?.schedule(tenantId,voiceSessionId,traceId);
+  }
+  private scheduleHandoffAnchorCleanup(input:{tenantId:number;voiceSessionId:number;traceId:string;timeoutSeconds:number}){
+    const existing=this.handoffCleanupTimers.get(input.voiceSessionId);if(existing)clearTimeout(existing);
+    const timer=setTimeout(()=>{
+      this.handoffCleanupTimers.delete(input.voiceSessionId);
+      const active=this.active.get(input.voiceSessionId);
+      if(!active||active.tenantId!==input.tenantId)return;
+      this.active.delete(input.voiceSessionId);
+      void this.media.stop(input.tenantId,active.mediaSessionId,input.traceId,"completed")
+        .catch(()=>{})
+        .then(()=>this.bridges.cleanup(input.voiceSessionId).catch(()=>{}));
+    },Math.max(10*60*1000,(Math.max(5,Math.min(Number(input.timeoutSeconds)||20,120))+2)*1000));
+    timer.unref?.();this.handoffCleanupTimers.set(input.voiceSessionId,timer);
+  }
+  async completeTransferredCaller(tenantId:number,voiceSessionId:number,traceId:string){
+    const timer=this.handoffCleanupTimers.get(voiceSessionId);
+    if(timer){clearTimeout(timer);this.handoffCleanupTimers.delete(voiceSessionId)}
+    const active=this.active.get(voiceSessionId);
+    if(!active||active.tenantId!==tenantId)return;
+    this.active.delete(voiceSessionId);
+    await this.media.stop(tenantId,active.mediaSessionId,traceId,"completed").catch(()=>{});
+    await this.bridges.cleanup(voiceSessionId).catch(()=>{});
+    await this.bridges.hangupCaller(active.callerChannel).catch(()=>{});
   }
   async durationLimit(tenantId:number,mediaSessionId:number,traceId:string){
     const entry=[...this.active.entries()].find(([,value])=>value.tenantId===tenantId&&value.mediaSessionId===mediaSessionId);
@@ -454,15 +482,28 @@ export class ControlledLiveVoiceService {
     const created:any=await this.store.query("INSERT INTO ai_handoff_events(tenant_id,config_id,voice_session_id,linkedid_hash,state,destination_type,destination_ref_safe,requested_at,announcement_finished_at,dialing_at,metadata_json)VALUES(?,?,?,?,?,?,?,NOW(3),NOW(3),NOW(3),'{}') ON DUPLICATE KEY UPDATE announcement_finished_at=VALUES(announcement_finished_at),dialing_at=VALUES(dialing_at),state='transferring'",[input.tenantId,input.config.id,input.voiceSessionId,voice.ari_channel_id_hash,"transferring",input.config.primary_destination_type,input.config.primary_destination_safe]);
     void created;
     try{
+      if(!this.pbxTransfer)throw new Error("blind_transfer_unavailable");
+      const destination=await this.pbxTransfer.resolveDestination(input.config.primary_destination_type,String(input.config.primary_destination_ref));
+      const transferAnchor=this.bridges.transferAnchor(input.voiceSessionId);
+      if(!destination||!transferAnchor)throw new Error("blind_transfer_context_unavailable");
       await this.realtime.stop(input.tenantId,active.realtimeSessionId,input.traceId,"completed");
-      await this.media.stop(input.tenantId,active.mediaSessionId,input.traceId,"completed");
-      this.active.delete(input.voiceSessionId);
-      await this.bridges.continueCaller(input.voiceSessionId,active.callerChannel,String(input.config.dialplan_token));
+      const transferred=await this.pbxTransfer.executeBlindTransfer(
+        {liveCallId:String(input.voiceSessionId),active:true,channelRef:transferAnchor},
+        destination,
+      );
+      if(!transferred.ok)throw new Error("blind_transfer_failed");
+      this.scheduleHandoffAnchorCleanup({
+        tenantId:input.tenantId,
+        voiceSessionId:input.voiceSessionId,
+        traceId:input.traceId,
+        timeoutSeconds:Number(input.config.answer_timeout_seconds)||20,
+      });
       input.coordinator.ringing();
       await this.store.query("UPDATE ai_voice_sessions SET transfer_state='ringing',completion_reason='human_handoff_requested' WHERE tenant_id=? AND id=?",[input.tenantId,input.voiceSessionId]);
       await this.store.query("UPDATE ai_handoff_events SET state='ringing',dial_status='RINGING' WHERE tenant_id=? AND config_id=? AND voice_session_id=?",[input.tenantId,input.config.id,input.voiceSessionId]);
+      this.recordings?.schedule(input.tenantId,input.voiceSessionId,input.traceId);
     }catch(error){
-      await this.store.query("UPDATE ai_handoff_events SET state='failed',dial_status='FAILED',failure_cause='ARI_CONTINUE_FAILED',ended_at=NOW(3),outcome='direction_unavailable' WHERE tenant_id=? AND config_id=? AND voice_session_id=?",[input.tenantId,input.config.id,input.voiceSessionId]);
+      await this.store.query("UPDATE ai_handoff_events SET state='failed',dial_status='FAILED',failure_cause='BLIND_TRANSFER_FAILED',ended_at=NOW(3),outcome='direction_unavailable' WHERE tenant_id=? AND config_id=? AND voice_session_id=?",[input.tenantId,input.config.id,input.voiceSessionId]);
       throw error;
     }
   }

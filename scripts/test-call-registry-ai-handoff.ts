@@ -80,4 +80,15 @@ for (const destinationType of ['queue', 'ring_group']) {
 const attempts = [metadata({ handoffId: 2, state: 'failed', dialStatus: 'NOANSWER' }), metadata({ handoffId: 3 })];
 assert.equal(getAiHandoffLogicalStatus(attempts.at(-1)!), 'human_handoff_answered', 'последняя попытка определяет итог');
 
+const continuousRecordingLegs = legs.map((leg, index) => index === 0
+  ? { ...leg, recordingfile: `ai-${linkedid}.wav` }
+  : leg
+);
+const continuouslyRecorded = aggregateAiHandoffLogicalCall(continuousRecordingLegs, metadata());
+assert.equal(
+  continuouslyRecorded?.recordingfile,
+  `ai-${linkedid}.wav`,
+  'единая запись исходного caller channel имеет приоритет над отдельной записью destination'
+);
+
 console.log('AI handoff logical call registry tests passed');

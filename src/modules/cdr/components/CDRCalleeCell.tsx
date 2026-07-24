@@ -119,7 +119,7 @@ export default function CDRCalleeCell({
           {hasTransferTarget && (
             <div className="inline-flex w-fit items-center gap-1.5 rounded-md border border-slate-200 bg-transparent px-2 py-1 text-[10px] font-black uppercase tracking-wide text-slate-700 dark:border-slate-700 dark:text-slate-200">
               <PhoneForwarded className="h-3.5 w-3.5" aria-label="Переведён" />
-              <span>{call?.logicalCall ? 'Переведён на' : 'на'}</span>
+              {!call?.logicalCall && <span>на</span>}
               <span className="font-mono text-xs">{transferTargetExt}</span>
               {transferTargetLabel && (
                 <span className="max-w-[160px] truncate normal-case tracking-normal text-slate-600 dark:text-slate-300">

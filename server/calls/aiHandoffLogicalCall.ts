@@ -86,6 +86,13 @@ export function aggregateAiHandoffLogicalCall(legs: any[], metadata: AiHandoffMe
     && !/AudioSocket\//i.test(String(leg.channel || ''))
   );
   const recordingLeg = sorted.find(leg =>
+    /^ai-[A-Za-z0-9_.-]+\.wav$/i.test(String(leg.recordingfile || '').trim())
+    && (
+      String(leg.uniqueid || '') === linkedid
+      || leg === aiLeg
+      || String(leg.dst || '') === String(metadata.aiExtension)
+    )
+  ) || sorted.find(leg =>
     String(leg.recordingfile || '').trim()
     && String(leg.dst || '') === String(metadata.destinationId)
   ) || sorted.find(leg => String(leg.recordingfile || '').trim());

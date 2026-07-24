@@ -40,8 +40,25 @@ export function composeRealtimeInstructions(context:any,language:string){
   };
 }
 
-export function detectRealtimeTransfer(text:string){
-  return /(соедини(те)?\s+(меня\s+)?с\s+(человеком|оператором|сотрудником)|нужен\s+живой|не\s+хочу\s+разговаривать\s+с\s+ботом|human agent|live person|\boperator\b)/iu.test(text);
+const normalizeTransferPhrase=(value:string)=>value
+  .toLocaleLowerCase("ru-RU")
+  .replace(/ё/g,"е")
+  .replace(/[^\p{L}\p{N}]+/gu," ")
+  .trim()
+  .replace(/\s+/g," ");
+
+export function detectRealtimeTransfer(text:string,configuredPhrases:string[]=[]){
+  const normalized=normalizeTransferPhrase(text);
+  if(configuredPhrases.some((phrase)=>{
+    const configured=normalizeTransferPhrase(String(phrase||""));
+    return configured.length>=5&&normalized.includes(configured);
+  }))return true;
+  if(/(?:^|\s)(?:не|нет)\s+(?:надо\s+|нужно\s+|хочу\s+)?(?:меня\s+)?(?:соедин|перевод|перевед|переключ|зов|позов|вызыв|вызов|связ)/iu.test(normalized))return false;
+  const humanTarget="(?:жив[а-я]*\\s+)?(?:человек[а-я]*|оператор[а-я]*|сотрудник[а-я]*|специалист[а-я]*|администратор[а-я]*|дежурн[а-я]*|консультант[а-я]*|менеджер[а-я]*|врач[а-я]*|доктор[а-я]*|внутренн[а-я]*\\s+номер(?:\\s+\\d{2,8})?|номер\\s+\\d{2,8}|\\d{2,8})";
+  const action=new RegExp(`(?:соедин|перевед|переключ|позов|вызов|свяж|направ|перенаправ|дай|дайте)[а-я]*\\s+(?:\\S+\\s+){0,5}?(?:с\\s+|на\\s+|к\\s+)?${humanTarget}`,"iu");
+  const request=new RegExp(`(?:хочу|желаю|можно|нужен|нужна|нужно|дайте|давай|мне\\s+бы)[а-я]*\\s+(?:\\S+\\s+){0,5}?(?:поговорить\\s+)?(?:с\\s+|на\\s+|к\\s+)?${humanTarget}`,"iu");
+  const conversation=new RegExp(`(?:поговорить|связаться|пообщаться)[а-я]*\\s+(?:\\S+\\s+){0,3}?(?:с\\s+|к\\s+)?${humanTarget}`,"iu");
+  return action.test(normalized)||request.test(normalized)||conversation.test(normalized)||/не\s+хочу\s+разговаривать\s+с\s+(?:ботом|роботом)|human agent|live person|\boperator\b/iu.test(normalized);
 }
 
 export function callbackIntent(text:string){

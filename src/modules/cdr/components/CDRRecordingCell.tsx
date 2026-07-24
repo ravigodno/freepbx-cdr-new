@@ -41,9 +41,6 @@ export function CDRRecordingCell({
               </>
             )}
           </button>
-          {call.logicalCall && (
-            <div className="mt-1 text-[10px] font-semibold text-slate-500">Разговор с сотрудником</div>
-          )}
         </>
       ) : (
         <span className="text-slate-405 dark:text-slate-500 italic text-xs select-none font-light">Нет записи</span>

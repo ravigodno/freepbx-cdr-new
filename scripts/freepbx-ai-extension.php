@@ -64,7 +64,7 @@ function customBlock(string $extension, string $fallbackTarget): string {
     $fallback = $fallbackTarget === 'hangup'
         ? 'Hangup(38)'
         : 'Goto(' . $fallbackTarget . ')';
-    return "; BEGIN PBXPuls AI Extension {$extension}\n[pbxpuls-ai]\nexten => {$extension},1,NoOp(PBXPuls managed AI Extension {$extension})\n same => n,Set(__PBXPULS_AI_EXTENSION={$extension})\n same => n,Set(__PBXPULS_AI_FALLBACK_DEPTH=\${IF(\$[\"\${PBXPULS_AI_FALLBACK_DEPTH}\"=\"\"]?0:\${PBXPULS_AI_FALLBACK_DEPTH})})\n same => n,GotoIf(\$[\${PBXPULS_AI_FALLBACK_DEPTH}>=2]?fallback_loop)\n same => n,Stasis(pbxpuls-ai-control,ai_extension:{$extension})\n same => n,Set(__PBXPULS_AI_FALLBACK_DEPTH=\$[\${PBXPULS_AI_FALLBACK_DEPTH}+1])\n same => n,{$fallback}\n same => n(fallback_loop),Hangup(25)\n; END PBXPuls AI Extension {$extension}\n";
+    return "; BEGIN PBXPuls AI Extension {$extension}\n[pbxpuls-ai]\nexten => {$extension},1,NoOp(PBXPuls managed AI Extension {$extension})\n same => n,Set(__PBXPULS_AI_EXTENSION={$extension})\n same => n,Set(__PBXPULS_AI_FALLBACK_DEPTH=\${IF(\$[\"\${PBXPULS_AI_FALLBACK_DEPTH}\"=\"\"]?0:\${PBXPULS_AI_FALLBACK_DEPTH})})\n same => n,GotoIf(\$[\${PBXPULS_AI_FALLBACK_DEPTH}>=2]?fallback_loop)\n same => n,GotoIf(\$[\"\${REC_STATUS}\"=\"RECORDING\"]?recording_ready)\n same => n,Set(__PBXPULS_RECORDING_ID=\${FILTER(0-9.,\${CHANNEL(linkedid)})})\n same => n,ExecIf(\$[\"\${PBXPULS_RECORDING_ID}\"=\"\"]?Set(__PBXPULS_RECORDING_ID=\${FILTER(0-9.,\${UNIQUEID})}))\n same => n,Set(__CALLFILENAME=ai-\${PBXPULS_RECORDING_ID}.wav)\n same => n,Set(CDR(recordingfile)=\${CALLFILENAME})\n same => n,MixMonitor(\${CALLFILENAME},bi(PBXPULS_MIXMON_ID))\n same => n,Set(__MIXMON_ID=\${PBXPULS_MIXMON_ID})\n same => n,Set(__REC_STATUS=RECORDING)\n same => n(recording_ready),Stasis(pbxpuls-ai-control,ai_extension:{$extension})\n same => n,Set(__PBXPULS_AI_FALLBACK_DEPTH=\$[\${PBXPULS_AI_FALLBACK_DEPTH}+1])\n same => n,{$fallback}\n same => n(fallback_loop),Hangup(25)\n; END PBXPuls AI Extension {$extension}\n";
 }
 
 $command = (string)($argv[1] ?? '');
@@ -109,6 +109,11 @@ if ($command === 'inspect') {
             'mode' => '0664',
             'context' => 'pbxpuls-ai',
             'extension' => $extension,
+            'continuousRecording' => true,
+            'recordingStartsBeforeStasis' => true,
+            'recordingPersistsAcrossHandoff' => true,
+            'recordingFilenamePattern' => 'ai-<linkedid>.wav',
+            'duplicateRecordingSuppression' => '__REC_STATUS=RECORDING',
             'legacyRoutePresent' => strpos($planned, 'pbxpuls-ai-voice-test') !== false,
             'preservedCustomContexts' => array_values(array_unique($preservedContexts[1] ?? [])),
         ],
