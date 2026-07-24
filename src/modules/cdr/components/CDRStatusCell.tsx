@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 
 interface CDRStatusCellProps {
+  index?: number;
   isMissed: boolean;
   callDisp: string;
   processed?: boolean;
@@ -13,6 +14,7 @@ interface CDRStatusCellProps {
   wasKpiResolved?: boolean;
   callbackTime?: string;
   callbackStatus?: 'processed_in_sla' | 'processed_late' | 'pending_callback' | 'not_called_back' | 'processed' | 'called_back' | 'repeated_inbound';
+  logicalStatus?: string;
   onShowProcessingEvent?: () => void;
 }
 
@@ -24,6 +26,7 @@ export function CDRStatusCell({
   wasKpiResolved,
   callbackTime,
   callbackStatus,
+  logicalStatus,
   onShowProcessingEvent,
 }: CDRStatusCellProps) {
   const isLostBadge = isMissed && callbackStatus === 'not_called_back';
@@ -35,7 +38,24 @@ export function CDRStatusCell({
   const showProcessedBadge = isMissed && (hasProcessedCallbackStatus || processed || wasCallbacked);
   const processedInSla = callbackStatus === 'processed_in_sla' || wasKpiResolved === true;
 
-  const statusBadge = callDisp === 'ANSWERED' ? (
+  const handoffLabels: Record<string, string> = {
+    human_handoff_answered: 'Переведён',
+    human_handoff_no_answer: 'Сотрудник не ответил',
+    human_handoff_busy: 'Сотрудник занят',
+    human_handoff_failed: 'Перевод не удался',
+    human_handoff_declined: 'Клиент отказался',
+    human_handoff_returned_to_ai: 'Возвращён к AI'
+  };
+  const statusBadge = logicalStatus && handoffLabels[logicalStatus] ? (
+    <span className={`inline-flex items-center gap-1.5 border px-2.5 py-1 rounded-lg text-[11px] font-bold ${
+      logicalStatus === 'human_handoff_answered'
+        ? 'bg-emerald-50/40 text-emerald-600 border-emerald-200'
+        : 'bg-amber-50/40 text-amber-600 border-amber-200'
+    }`}>
+      <CheckCircle className="h-3.5 w-3.5" />
+      {handoffLabels[logicalStatus]}
+    </span>
+  ) : callDisp === 'ANSWERED' ? (
     <span className="inline-flex items-center gap-1.5 bg-emerald-50/40 dark:bg-emerald-950/10 text-emerald-500 dark:text-emerald-400 border border-emerald-250/30 dark:border-emerald-800/40 px-2.5 py-1 rounded-lg text-[11px] font-bold">
       <CheckCircle className="h-3.5 w-3.5" />
       Отвечен

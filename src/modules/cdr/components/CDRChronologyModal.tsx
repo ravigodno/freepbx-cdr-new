@@ -69,11 +69,38 @@ export default function CDRChronologyModal({
           {chronologyData?.phoneMeeting ? (
             <MeetingTimelineViewer meeting={chronologyData.meeting} />
           ) : chronologyData && (
-            <CallRouteViewer
-              routeSteps={routeSteps}
-              anyAnswered={anyAnswered}
-              resultText={resultText}
-            />
+            <>
+              {Array.isArray(chronologyData.logicalTimeline) && (
+                <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-4">
+                  <h4 className="text-sm font-black text-slate-900">Понятная история звонка</h4>
+                  <div className="mt-3 space-y-3">
+                    {chronologyData.logicalTimeline.map((event: any, index: number) => (
+                      <div key={`${event.type}-${index}`} className="flex gap-3 text-xs">
+                        <span className="w-20 shrink-0 font-mono font-bold text-slate-500">
+                          {new Date(event.at).toLocaleTimeString('ru-RU')}
+                        </span>
+                        <span className="font-semibold text-slate-800">{event.title}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <details className="mt-4 border-t border-blue-100 pt-3">
+                    <summary className="cursor-pointer text-xs font-bold text-slate-500">Технические события</summary>
+                    <div className="mt-2 max-h-64 overflow-auto rounded bg-slate-950 p-3 font-mono text-[10px] text-slate-200">
+                      {(chronologyData.technicalTimeline || []).map((event: any, index: number) => (
+                        <div key={`${event.uniqueid}-${index}`}>
+                          {event.calldate} · {event.dcontext} · {event.lastapp} · {event.channel} → {event.dst}
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                </div>
+              )}
+              <CallRouteViewer
+                routeSteps={routeSteps}
+                anyAnswered={anyAnswered}
+                resultText={resultText}
+              />
+            </>
           )}
         </div>
 

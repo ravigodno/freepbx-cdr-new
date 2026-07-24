@@ -36,6 +36,7 @@ export default function CDRCalleeCell({
   const hasTransferTarget = Boolean(isBlindTransferBadgeEligible(call) && transferTargetExt);
   const compactInternal = calleeName === `Внутренний ${displayedDst}`;
   const compactCalleeLabel = compactInternal ? calleeName.slice(0, -displayedDst.length).trim() : calleeName;
+  const logicalCalleeLabel = call?.logicalCall ? String(call.aiAgentName || 'AI-сотрудник') : compactCalleeLabel;
   const callAction = !isMultiDst && (
     <button
         type="button"
@@ -95,7 +96,7 @@ export default function CDRCalleeCell({
                   ? 'text-red-800 dark:text-red-400'
                   : 'text-slate-800 dark:text-slate-100'
               }`}>
-                {compactCalleeLabel}
+                {logicalCalleeLabel}
               </span>
               {compactInternal && callAction}
               {compactInternal && (
@@ -118,7 +119,7 @@ export default function CDRCalleeCell({
           {hasTransferTarget && (
             <div className="inline-flex w-fit items-center gap-1.5 rounded-md border border-slate-200 bg-transparent px-2 py-1 text-[10px] font-black uppercase tracking-wide text-slate-700 dark:border-slate-700 dark:text-slate-200">
               <PhoneForwarded className="h-3.5 w-3.5" aria-label="Переведён" />
-              <span>на</span>
+              <span>{call?.logicalCall ? 'Переведён на' : 'на'}</span>
               <span className="font-mono text-xs">{transferTargetExt}</span>
               {transferTargetLabel && (
                 <span className="max-w-[160px] truncate normal-case tracking-normal text-slate-600 dark:text-slate-300">

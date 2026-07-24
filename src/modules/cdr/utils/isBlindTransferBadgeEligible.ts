@@ -12,6 +12,7 @@ export function isBlindTransferBadgeEligible(call: any): boolean {
 
   return call.blindTransfer === true
     || Boolean(call.blindTransferTargetExt)
+    || transferType === 'ai_handoff'
     || eventName === 'blindtransfer'
     || transferType === 'blind'
     || transferType === 'blind_transfer'

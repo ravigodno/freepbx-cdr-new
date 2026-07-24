@@ -4,6 +4,8 @@ interface Props {
   duration: number;
   billsec: number;
   formatSeconds: (sec: number) => string;
+  aiTalkDuration?: number;
+  humanTalkDuration?: number;
 }
 
 function DurationIcon({ className = 'h-3.5 w-3.5' }: { className?: string }) {
@@ -22,7 +24,8 @@ function TalkIcon({ className = 'h-3.5 w-3.5' }: { className?: string }) {
   );
 }
 
-export function CDRDurationCell({ duration, billsec, formatSeconds }: Props) {
+export function CDRDurationCell({ duration, billsec, formatSeconds, aiTalkDuration, humanTalkDuration }: Props) {
+  const handoffDurations = aiTalkDuration !== undefined || humanTalkDuration !== undefined;
   return (
     <td className="py-4 px-4 text-xs text-slate-500 dark:text-slate-400">
       <div className="flex flex-col gap-1.5">
@@ -34,6 +37,12 @@ export function CDRDurationCell({ duration, billsec, formatSeconds }: Props) {
           <TalkIcon className="h-3.5 w-3.5 text-slate-400" />
           <span className="font-bold font-mono text-slate-800 dark:text-slate-200">{formatSeconds(billsec)}</span>
         </div>
+        {handoffDurations && (
+          <div className="space-y-0.5 text-[10px] font-semibold text-slate-500">
+            <div>AI: <span className="font-mono">{formatSeconds(aiTalkDuration || 0)}</span></div>
+            <div>Сотрудник: <span className="font-mono">{formatSeconds(humanTalkDuration || 0)}</span></div>
+          </div>
+        )}
       </div>
     </td>
   );

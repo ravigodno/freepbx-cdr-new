@@ -53,6 +53,7 @@
     ,"test:ai-platform-live-voice": "tsx scripts/test-ai-platform-live-voice.ts"
     ,"test:ai-platform-ai-extensions": "tsx scripts/test-ai-platform-ai-extensions.ts"
     ,"test:ai-platform-human-handoff-runtime": "tsx scripts/test-ai-platform-human-handoff-runtime.ts"
+    ,"test:call-registry-ai-handoff": "tsx scripts/test-call-registry-ai-handoff.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

@@ -1,5 +1,5 @@
 import React from 'react';
-import { buildCdrRowViewModel } from '../utils/CDRRowHelpers';
+import { buildCdrRowViewModel, directoryEntryMatchesNumber } from '../utils/CDRRowHelpers';
 import CDRDurationCell from './CDRDurationCell';
 import CDRStatusCell from './CDRStatusCell';
 import CDRCommentCell from './CDRCommentCell';
@@ -69,13 +69,19 @@ export default function LegacyCDRTable({
       </thead>
       <tbody className="divide-y divide-slate-100 dark:divide-slate-800/45 text-xs bg-white dark:bg-slate-900">
         {calls.map((call, index) => {
+          const handoffDirectoryEntry = call.logicalCall && call.transferTargetExt
+            ? directory.find(entry => directoryEntryMatchesNumber(entry, call.transferTargetExt))
+            : null;
+          const displayCall = handoffDirectoryEntry
+            ? { ...call, transferTargetLabel: handoffDirectoryEntry.name || call.transferTargetLabel }
+            : call;
           const callLinkId = String(call.linkedid || call.uniqueid || '');
           const relatedLegs = calls.filter((leg: any) => {
             const legLinkId = String(leg.linkedid || leg.uniqueid || '');
             return callLinkId && legLinkId === callLinkId;
           });
 
-          const rowVm = buildCdrRowViewModel(call, directory, relatedLegs);
+          const rowVm = buildCdrRowViewModel(displayCall, directory, relatedLegs);
 
           const {
             isIncoming,
@@ -127,7 +133,7 @@ export default function LegacyCDRTable({
 
               {/* Column 3: Callee display (Куда звонил) */}
               <CDRCalleeCell
-                call={call}
+                call={displayCall}
                 calleeName={calleeName}
                 calleeType={calleeType}
                 displayedDst={displayedDst}
@@ -145,6 +151,7 @@ export default function LegacyCDRTable({
                 wasKpiResolved={call.wasKpiResolved}
                 callbackTime={call.callbackTime}
                 callbackStatus={call.callbackStatus}
+                logicalStatus={call.logicalStatus}
                 onShowProcessingEvent={() => showProcessingEvent(call)}
               />
 
@@ -160,6 +167,8 @@ export default function LegacyCDRTable({
               <CDRDurationCell
                 duration={call.duration}
                 billsec={call.billsec}
+                aiTalkDuration={call.logicalCall ? call.aiTalkDuration : undefined}
+                humanTalkDuration={call.logicalCall ? call.humanTalkDuration : undefined}
                 formatSeconds={formatSeconds}
               />
 

@@ -155,6 +155,12 @@ import { startLogAnalysisCollector } from './server/logAnalysis/service.js';
 import { registerOutgoingReportRoutes } from './server/outgoingReports.js';
 import { mergeDeviceNetworkIdentity, readIpNeighborMacs } from './server/deviceNetworkIdentity.js';
 import { getLatestRtcpQuality, qualityVariableForChannel, recordAsteriskRtcpQuality } from './server/rtcpQualityCollector.js';
+import { voiceHash } from './server/ai-platform/voice/voiceEncryption.js';
+import {
+  aggregateAiHandoffLogicalCall,
+  buildAiHandoffTimeline,
+  type AiHandoffMetadata
+} from './server/calls/aiHandoffLogicalCall.js';
 
 // Load environment variables
 dotenv.config();
@@ -2086,6 +2092,61 @@ const uniqueExts = (values: any[]): string[] => {
       result.push(ext);
     }
   });
+  return result;
+};
+
+const loadAiHandoffMetadata = async (linkedIds: string[]): Promise<Map<string, AiHandoffMetadata>> => {
+  const result = new Map<string, AiHandoffMetadata>();
+  const safeLinkedIds = Array.from(new Set(linkedIds.map(value => String(value || '').trim()).filter(Boolean))).slice(0, 1000);
+  if (!safeLinkedIds.length) return result;
+  try {
+    const tenants = await queryPBXPulsDb("SELECT id FROM ai_tenants WHERE tenant_key='installation' LIMIT 1");
+    const tenantId = Number(tenants[0]?.id || 0);
+    if (!tenantId) return result;
+    const linkedIdByHash = new Map(safeLinkedIds.map(linkedid => [voiceHash(tenantId, linkedid), linkedid]));
+    const hashes = Array.from(linkedIdByHash.keys());
+    const placeholders = hashes.map(() => '?').join(',');
+    const rows = await queryPBXPulsDb(
+      `SELECT e.id handoff_id,e.voice_session_id,e.state,e.destination_type,e.destination_ref_safe,
+              e.requested_at,e.announcement_finished_at,e.dialing_at,e.answered_at,e.ended_at,
+              e.dial_status,e.outcome,v.external_call_id_hash,v.agent_id,v.agent_version_id,
+              x.extension ai_extension,a.name agent_name,c.primary_destination_ref
+       FROM ai_handoff_events e
+       JOIN ai_voice_sessions v ON v.tenant_id=e.tenant_id AND v.id=e.voice_session_id
+       JOIN ai_agents a ON a.tenant_id=v.tenant_id AND a.id=v.agent_id
+       LEFT JOIN ai_handoff_configs c ON c.tenant_id=e.tenant_id AND c.id=e.config_id
+       LEFT JOIN ai_extensions x ON x.tenant_id=e.tenant_id AND x.id=c.ai_extension_id
+       WHERE e.tenant_id=? AND v.external_call_id_hash IN (${placeholders})
+       ORDER BY e.id ASC`,
+      [tenantId, ...hashes]
+    );
+    rows.forEach((row: any) => {
+      const linkedid = linkedIdByHash.get(String(row.external_call_id_hash || ''));
+      if (!linkedid) return;
+      result.set(linkedid, {
+        handoffId: Number(row.handoff_id),
+        voiceSessionId: Number(row.voice_session_id),
+        linkedid,
+        aiExtension: String(row.ai_extension || ''),
+        agentId: Number(row.agent_id),
+        agentName: String(row.agent_name || 'AI-сотрудник'),
+        agentVersionId: Number(row.agent_version_id),
+        destinationType: String(row.destination_type || ''),
+        destinationId: String(row.primary_destination_ref || '').replace(/\D/g, ''),
+        destinationName: String(row.destination_ref_safe || row.primary_destination_ref || ''),
+        state: String(row.state || ''),
+        dialStatus: row.dial_status ? String(row.dial_status) : null,
+        outcome: row.outcome ? String(row.outcome) : null,
+        requestedAt: row.requested_at ? String(row.requested_at) : null,
+        announcementFinishedAt: row.announcement_finished_at ? String(row.announcement_finished_at) : null,
+        dialingAt: row.dialing_at ? String(row.dialing_at) : null,
+        answeredAt: row.answered_at ? String(row.answered_at) : null,
+        endedAt: row.ended_at ? String(row.ended_at) : null
+      });
+    });
+  } catch (error: any) {
+    console.warn('[CDR] AI handoff metadata unavailable:', sanitizePBXPulsDbError(error));
+  }
   return result;
 };
 
@@ -14757,6 +14818,8 @@ app.get('/api/calls/:uniqueid/chronology', requireAuth(), async (req, res) => {
     legs.sort((a, b) => new Date(a.calldate).getTime() - new Date(b.calldate).getTime());
     const celCallerChain = await loadCelCallerChain(settings, isDemo, targetLinkedId);
     const externalCallerResolution = resolveInboundExternalCaller(legs, celCallerChain);
+    const chronologyHandoff = (await loadAiHandoffMetadata([targetLinkedId])).get(targetLinkedId) || null;
+    const handoffTimeline = chronologyHandoff ? buildAiHandoffTimeline(legs, chronologyHandoff) : null;
 
     // Format the timeline steps into beautiful human-readable explanations
     const timeline = legs.map((leg, idx) => {
@@ -14879,6 +14942,9 @@ app.get('/api/calls/:uniqueid/chronology', requireAuth(), async (req, res) => {
       trunkNumber: String(routeAnalysis?.steps?.find((step: any) => step.type === 'inbound_trunk')?.number || routeAnalysis?.did || '').trim(),
       routeDestination: routeAnalysis?.steps?.find((step: any) => step.type === 'inbound_route')?.destination || '',
       timeline,
+      logicalCall: chronologyHandoff ? aggregateAiHandoffLogicalCall(legs, chronologyHandoff) : null,
+      logicalTimeline: handoffTimeline?.events || null,
+      technicalTimeline: handoffTimeline?.technicalEvents || null,
       routeAnalysis
     });
 
@@ -15095,6 +15161,9 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
       if (!linkedGroups.has(key)) linkedGroups.set(key, []);
       linkedGroups.get(key)!.push(c);
     });
+    const aiHandoffMetadata = await loadAiHandoffMetadata(
+      Array.from(linkedGroups.keys()).filter(key => !String(key).startsWith('meeting:'))
+    );
 
     calls = Array.from(linkedGroups.values()).map(group => {
       const meeting = group.map(c => meetingByChannelId.get(String(c.uniqueid || '')) || meetingByChannelId.get(String(c.linkedid || ''))).find(Boolean);
@@ -15121,6 +15190,12 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
           phoneMeetingParticipants: participants
         } as CallEntry;
       }
+      const linkedid = String(group[0]?.linkedid || group[0]?.uniqueid || '');
+      const handoff = aiHandoffMetadata.get(linkedid);
+      if (handoff) {
+        const logicalCall = aggregateAiHandoffLogicalCall(group, handoff);
+        if (logicalCall) return logicalCall as CallEntry;
+      }
       if (group.length === 1) return normalizeClickToCallForDisplay(normalizeInboundCallerForDisplay(group[0]));
 
       const sorted = [...group].map(c => normalizeClickToCallForDisplay(c)).sort((a, b) => new Date(a.calldate).getTime() - new Date(b.calldate).getTime());
@@ -15134,8 +15209,14 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
       const queueLeg = sorted.find(c => c.dcontext === "ext-queues" || c.lastapp === "Queue");
       const groupLeg = sorted.find(c => c.dcontext === "ext-group");
       const routeLeg = queueLeg || groupLeg || first;
+      const aiHandoffTargetLeg = sorted.find(c =>
+        String(c.dcontext || "") === "from-did-direct"
+        && /^[0-9]{2,8}$/.test(String(c.dst || ""))
+        && /Local\/handoff-[a-f0-9]+@pbxpuls-ai-handoff-target/i.test(String(c.channel || ""))
+      );
+      const recordingLeg = sorted.find(c => String(c.recordingfile || "").trim());
       let answeredExts = uniqueExts(sorted
-        .filter(c => c.dcontext === "ext-local" && (c.disposition || "").toUpperCase() === "ANSWERED" && Number(c.billsec || 0) > 0)
+        .filter(c => (c.dcontext === "ext-local" || c === aiHandoffTargetLeg) && (c.disposition || "").toUpperCase() === "ANSWERED" && Number(c.billsec || 0) > 0)
         .map(c => c.dst));
       let missedExts = uniqueExts(sorted
         .filter(c => c.dcontext === "ext-local" && ((c.disposition || "").toUpperCase() !== "ANSWERED" || Number(c.billsec || 0) === 0))
@@ -15176,6 +15257,11 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
         did: buildDidWithAnsweredAndMissed((queueLeg?.did || groupLeg?.did || sorted.find(c => c.did)?.did || ""), answeredExts, missedExts) || (sorted.find(c => c.did)?.did || first.did),
         answeredExts,
         missedExts,
+        recordingfile: recordingLeg?.recordingfile || "",
+        wasTransferred: Boolean(aiHandoffTargetLeg),
+        transferType: aiHandoffTargetLeg ? "ai_handoff" : undefined,
+        transferTargetExt: aiHandoffTargetLeg ? String(aiHandoffTargetLeg.dst || "") : undefined,
+        transferTargetLabel: aiHandoffTargetLeg ? "AI → сотрудник" : undefined,
       };
     });
 
@@ -15192,8 +15278,15 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
       if (!statsLinkedGroups.has(key)) statsLinkedGroups.set(key, []);
       statsLinkedGroups.get(key)!.push(c);
     });
+    const statsAiHandoffMetadata = await loadAiHandoffMetadata(Array.from(statsLinkedGroups.keys()));
 
     calls = Array.from(statsLinkedGroups.values()).map(group => {
+      const linkedid = String(group[0]?.linkedid || group[0]?.uniqueid || '');
+      const handoff = statsAiHandoffMetadata.get(linkedid);
+      if (handoff) {
+        const logicalCall = aggregateAiHandoffLogicalCall(group, handoff);
+        if (logicalCall) return logicalCall as CallEntry;
+      }
       if (group.length === 1) return normalizeClickToCallForDisplay(normalizeInboundCallerForDisplay(group[0]));
       const sorted = [...group].map(c => normalizeClickToCallForDisplay(c)).sort((a, b) => new Date(a.calldate).getTime() - new Date(b.calldate).getTime());
       const answered = sorted.find(c => (c.disposition || "").toUpperCase() === "ANSWERED" && Number(c.billsec || 0) > 0);
