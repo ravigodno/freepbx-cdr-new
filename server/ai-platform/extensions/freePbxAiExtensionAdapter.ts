@@ -40,6 +40,9 @@ export class FreePbxAiExtensionAdapter{
   apply(extension:string,displayName:string,fallbackTarget:string){
     return this.command(["apply",extension,displayName,fallbackTarget]);
   }
+  remove(extension:string){
+    return this.command(["remove",extension]);
+  }
   async reload(){
     const{stdout,stderr}=await run("fwconsole",["reload"],{timeout:120000,maxBuffer:1024*1024});
     return{ok:true,output:String(stdout||stderr||"").slice(-500)};

@@ -18,6 +18,7 @@ export const AI_PLATFORM_PERMISSIONS = [
   ,'view_ai_handoff','configure_ai_handoff','test_ai_handoff','publish_ai_handoff'
   ,'view_ai_agents','edit_ai_agents','view_ai_telephony','configure_ai_telephony','ai_platform_expert_mode'
   ,'preview_ai_agents','apply_ai_agents'
+  ,'disable_ai_agents','archive_ai_agents','delete_ai_agents','force_delete_ai_agents'
 ] as const;
 
 export type AiPlatformPermission = typeof AI_PLATFORM_PERMISSIONS[number];

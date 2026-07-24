@@ -18,7 +18,8 @@ const requiredTables = [
   'ai_tenants', 'ai_agents', 'ai_agent_versions', 'ai_provider_configs', 'ai_tools', 'ai_agent_tools',
   'ai_behavior_profiles', 'ai_audit_log', 'ai_tool_executions', 'ai_transfer_requests',
   'ai_action_definitions', 'ai_actions', 'ai_agent_actions', 'ai_callback_requests', 'ai_voice_sessions', 'ai_voice_route_bindings', 'ai_voice_media_sessions', 'ai_realtime_voice_sessions',
-  'ai_extensions', 'ai_extension_previews', 'ai_agent_creation_drafts', 'ai_agent_creation_previews'
+  'ai_extensions', 'ai_extension_previews', 'ai_agent_creation_drafts', 'ai_agent_creation_previews',
+  'ai_agent_deletion_previews', 'ai_deleted_agent_snapshots'
   ,'ai_handoff_configs','ai_handoff_previews','ai_handoff_events'
 ];
 

@@ -158,4 +158,35 @@ if ($command === 'apply') {
     echo json_encode(['ok'=>true,'extension'=>$extension,'miscApplicationId'=>$miscId,'customDestinationId'=>$destId,'destination'=>$destination], JSON_UNESCAPED_UNICODE), PHP_EOL;
     exit;
 }
+if ($command === 'remove') {
+    $inspectionDependencies = dependencies($db, $destination);
+    if ($inspectionDependencies) fail('dependencies_present', 'Managed destination is still referenced');
+    $customapps = \FreePBX::Customappsreg();
+    $custom = $customapps->getAllCustomDests();
+    $destId = null;
+    foreach ($custom as $id => $row) {
+        if ((string)($row['target'] ?? '') !== $destination) continue;
+        $notes = (string)($row['notes'] ?? '');
+        if (strpos($notes, 'управляется PBXPuls') === false) fail('foreign_custom_destination', 'Custom Destination is not PBXPuls-managed');
+        $destId = (int)$id;
+    }
+    $misc = $db->prepare("SELECT miscapps_id,description FROM miscapps WHERE ext=? AND dest=? LIMIT 1");
+    $misc->execute([$extension, $destination]);
+    $miscRow = $misc->fetch();
+    if ($miscRow && strpos((string)($miscRow['description'] ?? ''), 'PBXPuls') === false)
+        fail('foreign_misc_application', 'Misc Application is not PBXPuls-managed');
+    if ($miscRow) \FreePBX::Miscapps()->delete((int)$miscRow['miscapps_id']);
+    if ($destId) $customapps->setConfig($destId, false, 'dests');
+    $source = is_file($contextFile) ? (string)file_get_contents($contextFile) : '';
+    $updated = preg_replace('/; BEGIN PBXPuls AI Extension '.preg_quote($extension, '/').'.*?; END PBXPuls AI Extension '.preg_quote($extension, '/').'\s*/s', '', $source);
+    if ($updated !== $source) {
+        $temporary = $contextFile . '.pbxpuls.tmp';
+        if (file_put_contents($temporary, $updated, LOCK_EX) === false) fail('dialplan_write_failed', 'Cannot write dialplan');
+        if (!chown($temporary, 'asterisk') || !chgrp($temporary, 'asterisk') || !chmod($temporary, 0664))
+            fail('dialplan_permissions_failed', 'Cannot set supported Asterisk file ownership');
+        if (!rename($temporary, $contextFile)) fail('dialplan_write_failed', 'Cannot activate dialplan file');
+    }
+    echo json_encode(['ok'=>true,'extension'=>$extension,'miscApplicationRemoved'=>(bool)$miscRow,'customDestinationRemoved'=>(bool)$destId,'managedBlockRemoved'=>$updated !== $source], JSON_UNESCAPED_UNICODE), PHP_EOL;
+    exit;
+}
 fail('unsupported_command', 'Unsupported command');

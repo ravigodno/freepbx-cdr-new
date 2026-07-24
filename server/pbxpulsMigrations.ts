@@ -1341,7 +1341,55 @@ const MIGRATIONS: Migration[] = [
        ('apply_ai_agents','Apply AI agent creation','Apply a confirmed AI agent creation preview','ai_platform')`,
       `INSERT IGNORE INTO role_permissions(role_id,permission_id)
        SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key IN('preview_ai_agents','apply_ai_agents')
-       WHERE r.role_key IN('su','admin')`
+      WHERE r.role_key IN('su','admin')`
+    ]
+  },
+  {
+    key:'20260724_058_safe_ai_agent_deletion',
+    description:'Add dependency-aware preview-first AI agent deletion lifecycle',
+    statements:[
+      `ALTER TABLE ai_agents
+       ADD COLUMN deletion_status VARCHAR(32) NULL AFTER status,
+       ADD COLUMN deletion_error_code VARCHAR(64) NULL AFTER deletion_status,
+       ADD COLUMN archived_at DATETIME NULL AFTER deletion_error_code,
+       ADD COLUMN deleted_at DATETIME NULL AFTER archived_at`,
+      `CREATE TABLE IF NOT EXISTS ai_agent_deletion_previews(
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,tenant_id BIGINT NOT NULL,agent_id BIGINT NOT NULL,
+        mode ENUM('disable','archive','delete') NOT NULL,idempotency_key VARCHAR(100) NOT NULL,
+        preview_json LONGTEXT NOT NULL,status ENUM('ready','blocked','applied','expired') NOT NULL,
+        created_by VARCHAR(191) NULL,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        expires_at DATETIME NOT NULL,applied_at DATETIME NULL,
+        UNIQUE KEY uniq_ai_agent_deletion_preview(tenant_id,idempotency_key),
+        KEY idx_ai_agent_deletion_agent(tenant_id,agent_id,status),
+        CONSTRAINT fk_ai_agent_deletion_tenant FOREIGN KEY(tenant_id) REFERENCES ai_tenants(id),
+        CONSTRAINT fk_ai_agent_deletion_agent FOREIGN KEY(agent_id) REFERENCES ai_agents(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS ai_deleted_agent_snapshots(
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,tenant_id BIGINT NOT NULL,agent_id BIGINT NOT NULL,
+        original_name VARCHAR(191) NOT NULL,snapshot_json LONGTEXT NOT NULL,deleted_by VARCHAR(191) NULL,
+        deleted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_ai_deleted_agent_snapshot(tenant_id,agent_id),
+        CONSTRAINT fk_ai_deleted_snapshot_tenant FOREIGN KEY(tenant_id) REFERENCES ai_tenants(id),
+        CONSTRAINT fk_ai_deleted_snapshot_agent FOREIGN KEY(agent_id) REFERENCES ai_agents(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `INSERT IGNORE INTO permissions(permission_key,name,description,category)VALUES
+       ('disable_ai_agents','Disable AI agents','Disable AI routing while preserving managed objects and history','ai_platform'),
+       ('archive_ai_agents','Archive AI agents','Archive disabled AI agents and preserve history','ai_platform'),
+       ('delete_ai_agents','Delete AI agents','Apply a dependency-free confirmed AI agent deletion preview','ai_platform'),
+       ('force_delete_ai_agents','Force delete AI agents','Override eligible non-production deletion blockers','ai_platform')`,
+      `INSERT IGNORE INTO role_permissions(role_id,permission_id)
+       SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key IN('disable_ai_agents','archive_ai_agents','delete_ai_agents')
+       WHERE r.role_key IN('su','admin')`,
+      `INSERT IGNORE INTO role_permissions(role_id,permission_id)
+       SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key='force_delete_ai_agents'
+      WHERE r.role_key='su'`
+    ]
+  },
+  {
+    key:'20260724_059_preserve_handoff_history_after_agent_delete',
+    description:'Allow archived handoff history to outlive a removed AI Extension',
+    statements:[
+      `ALTER TABLE ai_handoff_configs MODIFY ai_extension_id BIGINT NULL`
     ]
   }
 ];

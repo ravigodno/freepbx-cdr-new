@@ -1,12 +1,13 @@
 import React,{useEffect,useMemo,useState}from'react';
 import{BookOpen,MessageSquare,Phone,Plus,Settings2,TestTube2}from'lucide-react';
 import AiAgentCreationWizard from'./AiAgentCreationWizard';
+import AiAgentDeletionWizard from'./AiAgentDeletionWizard';
 
 const roleLabel:Record<string,string>={receptionist:'Администратор',telephony_admin:'Администратор телефонии',sales_manager:'Менеджер продаж'};
 const extensionOf=(value:any)=>String(value||'').split(',')[0]?.split(':')[0]||'—';
 
 export default function AiPlatformAgentList({token,canEdit,canCreate}:{token:string;canEdit:boolean;canCreate:boolean}){
- const headers=useMemo(()=>({Authorization:`Bearer ${token}`}),[token]),[agents,setAgents]=useState<any[]>([]),[error,setError]=useState(''),[creating,setCreating]=useState(false),[refresh,setRefresh]=useState(0);
+ const headers=useMemo(()=>({Authorization:`Bearer ${token}`}),[token]),[agents,setAgents]=useState<any[]>([]),[error,setError]=useState(''),[creating,setCreating]=useState(false),[deleting,setDeleting]=useState<any>(null),[refresh,setRefresh]=useState(0);
  useEffect(()=>{void fetch('/api/ai-platform/voice-agents',{headers}).then(async r=>{const body=await r.json();if(!r.ok)throw new Error(body.error||'Не удалось загрузить AI-сотрудников');setAgents(body.rows||[])}).catch(e=>setError(e.message))},[headers,refresh]);
  return <section><div className="mb-4 flex flex-wrap items-end justify-between gap-3"><div><h1 className="text-2xl font-black text-slate-900">AI-сотрудники</h1><p className="mt-1 text-sm text-slate-500">Настройте голос, телефонный номер, навыки и передачу сотруднику.</p></div>{canCreate&&<button onClick={()=>setCreating(true)} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-3 font-bold text-white"><Plus className="h-5 w-5"/>Добавить AI-сотрудника</button>}</div>
   {error&&<div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</div>}
@@ -20,7 +21,7 @@ export default function AiPlatformAgentList({token,canEdit,canCreate}:{token:str
     <div className="rounded-xl bg-slate-50 p-3 sm:col-span-2"><b>{agent.handoff_destination||'Не настроено'}</b><div className="text-xs text-slate-500">Передача сотруднику</div></div>
    </div>
    <div className="mt-3 text-xs text-slate-500">Последняя публикация: {agent.published_at?new Date(agent.published_at).toLocaleString():'—'}</div>
-   <div className="mt-4 flex flex-wrap gap-2">{canEdit&&<a href={`/ai-platform/agents/${agent.id}`} className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-sm font-bold text-white"><Settings2 className="h-4 w-4"/>Настроить</a>}<a href={`/ai-platform/agents/${agent.id}?step=test`} className="inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-bold"><TestTube2 className="h-4 w-4"/>Протестировать</a><a href="/ai-platform/conversations" className="inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-bold"><MessageSquare className="h-4 w-4"/>Разговоры</a></div>
+   <div className="mt-4 flex flex-wrap gap-2">{canEdit&&<a href={`/ai-platform/agents/${agent.id}`} className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-sm font-bold text-white"><Settings2 className="h-4 w-4"/>Настроить</a>}<a href={`/ai-platform/agents/${agent.id}?step=test`} className="inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-bold"><TestTube2 className="h-4 w-4"/>Протестировать</a><a href="/ai-platform/conversations" className="inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-bold"><MessageSquare className="h-4 w-4"/>Разговоры</a>{canEdit&&<button onClick={()=>setDeleting(agent)} className="rounded-lg border px-3 py-2 text-sm font-bold text-slate-600">Ещё…</button>}</div>
   </article>})}</div>
- {creating&&<AiAgentCreationWizard token={token} onClose={()=>setCreating(false)} onCreated={()=>{setCreating(false);setRefresh(x=>x+1)}}/>}</section>
+ {creating&&<AiAgentCreationWizard token={token} onClose={()=>setCreating(false)} onCreated={()=>{setCreating(false);setRefresh(x=>x+1)}}/>}{deleting&&<AiAgentDeletionWizard token={token} agent={deleting} onClose={()=>setDeleting(null)} onChanged={()=>{setDeleting(null);setRefresh(x=>x+1)}}/>}</section>
 }

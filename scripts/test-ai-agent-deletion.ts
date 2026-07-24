@@ -1,0 +1,12 @@
+import assert from'node:assert/strict';import fs from'node:fs';import{assertAgentDeletionTransition}from'../server/ai-platform/agents/deletion/agentDeletionStateMachine.js';
+for(const [from,to]of[['active','disabling'],['disabling','disabled'],['active','archiving'],['archiving','archived'],['archived','delete_preview_ready'],['delete_preview_ready','deleting'],['deleting','removing_freepbx_objects'],['removing_freepbx_objects','reloading'],['reloading','verifying'],['verifying','deleted']]as const)assert.doesNotThrow(()=>assertAgentDeletionTransition(from,to));
+assert.doesNotThrow(()=>assertAgentDeletionTransition('verifying','delete_failed'));assert.throws(()=>assertAgentDeletionTransition('active','deleted'));
+const service=fs.readFileSync('server/ai-platform/agents/deletion/agentDeletionService.ts','utf8'),router=fs.readFileSync('server/ai-platform/agents/deletion/api/agentDeletionRouter.ts','utf8'),helper=fs.readFileSync('scripts/freepbx-ai-extension.php','utf8'),ui=fs.readFileSync('src/modules/aiPlatform/AiAgentDeletionWizard.tsx','utf8');
+for(const dependency of ['ACTIVE_CALL','ACTIVE_MEDIA_SESSION','ACTIVE_REALTIME_SESSION','ACTIVE_HANDOFF','HANDOFF_DESTINATION','FREEPBX_DEPENDENCY'])assert.ok(service.includes(dependency),dependency);
+for(const preserved of ['CDR/CEL references','conversations','recording metadata','audit','published version snapshots'])assert.ok(service.includes(preserved),preserved);
+for(const invariant of ["status='disabled',enabled=0","status='archived',enabled=0","deletion_status='delete_failed'",'FREEPBX_OBJECTS_STILL_PRESENT','idempotent:true'])assert.ok(service.includes(invariant),invariant);
+for(const route of ['dependencies',"for(const mode of['disable','archive','delete']",'${mode}-preview','${mode}-apply','restore','delete-retry'])assert.ok(router.includes(route),route);
+for(const permission of ['disable_ai_agents','archive_ai_agents','delete_ai_agents'])assert.ok(router.includes(permission),permission);
+assert.match(helper,/foreign_custom_destination/);assert.match(helper,/foreign_misc_application/);assert.match(helper,/dependencies_present/);
+for(const label of ['Отключить','Архивировать','Удалить окончательно','Введите имя для подтверждения'])assert.ok(ui.includes(label),label);
+console.log('AI agent deletion lifecycle tests: OK');
