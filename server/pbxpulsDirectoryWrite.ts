@@ -1,9 +1,9 @@
-import crypto from 'crypto';
 import mysql, { Connection, ResultSetHeader } from 'mysql2/promise';
 import { isPBXPulsDbAvailable, sanitizePBXPulsDbError } from './pbxpulsDb.js';
 import { writePBXPulsSystemEvent } from './pbxpulsEvents.js';
 import { getPBXPulsSetting } from './pbxpulsSettings.js';
 import { getPBXPulsDbConfig, getPBXPulsDbConnectionOptions } from './pbxpulsDbConfig.js';
+import { createDirectoryContactId } from './directoryContactIds.js';
 
 export type DirectoryWriteMode = 'legacy' | 'sql';
 export type DirectorySqlContactType = 'common' | 'personal';
@@ -630,7 +630,7 @@ function currentSqlDate(): string {
 }
 
 function generateDirectoryContactId(): string {
-  return `dir_${crypto.randomBytes(12).toString('hex')}`;
+  return createDirectoryContactId();
 }
 
 function safeText(value: unknown, maxLength: number): string {

@@ -168,6 +168,80 @@ export async function applyDirectoryBulkDelete(token: string, previewId: string,
   return data;
 }
 
+export async function createDirectoryImportJob(token: string, file: Blob, options: {
+  filename: string;
+  atomicityMode: 'rollback_on_error' | 'partial';
+  duplicateStrategy: 'skip' | 'update' | 'create';
+  batchSize?: number;
+  idempotencyKey: string;
+}) {
+  const resp = await fetch('/api/directory/import-jobs', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'text/csv',
+      'X-Import-Filename': encodeURIComponent(options.filename),
+      'X-Import-Atomicity': options.atomicityMode,
+      'X-Import-Duplicate-Strategy': options.duplicateStrategy,
+      'X-Import-Batch-Size': String(options.batchSize || 500),
+      'Idempotency-Key': options.idempotencyKey
+    },
+    body: file
+  });
+  return parseDirectorySettingsResponse(resp, 'Не удалось создать задачу импорта.');
+}
+
+export async function getDirectoryImportJob(token: string, jobId: string) {
+  const resp = await fetch(`/api/directory/import-jobs/${encodeURIComponent(jobId)}/progress`, {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: 'no-store'
+  });
+  return parseDirectorySettingsResponse(resp, 'Не удалось получить прогресс импорта.');
+}
+
+export async function cancelDirectoryImportJob(token: string, jobId: string, mode: 'preserve' | 'rollback') {
+  const resp = await fetch(`/api/directory/import-jobs/${encodeURIComponent(jobId)}/cancel`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ mode })
+  });
+  return parseDirectorySettingsResponse(resp, 'Не удалось остановить импорт.');
+}
+
+export async function resumeDirectoryImportJob(token: string, jobId: string) {
+  const resp = await fetch(`/api/directory/import-jobs/${encodeURIComponent(jobId)}/resume`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({})
+  });
+  return parseDirectorySettingsResponse(resp, 'Не удалось продолжить импорт.');
+}
+
+export async function previewDirectoryImportRollback(token: string, jobId: string) {
+  const resp = await fetch(`/api/directory/import-jobs/${encodeURIComponent(jobId)}/rollback-preview`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({})
+  });
+  return parseDirectorySettingsResponse(resp, 'Не удалось подготовить rollback preview.');
+}
+
+export async function applyDirectoryImportRollback(token: string, jobId: string, confirmation: string) {
+  const resp = await fetch(`/api/directory/import-jobs/${encodeURIComponent(jobId)}/rollback`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ confirmation })
+  });
+  return parseDirectorySettingsResponse(resp, 'Не удалось откатить импорт.');
+}
+
+export async function getDirectoryImportJobErrors(token: string, jobId: string) {
+  const resp = await fetch(`/api/directory/import-jobs/${encodeURIComponent(jobId)}/errors`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  return parseDirectorySettingsResponse(resp, 'Не удалось получить ошибки импорта.');
+}
+
 export async function toggleDirectoryBlacklist(
   token: string,
   id: string,

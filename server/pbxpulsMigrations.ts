@@ -1476,6 +1476,51 @@ const MIGRATIONS: Migration[] = [
     statements:[
       `ALTER TABLE ai_integration_post_call_jobs ADD COLUMN input_encrypted LONGTEXT NULL AFTER input_masked_json`
     ]
+  },
+  {
+    key:'20260724_062_resilient_directory_import_jobs',
+    description:'Add cancellable and resumable Directory import jobs',
+    statements:[
+      `CREATE TABLE IF NOT EXISTS directory_import_jobs(
+        id VARCHAR(64) PRIMARY KEY,source_filename VARCHAR(255) NOT NULL,source_hash CHAR(64) NOT NULL,source_path VARCHAR(512) NOT NULL,
+        total_rows INT NOT NULL DEFAULT 0,processed_rows INT NOT NULL DEFAULT 0,inserted_rows INT NOT NULL DEFAULT 0,
+        updated_rows INT NOT NULL DEFAULT 0,skipped_rows INT NOT NULL DEFAULT 0,duplicate_rows INT NOT NULL DEFAULT 0,
+        failed_rows INT NOT NULL DEFAULT 0,current_row INT NOT NULL DEFAULT 0,status VARCHAR(32) NOT NULL,
+        cancel_requested TINYINT(1) NOT NULL DEFAULT 0,cancel_mode VARCHAR(32) NULL,started_by VARCHAR(100) NOT NULL,
+        started_at DATETIME NULL,updated_at DATETIME NOT NULL,finished_at DATETIME NULL,error_code VARCHAR(64) NULL,
+        error_row INT NULL,error_message VARCHAR(500) NULL,mode VARCHAR(32) NOT NULL DEFAULT 'upsert',
+        duplicate_strategy VARCHAR(32) NOT NULL DEFAULT 'update',batch_size INT NOT NULL DEFAULT 500,
+        atomicity_mode VARCHAR(32) NOT NULL DEFAULT 'rollback_on_error',idempotency_key VARCHAR(191) NOT NULL,
+        rollback_status VARCHAR(32) NULL,rolled_back_rows INT NOT NULL DEFAULT 0,
+        UNIQUE KEY uniq_directory_import_idempotency(idempotency_key),
+        KEY idx_directory_import_status(status,updated_at),KEY idx_directory_import_source(source_hash)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS directory_import_job_rows(
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,job_id VARCHAR(64) NOT NULL,row_number INT NOT NULL,row_fingerprint CHAR(64) NOT NULL,
+        contact_id VARCHAR(64) NULL,status VARCHAR(32) NOT NULL,error_code VARCHAR(64) NULL,error_message VARCHAR(500) NULL,
+        created_at DATETIME NOT NULL,updated_at DATETIME NOT NULL,
+        UNIQUE KEY uniq_directory_import_job_row(job_id,row_number),
+        UNIQUE KEY uniq_directory_import_job_fingerprint(job_id,row_fingerprint),
+        KEY idx_directory_import_job_row_status(job_id,status),
+        CONSTRAINT fk_directory_import_job_rows_job FOREIGN KEY(job_id) REFERENCES directory_import_jobs(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `ALTER TABLE directory_contacts
+        ADD COLUMN import_job_id VARCHAR(64) NULL,
+        ADD COLUMN import_row_number INT NULL,
+        ADD COLUMN import_row_fingerprint CHAR(64) NULL,
+        ADD KEY idx_directory_contacts_import_job(import_job_id),
+        ADD UNIQUE KEY uniq_directory_contacts_import_row(import_job_id,import_row_number)`,
+      `INSERT IGNORE INTO permissions(permission_key,name,description,category)VALUES
+       ('import_directory','Import Directory','Create managed Directory import jobs','directory'),
+       ('cancel_directory_import','Cancel Directory import','Request safe cancellation of Directory import jobs','directory'),
+       ('resume_directory_import','Resume Directory import','Resume failed or cancelled Directory import jobs','directory'),
+       ('rollback_directory_import','Rollback Directory import','Preview and rollback contacts created by an import job','directory'),
+       ('view_directory_import_errors','View Directory import errors','View and download safe row-level import errors','directory')`,
+      `INSERT IGNORE INTO role_permissions(role_id,permission_id)
+       SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key IN(
+        'import_directory','cancel_directory_import','resume_directory_import','rollback_directory_import','view_directory_import_errors'
+       ) WHERE r.role_key IN('su','admin')`
+    ]
   }
 ];
 

@@ -22,6 +22,8 @@ import { TcpdumpTextStreamParser, type SipCaptureEvent } from './server/sipCaptu
 import { buildSafeSipBpf, buildSipDialogs, redactSipSecrets, SIP_CAPTURE_LIMITS, validateCaptureHost, validateCapturePort } from './server/sipDialogs.js';
 import { normalizeQualityMetrics } from './server/qualityMetrics.js';
 import crypto from 'crypto';
+import { createDirectoryContactId } from './server/directoryContactIds.js';
+import { registerDirectoryImportJobRoutes } from './server/directoryImportJobs.js';
 import http from 'http';
 import https from 'https';
 import { CallEntry, MissedCallStatus, AppSettings, DashboardStats, UserRole, WebUser } from './src/types.js';
@@ -3221,7 +3223,7 @@ const normalizeDirectoryEntry = (entry: any, settings?: AppSettings): any => {
   };
 
   return {
-    id: entry?.id || ('dir_' + Date.now() + '_' + Math.floor(Math.random() * 100000)),
+    id: entry?.id || createDirectoryContactId(),
     name: String(entry?.name || entry?.fio || entry?.fullname || entry?.contact || '').trim(),
     number: phones[0] || String(entry?.number || '').trim(),
     phones,
@@ -7858,6 +7860,7 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json({ limit: '25mb' }));
+registerDirectoryImportJobRoutes(app, { requireAuth: requireAuth(), hasPermission: checkUserPermission });
 
 app.get('/api/system/time', (_req, res) => {
   const now = new Date();

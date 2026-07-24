@@ -92,7 +92,7 @@ import QualityTab from './modules/monitoring/tabs/monitoring/QualityTab';
 import DevicesMapTab from './modules/monitoring/tabs/monitoring/DevicesMapTab';
 import HealthReportTab from './modules/monitoring/tabs/monitoring/HealthReportTab';
 import { DirectoryStatusIcon } from './modules/directory/components/DirectoryStatusIcon';
-import { fetchDirectory, fetchDirectoryAll, saveDirectoryEntry, deleteDirectoryEntry, toggleDirectoryBlacklist, toggleDirectorySpam, previewDirectoryImport, previewDirectoryBulkDelete, applyDirectoryBulkDelete, fetchDirectoryColumnSettings, saveMyDirectoryColumnSettings, resetMyDirectoryColumnSettings, saveGlobalDirectoryColumnSettings, resetGlobalDirectoryColumnSettings, setDirectoryFavorite } from './modules/directory/services/directoryApi';
+import { fetchDirectory, fetchDirectoryAll, saveDirectoryEntry, deleteDirectoryEntry, toggleDirectoryBlacklist, toggleDirectorySpam, previewDirectoryImport, previewDirectoryBulkDelete, applyDirectoryBulkDelete, createDirectoryImportJob, getDirectoryImportJob, cancelDirectoryImportJob, resumeDirectoryImportJob, previewDirectoryImportRollback, getDirectoryImportJobErrors, fetchDirectoryColumnSettings, saveMyDirectoryColumnSettings, resetMyDirectoryColumnSettings, saveGlobalDirectoryColumnSettings, resetGlobalDirectoryColumnSettings, setDirectoryFavorite } from './modules/directory/services/directoryApi';
 import CDRPage from './modules/cdr/pages/CDRPage';
 import LegacyCDRTable from './modules/cdr/components/LegacyCDRTable';
 import CDRProcessModal from './modules/cdr/components/CDRProcessModal';
@@ -955,6 +955,12 @@ export default function App() {
   const [showImportDiagnostics, setShowImportDiagnostics] = useState(false);
   const [importDiagnosticReason, setImportDiagnosticReason] = useState('all');
   const [importFileName, setImportFileName] = useState('');
+  const [importSourceFile, setImportSourceFile] = useState<Blob | null>(null);
+  const [directoryImportJob, setDirectoryImportJob] = useState<any>(null);
+  const [directoryImportAtomicity, setDirectoryImportAtomicity] = useState<'rollback_on_error' | 'partial'>('rollback_on_error');
+  const [directoryImportDuplicateStrategy, setDirectoryImportDuplicateStrategy] = useState<'skip' | 'update' | 'create'>('skip');
+  const [isDirectoryImportCancelOpen, setIsDirectoryImportCancelOpen] = useState(false);
+  const [directoryImportRollbackPreview, setDirectoryImportRollbackPreview] = useState<any>(null);
   const [importProgress, setImportProgress] = useState({ stage: 'idle' as 'idle' | 'reading' | 'parsing' | 'validating' | 'importing' | 'complete' | 'error', processed: 0, total: 0, message: '' });
   const [importRowFilter, setImportRowFilter] = useState<'all' | 'errors' | 'duplicates' | 'valid'>('all');
   const [importPreviewPage, setImportPreviewPage] = useState(1);
@@ -1198,6 +1204,9 @@ export default function App() {
     if (!file) return;
 
     setImportFileName(file.name);
+    setImportSourceFile(file);
+    setDirectoryImportJob(null);
+    setDirectoryImportRollbackPreview(null);
     setImportFileError('');
     setImportProgress({ stage: 'reading', processed: 0, total: file.size, message: 'Чтение файла' });
     const reader = new FileReader();
@@ -1864,54 +1873,111 @@ export default function App() {
       setShowImportDiagnostics(true);
       return;
     }
+    if (!session?.token) return;
+    const source = importSourceFile || (importText.trim() ? new Blob([importText], { type: 'text/csv' }) : null);
+    if (!source) {
+      setImportFileError('Повторно выберите исходный CSV-файл.');
+      return;
+    }
     setIsImporting(true);
     setImportFileError('');
-    setImportProgress({ stage: 'importing', processed: 0, total: parsedImportEntries.length, message: 'Импорт контактов' });
+    setImportProgress({ stage: 'validating', processed: 0, total: parsedImportEntries.length, message: 'Создание управляемой задачи' });
     try {
-      let importedCount = 0;
-      const batchSize = 500;
-      for (let offset = 0; offset < parsedImportEntries.length; offset += batchSize) {
-        const batch = parsedImportEntries.slice(offset, offset + batchSize).map(toDirectoryImportPayload);
-        const resp = await fetch('/api/directory/import', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${session?.token}`
-          },
-          body: JSON.stringify({ entries: batch, overwrite: importOverwriteMode && offset === 0 })
-        });
-        if (resp.status === 401) {
-          handleAuthError(resp);
-          return;
-        }
-        const data = await resp.json().catch(() => ({}));
-        if (!resp.ok) {
-          const reason = resp.status === 413
-            ? 'Пакет превышает допустимый размер сервера.'
-            : data.message || data.error || `Сервер вернул HTTP ${resp.status}.`;
-          throw new Error(`Импорт остановлен на строке ${offset + 2}: ${reason}`);
-        }
-        importedCount += Number(data.count || batch.length);
-        setImportProgress({ stage: 'importing', processed: Math.min(offset + batch.length, parsedImportEntries.length), total: parsedImportEntries.length, message: 'Импорт контактов' });
-      }
-      setImportSuccessCount(importedCount);
-      setImportProgress({ stage: 'complete', processed: parsedImportEntries.length, total: parsedImportEntries.length, message: 'Импорт завершён' });
-      setImportText('');
-      setParsedImportEntries([]);
-      setImportPreviewRows([]);
-      setImportDuplicateCount(0);
-      setDirPage(1);
-      await loadDirectory(1);
-      await loadDirectoryLookup();
-      loadCalls(page);
-      setTimeout(() => setImportSuccessCount(null), 3000);
+      const bytes = await source.arrayBuffer();
+      const digest = await window.crypto.subtle.digest('SHA-256', bytes);
+      const sourceHash = Array.from(new Uint8Array(digest)).map(value => value.toString(16).padStart(2, '0')).join('');
+      const data = await createDirectoryImportJob(session.token, source, {
+        filename: importFileName || 'directory-import.csv',
+        atomicityMode: directoryImportAtomicity,
+        duplicateStrategy: directoryImportDuplicateStrategy,
+        batchSize: 500,
+        idempotencyKey: `${sourceHash}:${directoryImportAtomicity}:${directoryImportDuplicateStrategy}`
+      });
+      setDirectoryImportJob(data.job);
+      setImportProgress({ stage: 'importing', processed: Number(data.job?.processedRows || 0), total: Number(data.job?.totalRows || parsedImportEntries.length), message: 'Импорт выполняется на сервере' });
     } catch (e: any) {
       const message = e?.message || 'Сервер недоступен. Проверьте соединение и повторите попытку.';
       setImportFileError(message);
       setImportProgress(current => ({ ...current, stage: 'error', message }));
-    } finally {
       setIsImporting(false);
     }
+  };
+
+  useEffect(() => {
+    if (!session?.token || !directoryImportJob?.id || !['queued','validating','importing','cancelling'].includes(directoryImportJob.status)) return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const data = await getDirectoryImportJob(session.token, directoryImportJob.id);
+        if (cancelled || !data?.job) return;
+        const job = data.job;
+        setDirectoryImportJob(job);
+        const terminal = ['completed','completed_with_errors','failed','cancelled'].includes(job.status);
+        setImportProgress({
+          stage: job.status === 'failed' ? 'error' : terminal ? 'complete' : job.status === 'validating' ? 'validating' : 'importing',
+          processed: Number(job.processedRows || 0),
+          total: Number(job.totalRows || 0),
+          message: job.status === 'cancelling' ? 'Остановка после текущего пакета' : job.status === 'validating' ? 'Проверка файла' : terminal ? ({
+            completed: 'Импорт завершён',
+            completed_with_errors: 'Импорт завершён с ошибками',
+            cancelled: 'Импорт остановлен',
+            failed: 'Импорт остановлен'
+          } as Record<string,string>)[job.status] : 'Импорт выполняется на сервере'
+        });
+        if (terminal) {
+          setIsImporting(false);
+          if (job.status === 'failed') setImportFileError(`Импорт остановлен${job.errorRow?` на строке ${job.errorRow}`:''}. ${job.errorMessage||''}`.trim());
+          if (job.status === 'completed' || job.status === 'completed_with_errors') {
+            setImportSuccessCount(Number(job.insertedRows || 0));
+            setDirPage(1);
+            await loadDirectory(1);
+            await loadDirectoryLookup();
+          }
+        }
+      } catch (error: any) {
+        if (!cancelled) setImportFileError(error?.message || 'Не удалось получить прогресс импорта.');
+      }
+    };
+    void poll();
+    const timer = window.setInterval(() => void poll(), 1000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [session?.token, directoryImportJob?.id, directoryImportJob?.status]);
+
+  const handleCancelDirectoryImport = async (mode: 'preserve' | 'rollback') => {
+    if (!session?.token || !directoryImportJob?.id) return;
+    setIsDirectoryImportCancelOpen(false);
+    setDirectoryImportJob((job:any)=>({...job,status:'cancelling',cancelRequested:true,cancelMode:mode}));
+    setImportProgress(current=>({...current,message:'Остановка после текущего пакета'}));
+    try {
+      await cancelDirectoryImportJob(session.token, directoryImportJob.id, mode);
+    } catch (error:any) {
+      setImportFileError(error?.message || 'Не удалось запросить остановку импорта.');
+    }
+  };
+
+  const handleResumeDirectoryImport = async () => {
+    if (!session?.token || !directoryImportJob?.id) return;
+    setIsImporting(true);
+    setImportFileError('');
+    const result = await resumeDirectoryImportJob(session.token, directoryImportJob.id);
+    setDirectoryImportJob((job:any)=>({...job,status:result.status||'queued'}));
+  };
+
+  const handlePreviewDirectoryImportRollback = async () => {
+    if (!session?.token || !directoryImportJob?.id) return;
+    try {
+      setDirectoryImportRollbackPreview(await previewDirectoryImportRollback(session.token, directoryImportJob.id));
+    } catch (error:any) {
+      setImportFileError(error?.message || 'Не удалось подготовить rollback preview.');
+    }
+  };
+
+  const handleDownloadDirectoryImportErrors = async () => {
+    if (!session?.token || !directoryImportJob?.id) return;
+    const data = await getDirectoryImportJobErrors(session.token, directoryImportJob.id);
+    const quote=(value:unknown)=>`"${String(value??'').replace(/"/g,'""')}"`;
+    const csv=['row,error_code,message,at',...(data.errors||[]).map((item:any)=>[item.rowNumber,item.errorCode,item.message,item.at].map(quote).join(','))].join('\r\n');
+    const link=document.createElement('a');link.href=URL.createObjectURL(new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8'}));link.download=`directory_import_${directoryImportJob.id}_errors.csv`;link.click();URL.revokeObjectURL(link.href);
   };
 
   const importDiagnostics=useMemo(()=>[...parsedImportEntries.flatMap((entry:any)=>(entry._importDiagnostics||[]).map((diagnostic:DirectoryImportDiagnostic)=>({...diagnostic,name:entry.name||entry.company||'',email:entry.email||''}))),...importPreviewRows.filter((row:any)=>row.duplicateId).map((row:any)=>{const entry=parsedImportEntries[row.index]||{},raw=String(entry.number||'');return{rowNumber:entry._csvRowNumber||row.index+2,field:'phone',raw,trimmed:raw.trim(),normalized:normalizeDirectoryPhoneInput(raw).digits,digitLength:normalizeDirectoryPhoneInput(raw).digits.length,codePoints:normalizeDirectoryPhoneInput(raw).codePoints,reason:'duplicate_in_database',duplicateInFile:false,suggestedValue:null,name:entry.name||entry.company||'',email:entry.email||'',duplicateName:row.duplicateName}})],[parsedImportEntries,importPreviewRows]);
@@ -6505,21 +6571,25 @@ export default function App() {
                 <p className="mt-1 text-xs text-slate-500">{parsedImportEntries.length ? `${parsedImportEntries.length.toLocaleString('ru-RU')} строк · ${importColumnDefinitions.length} столбец` : 'Загрузите CSV, чтобы открыть полноэкранный предпросмотр.'}</p>
               </div>
               <div className="flex flex-wrap gap-2">
-                <button type="button" onClick={() => setIsImportOpen(true)} className="rounded-lg border border-blue-200 bg-white px-3 py-2 text-xs font-bold text-blue-700 hover:bg-blue-50"><Upload className="mr-1 inline h-3.5 w-3.5" />{parsedImportEntries.length ? 'Загрузить другой файл' : 'Загрузить файл'}</button>
+                <button type="button" disabled={isImporting} onClick={() => setIsImportOpen(true)} className="rounded-lg border border-blue-200 bg-white px-3 py-2 text-xs font-bold text-blue-700 hover:bg-blue-50 disabled:opacity-40"><Upload className="mr-1 inline h-3.5 w-3.5" />{parsedImportEntries.length ? 'Загрузить другой файл' : 'Загрузить файл'}</button>
                 <button type="button" onClick={handlePreviewImport} disabled={isImporting || !parsedImportEntries.length} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50">Проверить ошибки и дубли</button>
                 <button type="button" onClick={handleExecuteImport} disabled={isImporting || !parsedImportEntries.length || importRowsWithState.some(row => row.hasErrors)} className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-50">Импортировать ({parsedImportEntries.length.toLocaleString('ru-RU')})</button>
+                {directoryImportJob&&['queued','validating','importing','cancelling'].includes(directoryImportJob.status)&&<button type="button" disabled={directoryImportJob.status==='cancelling'} onClick={()=>setIsDirectoryImportCancelOpen(true)} className="rounded-lg border border-rose-300 bg-white px-3 py-2 text-xs font-black text-rose-700 disabled:opacity-40">Остановить импорт</button>}
               </div>
             </div>
 
             {importProgress.stage !== 'idle' && <div className="border-b border-slate-200 px-4 py-3">
               <div className="mb-1.5 flex items-center justify-between text-xs"><span className={importProgress.stage==='error'?'font-bold text-rose-700':'font-bold text-slate-700'}>{importProgress.message}</span><span className="tabular-nums text-slate-500">{importProgressPercent}%{importProgress.total>1?` · ${importProgress.processed.toLocaleString('ru-RU')} из ${importProgress.total.toLocaleString('ru-RU')}`:''}</span></div>
               <div className="h-2 overflow-hidden rounded-full bg-slate-100"><div className={`h-full rounded-full transition-all ${importProgress.stage==='error'?'bg-rose-500':importProgress.stage==='complete'?'bg-emerald-500':'bg-blue-600'}`} style={{width:`${importProgressPercent}%`}} /></div>
+              {directoryImportJob&&<div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-slate-600 sm:grid-cols-4 lg:grid-cols-7"><span>Добавлено: <b>{Number(directoryImportJob.insertedRows||0).toLocaleString('ru-RU')}</b></span><span>Обновлено: <b>{Number(directoryImportJob.updatedRows||0).toLocaleString('ru-RU')}</b></span><span>Пропущено: <b>{Number(directoryImportJob.skippedRows||0).toLocaleString('ru-RU')}</b></span><span>Дубли: <b>{Number(directoryImportJob.duplicateRows||0).toLocaleString('ru-RU')}</b></span><span>Ошибки: <b>{Number(directoryImportJob.failedRows||0).toLocaleString('ru-RU')}</b></span><span>Скорость: <b>{Number(directoryImportJob.speedRowsPerSecond||0).toLocaleString('ru-RU')} стр/с</b></span><span>Осталось: <b>{directoryImportJob.etaSeconds==null?'—':`${Math.ceil(directoryImportJob.etaSeconds/60)} мин`}</b></span></div>}
             </div>}
 
             {importFileError && <div className="m-4 rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800"><div className="font-bold">{importFileError}</div>{importDiagnostics.length>0&&<button type="button" onClick={()=>{setShowImportDiagnostics(true);setImportRowFilter('errors');setImportPreviewPage(1)}} className="mt-2 rounded border border-rose-300 bg-white px-3 py-1.5 font-bold">Показать строки с ошибками</button>}</div>}
             {importSuccessCount !== null && <div className="m-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs font-bold text-emerald-800">Контакты успешно импортированы: {importSuccessCount}</div>}
+            {directoryImportJob&&['failed','cancelled','completed_with_errors'].includes(directoryImportJob.status)&&<div className="m-4 flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs"><span className="mr-auto font-bold text-amber-900">{directoryImportJob.status==='failed'?'Импорт остановлен':directoryImportJob.status==='cancelled'?'Импорт отменён':'Импорт завершён с ошибками'}</span><button type="button" onClick={handleResumeDirectoryImport} className="rounded border bg-white px-3 py-1.5 font-bold">Продолжить</button><button type="button" onClick={handlePreviewDirectoryImportRollback} className="rounded border bg-white px-3 py-1.5 font-bold">Откатить импорт</button>{Number(directoryImportJob.failedRows||0)>0&&<button type="button" onClick={handleDownloadDirectoryImportErrors} className="rounded border bg-white px-3 py-1.5 font-bold">Скачать ошибки</button>}</div>}
 
             {parsedImportEntries.length > 0 ? <>
+              {!directoryImportJob&&<div className="grid gap-3 border-b border-slate-200 p-4 md:grid-cols-2"><label className="text-xs font-bold text-slate-700">Поведение при ошибке<select value={directoryImportAtomicity} onChange={event=>{const value=event.target.value as typeof directoryImportAtomicity;setDirectoryImportAtomicity(value);if(value==='rollback_on_error'&&directoryImportDuplicateStrategy==='update')setDirectoryImportDuplicateStrategy('skip')}} className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3 py-2"><option value="rollback_on_error">Откатить всё при ошибке</option><option value="partial">Импортировать остальные строки, ошибки пропустить</option></select></label><label className="text-xs font-bold text-slate-700">Если контакт уже существует<select value={directoryImportDuplicateStrategy} onChange={event=>setDirectoryImportDuplicateStrategy(event.target.value as typeof directoryImportDuplicateStrategy)} className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3 py-2"><option value="skip">Пропустить</option><option value="update" disabled={directoryImportAtomicity==='rollback_on_error'}>Обновить существующий</option><option value="create">Создать новый, если разрешено</option></select></label></div>}
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 p-3">
                 <div className="flex flex-wrap gap-1.5">
                   {([['all','Все',parsedImportEntries.length],['errors','Ошибки',importRowsWithState.filter(row=>row.hasErrors).length],['duplicates','Дубли',importRowsWithState.filter(row=>row.duplicate).length],['valid','Готовы',importRowsWithState.filter(row=>!row.hasErrors&&!row.duplicate).length]] as const).map(([value,label,count])=><button type="button" key={value} onClick={()=>{setImportRowFilter(value);setImportPreviewPage(1)}} className={`rounded-lg px-3 py-1.5 text-xs font-bold ${importRowFilter===value?'bg-blue-600 text-white':'border border-slate-200 bg-white text-slate-600'}`}>{label} · {count.toLocaleString('ru-RU')}</button>)}
@@ -6547,6 +6617,8 @@ export default function App() {
           {showImportDiagnostics&&importDiagnostics.length>0&&<div className="rounded-xl border border-amber-200 bg-amber-50/40 p-4"><div className="flex flex-wrap items-center justify-between gap-2"><div><h4 className="text-sm font-black">Ошибки по строкам и столбцам ({importDiagnostics.length})</h4><p className="text-xs text-slate-500">Щёлкните фильтр «Ошибки», чтобы увидеть ячейки в общей таблице.</p></div><div className="flex gap-2"><select value={importDiagnosticReason} onChange={event=>setImportDiagnosticReason(event.target.value)} className="rounded border bg-white px-2 py-1.5 text-xs"><option value="all">Все причины</option>{Array.from(new Set(importDiagnostics.map((item:any)=>item.reason))).map(reason=><option key={reason} value={reason}>{importReasonLabel(reason)}</option>)}</select><button type="button" onClick={()=>downloadImportDiagnostics(true)} className="rounded border bg-white px-2 py-1.5 text-xs font-bold">Скачать CSV ошибок</button><button type="button" onClick={()=>downloadImportDiagnostics(false)} className="rounded border bg-white px-2 py-1.5 text-xs font-bold">Скачать отчёт</button></div></div><div className="mt-3 max-h-72 overflow-auto"><table className="w-full min-w-[900px] text-left text-xs"><thead className="sticky top-0 bg-amber-50"><tr>{['Строка','ФИО','Столбец','Исходное значение','После нормализации','Причина','Исправление'].map(label=><th key={label} className="border-b px-2 py-2">{label}</th>)}</tr></thead><tbody>{filteredImportDiagnostics.slice(0,500).map((item:any,index:number)=><tr key={`${item.rowNumber}-${item.field}-${index}`} className="border-b border-amber-100"><td className="px-2 py-1.5">{item.rowNumber}</td><td className="px-2 py-1.5">{item.name||'—'}</td><td className="px-2 py-1.5 font-mono">{item.field}</td><td className="px-2 py-1.5 font-mono">{item.raw||'—'}</td><td className="px-2 py-1.5 font-mono">{item.normalized||'—'}</td><td className="px-2 py-1.5 font-bold text-rose-700">{importReasonLabel(item.reason)}</td><td className="px-2 py-1.5">{item.suggestedValue||'Исправьте значение в исходном CSV'}</td></tr>)}</tbody></table></div></div>}
 
           {isImportOpen&&<div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm"><div role="dialog" aria-modal="true" aria-label="Загрузка CSV-файла" className="w-full max-w-2xl rounded-2xl bg-white p-5 shadow-2xl"><div className="flex items-start justify-between gap-3"><div><h3 className="text-lg font-black text-slate-900">Загрузка файла</h3><p className="mt-1 text-xs text-slate-500">Выберите CSV или вставьте текст. После разбора предпросмотр откроется на весь экран.</p></div><button type="button" onClick={()=>setIsImportOpen(false)} className="rounded-lg border px-3 py-1.5 text-xs font-bold">Закрыть</button></div><label className="relative mt-5 flex min-h-44 cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-blue-200 bg-blue-50/40 p-5 text-center hover:border-blue-400"><input type="file" accept=".csv,.txt,text/csv,text/plain" onChange={handleFileUpload} className="absolute inset-0 h-full w-full cursor-pointer opacity-0"/><Upload className="mb-2 h-8 w-8 text-blue-600"/><span className="text-sm font-black text-slate-800">Выбрать CSV или TXT</span><span className="mt-1 text-xs text-slate-500">Большие файлы проверяются пакетами по 500 строк</span></label><div className="my-3 text-center text-xs text-slate-400">или вставьте CSV</div><textarea value={importText} onChange={event=>setImportText(event.target.value)} rows={6} placeholder="Вставьте содержимое CSV" className="w-full resize-none rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs"/><div className="mt-4 flex justify-end gap-2"><button type="button" onClick={()=>setIsImportOpen(false)} className="rounded-lg border px-4 py-2 text-xs font-bold">Отмена</button><button type="button" disabled={!importText.trim()} onClick={()=>{setImportProgress({stage:'parsing',processed:0,total:1,message:'Разбор строк и столбцов'});window.requestAnimationFrame(()=>{handleParseImport(importText);setImportPreviewPage(1);setImportProgress({stage:'complete',processed:1,total:1,message:'Файл подготовлен к проверке'});setIsImportOpen(false)})}} className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-40">Открыть предпросмотр</button></div></div></div>}
+          {isDirectoryImportCancelOpen&&<div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm"><div role="dialog" aria-modal="true" aria-label="Остановить импорт" className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-2xl"><h3 className="text-lg font-black text-slate-900">Остановить импорт?</h3><p className="mt-2 text-sm text-slate-600">Текущий пакет завершится безопасно. Выберите, что сделать с уже добавленными этим заданием контактами.</p><div className="mt-5 grid gap-2"><button type="button" onClick={()=>handleCancelDirectoryImport('preserve')} className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-left text-sm font-bold text-amber-900">Остановить и сохранить уже добавленные</button><button type="button" onClick={()=>handleCancelDirectoryImport('rollback')} className="rounded-lg border border-rose-300 bg-rose-50 px-4 py-3 text-left text-sm font-bold text-rose-900">Остановить и откатить этот импорт</button><button type="button" onClick={()=>setIsDirectoryImportCancelOpen(false)} className="rounded-lg border border-slate-200 px-4 py-3 text-sm font-bold text-slate-700">Продолжить импорт</button></div></div></div>}
+          {directoryImportRollbackPreview&&<div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm"><div className="flex items-start justify-between gap-3"><div><h4 className="font-black text-rose-900">Предпросмотр отката</h4><p className="mt-1 text-rose-800">Будет удалено контактов: <b>{Number(directoryImportRollbackPreview.contactsToDelete||0).toLocaleString('ru-RU')}</b>; связанных записей: <b>{Number(directoryImportRollbackPreview.metadataToDelete||0).toLocaleString('ru-RU')}</b>.</p><p className="mt-1 text-xs text-rose-700">Откат не выполнен. Для удаления требуется отдельное подтверждение.</p></div><button type="button" onClick={()=>setDirectoryImportRollbackPreview(null)} className="rounded border border-rose-200 bg-white px-2 py-1 text-xs font-bold">Закрыть</button></div></div>}
         </section>
       )}
 
