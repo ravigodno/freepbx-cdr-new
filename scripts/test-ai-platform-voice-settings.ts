@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {containsAiConfigSecrets,findAiConfigSecretField} from '../server/ai-platform/agents/agentConfigurationValidator.js';
-import {normalizePronunciationEntries,normalizeVoiceProfile} from '../server/ai-platform/voice/profiles/voiceProfile.js';
+import {compileVoiceProfileInstructions,normalizePronunciationEntries,normalizeVoiceProfile} from '../server/ai-platform/voice/profiles/voiceProfile.js';
+import {compilePersonalityInstructions} from '../server/ai-platform/agents/agentPersonalityProfile.js';
 
 const publishedConfig={
   skillEngine:{dynamicFields:true,dynamicCatalogs:true,dynamicTemplates:true,authoritativePlanner:true},
@@ -43,9 +44,14 @@ const forbiddenCases:Array<[unknown,string]>=[
 ];
 for(const[value,path]of forbiddenCases)assert.equal(findAiConfigSecretField(value),path);
 
-const draftConfig={...publishedConfig,voiceProfile:profile,voice:{...publishedConfig.voice,endOfTurnSilenceMs:350,speakingRate:profile.speakingRate,pauseStyle:profile.pauseStyle},pronunciationEntries:entries};
+const draftConfig={...publishedConfig,voiceProfile:profile,voice:{...publishedConfig.voice,endOfTurnSilenceMs:350},pronunciationEntries:entries};
 assert.equal(draftConfig.voiceProfile.voiceId,'marin');
 assert.equal((publishedConfig as any).voiceProfile,undefined);
 assert.equal(containsAiConfigSecrets(draftConfig),false);
+const voiceInstructions=compileVoiceProfileInstructions(profile);
+assert.match(voiceInstructions,/Говори по-русски естественно, спокойно, доброжелательно и разборчиво\. Используй короткие естественные паузы\./);
+assert.doesNotMatch(voiceInstructions,/иностранн|прибалтийск|не растягивай/);
+const personalityInstructions=compilePersonalityInstructions(undefined);
+assert.doesNotMatch(personalityInstructions,/speaking_rate|pause_style|короткими естественными паузами/);
 
 console.log('AI Platform Voice Settings security and allowlist checks passed');

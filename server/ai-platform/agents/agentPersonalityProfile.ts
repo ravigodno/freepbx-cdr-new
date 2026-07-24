@@ -19,8 +19,6 @@ export type AgentPersonalityProfile = {
   speakingStyle: string;
   selfDescription: string;
   responsePacing: string;
-  speakingRate: string;
-  pauseStyle: string;
   enthusiasm: string;
   emotionalDistance: string;
 };
@@ -40,8 +38,6 @@ export const receptionistPersonalityV10 = (): AgentPersonalityProfile => ({
   speakingStyle: "friendly_confident",
   selfDescription: "receptionist",
   responsePacing: "concise_natural",
-  speakingRate: "slightly_fast",
-  pauseStyle: "short_natural",
   enthusiasm: "warm",
   emotionalDistance: "low",
 });
@@ -62,8 +58,6 @@ export function validatePersonalityProfile(value: unknown): string[] {
     speakingStyle: ["friendly_confident", "calm_professional", "neutral"],
     selfDescription: ["receptionist", "assistant"],
     responsePacing: ["concise_natural", "measured"],
-    speakingRate: ["normal", "slightly_fast"],
-    pauseStyle: ["short_natural", "natural"],
     enthusiasm: ["neutral", "warm"],
     emotionalDistance: ["low", "medium"],
   };
@@ -93,8 +87,6 @@ export function normalizePersonalityProfile(value: unknown): AgentPersonalityPro
     speakingStyle: enumValue(profile.speakingStyle, ["friendly_confident", "calm_professional", "neutral"], base.speakingStyle),
     selfDescription: enumValue(profile.selfDescription, ["receptionist", "assistant"], base.selfDescription),
     responsePacing: enumValue(profile.responsePacing, ["concise_natural", "measured"], base.responsePacing),
-    speakingRate: enumValue(profile.speakingRate, ["normal", "slightly_fast"], base.speakingRate),
-    pauseStyle: enumValue(profile.pauseStyle, ["short_natural", "natural"], base.pauseStyle),
     enthusiasm: enumValue(profile.enthusiasm, ["neutral", "warm"], base.enthusiasm),
     emotionalDistance: enumValue(profile.emotionalDistance, ["low", "medium"], base.emotionalDistance),
   };
@@ -105,10 +97,9 @@ export function compilePersonalityInstructions(value: unknown) {
   return [
     "PERSONALITY PROFILE (internal, do not quote):",
     `warmth=${profile.warmth}; attentiveness=${profile.attentiveness}; energy=${profile.energy}; empathy=${profile.empathy}; formality=${profile.formality}; brevity=${profile.brevity}; initiative=${profile.initiative}; humor=${profile.humor}; patience=${profile.patience}; persistence=${profile.persistence}.`,
-    `speaking_style=${profile.speakingStyle}; response_pacing=${profile.responsePacing}; speaking_rate=${profile.speakingRate}; pause_style=${profile.pauseStyle}; enthusiasm=${profile.enthusiasm}; emotional_distance=${profile.emotionalDistance}.`,
+    `speaking_style=${profile.speakingStyle}; response_pacing=${profile.responsePacing}; enthusiasm=${profile.enthusiasm}; emotional_distance=${profile.emotionalDistance}.`,
     "Говори тепло, внимательно, спокойно и бодро. Сначала ответь по существу, затем задай не более одного необходимого вопроса.",
     "Покажи, что услышала важную деталь, но не повторяй весь запрос. Не раздражайся, не спорь, не оправдывайся и не становись фамильярной.",
     "После критики коротко прими замечание, адаптируй тон и вернись к задаче. Смех не требует отдельного ответа.",
-    "Говори немного быстрее обычного, с короткими естественными паузами, сохраняя разборчивость.",
   ].join("\n");
 }

@@ -1170,6 +1170,20 @@ const MIGRATIONS: Migration[] = [
       `INSERT IGNORE INTO ai_conversation_intent_routes(tenant_id,intent_key,trigger_phrases_json,negative_trigger_phrases_json,response_template,route_mode,priority,active)VALUES(NULL,'meta_conversation','["как тебя зовут","ты меня понимаешь","ты робот"]','[]','Я вас понимаю и готова помочь с вашим вопросом.','meta_response',200,1)`,
       `INSERT IGNORE INTO ai_conversation_intent_routes(tenant_id,intent_key,trigger_phrases_json,negative_trigger_phrases_json,response_template,route_mode,priority,active)VALUES(NULL,'active_skill_continuation','["по записи","по моему вопросу","продолжим"]','[]','Продолжим текущую задачу.','skill_continuation',100,1)`
     ]
+  },
+  {
+    key:'20260724_051_voice_catalog_capabilities',
+    description:'Add refreshable provider voice catalog capabilities',
+    statements:[
+      `ALTER TABLE ai_voice_catalog ADD COLUMN model_compatibility_json LONGTEXT NOT NULL AFTER metadata_json`,
+      `ALTER TABLE ai_voice_catalog ADD COLUMN supported_output_formats_json LONGTEXT NOT NULL AFTER model_compatibility_json`,
+      `ALTER TABLE ai_voice_catalog ADD COLUMN supported_sample_rates_json LONGTEXT NOT NULL AFTER supported_output_formats_json`,
+      `ALTER TABLE ai_voice_catalog ADD COLUMN preview_available TINYINT(1) NOT NULL DEFAULT 0 AFTER supported_sample_rates_json`,
+      `ALTER TABLE ai_voice_catalog ADD COLUMN first_seen_at DATETIME NULL AFTER preview_available`,
+      `UPDATE ai_voice_catalog SET model_compatibility_json='["gpt-realtime-2.1"]',supported_output_formats_json='["slin16","ulaw"]',supported_sample_rates_json='[16000,8000]',preview_available=1,first_seen_at=NULL WHERE provider_key='openai_realtime'`,
+      `INSERT IGNORE INTO permissions(permission_key,name,description,category)VALUES('manage_ai_voice_catalog','Manage AI voice catalog','Refresh versioned provider voice manifests','ai_platform')`,
+      `INSERT IGNORE INTO role_permissions(role_id,permission_id)SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key='manage_ai_voice_catalog' WHERE r.role_key IN('su','admin')`
+    ]
   }
 ];
 

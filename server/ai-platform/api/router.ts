@@ -148,8 +148,13 @@ export function registerAiPlatformRoutes(app:Express,deps:AiPlatformRouterDeps){
     res.json({success:true,data:{provider:'openai_realtime',voices:OPENAI_REALTIME_VOICES,comparisonTexts:RUSSIAN_VOICE_COMPARISON_TEXTS,testPhrase:DEFAULT_RUSSIAN_TEST_PHRASE,providerApiFields:['voice','instructions'],auditoryReviewRequired:true}});
   }));
   app.get('/api/ai-platform/voice-catalog',...authenticated,permit('view_ai_voice_catalog'),enabled,wrap(async(req,res)=>{
-    const tenant=await getInstallationTenant(store),rows=await voiceCatalog.list(tenant.id,{provider:req.query.provider,active:req.query.active,gender:req.query.gender});
-    res.json({success:true,rows,filters:{providers:[...new Set(rows.map(row=>row.provider))],genders:[...new Set(rows.map(row=>String(row.metadata.gender||'')).filter(Boolean))]}});
+    const tenant=await getInstallationTenant(store),rows=await voiceCatalog.list(tenant.id,{provider:req.query.provider,active:req.query.active,gender:req.query.gender,newOnly:req.query.newOnly==='true'});
+    const lastVerifiedAt=rows.map(row=>row.lastVerifiedAt).filter(Boolean).sort().at(-1)||null;
+    res.json({success:true,rows:rows.map(row=>({...row,isNew:voiceCatalog.isNew(row.firstSeenAt)})),lastVerifiedAt,filters:{providers:[...new Set(rows.map(row=>row.provider))],genders:[...new Set(rows.map(row=>String(row.metadata.gender||'')).filter(Boolean))]}});
+  }));
+  app.post('/api/ai-platform/voice-catalog/refresh',...authenticated,permit('manage_ai_voice_catalog'),enabled,wrap(async(req,res)=>{
+    const tenant=await getInstallationTenant(store),data=await voiceCatalog.refresh(tenant.id,String(req.body?.provider||'openai_realtime'),actor(req));
+    res.json({success:true,data});
   }));
   app.post('/api/ai-platform/voice-profiles/preview-audio',...authenticated,permit('generate_ai_voice_preview'),enabled,wrap(async(req,res)=>{
     const tenant=await getInstallationTenant(store),current=actor(req),comparison=buildRussianVoiceComparisonRequest({...req.body?.voiceProfile,textKey:req.body?.textKey,text:req.body?.text}),profile=comparison.profile,external=readOpenAIRealtimeConfig();
@@ -198,7 +203,8 @@ export function registerAiPlatformRoutes(app:Express,deps:AiPlatformRouterDeps){
     const config:any=parseJsonObject(rows[0].config_json||{},'config_json');
     await voiceCatalog.requireAvailable(tenant.id,profile.provider,profile.voiceId);
     const oldVoiceId=String(config.voiceProfile?.voiceId||'');
-    config.voiceProfile=profile;config.voice={...(config.voice||{}),endOfTurnSilenceMs:vad,speakingRate:profile.speakingRate,pauseStyle:profile.pauseStyle};
+    config.voiceProfile=profile;config.voice={...(config.voice||{}),endOfTurnSilenceMs:vad};
+    delete config.voice.speakingRate;delete config.voice.pauseStyle;
     config.pronunciationEntries=entries;
     const data=await builder.createDraftVersion(tenant.id,id,{config,systemPrompt:String(rows[0].system_prompt||''),changeReason:'Voice profile settings'},actor(req));
     await store.query(`INSERT INTO ai_agent_tools(tenant_id,agent_version_id,tool_id,enabled,config_json)

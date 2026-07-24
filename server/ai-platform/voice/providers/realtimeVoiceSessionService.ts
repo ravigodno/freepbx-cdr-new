@@ -130,6 +130,7 @@ type Runtime = {
   interruptions: number;
   toolCalls: number;
   transcripts: Array<{ kind: any; text: string }>;
+  canonicalInputFinalKeys: Set<string>;
   transferRequired: boolean;
   callbackOfferRequired: boolean;
   blocked: boolean;
@@ -636,6 +637,7 @@ export class RealtimeVoiceSessionService {
         interruptions: 0,
         toolCalls: 0,
         transcripts: [],
+        canonicalInputFinalKeys: new Set(),
         transferRequired: false,
         callbackOfferRequired: false,
         blocked: false,
@@ -1518,6 +1520,11 @@ export class RealtimeVoiceSessionService {
       const extractionText=event.kind.startsWith("input_")
         ? String(event.extractionText??event.text).slice(0,1000)
         : text;
+      if(event.kind==="input_final"){
+        const finalKey=event.itemId||event.eventId||`${runtime.coordinator.callerTurnRef}:${extractionText}`;
+        if(runtime.canonicalInputFinalKeys.has(finalKey))return;
+        runtime.canonicalInputFinalKeys.add(finalKey);
+      }
       if(event.kind.startsWith("input_"))
         redactAiPlatformText(extractionText,runtime.redactionCounts);
       if(event.responseId&&event.kind==="output_partial"){

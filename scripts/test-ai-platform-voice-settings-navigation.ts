@@ -5,9 +5,10 @@ const app=fs.readFileSync(new URL('../src/App.tsx',import.meta.url),'utf8');
 const builder=fs.readFileSync(new URL('../src/modules/aiPlatform/AiAgentBuilderPage.tsx',import.meta.url),'utf8');
 const agents=fs.readFileSync(new URL('../src/modules/aiPlatform/VoiceAgentsManagementPage.tsx',import.meta.url),'utf8');
 const settings=fs.readFileSync(new URL('../src/modules/aiPlatform/VoiceSettingsPanel.tsx',import.meta.url),'utf8');
+const diagnostics=fs.readFileSync(new URL('../src/modules/aiPlatform/VoiceDiagnosticsPanel.tsx',import.meta.url),'utf8');
 const service=fs.readFileSync(new URL('../server/ai-platform/voice/management/voiceAgentRouteService.ts',import.meta.url),'utf8');
 
-assert.ok(app.includes('/(?:knowledge|voice)'));
+assert.ok(app.includes('/(?:knowledge|voice|diagnostics)'));
 assert.match(app,/view_ai_voice_catalog/);
 assert.match(app,/generate_ai_voice_preview/);
 assert.match(app,/manage_ai_voice_profiles/);
@@ -28,6 +29,15 @@ assert.match(settings,/Прослушать/);
 assert.match(settings,/Выбрать/);
 assert.match(settings,/Сравнить 2–5/);
 assert.match(settings,/Слепое A\/B\/C/);
+assert.match(settings,/Обновить каталог голосов/);
+assert.match(settings,/Новый/);
+assert.match(settings,/Последняя проверка каталога/);
+assert.doesNotMatch(settings,/VAD end-of-turn|AudioSocket|Frame conservation/);
+assert.match(diagnostics,/AudioSocket/);
+assert.match(diagnostics,/Frame conservation/);
+assert.match(diagnostics,/Качество произношения зависит от голосовой модели/);
+assert.match(settings,/disabled=\{!canManage\}/);
+assert.doesNotMatch(settings,/disabled=\{!preview\}/);
 assert.doesNotMatch(settings,/\[['"]alloy['"],['"]ash['"]/);
 
 console.log('AI Platform voice settings navigation UI checks passed');

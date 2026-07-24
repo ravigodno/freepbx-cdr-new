@@ -1,6 +1,6 @@
-export const OPENAI_REALTIME_VOICES=[
-  'alloy','ash','ballad','coral','echo','sage','shimmer','verse','marin','cedar',
-] as const;
+import { OPENAI_REALTIME_VOICE_MANIFEST } from "../providers/manifests/openaiRealtimeVoiceManifest.js";
+
+export const OPENAI_REALTIME_VOICES=OPENAI_REALTIME_VOICE_MANIFEST.map(item=>item.voiceId);
 
 export type VoiceProfile={
   schemaVersion:1;
@@ -29,7 +29,7 @@ export const DEFAULT_RUSSIAN_TEST_PHRASE=
 
 export function normalizeVoiceProfile(value:any):VoiceProfile{
   const voiceId=String(value?.voiceId||'marin');
-  if(!OPENAI_REALTIME_VOICES.includes(voiceId as any))
+  if(!/^[a-z0-9][a-z0-9_-]{1,99}$/.test(voiceId))
     throw new Error('Unsupported OpenAI Realtime voice');
   const locale=String(value?.locale||'ru-RU');
   return {
@@ -68,13 +68,7 @@ export function compileVoiceProfileInstructions(
 ){
   const profile=normalizeVoiceProfile(value);
   const instructions=[
-    'Говори на естественном современном русском языке.',
-    'Используй нейтральное русское произношение и не имитируй иностранный акцент.',
-    'Произноси окончания слов полностью и чётко, не растягивай гласные и не используй англоязычную или прибалтийскую интонацию.',
-    profile.pauseStyle==='short_natural'
-      ? 'Делай короткие естественные паузы.':'Делай естественные паузы.',
-    profile.speakingRate==='slightly_fast'
-      ? 'Говори немного быстрее среднего, сохраняя разборчивость.':'Говори в среднем темпе.',
+    'Говори по-русски естественно, спокойно, доброжелательно и разборчиво. Используй короткие естественные паузы.',
   ];
   if(entries.length){
     instructions.push('Соблюдай словарь произношения:');

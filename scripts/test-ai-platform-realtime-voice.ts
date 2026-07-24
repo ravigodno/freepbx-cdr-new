@@ -120,7 +120,8 @@ async function run() {
   assert.equal(voiceProfile.voiceId,'cedar');
   assert.ok(OPENAI_REALTIME_VOICES.includes('marin')&&OPENAI_REALTIME_VOICES.includes('cedar'));
   const voiceInstructions=compileVoiceProfileInstructions(voiceProfile,[{source:'PBXPuls',pronunciation:'Пи-Би-Икс Пульс'}]);
-  assert.match(voiceInstructions,/нейтральное русское произношение/iu);
+  assert.match(voiceInstructions,/Говори по-русски естественно, спокойно, доброжелательно и разборчиво/iu);
+  assert.doesNotMatch(voiceInstructions,/иностранн|прибалтийск|не растягивай/iu);
   assert.match(voiceInstructions,/короткие естественные паузы/iu);
   assert.match(voiceInstructions,/Пи-Би-Икс Пульс/u);
   const comparisonRequests=OPENAI_REALTIME_VOICES.map(voiceId=>
@@ -147,7 +148,7 @@ async function run() {
   assert.equal(configuredMetaResponseForTurn(intentRoutes,"А меня слышно?",{actionResultReported:true,activeSkillId:3,lastUpdatedFields:["specialist"]}),null);
   const personality=receptionistPersonalityV10();
   assert.deepEqual(validatePersonalityProfile(personality),[]);
-  assert.match(compilePersonalityInstructions(personality),/говори немного быстрее/iu);
+  assert.doesNotMatch(compilePersonalityInstructions(personality),/говори немного быстрее|speaking_rate|pause_style/iu);
   const skill:SkillSchema={id:1,schemaVersion:2,skillKey:"fixture_flow",name:"Fixture",description:"Универсальное оформление запроса",triggerPhrases:["оформить запрос"],negativeTriggerPhrases:[],intentExamples:["оформить запрос"],activationThreshold:.72,ambiguityPolicy:"clarify",fields:[
     {key:"date",label:"Дата",type:"date",required:true,extractionHints:[],synonyms:[],enumSource:null,validation:{},confirmationRequired:true,sensitive:false,displayOrder:1,askTemplate:"На какой день?"},
     {key:"time",label:"Время",type:"time",required:true,extractionHints:[],synonyms:[],enumSource:null,validation:{},confirmationRequired:true,sensitive:false,displayOrder:2,askTemplate:"На какое время {{field.value}}?"},

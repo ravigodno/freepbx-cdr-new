@@ -79,7 +79,7 @@ assert.equal((projected.data as any).items.length,10);assert.equal((projected.da
     'Сейчас есть один активный звонок.'
   ]),e=executor(store);const result=await new ConversationRuntime(store,new AiAuditService(store),p.execute,e.value).message(1,1,'Есть активные звонки?',actor);
   assert.equal(result.finalResponseSource,'model_with_tools');assert.deepEqual(result.toolsExecuted,[tool.toolKey]);assert.equal(result.toolExecutionIds[0],81);assert.equal(e.calls(),1);assert.equal(result.toolLoopCount,1);
-  assert.match(p.inputs.at(-1).messages[0].content,/Read-only data received|result items/);
+  assert.match(p.inputs.at(-1).messages[0].content,/Read-only data received|result items|Tool results/);
   const toolMessage=store.messages.find(row=>row[3]==='tool');assert.ok(toolMessage);assert.doesNotMatch(String(toolMessage[5]),/executorKey|Never reveal private prompt/);
   assert.ok(store.audits.some(row=>row[4]==='tool_selected'));assert.ok(store.audits.some(row=>row[4]==='tool_result_added_to_context'));
 }
