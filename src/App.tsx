@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from 'react';
+import{diagnoseDirectoryExtension,diagnoseDirectoryPhone,normalizeDirectoryPhoneInput,parseDirectoryCsv,validateDirectoryPhone,type DirectoryImportDiagnostic}from'../shared/directoryImportValidation';
 import {
   Phone,
   PhoneIncoming,
@@ -945,6 +946,8 @@ export default function App() {
   const [importSuccessCount, setImportSuccessCount] = useState<number | null>(null);
   const [importPreviewRows, setImportPreviewRows] = useState<any[]>([]);
   const [importDuplicateCount, setImportDuplicateCount] = useState(0);
+  const [showImportDiagnostics, setShowImportDiagnostics] = useState(false);
+  const [importDiagnosticReason, setImportDiagnosticReason] = useState('all');
   const [isNormalizingDb, setIsNormalizingDb] = useState(false);
   const [normalizedCount, setNormalizedCount] = useState<number | null>(null);
 
@@ -953,13 +956,7 @@ export default function App() {
   const normalizePhoneDigits = (value: string): string => String(value || '').replace(/\D/g, '');
 
   const validateDirectoryPhoneNumber = (value: string): boolean => {
-    const raw = String(value || '').trim();
-    if (!raw) return true;
-    const digits = normalizePhoneDigits(raw);
-    const plusCount = (raw.match(/\+/g) || []).length;
-    const allowed = /^\+?[0-9\s\-()]+$/.test(raw);
-    const plusOk = plusCount <= 1 && (plusCount === 0 || raw.startsWith('+'));
-    return allowed && plusOk && digits.length >= 2 && digits.length <= 11;
+    return validateDirectoryPhone(value).valid;
   };
 
   const getDirectoryPhoneValidationErrors = (phones: string[]): string[] => {
@@ -1062,33 +1059,10 @@ export default function App() {
       return;
     }
     try {
-      const parseCsvLine = (line: string) => {
-        const result: string[] = [];
-        let cur = '';
-        let inQuotes = false;
-        for (let i = 0; i < line.length; i++) {
-          const ch = line[i];
-          const next = line[i + 1];
-          if (ch === '"' && inQuotes && next === '"') {
-            cur += '"';
-            i++;
-          } else if (ch === '"') {
-            inQuotes = !inQuotes;
-          } else if ((ch === ',' || ch === ';' || ch === '\t') && !inQuotes) {
-            result.push(cur.trim());
-            cur = '';
-          } else {
-            cur += ch;
-          }
-        }
-        result.push(cur.trim());
-        return result.map(v => v.replace(/^"|"$/g, '').trim());
-      };
-
-      const lines = text.split(/\r?\n/).filter(line => line.trim());
-      const header = parseCsvLine(lines[0] || '').map(h => h.toLowerCase());
+      const csv = parseDirectoryCsv(text);
+      const header = (csv.rows[0]?.values || []).map(h => h.replace(/^\uFEFF/,'').trim().toLowerCase());
       const hasHeader = header.some(h => ['name','fullname','имя','фио','company','organization','компания','phone','phone1','телефон','номер'].includes(h));
-      const dataLines = hasHeader ? lines.slice(1) : lines;
+      const dataLines = hasHeader ? csv.rows.slice(1) : csv.rows;
 
       const getByHeader = (cols: string[], ...names: string[]) => {
         for (const name of names) {
@@ -1098,8 +1072,8 @@ export default function App() {
         return '';
       };
 
-      const parsed = dataLines.map((line, index) => {
-        const cols = parseCsvLine(line);
+      const parsed = dataLines.map((csvRow, index) => {
+        const cols = csvRow.values;
         const name = hasHeader ? (getByHeader(cols, 'fullName','fullname','name','имя','фио','contact','контакт') || cols[0]) : cols[0];
         const company = hasHeader ? getByHeader(cols, 'organization','company','компания','организация') : '';
         const position = hasHeader ? getByHeader(cols, 'position','должность','job','title') : '';
@@ -1148,11 +1122,25 @@ export default function App() {
         const internalExtension = hasHeader ? getByHeader(cols, 'internalExtension','внутренний номер','extension') : '';
         const linkedExternalNumber = hasHeader ? getByHeader(cols, 'linkedExternalNumber','связанный внешний номер','externalNumber') : '';
         const responsibleUserId = hasHeader ? getByHeader(cols, 'responsibleUserId','ответственный сотрудник','responsible') : '';
+        const rowDiagnostics:DirectoryImportDiagnostic[]=[
+          diagnoseDirectoryPhone(phone1,'phone',csvRow.rowNumber),
+          diagnoseDirectoryPhone(phone2,'phone2',csvRow.rowNumber),
+          diagnoseDirectoryPhone(phone3,'phone3',csvRow.rowNumber),
+          diagnoseDirectoryPhone(linkedExternalNumber,'linkedExternalNumber',csvRow.rowNumber),
+          diagnoseDirectoryExtension(internalExtension,csvRow.rowNumber)
+        ].filter(Boolean)as DirectoryImportDiagnostic[];
+        const metadataDiagnostic=(field:'type'|'visibility'|'isSpam',raw:string,reason:'invalid_type'|'invalid_visibility'|'invalid_boolean'):DirectoryImportDiagnostic=>({rowNumber:csvRow.rowNumber,field,raw,trimmed:String(raw||'').trim(),normalized:'',digitLength:0,codePoints:normalizeDirectoryPhoneInput(raw).codePoints,reason,duplicateInFile:false,suggestedValue:null});
+        if(typeErrors.length)rowDiagnostics.push(metadataDiagnostic('type',typeRaw,'invalid_type'));
+        if(visibilityErrors.length)rowDiagnostics.push(metadataDiagnostic('visibility',visibilityRaw,'invalid_visibility'));
+        if(parsedSpam.error)rowDiagnostics.push(metadataDiagnostic('isSpam',isSpamRaw,'invalid_boolean'));
+        const phoneFields=[['phone',phone1],['phone2',phone2],['phone3',phone3],['linkedExternalNumber',linkedExternalNumber]]as const,seenInRow=new Set<string>();
+        phoneFields.forEach(([field,value])=>{const normalized=normalizeDirectoryPhoneInput(value).digits;if(!normalized)return;if(seenInRow.has(normalized))rowDiagnostics.push({rowNumber:csvRow.rowNumber,field,raw:String(value||''),trimmed:String(value||'').trim(),normalized,digitLength:normalized.length,codePoints:normalizeDirectoryPhoneInput(value).codePoints,reason:'duplicate_in_row',duplicateInFile:false,suggestedValue:null});seenInRow.add(normalized)});
+        if(hasHeader&&cols.length!==header.length)rowDiagnostics.push({rowNumber:csvRow.rowNumber,field:'row',raw:cols.join(csv.delimiter),trimmed:'',normalized:'',digitLength:0,codePoints:[],reason:'parser_column_mismatch',duplicateInFile:false,suggestedValue:null});
         const importErrors = [
           ...typeErrors,
           ...visibilityErrors,
           ...(parsedSpam.error ? [parsedSpam.error] : []),
-          ...getDirectoryPhoneValidationErrors([...phones, linkedExternalNumber])
+          ...rowDiagnostics.filter(item=>!['hidden_unicode','bom','whitespace','duplicate_in_file'].includes(item.reason)).map(item=>`${item.field}: ${item.reason}`)
         ];
 
         return {
@@ -1176,11 +1164,17 @@ export default function App() {
           internalExtension,
           linkedExternalNumber,
           responsibleUserId,
+          _csvRowNumber:csvRow.rowNumber,
+          _csvColumnCount:cols.length,
+          _csvExpectedColumns:header.length,
+          _importDiagnostics:rowDiagnostics,
           _importErrors: importErrors,
           isSpam,
           isBlacklisted
         };
       }).filter(Boolean) as any[];
+      const seenPhones=new Map<string,number>();
+      parsed.forEach(entry=>{const value=normalizeDirectoryPhoneInput(entry.number).digits;if(!value)return;const first=seenPhones.get(value);if(first){const diagnostic:DirectoryImportDiagnostic={rowNumber:entry._csvRowNumber,field:'phone',raw:String(entry.number||''),trimmed:String(entry.number||'').trim(),normalized:value,digitLength:value.length,codePoints:normalizeDirectoryPhoneInput(entry.number).codePoints,reason:'duplicate_in_file',duplicateInFile:true,suggestedValue:null};entry._importDiagnostics.push(diagnostic)}else seenPhones.set(value,entry._csvRowNumber)});
 
       setParsedImportEntries(parsed);
       setImportFileError(parsed.length === 0 ? 'Не удалось прочесть корректные записи.' : '');
@@ -1838,7 +1832,10 @@ export default function App() {
     if (parsedImportEntries.length === 0) return;
     const invalidRows = parsedImportEntries.filter((entry: any) => Array.isArray(entry._importErrors) && entry._importErrors.length > 0);
     if (invalidRows.length) {
-      setImportFileError('Исправьте телефоны перед импортом. Строк с ошибками: ' + invalidRows.length + '.');
+      const reasons=new Map<string,number>();invalidRows.flatMap((entry:any)=>entry._importDiagnostics||[]).forEach((item:any)=>reasons.set(item.reason,(reasons.get(item.reason)||0)+1));
+      const summary=Array.from(reasons.entries()).map(([reason,count])=>`${reason}: ${count}`).join(', ');
+      setImportFileError('Исправьте ошибки перед импортом. Строк с ошибками: ' + invalidRows.length + (summary?'. '+summary:'') + '.');
+      setShowImportDiagnostics(true);
       return;
     }
     setIsImporting(true);
@@ -1880,6 +1877,14 @@ export default function App() {
     } finally {
       setIsImporting(false);
     }
+  };
+
+  const importDiagnostics=[...parsedImportEntries.flatMap((entry:any)=>(entry._importDiagnostics||[]).map((diagnostic:DirectoryImportDiagnostic)=>({...diagnostic,name:entry.name||entry.company||'',email:entry.email||''}))),...importPreviewRows.filter((row:any)=>row.duplicateId).map((row:any)=>{const entry=parsedImportEntries[row.index]||{},raw=String(entry.number||'');return{rowNumber:entry._csvRowNumber||row.index+2,field:'phone',raw,trimmed:raw.trim(),normalized:normalizeDirectoryPhoneInput(raw).digits,digitLength:normalizeDirectoryPhoneInput(raw).digits.length,codePoints:normalizeDirectoryPhoneInput(raw).codePoints,reason:'duplicate_in_database',duplicateInFile:false,suggestedValue:null,name:entry.name||entry.company||'',email:entry.email||'',duplicateName:row.duplicateName}})];
+  const filteredImportDiagnostics=importDiagnosticReason==='all'?importDiagnostics:importDiagnostics.filter((item:any)=>item.reason===importDiagnosticReason);
+  const downloadImportDiagnostics=(errorsOnly:boolean)=>{
+    const rows=errorsOnly?filteredImportDiagnostics:importDiagnostics,quote=(value:unknown)=>`"${String(value??'').replace(/"/g,'""')}"`;
+    const csv=['row,name,field,raw,trimmed,normalized,digitLength,reason,duplicateInFile,suggestedValue,codePoints',...rows.map((item:any)=>[item.rowNumber,item.name,item.field,item.raw,item.trimmed,item.normalized,item.digitLength,item.reason,item.duplicateInFile,item.suggestedValue||'',item.codePoints.join(' ')].map(quote).join(','))].join('\r\n');
+    const link=document.createElement('a');link.href=URL.createObjectURL(new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8'}));link.download=errorsOnly?'directory_import_errors.csv':'directory_import_diagnostic.csv';link.click();URL.revokeObjectURL(link.href);
   };
 
   // --- CLICK-TO-CALL USER EXTENSION & LOG DIALOG ---
@@ -6394,7 +6399,7 @@ export default function App() {
             <div className="min-w-0 space-y-4">
               <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                 <h3 className="mb-3 text-sm font-black text-slate-900">Загрузка файла</h3>
-                {importFileError && <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 break-words">{importFileError}</div>}
+                {importFileError && <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 break-words"><div>{importFileError}</div>{importDiagnostics.length>0&&<button type="button" onClick={()=>setShowImportDiagnostics(value=>!value)} className="mt-2 rounded border border-amber-300 bg-white px-3 py-1.5 font-bold">Показать строки с ошибками</button>}</div>}
                 {importSuccessCount !== null && <div className="mb-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-800">Контакты успешно импортированы: {importSuccessCount}</div>}
                 <div className="relative rounded-xl border-2 border-dashed border-slate-200 p-5 text-center hover:border-blue-300">
                   <input type="file" accept=".csv,.txt" onChange={handleFileUpload} className="absolute inset-0 h-full w-full cursor-pointer opacity-0" />
@@ -6407,6 +6412,7 @@ export default function App() {
                   <button type="button" onClick={handlePreviewImport} disabled={isImporting || parsedImportEntries.length === 0} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50">Проверить ошибки и дубли</button>
                   <button type="button" onClick={handleExecuteImport} disabled={isImporting || parsedImportEntries.length === 0} className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-50">Импортировать ({parsedImportEntries.length})</button>
                 </div>
+                {showImportDiagnostics&&importDiagnostics.length>0&&<div className="mt-4 rounded-xl border border-amber-200 bg-amber-50/40 p-3"><div className="flex flex-wrap items-center justify-between gap-2"><div><h4 className="text-xs font-black text-slate-900">Диагностика строк ({importDiagnostics.length})</h4><p className="text-[11px] text-slate-500">Показаны первые 50 записей. Проверка не выполняет импорт.</p></div><div className="flex flex-wrap gap-2"><select value={importDiagnosticReason} onChange={event=>setImportDiagnosticReason(event.target.value)} className="rounded border bg-white px-2 py-1.5 text-xs"><option value="all">Все причины</option>{Array.from(new Set(importDiagnostics.map((item:any)=>item.reason))).map(reason=><option key={reason} value={reason}>{reason}</option>)}</select><button type="button" onClick={()=>downloadImportDiagnostics(true)} className="rounded border bg-white px-2 py-1.5 text-xs font-bold">Скачать CSV с ошибками</button><button type="button" onClick={()=>downloadImportDiagnostics(false)} className="rounded border bg-white px-2 py-1.5 text-xs font-bold">Скачать диагностический отчёт</button></div></div><div className="mt-3 overflow-x-auto"><table className="w-full min-w-[920px] text-left text-[11px]"><thead><tr className="border-b">{['Строка','ФИО','Поле','Исходное значение','После trim','Нормализация','Длина','Причина','Предложение'].map(label=><th key={label} className="px-2 py-1.5">{label}</th>)}</tr></thead><tbody>{filteredImportDiagnostics.slice(0,50).map((item:any,index:number)=><tr key={`${item.rowNumber}-${item.field}-${index}`} className="border-b border-amber-100"><td className="px-2 py-1.5">{item.rowNumber}</td><td className="max-w-[160px] truncate px-2 py-1.5">{item.name||'—'}</td><td className="px-2 py-1.5 font-mono">{item.field}</td><td className="max-w-[180px] truncate px-2 py-1.5 font-mono" title={item.codePoints.join(' ')}>{item.raw||'—'}</td><td className="px-2 py-1.5 font-mono">{item.trimmed||'—'}</td><td className="px-2 py-1.5 font-mono">{item.normalized||'—'}</td><td className="px-2 py-1.5">{item.digitLength}</td><td className="px-2 py-1.5 font-bold text-rose-700">{item.reason}</td><td className="px-2 py-1.5 font-mono">{item.suggestedValue||'—'}</td></tr>)}</tbody></table></div></div>}
               </div>
 
               <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">

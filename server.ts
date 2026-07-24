@@ -25,6 +25,7 @@ import crypto from 'crypto';
 import http from 'http';
 import https from 'https';
 import { CallEntry, MissedCallStatus, AppSettings, DashboardStats, UserRole, WebUser } from './src/types.js';
+import{validateDirectoryPhone as validateSharedDirectoryPhone}from'./shared/directoryImportValidation.js';
 import os from 'os';
 import { registerManagementRoutes } from './server-management.js';
 import { generateAIResponse, registerAiPbxAdminRoutes } from './server/aiPbxAdmin.js';
@@ -502,17 +503,11 @@ const onlyDigits = (value: any): string => {
 const DIRECTORY_PHONE_VALIDATION_MESSAGE = 'Телефон должен содержать от 2 до 11 цифр. Допустимы + в начале, пробелы, дефисы и скобки.';
 
 const validateDirectoryPhoneNumber = (value: any): { valid: boolean; digits: string; message?: string } => {
-  const raw = String(value ?? '').trim();
-  if (!raw) return { valid: true, digits: '' };
-  const digits = onlyDigits(raw);
-  const plusCount = (raw.match(/\+/g) || []).length;
-  const allowed = /^\+?[0-9\s\-()]+$/.test(raw);
-  const plusOk = plusCount <= 1 && (plusCount === 0 || raw.startsWith('+'));
-  const lengthOk = digits.length >= 2 && digits.length <= 11;
+  const result=validateSharedDirectoryPhone(value);
   return {
-    valid: allowed && plusOk && lengthOk,
-    digits,
-    message: allowed && plusOk && lengthOk ? undefined : DIRECTORY_PHONE_VALIDATION_MESSAGE
+    valid: result.valid,
+    digits: result.digits,
+    message: result.valid ? undefined : DIRECTORY_PHONE_VALIDATION_MESSAGE
   };
 };
 
