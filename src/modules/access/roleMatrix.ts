@@ -49,6 +49,8 @@ export const ROLE_PERMISSIONS: Partial<Record<UserRole, PermissionKey[]>> = {
     'create_ai_agents',
     'clone_ai_agents',
     'publish_ai_agents',
+    'preview_ai_agents',
+    'apply_ai_agents',
     'view_ai_agents',
     'edit_ai_agents',
     'view_ai_telephony',

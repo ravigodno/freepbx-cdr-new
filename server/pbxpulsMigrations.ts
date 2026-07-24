@@ -1303,6 +1303,44 @@ const MIGRATIONS: Migration[] = [
       `INSERT IGNORE INTO role_permissions(role_id,permission_id)
        SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key IN(
        'view_ai_agents','edit_ai_agents','view_ai_telephony','configure_ai_telephony','ai_platform_expert_mode')
+      WHERE r.role_key IN('su','admin')`
+    ]
+  },
+  {
+    key:'20260724_057_ai_agent_creation_wizard',
+    description:'Add resumable preview-first AI agent creation wizard',
+    statements:[
+      `CREATE TABLE IF NOT EXISTS ai_agent_creation_drafts(
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,tenant_id BIGINT NOT NULL,idempotency_key VARCHAR(100) NOT NULL,
+        state ENUM('draft','validating','preview_ready','applying','publishing','creating_extension','reloading','verifying','active','creation_failed') NOT NULL DEFAULT 'draft',
+        template_key VARCHAR(100) NOT NULL,name VARCHAR(191) NOT NULL,role VARCHAR(191) NOT NULL,description VARCHAR(1000) NOT NULL,
+        language VARCHAR(20) NOT NULL,communication_style VARCHAR(191) NOT NULL,greeting VARCHAR(500) NOT NULL,
+        extension VARCHAR(20) NULL,freepbx_display_name VARCHAR(191) NULL,fallback_type VARCHAR(64) NOT NULL DEFAULT 'terminate_call',fallback_value VARCHAR(191) NULL,
+        provider VARCHAR(64) NOT NULL,model VARCHAR(191) NOT NULL,voice_id VARCHAR(100) NOT NULL,voice_json LONGTEXT NOT NULL,
+        skills_json LONGTEXT NOT NULL,knowledge_json LONGTEXT NOT NULL,handoff_json LONGTEXT NOT NULL,source_agent_id BIGINT NULL,
+        agent_id BIGINT NULL,agent_version_id BIGINT NULL,ai_extension_id BIGINT NULL,ai_extension_preview_id BIGINT NULL,
+        error_code VARCHAR(64) NULL,last_synced_at DATETIME NULL,created_by VARCHAR(191) NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at DATETIME NULL,
+        UNIQUE KEY uniq_ai_agent_creation_key(tenant_id,idempotency_key),KEY idx_ai_agent_creation_state(tenant_id,state),
+        CONSTRAINT fk_ai_agent_creation_tenant FOREIGN KEY(tenant_id) REFERENCES ai_tenants(id),
+        CONSTRAINT fk_ai_agent_creation_source FOREIGN KEY(source_agent_id) REFERENCES ai_agents(id),
+        CONSTRAINT fk_ai_agent_creation_agent FOREIGN KEY(agent_id) REFERENCES ai_agents(id),
+        CONSTRAINT fk_ai_agent_creation_version FOREIGN KEY(agent_version_id) REFERENCES ai_agent_versions(id),
+        CONSTRAINT fk_ai_agent_creation_extension FOREIGN KEY(ai_extension_id) REFERENCES ai_extensions(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS ai_agent_creation_previews(
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,tenant_id BIGINT NOT NULL,draft_id BIGINT NOT NULL,idempotency_key VARCHAR(100) NOT NULL,
+        preview_json LONGTEXT NOT NULL,status ENUM('ready','blocked','applied','expired') NOT NULL,
+        created_by VARCHAR(191) NULL,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,expires_at DATETIME NOT NULL,applied_at DATETIME NULL,
+        UNIQUE KEY uniq_ai_agent_creation_preview_key(tenant_id,idempotency_key),
+        CONSTRAINT fk_ai_agent_creation_preview_tenant FOREIGN KEY(tenant_id) REFERENCES ai_tenants(id),
+        CONSTRAINT fk_ai_agent_creation_preview_draft FOREIGN KEY(draft_id) REFERENCES ai_agent_creation_drafts(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `INSERT IGNORE INTO permissions(permission_key,name,description,category)VALUES
+       ('preview_ai_agents','Preview AI agent creation','Validate and preview new AI agents without live PBX changes','ai_platform'),
+       ('apply_ai_agents','Apply AI agent creation','Apply a confirmed AI agent creation preview','ai_platform')`,
+      `INSERT IGNORE INTO role_permissions(role_id,permission_id)
+       SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key IN('preview_ai_agents','apply_ai_agents')
        WHERE r.role_key IN('su','admin')`
     ]
   }

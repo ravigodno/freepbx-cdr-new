@@ -16,6 +16,7 @@ import VoiceMediaPanel from'./VoiceMediaPanel';
 import RealtimeVoicePanel from'./RealtimeVoicePanel';
 
 interface Props{
+ canCreateAgents?:boolean;
  token:string;canCreate:boolean;canViewKnowledge:boolean;canViewTraining:boolean;canViewTransfers:boolean;canTestTransfer:boolean;canViewCallbacks:boolean;canManageCallbacks:boolean;canAssignActions:boolean;canViewVoice:boolean;canManageVoice:boolean;canTestVoice:boolean;canViewMedia:boolean;canTestMedia:boolean;canViewRealtime:boolean;canTestRealtime:boolean;canViewLive:boolean;canConfigureLive:boolean;canEnableLive:boolean;canCheckLive:boolean;canViewVoiceAgents:boolean;canManageVoiceAgents:boolean;canTestVoiceAgents:boolean;canViewVoiceTranscripts:boolean;canExportVoiceTranscripts:boolean;canViewVoiceSettings:boolean;canManageVoiceSettings:boolean;canViewAiExtensions:boolean;canCreateAiExtensions:boolean;canUpdateAiExtensions:boolean;canPublishAiExtensions:boolean;canViewHandoff:boolean;canConfigureHandoff:boolean;canPublishHandoff:boolean;canPublishAgents?:boolean;canExpertMode?:boolean;
 }
 const sectionFromPath=():AiPlatformSection=>location.pathname.startsWith('/ai-platform/skills')?'skills':location.pathname.startsWith('/ai-platform/knowledge')?'knowledge':location.pathname.startsWith('/ai-platform/conversations')?'conversations':location.pathname.startsWith('/ai-platform/settings')||location.pathname.startsWith('/ai-platform/diagnostics')||/\/agents\/\d+\/diagnostics$/.test(location.pathname)?'settings':'agents';
@@ -27,7 +28,7 @@ export default function AiAgentBuilderPage(props:Props){
  return <section className="mx-auto max-w-[1440px] space-y-4">
   <header className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div><h1 className="text-xl font-black">AI Platform</h1><p className="text-sm text-slate-500">AI-сотрудники для вашей телефонии</p></div>{props.canExpertMode&&<label className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-bold"><input type="checkbox" checked={Boolean(expertMode)} onChange={e=>setExpertMode(e.target.checked)}/>Показать расширенные настройки</label>}</header>
   <div className="grid gap-4 lg:grid-cols-[210px_minmax(0,1fr)]"><aside><AiPlatformNavigation active={section}/></aside><main className="min-w-0">
-   {section==='agents'&&!agentId&&<AiPlatformAgentList token={token} canEdit={props.canCreate}/>}
+   {section==='agents'&&!agentId&&<AiPlatformAgentList token={token} canEdit={props.canCreate} canCreate={Boolean(props.canCreateAgents??props.canCreate)}/>}
    {section==='agents'&&agentId>0&&<AiAgentEditor token={token} agentId={agentId} expertMode={Boolean(expertMode)} permissions={permissions}/>}
    {section==='skills'&&<SimpleSurface title="Навыки" text="Настройте, что AI-сотрудники умеют делать."><SkillBuilderPanel token={token} agentId={1} enabled canManage={props.canCreate}/></SimpleSurface>}
    {section==='knowledge'&&<SimpleSurface title="Базы знаний" text="Подключите инструкции, ответы и справочники."><AgentKnowledgeTrainingPage token={token} agentId={1} enabled canViewKnowledge={props.canViewKnowledge} canViewTraining={props.canViewTraining}/></SimpleSurface>}

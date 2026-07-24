@@ -1,0 +1,18 @@
+import assert from'node:assert/strict';
+import fs from'node:fs';
+import{assertAgentCreationTransition,isAgentCreationTerminal}from'../server/ai-platform/agents/creation/agentCreationStateMachine.js';
+import{AGENT_CREATION_TEMPLATES}from'../server/ai-platform/agents/creation/agentCreationTypes.js';
+assert.equal(AGENT_CREATION_TEMPLATES.length,4);
+assert.deepEqual(AGENT_CREATION_TEMPLATES.map(x=>x.name),['Виртуальный секретарь','Оператор первой линии','Информационный помощник','Пустой AI-сотрудник']);
+for(const pair of [['draft','validating'],['validating','preview_ready'],['preview_ready','applying'],['applying','publishing'],['publishing','creating_extension'],['creating_extension','reloading'],['reloading','verifying'],['verifying','active']]as const)assert.doesNotThrow(()=>assertAgentCreationTransition(pair[0],pair[1]));
+assert.doesNotThrow(()=>assertAgentCreationTransition('verifying','creation_failed'));
+assert.doesNotThrow(()=>assertAgentCreationTransition('creation_failed','applying'));
+assert.throws(()=>assertAgentCreationTransition('draft','active'));
+assert.equal(isAgentCreationTerminal('active'),true);
+const service=fs.readFileSync('server/ai-platform/agents/creation/agentCreationService.ts','utf8'),router=fs.readFileSync('server/ai-platform/agents/creation/api/agentCreationRouter.ts','utf8'),ui=fs.readFileSync('src/modules/aiPlatform/AiAgentCreationWizard.tsx','utf8');
+for(const route of ['/drafts','suggest-extension','validate-extension','/preview','/apply','/status','/retry'])assert.ok(router.includes(route),route);
+for(const permission of ['create_ai_agents','preview_ai_agents','apply_ai_agents'])assert.ok(router.includes(`permit('${permission}')`),permission);
+for(const invariant of ['productionAffected:false','automaticCall:false','sipEndpointCreated:false',"status='draft',current_version_id=NULL",'idempotent:true'])assert.ok(service.includes(invariant),invariant);
+for(const label of ['Добавить AI-сотрудника','Проверить создание','Создать AI-сотрудника и виртуальный номер'])assert.ok(ui.includes(label),label);
+assert.ok((ui.match(/title="/g)||[]).length>=7);
+console.log('AI agent creation wizard tests: OK');

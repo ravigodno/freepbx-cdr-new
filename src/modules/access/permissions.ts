@@ -138,7 +138,9 @@ export type PermissionKey =
   | 'view_ai_handoff'
   | 'configure_ai_handoff'
   | 'test_ai_handoff'
-  | 'publish_ai_handoff';
+  | 'publish_ai_handoff'
+  | 'preview_ai_agents'
+  | 'apply_ai_agents';
 
 export type UserPermissions = Partial<Record<PermissionKey, boolean>>;
 

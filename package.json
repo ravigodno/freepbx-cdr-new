@@ -54,6 +54,7 @@
     ,"test:ai-platform-ai-extensions": "tsx scripts/test-ai-platform-ai-extensions.ts"
     ,"test:ai-platform-human-handoff-runtime": "tsx scripts/test-ai-platform-human-handoff-runtime.ts"
     ,"test:ai-platform-simple-ux": "tsx scripts/test-ai-platform-simple-ux.ts"
+    ,"test:ai-agent-creation-wizard": "tsx scripts/test-ai-agent-creation-wizard.ts"
     ,"test:call-registry-ai-handoff": "tsx scripts/test-call-registry-ai-handoff.ts"
   },
   "dependencies": {

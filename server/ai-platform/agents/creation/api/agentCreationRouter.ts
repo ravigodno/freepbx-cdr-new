@@ -1,0 +1,16 @@
+import type{Express}from'express';
+import type{AgentCreationService}from'../agentCreationService.js';
+export function registerAgentCreationRoutes(app:Express,r:any,service:AgentCreationService){const{authenticated,permit,wrap,getTenantId,actor,positiveInt}=r;
+ app.get('/api/ai-platform/agent-creation/templates',...authenticated,permit('view_ai_agents'),wrap(async(_q:any,res:any)=>res.json({success:true,rows:await service.templates()})));
+ app.get('/api/ai-platform/agent-creation/drafts',...authenticated,permit('create_ai_agents'),wrap(async(req:any,res:any)=>res.json({success:true,rows:await service.listDrafts(await getTenantId(),actor(req).actorId)})));
+ app.post('/api/ai-platform/agent-creation/drafts',...authenticated,permit('create_ai_agents'),wrap(async(req:any,res:any)=>res.status(201).json({success:true,data:await service.createDraft(await getTenantId(),req.body||{},actor(req))})));
+ app.get('/api/ai-platform/agent-creation/drafts/:id',...authenticated,permit('create_ai_agents'),wrap(async(req:any,res:any)=>res.json({success:true,data:await service.get(await getTenantId(),positiveInt(req.params.id,'draft id'))})));
+ app.put('/api/ai-platform/agent-creation/drafts/:id',...authenticated,permit('create_ai_agents'),wrap(async(req:any,res:any)=>res.json({success:true,data:await service.updateDraft(await getTenantId(),positiveInt(req.params.id,'draft id'),req.body||{},actor(req))})));
+ app.delete('/api/ai-platform/agent-creation/drafts/:id',...authenticated,permit('create_ai_agents'),wrap(async(req:any,res:any)=>res.json({success:true,data:await service.removeDraft(await getTenantId(),positiveInt(req.params.id,'draft id'),actor(req))})));
+ app.get('/api/ai-platform/agent-creation/suggest-extension',...authenticated,permit('create_ai_agents'),wrap(async(_q:any,res:any)=>res.json({success:true,data:await service.suggest(await getTenantId())})));
+ app.post('/api/ai-platform/agent-creation/validate-extension',...authenticated,permit('create_ai_agents'),wrap(async(req:any,res:any)=>res.json({success:true,data:await service.validateExtension(await getTenantId(),String(req.body?.extension||''),req.body?.draftId?positiveInt(req.body.draftId,'draft id'):undefined)})));
+ app.post('/api/ai-platform/agent-creation/preview',...authenticated,permit('preview_ai_agents'),wrap(async(req:any,res:any)=>res.status(201).json({success:true,data:await service.preview(await getTenantId(),positiveInt(req.body?.draftId,'draft id'),String(req.body?.idempotencyKey||''),actor(req))})));
+ app.post('/api/ai-platform/agent-creation/apply',...authenticated,permit('apply_ai_agents'),permit('publish_ai_agents'),permit('publish_ai_extensions'),wrap(async(req:any,res:any)=>res.json({success:true,data:await service.apply(await getTenantId(),positiveInt(req.body?.previewId,'preview id'),req.body?.confirm===true,actor(req))})));
+ app.get('/api/ai-platform/agent-creation/:id/status',...authenticated,permit('create_ai_agents'),wrap(async(req:any,res:any)=>res.json({success:true,data:await service.get(await getTenantId(),positiveInt(req.params.id,'draft id'))})));
+ app.post('/api/ai-platform/agent-creation/:id/retry',...authenticated,permit('apply_ai_agents'),wrap(async(req:any,res:any)=>res.json({success:true,data:await service.retry(await getTenantId(),positiveInt(req.params.id,'draft id'),actor(req))})));
+}
