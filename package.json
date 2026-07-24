@@ -1,7 +1,7 @@
 {
   "name": "freepbx-cdr-new",
   "private": true,
-  "version": "5.6.34",
+  "version": "5.6.35",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
@@ -34,34 +34,34 @@
     "test:sngrep": "tsx scripts/test-sngrep.ts",
     "test:contact-import-duplicates": "tsx scripts/test-contact-import-duplicates.ts",
     "test:directory-own-contact-permission": "tsx scripts/test-directory-own-contact-permission.ts",
-    "test:live-transfer-search": "tsx scripts/test-live-transfer-search.ts"
-    ,"test:security": "tsx scripts/test-security-monitoring.ts",
-    "test:server-clock": "tsx scripts/test-server-clock.ts"
-    ,"test:device-network-identity": "tsx scripts/test-device-network-identity.ts",
+    "test:live-transfer-search": "tsx scripts/test-live-transfer-search.ts",
+    "test:security": "tsx scripts/test-security-monitoring.ts",
+    "test:server-clock": "tsx scripts/test-server-clock.ts",
+    "test:device-network-identity": "tsx scripts/test-device-network-identity.ts",
     "test:log-analysis": "tsx scripts/test-log-analysis.ts",
     "test:log-source-audit": "tsx scripts/test-log-source-audit.ts",
-    "test:call-trace": "tsx scripts/test-call-trace.ts"
-    ,"test:ai-platform-core": "tsx scripts/test-ai-platform-core.ts"
-    ,"test:ai-platform-sandbox": "tsx scripts/test-ai-platform-sandbox.ts"
-    ,"test:ai-platform-tools": "tsx scripts/test-ai-platform-tools.ts"
-    ,"test:ai-platform-tool-loop": "tsx scripts/test-ai-platform-tool-loop.ts"
-    ,"test:ai-platform-transfer": "tsx scripts/test-ai-platform-transfer.ts"
-    ,"test:ai-platform-actions": "tsx scripts/test-ai-platform-actions.ts"
-    ,"test:ai-platform-voice-control": "tsx scripts/test-ai-platform-voice-control.ts"
-    ,"test:ai-platform-voice-media": "tsx scripts/test-ai-platform-voice-media.ts && tsx scripts/test-ai-platform-media-worker.ts"
-    ,"test:ai-platform-realtime-voice": "tsx scripts/test-ai-platform-realtime-voice.ts"
-    ,"test:ai-platform-live-voice": "tsx scripts/test-ai-platform-live-voice.ts"
-    ,"test:ai-platform-ai-extensions": "tsx scripts/test-ai-platform-ai-extensions.ts"
-    ,"test:ai-platform-human-handoff-runtime": "tsx scripts/test-ai-platform-human-handoff-runtime.ts"
-    ,"test:ai-platform-integrations": "tsx scripts/test-ai-platform-integrations.ts"
-    ,"test:directory-import-validation": "tsx scripts/test-directory-import-validation.ts"
-    ,"test:directory-contact-ids": "tsx scripts/test-directory-contact-ids.ts"
-    ,"test:directory-import-jobs": "tsx scripts/test-directory-import-jobs.ts"
-    ,"test:directory-bulk-delete": "tsx scripts/test-directory-bulk-delete.ts"
-    ,"test:ai-platform-simple-ux": "tsx scripts/test-ai-platform-simple-ux.ts"
-    ,"test:ai-agent-creation-wizard": "tsx scripts/test-ai-agent-creation-wizard.ts"
-    ,"test:ai-agent-deletion": "tsx scripts/test-ai-agent-deletion.ts"
-    ,"test:call-registry-ai-handoff": "tsx scripts/test-call-registry-ai-handoff.ts"
+    "test:call-trace": "tsx scripts/test-call-trace.ts",
+    "test:ai-platform-core": "tsx scripts/test-ai-platform-core.ts",
+    "test:ai-platform-sandbox": "tsx scripts/test-ai-platform-sandbox.ts",
+    "test:ai-platform-tools": "tsx scripts/test-ai-platform-tools.ts",
+    "test:ai-platform-tool-loop": "tsx scripts/test-ai-platform-tool-loop.ts",
+    "test:ai-platform-transfer": "tsx scripts/test-ai-platform-transfer.ts",
+    "test:ai-platform-actions": "tsx scripts/test-ai-platform-actions.ts",
+    "test:ai-platform-voice-control": "tsx scripts/test-ai-platform-voice-control.ts",
+    "test:ai-platform-voice-media": "tsx scripts/test-ai-platform-voice-media.ts && tsx scripts/test-ai-platform-media-worker.ts",
+    "test:ai-platform-realtime-voice": "tsx scripts/test-ai-platform-realtime-voice.ts",
+    "test:ai-platform-live-voice": "tsx scripts/test-ai-platform-live-voice.ts",
+    "test:ai-platform-ai-extensions": "tsx scripts/test-ai-platform-ai-extensions.ts",
+    "test:ai-platform-human-handoff-runtime": "tsx scripts/test-ai-platform-human-handoff-runtime.ts",
+    "test:ai-platform-integrations": "tsx scripts/test-ai-platform-integrations.ts",
+    "test:directory-import-validation": "tsx scripts/test-directory-import-validation.ts",
+    "test:directory-contact-ids": "tsx scripts/test-directory-contact-ids.ts",
+    "test:directory-import-jobs": "tsx scripts/test-directory-import-jobs.ts",
+    "test:directory-bulk-delete": "tsx scripts/test-directory-bulk-delete.ts",
+    "test:ai-platform-simple-ux": "tsx scripts/test-ai-platform-simple-ux.ts",
+    "test:ai-agent-creation-wizard": "tsx scripts/test-ai-agent-creation-wizard.ts",
+    "test:ai-agent-deletion": "tsx scripts/test-ai-agent-deletion.ts",
+    "test:call-registry-ai-handoff": "tsx scripts/test-call-registry-ai-handoff.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
