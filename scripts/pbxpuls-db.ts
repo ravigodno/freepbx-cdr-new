@@ -17,7 +17,8 @@ const requiredTables = [
   'security_file_changes', 'security_alert_rules', 'security_alert_history', 'security_scan_runs',
   'ai_tenants', 'ai_agents', 'ai_agent_versions', 'ai_provider_configs', 'ai_tools', 'ai_agent_tools',
   'ai_behavior_profiles', 'ai_audit_log', 'ai_tool_executions', 'ai_transfer_requests',
-  'ai_action_definitions', 'ai_actions', 'ai_agent_actions', 'ai_callback_requests', 'ai_voice_sessions', 'ai_voice_route_bindings', 'ai_voice_media_sessions', 'ai_realtime_voice_sessions'
+  'ai_action_definitions', 'ai_actions', 'ai_agent_actions', 'ai_callback_requests', 'ai_voice_sessions', 'ai_voice_route_bindings', 'ai_voice_media_sessions', 'ai_realtime_voice_sessions',
+  'ai_extensions', 'ai_extension_previews'
 ];
 
 function parseFreePBXConfig(): Record<string, string> {

@@ -1184,6 +1184,52 @@ const MIGRATIONS: Migration[] = [
       `INSERT IGNORE INTO permissions(permission_key,name,description,category)VALUES('manage_ai_voice_catalog','Manage AI voice catalog','Refresh versioned provider voice manifests','ai_platform')`,
       `INSERT IGNORE INTO role_permissions(role_id,permission_id)SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key='manage_ai_voice_catalog' WHERE r.role_key IN('su','admin')`
     ]
+  },
+  {
+    key:'20260724_052_ai_virtual_extensions',
+    description:'Add managed virtual extensions for AI agents',
+    statements:[
+      `CREATE TABLE IF NOT EXISTS ai_extensions(
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,tenant_id BIGINT NOT NULL,extension VARCHAR(20) NOT NULL,extension_hash CHAR(64) NOT NULL,display_name VARCHAR(191) NOT NULL,
+        agent_id BIGINT NOT NULL,published_agent_version_id BIGINT NOT NULL,route_binding_id BIGINT NULL,provider VARCHAR(64) NOT NULL,
+        status ENUM('draft','preview_ready','active','disabled','conflict','sync_failed','archived') NOT NULL DEFAULT 'draft',
+        enabled TINYINT(1) NOT NULL DEFAULT 0,freepbx_object_type VARCHAR(64) NOT NULL DEFAULT 'misc_application_custom_destination',
+        dialplan_context VARCHAR(64) NOT NULL DEFAULT 'pbxpuls-ai',dialplan_destination VARCHAR(191) NOT NULL,
+        fallback_type ENUM('extension','ring_group','queue','external','terminate_call') NOT NULL DEFAULT 'terminate_call',
+        fallback_value_safe VARCHAR(191) NULL,fallback_value_hash CHAR(64) NULL,maximum_concurrent_calls INT NOT NULL DEFAULT 1,
+        freepbx_miscapp_id BIGINT NULL,freepbx_custom_destination_id BIGINT NULL,created_by VARCHAR(191) NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at DATETIME NULL,last_synced_at DATETIME NULL,
+        sync_status VARCHAR(64) NOT NULL DEFAULT 'not_synced',sync_error_code VARCHAR(64) NULL,
+        UNIQUE KEY uniq_ai_extension_number(tenant_id,extension),KEY idx_ai_extension_hash(tenant_id,extension_hash,status),KEY idx_ai_extension_agent(tenant_id,agent_id,status),
+        CONSTRAINT fk_ai_extension_tenant FOREIGN KEY(tenant_id) REFERENCES ai_tenants(id),
+        CONSTRAINT fk_ai_extension_agent FOREIGN KEY(agent_id) REFERENCES ai_agents(id),
+        CONSTRAINT fk_ai_extension_version FOREIGN KEY(published_agent_version_id) REFERENCES ai_agent_versions(id),
+        CONSTRAINT fk_ai_extension_binding FOREIGN KEY(route_binding_id) REFERENCES ai_voice_route_bindings(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `ALTER TABLE ai_voice_route_bindings MODIFY match_type ENUM('did','extension','inbound_route','queue_entry','queue_overflow','after_hours','test_context','controlled_test_extension','ai_extension') NOT NULL`,
+      `CREATE TABLE IF NOT EXISTS ai_extension_previews(
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,tenant_id BIGINT NOT NULL,ai_extension_id BIGINT NULL,operation ENUM('create','update','disable','archive') NOT NULL,
+        idempotency_key VARCHAR(100) NOT NULL,input_hash CHAR(64) NOT NULL,preview_json LONGTEXT NOT NULL,status ENUM('ready','blocked','applied','expired') NOT NULL,
+        created_by VARCHAR(191) NOT NULL,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,expires_at DATETIME NOT NULL,applied_at DATETIME NULL,
+        UNIQUE KEY uniq_ai_extension_preview_key(tenant_id,idempotency_key),
+        CONSTRAINT fk_ai_extension_preview_tenant FOREIGN KEY(tenant_id) REFERENCES ai_tenants(id),
+        CONSTRAINT fk_ai_extension_preview_extension FOREIGN KEY(ai_extension_id) REFERENCES ai_extensions(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `INSERT IGNORE INTO permissions(permission_key,name,description,category)VALUES
+       ('view_ai_extensions','View AI extensions','View virtual AI extensions','ai_platform'),
+       ('create_ai_extensions','Create AI extensions','Create virtual AI extension previews and apply them','ai_platform'),
+       ('update_ai_extensions','Update AI extensions','Update and disable virtual AI extensions','ai_platform'),
+       ('publish_ai_extensions','Publish AI extensions','Apply reviewed AI extensions to FreePBX','ai_platform'),
+       ('delete_ai_extensions','Archive AI extensions','Archive virtual AI extensions after dependency review','ai_platform')`,
+      `INSERT IGNORE INTO role_permissions(role_id,permission_id)SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key IN('view_ai_extensions','create_ai_extensions','update_ai_extensions','publish_ai_extensions','delete_ai_extensions') WHERE r.role_key IN('su','admin')`
+    ]
+  },
+  {
+    key:'20260724_053_ai_extension_sync_state_machine',
+    description:'Make AI extension apply and verification states explicit',
+    statements:[
+      `ALTER TABLE ai_extensions MODIFY status ENUM('draft','preview_ready','applying','verifying','active','disabled','conflict','sync_failed','archived') NOT NULL DEFAULT 'draft'`
+    ]
   }
 ];
 

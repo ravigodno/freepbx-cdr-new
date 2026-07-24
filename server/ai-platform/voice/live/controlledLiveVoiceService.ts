@@ -45,7 +45,7 @@ export class ControlledLiveVoiceService {
       ),
       binding = (
         await this.store.query(
-          `SELECT b.id,v.lifecycle_status FROM ai_voice_route_bindings b JOIN ai_agent_versions v ON v.id=b.agent_version_id AND v.tenant_id=b.tenant_id WHERE b.tenant_id=? AND b.match_type='controlled_test_extension' AND b.status='active' AND b.dry_run_only=0 LIMIT 1`,
+          `SELECT b.id,v.lifecycle_status FROM ai_voice_route_bindings b JOIN ai_agent_versions v ON v.id=b.agent_version_id AND v.tenant_id=b.tenant_id WHERE b.tenant_id=? AND b.match_type IN('controlled_test_extension','ai_extension') AND b.status='active' AND b.dry_run_only=0 LIMIT 1`,
           [tenantId],
         )
       )[0],
@@ -181,7 +181,7 @@ export class ControlledLiveVoiceService {
         503,
         "Controlled live voice test is not ready",
       );
-    if (!config.allowedCallers.includes(caller)) {
+    if (input.binding.matchType!=="ai_extension"&&!config.allowedCallers.includes(caller)) {
       await this.audit.append({
         tenantId: input.tenantId,
         traceId: input.traceId,

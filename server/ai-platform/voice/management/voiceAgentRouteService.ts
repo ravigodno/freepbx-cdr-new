@@ -5,7 +5,8 @@ export class VoiceAgentRouteService{constructor(private store:AiPlatformStore,pr
  async readiness(tenantId:number){const ari=readAriConfig(),audio=readAudioSocketServerConfig(),provider=readOpenAIRealtimeConfig(),applications=this.manager.status().state==='connected'?await (async()=>true)():false;const items=[['ari',this.manager.status().state==='connected','ari_unavailable'],['stasis',ari.configured&&applications,'stasis_unavailable'],['audioSocket',audio.port>0,'live_media_not_configured'],['providerConfigured',provider.configured,'provider_not_configured'],['providerHealth',provider.configured,'provider_not_ready'],['encryption',new VoiceEncryptionService().ready(),'encryption_not_configured']]as const;return{ready:items.every(x=>x[1]),items:items.map(([key,ready,code])=>({key,ready,code:ready?null:code}))}}
  async agents(tenantId:number){const readiness=await this.readiness(tenantId),rows=await this.store.query(`SELECT a.id,a.name,a.agent_type,a.status,av.id version_id,av.version_number,av.lifecycle_status,av.config_json published_config_json,
    dv.id draft_version_id,dv.version_number draft_version_number,dv.config_json draft_config_json,
-   COUNT(DISTINCT b.id) binding_count,SUM(v.state NOT IN('completed','failed','cancelled')) active_calls,MAX(v.failure_code) last_error
+   COUNT(DISTINCT b.id) binding_count,SUM(v.state NOT IN('completed','failed','cancelled')) active_calls,MAX(v.failure_code) last_error,
+   (SELECT GROUP_CONCAT(CONCAT(e.extension,':',e.status) ORDER BY e.extension SEPARATOR ',') FROM ai_extensions e WHERE e.tenant_id=a.tenant_id AND e.agent_id=a.id AND e.status<>'archived') telephony
    FROM ai_agents a
    LEFT JOIN ai_agent_versions av ON av.id=a.current_version_id AND av.tenant_id=a.tenant_id
    LEFT JOIN ai_agent_versions dv ON dv.id=(SELECT d.id FROM ai_agent_versions d WHERE d.tenant_id=a.tenant_id AND d.agent_id=a.id AND d.lifecycle_status='draft' ORDER BY d.version_number DESC LIMIT 1)
