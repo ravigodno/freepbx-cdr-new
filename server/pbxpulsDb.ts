@@ -32,6 +32,16 @@ function markUnavailable(error: any): void {
   }
 }
 
+export function isPBXPulsDbConnectivityError(error: any): boolean {
+  const code = String(error?.code || error?.errno || '').toUpperCase();
+  return [
+    'ECONNREFUSED', 'ECONNRESET', 'EHOSTUNREACH', 'ENETUNREACH', 'ENOTFOUND',
+    'EPIPE', 'ETIMEDOUT', 'PROTOCOL_CONNECTION_LOST', 'PROTOCOL_ENQUEUE_AFTER_FATAL_ERROR',
+    'ER_ACCESS_DENIED_ERROR', 'ER_BAD_DB_ERROR', 'ER_CON_COUNT_ERROR',
+    'ER_SERVER_GONE_ERROR', 'ER_SERVER_SHUTDOWN'
+  ].includes(code);
+}
+
 export function getPBXPulsDbRuntimeStatus() {
   const config = getPBXPulsDbConfig();
   const available = config.configured && lastSuccessfulAt > 0 && Date.now() >= unavailableUntil;
@@ -58,7 +68,9 @@ export async function queryPBXPulsDb(sql: string, params: any[] = []): Promise<a
     lastSuccessfulAt = Date.now();
     return rows as any[];
   } catch (error) {
-    markUnavailable(error);
+    // Constraint/validation errors belong to the individual query. They must not
+    // disable unrelated PBXPuls DB consumers (monitoring, directory, reports).
+    if (isPBXPulsDbConnectivityError(error)) markUnavailable(error);
     throw error;
   }
 }

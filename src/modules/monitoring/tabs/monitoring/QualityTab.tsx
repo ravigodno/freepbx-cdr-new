@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useCallback, useEffect, useState, useMemo } from 'react';
 import {
   Activity,
   AlertTriangle,
@@ -492,7 +492,7 @@ export default function QualityTab({ token }: Props) {
   const [isRunningDiag, setIsRunningDiag] = useState<boolean>(false);
   const [activeDiagName, setActiveDiagName] = useState<string>('');
 
-  const loadCachedData = async (signal?: AbortSignal) => {
+  const loadCachedData = useCallback(async (signal?: AbortSignal) => {
     try {
       const response = await fetch(`/api/quality/cache?ext=${encodeURIComponent(selectedExt || 'all')}&period=${encodeURIComponent(historyPeriod)}`, { headers: authHeaders, signal });
       const cached = await response.json();
@@ -514,9 +514,9 @@ export default function QualityTab({ token }: Props) {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [effectiveToken, selectedExt, historyPeriod]);
 
-  const refreshLiveData = async () => {
+  const refreshLiveData = useCallback(async () => {
     setIsRefreshing(true);
     setError('');
     try {
@@ -539,20 +539,20 @@ export default function QualityTab({ token }: Props) {
     } finally {
       setIsRefreshing(false);
     }
-  };
+  }, [effectiveToken, loadCachedData]);
 
   useEffect(() => {
     const controller = new AbortController();
     loadCachedData(controller.signal);
     return () => controller.abort();
-  }, [token, selectedExt, historyPeriod]);
+  }, [loadCachedData]);
 
   useEffect(() => {
     const refreshVisible = () => { if (!document.hidden) refreshLiveData(); };
     refreshVisible();
     const interval = setInterval(refreshVisible, 60000);
     return () => clearInterval(interval);
-  }, [token]);
+  }, [refreshLiveData]);
 
   useEffect(() => {
     if (!isDiagnosticsOpen) return;

@@ -75,11 +75,14 @@ export async function readQualityHistoryFromSql(period = '24h', ext = 'all'): Pr
   ]);
   const legacy = legacyRows.map((r: any) => ({
     ext: String(r.ext), name: r.name || '', status: r.status || '', qualityStatus: r.quality_status || '',
-    latency: Number(r.latency_ms || 0), jitter: Number(r.jitter_ms || 0), rtpLoss: Number(r.rtp_loss || 0),
-    mos: Number(r.mos || 0), timestamp: sqlDateToIso(r.sampled_at),
+    latency: num(r.latency_ms), jitter: r.quality_status === 'sip_rtt' ? null : Number(r.jitter_ms || 0),
+    rtpLoss: r.quality_status === 'sip_rtt' ? null : Number(r.rtp_loss || 0),
+    mos: r.quality_status === 'sip_rtt' ? null : Number(r.mos || 0), timestamp: sqlDateToIso(r.sampled_at),
     // The legacy schema has no provenance column. These rows were written by the old
-    // calculated quality collector, so they must never be presented as measured RTCP.
-    metricsSource: 'synthetic_legacy', metricsAvailable: false, rtcpAvailable: false
+    // calculated quality collector. New SIP availability samples use a reserved
+    // quality_status marker so they can be distinguished without a live schema change.
+    metricsSource: r.quality_status === 'sip_rtt' ? 'sip_rtt' : 'synthetic_legacy',
+    metricsAvailable: false, rtcpAvailable: false
   }));
   const measured = rtcpRows.map((r: any) => ({
     ext: String(r.ext), name: r.name || '', status: r.status || '', qualityStatus: r.quality_status || '',
@@ -90,9 +93,22 @@ export async function readQualityHistoryFromSql(period = '24h', ext = 'all'): Pr
 }
 
 export async function appendRealQualityHistoryToSql(items: any[]): Promise<void> {
+  const availabilitySampledAt = dateValue(new Date());
   for (const item of items) {
+    if (availabilitySampledAt) {
+      await timedQuery(`INSERT INTO quality_history
+        (ext,name,status,quality_status,latency_ms,jitter_ms,rtp_loss,mos,sampled_at)
+        VALUES (?,?,?,'sip_rtt',?,0,0,0,?)
+        ON DUPLICATE KEY UPDATE name=VALUES(name),status=VALUES(status),
+          quality_status=VALUES(quality_status),latency_ms=VALUES(latency_ms)`,
+        [text(item.ext),text(item.name),
+          item.availabilityStatus === 'offline' ? 'Offline'
+            : item.availabilityStatus === 'online' ? 'Online'
+              : text(item.deviceStatus || item.status),
+          num(item.sipRttMs ?? item.latency) ?? 0,availabilitySampledAt]);
+    }
     if (item?.metricsSource !== 'rtcp' || item?.rtcpAvailable !== true) continue;
-    const sampledAt = dateValue(item.lastSeenAt || item.lastCheck || new Date());
+    const sampledAt = dateValue(item.metricsMeasuredAt || item.lastSeenAt || item.lastCheck || new Date());
     if (!sampledAt) continue;
     await timedQuery(`INSERT INTO quality_rtcp_history
       (ext,name,status,quality_status,sip_rtt_ms,jitter_ms,rtp_loss,mos,sampled_at,metrics_source)
@@ -101,7 +117,7 @@ export async function appendRealQualityHistoryToSql(items: any[]): Promise<void>
         sip_rtt_ms=VALUES(sip_rtt_ms),jitter_ms=VALUES(jitter_ms),rtp_loss=VALUES(rtp_loss),mos=VALUES(mos)`,
       [text(item.ext),text(item.name),text(item.status),text(item.qualityStatus),num(item.sipRttMs),num(item.jitterMs),num(item.rtpLossPercent),num(item.mos),sampledAt]);
   }
-  if (items.length) markWrite('quality_rtcp_history', true);
+  if (items.length) markWrite('quality_history_and_rtcp', true);
 }
 
 export async function readLatestRealQualityMetricsFromSql(maxAgeDays = 30): Promise<any[]> {
