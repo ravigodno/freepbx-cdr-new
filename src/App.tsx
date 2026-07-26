@@ -93,6 +93,7 @@ import DevicesMapTab from './modules/monitoring/tabs/monitoring/DevicesMapTab';
 import HealthReportTab from './modules/monitoring/tabs/monitoring/HealthReportTab';
 import { DirectoryStatusIcon } from './modules/directory/components/DirectoryStatusIcon';
 import { fetchDirectory, fetchDirectoryAll, saveDirectoryEntry, deleteDirectoryEntry, toggleDirectoryBlacklist, toggleDirectorySpam, previewDirectoryImport, previewDirectoryImportOwnership, previewDirectoryBulkDelete, applyDirectoryBulkDelete, createDirectoryImportJob, getDirectoryImportJob, cancelDirectoryImportJob, resumeDirectoryImportJob, previewDirectoryImportRollback, getDirectoryImportJobErrors, fetchDirectoryColumnSettings, saveMyDirectoryColumnSettings, resetMyDirectoryColumnSettings, saveGlobalDirectoryColumnSettings, resetGlobalDirectoryColumnSettings, setDirectoryFavorite } from './modules/directory/services/directoryApi';
+import { calculateDirectoryImportDigest, DIRECTORY_IMPORT_MAX_BYTES, isSupportedDirectoryImportFile, summarizeDirectoryImportSource, type DirectoryImportDigestStatus, type DirectoryImportSourceKind, type DirectoryImportSourceSummary } from './modules/directory/utils/directoryImportSource';
 import CDRPage from './modules/cdr/pages/CDRPage';
 import LegacyCDRTable from './modules/cdr/components/LegacyCDRTable';
 import CDRProcessModal from './modules/cdr/components/CDRProcessModal';
@@ -943,8 +944,16 @@ export default function App() {
 
   // --- ADMIN DIRECTORY IMPORT / EXPORT & NORMALIZATION STATE ---
   const [isAdminPanelExpanded, setIsAdminPanelExpanded] = useState(false);
-  const [isImportOpen, setIsImportOpen] = useState(false);
+  const directoryImportFileInputRef = useRef<HTMLInputElement | null>(null);
+  const directoryImportDigestRequestRef = useRef(0);
+  const [directoryImportSourceKind, setDirectoryImportSourceKind] = useState<DirectoryImportSourceKind>('file');
+  const [isDirectoryImportDragging, setIsDirectoryImportDragging] = useState(false);
+  const [directoryImportSourceError, setDirectoryImportSourceError] = useState('');
+  const [directoryImportSourceSummary, setDirectoryImportSourceSummary] = useState<DirectoryImportSourceSummary | null>(null);
+  const [directoryImportDigestStatus, setDirectoryImportDigestStatus] = useState<DirectoryImportDigestStatus>('idle');
+  const [directoryImportSourceDigest, setDirectoryImportSourceDigest] = useState('');
   const [importText, setImportText] = useState('');
+  const [importFileText, setImportFileText] = useState('');
   const [importFileError, setImportFileError] = useState('');
   const [parsedImportEntries, setParsedImportEntries] = useState<any[]>([]);
   const [importOverwriteMode, setImportOverwriteMode] = useState(false);
@@ -1203,36 +1212,167 @@ export default function App() {
     }
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const calculateImportSourceDigest = async (source: Blob) => {
+    const requestId = ++directoryImportDigestRequestRef.current;
+    setDirectoryImportDigestStatus('calculating');
+    setDirectoryImportSourceDigest('');
+    try {
+      const digest = await calculateDirectoryImportDigest(source);
+      if (requestId !== directoryImportDigestRequestRef.current) return;
+      setDirectoryImportSourceDigest(digest);
+      setDirectoryImportDigestStatus('ready');
+    } catch (_error) {
+      if (requestId !== directoryImportDigestRequestRef.current) return;
+      setDirectoryImportDigestStatus('error');
+      setDirectoryImportSourceError('Не удалось рассчитать контрольную сумму источника.');
+    }
+  };
 
-    setImportFileName(file.name);
-    setImportSourceFile(file);
+  const resetPreparedDirectoryImport = () => {
+    setParsedImportEntries([]);
+    setImportPreviewRows([]);
+    setDirectoryOwnershipPreview(null);
     setDirectoryImportJob(null);
     setDirectoryImportRollbackPreview(null);
     setImportFileError('');
+    setImportProgress({ stage: 'idle', processed: 0, total: 0, message: '' });
+  };
+
+  const handleDirectoryImportFile = (file: File) => {
+    setDirectoryImportSourceError('');
+    if (!isSupportedDirectoryImportFile(file.name)) {
+      setDirectoryImportSourceError('Поддерживаются только файлы CSV и TXT.');
+      return;
+    }
+    if (file.size > DIRECTORY_IMPORT_MAX_BYTES) {
+      setDirectoryImportSourceError('Файл слишком большой. Максимальный размер — 100 МБ.');
+      return;
+    }
+    if (file.size === 0) {
+      setDirectoryImportSourceError('Выбранный файл пуст.');
+      return;
+    }
+    setDirectoryImportSourceKind('file');
+    setImportFileName(file.name);
+    setImportSourceFile(file);
+    setImportFileText('');
+    resetPreparedDirectoryImport();
     setImportProgress({ stage: 'reading', processed: 0, total: file.size, message: 'Чтение файла' });
+    void calculateImportSourceDigest(file);
     const reader = new FileReader();
     reader.onprogress = event => {
       if (event.lengthComputable) setImportProgress({ stage: 'reading', processed: event.loaded, total: event.total, message: 'Чтение файла' });
     };
-    reader.onload = (event) => {
-      const text = event.target?.result as string;
-      setImportText(text);
-      setImportProgress({ stage: 'parsing', processed: 0, total: 1, message: 'Разбор строк и столбцов' });
-      window.requestAnimationFrame(() => {
-        handleParseImport(text);
-        setImportPreviewPage(1);
-        setImportProgress({ stage: 'complete', processed: 1, total: 1, message: 'Файл подготовлен к проверке' });
-        setIsImportOpen(false);
-      });
+    reader.onload = event => {
+      const text = String(event.target?.result || '');
+      if (!text.trim()) {
+        setDirectoryImportSourceError('Выбранный файл пуст.');
+        setDirectoryImportSourceSummary(null);
+        return;
+      }
+      try {
+        setImportFileText(text);
+        setDirectoryImportSourceSummary(summarizeDirectoryImportSource(text, 'file', file.name, file.size));
+        setImportProgress({ stage: 'complete', processed: file.size, total: file.size, message: 'Источник подготовлен' });
+      } catch (_error) {
+        setDirectoryImportSourceError('Не удалось разобрать структуру файла.');
+        setImportProgress({ stage: 'error', processed: 0, total: file.size, message: 'Ошибка подготовки файла' });
+      }
     };
     reader.onerror = () => {
-      setImportProgress({ stage: 'error', processed: 0, total: file.size, message: 'Не удалось прочитать файл' });
-      setImportFileError('Не удалось прочитать выбранный файл.');
+      setDirectoryImportSourceError('Не удалось прочитать выбранный файл.');
+      setDirectoryImportSourceSummary(null);
+      setImportProgress({ stage: 'error', processed: 0, total: file.size, message: 'Ошибка подготовки файла' });
     };
     reader.readAsText(file, 'UTF-8');
+  };
+
+  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) handleDirectoryImportFile(file);
+    event.target.value = '';
+  };
+
+  const handleDirectoryImportTextChange = (text: string) => {
+    setImportText(text);
+    setDirectoryImportSourceError('');
+    resetPreparedDirectoryImport();
+    if (!text.trim()) {
+      directoryImportDigestRequestRef.current++;
+      setDirectoryImportSourceSummary(null);
+      setDirectoryImportDigestStatus('idle');
+      setDirectoryImportSourceDigest('');
+      return;
+    }
+    const source = new Blob([text], { type: 'text/csv;charset=utf-8' });
+    try {
+      setDirectoryImportSourceSummary(summarizeDirectoryImportSource(text, 'text', 'Вставленные данные', source.size));
+      void calculateImportSourceDigest(source);
+    } catch (_error) {
+      setDirectoryImportSourceSummary(null);
+      setDirectoryImportSourceError('Не удалось определить структуру вставленных данных.');
+    }
+  };
+
+  const handlePasteDirectoryImportClipboard = async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      setDirectoryImportSourceKind('text');
+      if (!text.trim()) {
+        setDirectoryImportSourceError('Буфер обмена не содержит данных.');
+        return;
+      }
+      handleDirectoryImportTextChange(text);
+    } catch (_error) {
+      setDirectoryImportSourceError('Браузер не разрешил чтение буфера. Вставьте данные сочетанием Ctrl+V.');
+    }
+  };
+
+  const clearDirectoryImportSource = (kind: DirectoryImportSourceKind = directoryImportSourceKind) => {
+    directoryImportDigestRequestRef.current++;
+    resetPreparedDirectoryImport();
+    setDirectoryImportSourceError('');
+    setDirectoryImportSourceSummary(null);
+    setDirectoryImportDigestStatus('idle');
+    setDirectoryImportSourceDigest('');
+    if (kind === 'file') {
+      setImportSourceFile(null);
+      setImportFileName('');
+      setImportFileText('');
+    } else {
+      setImportText('');
+    }
+  };
+
+  const selectDirectoryImportSourceKind = (kind: DirectoryImportSourceKind) => {
+    setDirectoryImportSourceKind(kind);
+    setDirectoryImportSourceError('');
+    resetPreparedDirectoryImport();
+    const text = kind === 'file' ? importFileText : importText;
+    const source = kind === 'file' ? importSourceFile : (text.trim() ? new Blob([text], { type: 'text/csv;charset=utf-8' }) : null);
+    if (!source || !text.trim()) {
+      directoryImportDigestRequestRef.current++;
+      setDirectoryImportSourceSummary(null);
+      setDirectoryImportDigestStatus('idle');
+      setDirectoryImportSourceDigest('');
+      return;
+    }
+    setDirectoryImportSourceSummary(summarizeDirectoryImportSource(text, kind, kind === 'file' ? importFileName : 'Вставленные данные', source.size));
+    void calculateImportSourceDigest(source);
+  };
+
+  const openDirectoryImportPreview = () => {
+    const text = directoryImportSourceKind === 'file' ? importFileText : importText;
+    if (!text.trim()) {
+      setDirectoryImportSourceError(directoryImportSourceKind === 'file' ? 'Сначала выберите непустой CSV или TXT файл.' : 'Вставьте CSV из буфера обмена.');
+      return;
+    }
+    setImportProgress({ stage: 'parsing', processed: 0, total: 1, message: 'Разбор строк и столбцов' });
+    window.requestAnimationFrame(() => {
+      handleParseImport(text);
+      setImportPreviewPage(1);
+      setImportProgress({ stage: 'complete', processed: 1, total: 1, message: 'Файл подготовлен к проверке' });
+    });
   };
 
   const handleDownloadTemplate = () => {
@@ -1886,7 +2026,9 @@ export default function App() {
       return;
     }
     if (!session?.token) return;
-    const source = importSourceFile || (importText.trim() ? new Blob([importText], { type: 'text/csv' }) : null);
+    const source = directoryImportSourceKind === 'file'
+      ? importSourceFile
+      : (importText.trim() ? new Blob([importText], { type: 'text/csv' }) : null);
     if (!source) {
       setImportFileError('Повторно выберите исходный CSV-файл.');
       return;
@@ -1895,11 +2037,11 @@ export default function App() {
     setImportFileError('');
     setImportProgress({ stage: 'validating', processed: 0, total: parsedImportEntries.length, message: 'Создание управляемой задачи' });
     try {
-      const bytes = await source.arrayBuffer();
-      const digest = await window.crypto.subtle.digest('SHA-256', bytes);
-      const sourceHash = Array.from(new Uint8Array(digest)).map(value => value.toString(16).padStart(2, '0')).join('');
+      const sourceHash = directoryImportDigestStatus === 'ready' && directoryImportSourceDigest
+        ? directoryImportSourceDigest
+        : await calculateDirectoryImportDigest(source);
       const data = await createDirectoryImportJob(session.token, source, {
-        filename: importFileName || 'directory-import.csv',
+        filename: directoryImportSourceKind === 'file' ? (importFileName || 'directory-import.csv') : 'pasted-directory-import.csv',
         atomicityMode: directoryImportAtomicity,
         duplicateStrategy: directoryImportDuplicateStrategy,
         batchSize: 500,
@@ -2633,7 +2775,9 @@ export default function App() {
     setImportFileError('');
     setImportProgress({ stage: 'validating', processed: 0, total: parsedImportEntries.length, message: 'Проверка ошибок и дублей' });
     try {
-      const source = importSourceFile || (importText.trim() ? new Blob([importText], { type: 'text/csv' }) : null);
+      const source = directoryImportSourceKind === 'file'
+        ? importSourceFile
+        : (importText.trim() ? new Blob([importText], { type: 'text/csv' }) : null);
       if (!source) throw new Error('Повторно выберите исходный CSV-файл.');
       const ownership = await previewDirectoryImportOwnership(session.token, source, {
         unknownResponsibleStrategy: directoryUnknownResponsibleStrategy,
@@ -6589,12 +6733,12 @@ export default function App() {
           <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 p-4">
               <div>
-                <h3 className="text-sm font-black text-slate-900">{importFileName || 'Файл не выбран'}</h3>
-                <p className="mt-1 text-xs text-slate-500">{parsedImportEntries.length ? `${parsedImportEntries.length.toLocaleString('ru-RU')} строк · ${importColumnDefinitions.length} столбец` : 'Загрузите CSV, чтобы открыть полноэкранный предпросмотр.'}</p>
+                <h3 className="text-sm font-black text-slate-900">{directoryImportSourceSummary?.name || (directoryImportSourceKind==='text'&&importText.trim()?'Вставленные данные':importFileName || 'Источник не выбран')}</h3>
+                <p className="mt-1 text-xs text-slate-500">{parsedImportEntries.length ? `${parsedImportEntries.length.toLocaleString('ru-RU')} строк · ${importColumnDefinitions.length} столбец` : directoryImportSourceSummary ? `${directoryImportSourceSummary.rows.toLocaleString('ru-RU')} строк подготовлено` : 'Выберите файл или вставьте данные ниже.'}</p>
               </div>
               <div className="flex flex-wrap gap-2">
-                <button type="button" disabled={isImporting} onClick={() => setIsImportOpen(true)} className="rounded-lg border border-blue-200 bg-white px-3 py-2 text-xs font-bold text-blue-700 hover:bg-blue-50 disabled:opacity-40"><Upload className="mr-1 inline h-3.5 w-3.5" />{parsedImportEntries.length ? 'Загрузить другой файл' : 'Загрузить файл'}</button>
-                <button type="button" onClick={handlePreviewImport} disabled={isImporting || !parsedImportEntries.length} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50">Проверить ошибки и дубли</button>
+                <button type="button" disabled={isImporting} onClick={() => {selectDirectoryImportSourceKind('file');window.requestAnimationFrame(()=>directoryImportFileInputRef.current?.click())}} className="rounded-lg border border-blue-200 bg-white px-3 py-2 text-xs font-bold text-blue-700 hover:bg-blue-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-40"><Upload className="mr-1 inline h-3.5 w-3.5" />Выбрать файл</button>
+                <button type="button" onClick={()=>parsedImportEntries.length?void handlePreviewImport():openDirectoryImportPreview()} disabled={isImporting || (!parsedImportEntries.length && (!(directoryImportSourceKind==='file'?importFileText.trim():importText.trim()) || directoryImportDigestStatus!=='ready'))} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50">Проверить ошибки и дубли</button>
                 <button type="button" onClick={handleExecuteImport} disabled={isImporting || !directoryOwnershipPreview || !parsedImportEntries.length || importRowsWithState.some(row => row.hasErrors) || (directoryUnknownResponsibleStrategy==='map'&&Number(directoryOwnershipPreview?.unknownResponsibleRows||0)>0)} className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-50">Импортировать ({parsedImportEntries.length.toLocaleString('ru-RU')})</button>
                 {directoryImportJob&&['queued','validating','importing','cancelling'].includes(directoryImportJob.status)&&<button type="button" disabled={directoryImportJob.status==='cancelling'} onClick={()=>setIsDirectoryImportCancelOpen(true)} className="rounded-lg border border-rose-300 bg-white px-3 py-2 text-xs font-black text-rose-700 disabled:opacity-40">Остановить импорт</button>}
               </div>
@@ -6656,12 +6800,44 @@ export default function App() {
                 </table>
               </div>
               <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 p-3 text-xs text-slate-500"><span>Показано {visibleImportRows.length} из {filteredImportRows.length.toLocaleString('ru-RU')} · по 100 строк на странице</span><div className="flex items-center gap-2"><button type="button" disabled={importPreviewPage<=1} onClick={()=>setImportPreviewPage(page=>Math.max(1,page-1))} className="rounded border px-2 py-1 disabled:opacity-40"><ChevronLeft className="h-4 w-4"/></button><span>{importPreviewPage} / {importPreviewPageCount}</span><button type="button" disabled={importPreviewPage>=importPreviewPageCount} onClick={()=>setImportPreviewPage(page=>Math.min(importPreviewPageCount,page+1))} className="rounded border px-2 py-1 disabled:opacity-40"><ChevronRight className="h-4 w-4"/></button></div></div>
-            </> : <button type="button" onClick={()=>setIsImportOpen(true)} className="m-6 flex min-h-[280px] w-[calc(100%-3rem)] flex-col items-center justify-center rounded-xl border-2 border-dashed border-slate-200 text-slate-500 hover:border-blue-300 hover:bg-blue-50/30"><Upload className="mb-3 h-10 w-10"/><span className="text-sm font-black">Выбрать CSV-файл</span><span className="mt-1 text-xs">Загрузка откроется в отдельном окне</span></button>}
+            </> : <div className="p-4 sm:p-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div><h3 className="text-sm font-black text-slate-900">Источник данных</h3><p className="mt-1 text-xs text-slate-500">Выберите файл или вставьте CSV/TAB-данные. Импорт не начнётся до проверки и отдельного подтверждения.</p></div>
+                <div role="tablist" aria-label="Источник данных" className="inline-flex rounded-lg border border-slate-200 bg-slate-100 p-1">
+                  {([['file','Файл'],['text','Вставить данные']] as const).map(([kind,label])=><button key={kind} type="button" role="tab" aria-selected={directoryImportSourceKind===kind} onClick={()=>selectDirectoryImportSourceKind(kind)} className={`rounded-md px-3 py-1.5 text-xs font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${directoryImportSourceKind===kind?'bg-white text-blue-700 shadow-sm':'text-slate-500'}`}>{label}</button>)}
+                </div>
+              </div>
+
+              <div className="mt-4">
+                {directoryImportSourceKind==='file'?<div>
+                  <input ref={directoryImportFileInputRef} id="directory-import-file-input" type="file" accept=".csv,.txt,text/csv,text/plain" onChange={handleFileUpload} className="sr-only"/>
+                  <label htmlFor="directory-import-file-input" onDragEnter={event=>{event.preventDefault();setIsDirectoryImportDragging(true)}} onDragOver={event=>{event.preventDefault();event.dataTransfer.dropEffect='copy';setIsDirectoryImportDragging(true)}} onDragLeave={event=>{event.preventDefault();if(!event.currentTarget.contains(event.relatedTarget as Node))setIsDirectoryImportDragging(false)}} onDrop={event=>{event.preventDefault();setIsDirectoryImportDragging(false);const file=event.dataTransfer.files?.[0];if(file)handleDirectoryImportFile(file)}} className={`flex min-h-52 cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed p-6 text-center transition focus-within:ring-2 focus-within:ring-blue-500 sm:min-h-56 ${isDirectoryImportDragging?'border-blue-600 bg-blue-100 ring-2 ring-blue-300':'border-blue-200 bg-blue-50/40 hover:border-blue-400 hover:bg-blue-50'}`}>
+                    <Upload className="mb-3 h-9 w-9 text-blue-600"/>
+                    <span className="text-sm font-black text-slate-800">{isDirectoryImportDragging?'Отпустите файл для выбора':'Перетащите CSV или TXT сюда'}</span>
+                    <span className="mt-1 text-xs text-slate-500">или выберите файл на компьютере</span>
+                    <span className="mt-2 text-[11px] text-slate-400">UTF-8 · до 100 МБ · большие файлы обрабатываются пакетами</span>
+                  </label>
+                </div>:<div>
+                  <div className="flex flex-wrap items-center justify-between gap-2"><label htmlFor="directory-import-textarea" className="text-xs font-bold text-slate-700">Вставьте CSV из буфера обмена</label><button type="button" onClick={()=>void handlePasteDirectoryImportClipboard()} className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">Вставить из буфера</button></div>
+                  <textarea id="directory-import-textarea" value={importText} onChange={event=>handleDirectoryImportTextChange(event.target.value)} rows={9} placeholder={'type,visibility,isSpam,organization,fullName,phone,email\\nclient,shared,false,ООО Ромашка,Иван Иванов,+79781234567,mail@example.com'} className="mt-2 min-h-[200px] w-full resize-y rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 font-mono text-xs focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200 sm:min-h-[220px]"/>
+                  <div className="mt-1 text-right text-[11px] text-slate-400">{importText.length.toLocaleString('ru-RU')} символов</div>
+                </div>}
+              </div>
+
+              {directoryImportSourceError&&<div role="alert" className="mt-3 rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs font-bold text-rose-800">{directoryImportSourceError}</div>}
+              {directoryImportSourceSummary&&<div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0"><div className="truncate text-sm font-black text-slate-800">{directoryImportSourceSummary.name}</div><div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500"><span>{directoryImportSourceSummary.kind==='file'?`${(directoryImportSourceSummary.bytes/1024/1024).toFixed(2)} МБ`:`${directoryImportSourceSummary.characters.toLocaleString('ru-RU')} символов`}</span><span>{directoryImportSourceSummary.rows.toLocaleString('ru-RU')} строк</span><span>Разделитель: <b>{directoryImportSourceSummary.delimiter}</b></span><span>Кодировка: <b>{directoryImportSourceSummary.encoding}</b></span></div></div>
+                  <div className="flex flex-wrap gap-2"><button type="button" onClick={()=>directoryImportSourceKind==='file'?directoryImportFileInputRef.current?.click():document.getElementById('directory-import-textarea')?.focus()} className="rounded-lg border bg-white px-3 py-1.5 text-xs font-bold text-slate-700">Заменить</button><button type="button" onClick={()=>clearDirectoryImportSource()} className="rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-bold text-rose-700">Очистить</button></div>
+                </div>
+                <div aria-live="polite" className={`mt-2 text-[11px] font-bold ${directoryImportDigestStatus==='error'?'text-rose-700':directoryImportDigestStatus==='ready'?'text-emerald-700':'text-slate-500'}`}>{directoryImportDigestStatus==='calculating'?'Расчёт контрольной суммы…':directoryImportDigestStatus==='ready'?'Контрольная сумма рассчитана':directoryImportDigestStatus==='error'?'Ошибка подготовки файла':'Ожидание подготовки'}</div>
+              </div>}
+              <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-end"><button type="button" onClick={()=>clearDirectoryImportSource()} disabled={!directoryImportSourceSummary} className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-600 disabled:opacity-40">Очистить</button><button type="button" onClick={handleDownloadTemplate} className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-600">Скачать шаблон</button><button type="button" onClick={openDirectoryImportPreview} disabled={!directoryImportSourceSummary||directoryImportDigestStatus!=='ready'} className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-bold text-white hover:bg-blue-700 disabled:opacity-40">Открыть предпросмотр</button></div>
+            </div>}
           </div>
 
           {showImportDiagnostics&&importDiagnostics.length>0&&<div className="rounded-xl border border-amber-200 bg-amber-50/40 p-4"><div className="flex flex-wrap items-center justify-between gap-2"><div><h4 className="text-sm font-black">Ошибки по строкам и столбцам ({importDiagnostics.length})</h4><p className="text-xs text-slate-500">Щёлкните фильтр «Ошибки», чтобы увидеть ячейки в общей таблице.</p></div><div className="flex gap-2"><select value={importDiagnosticReason} onChange={event=>setImportDiagnosticReason(event.target.value)} className="rounded border bg-white px-2 py-1.5 text-xs"><option value="all">Все причины</option>{Array.from(new Set(importDiagnostics.map((item:any)=>item.reason))).map(reason=><option key={reason} value={reason}>{importReasonLabel(reason)}</option>)}</select><button type="button" onClick={()=>downloadImportDiagnostics(true)} className="rounded border bg-white px-2 py-1.5 text-xs font-bold">Скачать CSV ошибок</button><button type="button" onClick={()=>downloadImportDiagnostics(false)} className="rounded border bg-white px-2 py-1.5 text-xs font-bold">Скачать отчёт</button></div></div><div className="mt-3 max-h-72 overflow-auto"><table className="w-full min-w-[900px] text-left text-xs"><thead className="sticky top-0 bg-amber-50"><tr>{['Строка','ФИО','Столбец','Исходное значение','После нормализации','Причина','Исправление'].map(label=><th key={label} className="border-b px-2 py-2">{label}</th>)}</tr></thead><tbody>{filteredImportDiagnostics.slice(0,500).map((item:any,index:number)=><tr key={`${item.rowNumber}-${item.field}-${index}`} className="border-b border-amber-100"><td className="px-2 py-1.5">{item.rowNumber}</td><td className="px-2 py-1.5">{item.name||'—'}</td><td className="px-2 py-1.5 font-mono">{item.field}</td><td className="px-2 py-1.5 font-mono">{item.raw||'—'}</td><td className="px-2 py-1.5 font-mono">{item.normalized||'—'}</td><td className="px-2 py-1.5 font-bold text-rose-700">{importReasonLabel(item.reason)}</td><td className="px-2 py-1.5">{item.suggestedValue||'Исправьте значение в исходном CSV'}</td></tr>)}</tbody></table></div></div>}
 
-          {isImportOpen&&<div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm"><div role="dialog" aria-modal="true" aria-label="Загрузка CSV-файла" className="w-full max-w-2xl rounded-2xl bg-white p-5 shadow-2xl"><div className="flex items-start justify-between gap-3"><div><h3 className="text-lg font-black text-slate-900">Загрузка файла</h3><p className="mt-1 text-xs text-slate-500">Выберите CSV или вставьте текст. После разбора предпросмотр откроется на весь экран.</p></div><button type="button" onClick={()=>setIsImportOpen(false)} className="rounded-lg border px-3 py-1.5 text-xs font-bold">Закрыть</button></div><label className="relative mt-5 flex min-h-44 cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-blue-200 bg-blue-50/40 p-5 text-center hover:border-blue-400"><input type="file" accept=".csv,.txt,text/csv,text/plain" onChange={handleFileUpload} className="absolute inset-0 h-full w-full cursor-pointer opacity-0"/><Upload className="mb-2 h-8 w-8 text-blue-600"/><span className="text-sm font-black text-slate-800">Выбрать CSV или TXT</span><span className="mt-1 text-xs text-slate-500">Большие файлы проверяются пакетами по 500 строк</span></label><div className="my-3 text-center text-xs text-slate-400">или вставьте CSV</div><textarea value={importText} onChange={event=>setImportText(event.target.value)} rows={6} placeholder="Вставьте содержимое CSV" className="w-full resize-none rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs"/><div className="mt-4 flex justify-end gap-2"><button type="button" onClick={()=>setIsImportOpen(false)} className="rounded-lg border px-4 py-2 text-xs font-bold">Отмена</button><button type="button" disabled={!importText.trim()} onClick={()=>{setImportProgress({stage:'parsing',processed:0,total:1,message:'Разбор строк и столбцов'});window.requestAnimationFrame(()=>{handleParseImport(importText);setImportPreviewPage(1);setImportProgress({stage:'complete',processed:1,total:1,message:'Файл подготовлен к проверке'});setIsImportOpen(false)})}} className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-40">Открыть предпросмотр</button></div></div></div>}
           {isDirectoryImportCancelOpen&&<div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm"><div role="dialog" aria-modal="true" aria-label="Остановить импорт" className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-2xl"><h3 className="text-lg font-black text-slate-900">Остановить импорт?</h3><p className="mt-2 text-sm text-slate-600">Текущий пакет завершится безопасно. Выберите, что сделать с уже добавленными этим заданием контактами.</p><div className="mt-5 grid gap-2"><button type="button" onClick={()=>handleCancelDirectoryImport('preserve')} className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-left text-sm font-bold text-amber-900">Остановить и сохранить уже добавленные</button><button type="button" onClick={()=>handleCancelDirectoryImport('rollback')} className="rounded-lg border border-rose-300 bg-rose-50 px-4 py-3 text-left text-sm font-bold text-rose-900">Остановить и откатить этот импорт</button><button type="button" onClick={()=>setIsDirectoryImportCancelOpen(false)} className="rounded-lg border border-slate-200 px-4 py-3 text-sm font-bold text-slate-700">Продолжить импорт</button></div></div></div>}
           {directoryImportRollbackPreview&&<div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm"><div className="flex items-start justify-between gap-3"><div><h4 className="font-black text-rose-900">Предпросмотр отката</h4><p className="mt-1 text-rose-800">Будет удалено контактов: <b>{Number(directoryImportRollbackPreview.contactsToDelete||0).toLocaleString('ru-RU')}</b>; связанных записей: <b>{Number(directoryImportRollbackPreview.metadataToDelete||0).toLocaleString('ru-RU')}</b>.</p><p className="mt-1 text-xs text-rose-700">Откат не выполнен. Для удаления требуется отдельное подтверждение.</p></div><button type="button" onClick={()=>setDirectoryImportRollbackPreview(null)} className="rounded border border-rose-200 bg-white px-2 py-1 text-xs font-bold">Закрыть</button></div></div>}
         </section>
