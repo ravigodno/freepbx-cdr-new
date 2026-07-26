@@ -24,6 +24,8 @@ export interface DirectoryPageResponse<T = any> {
   page: number;
   pageSize: number;
   totalPages: number;
+  queryTimeMs?: number;
+  searchTooShort?: boolean;
 }
 
 export interface DirectoryColumnSettingsResponse {
@@ -52,13 +54,14 @@ async function parseDirectorySettingsResponse(resp: Response, fallbackError: str
 function buildDirectoryUrl(filters: DirectoryFetchFilters = {}) {
   const params = new URLSearchParams();
   Object.entries(filters).forEach(([key, value]) => {
-    if (value === undefined || value === null || value === '' || value === 'all') return;
+    if (value === undefined || value === null || value === '') return;
+    if (value === 'all' && key !== 'spamMode') return;
     params.set(key, String(value));
   });
   return params.toString() ? '/api/directory?' + params.toString() : '/api/directory';
 }
 
-export async function fetchDirectory(token: string, filters: DirectoryFetchFilters = {}, signal?: AbortSignal): Promise<DirectoryPageResponse & { queryTimeMs?: number }> {
+export async function fetchDirectory(token: string, filters: DirectoryFetchFilters = {}, signal?: AbortSignal): Promise<DirectoryPageResponse> {
   const legacyUrl = buildDirectoryUrl(filters);
   const resp = await fetch(legacyUrl.replace(/^\/api\/directory/, '/api/directory/contacts'), {
     headers: {

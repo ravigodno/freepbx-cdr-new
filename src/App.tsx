@@ -901,7 +901,9 @@ export default function App() {
   const [dirTotalPages, setDirTotalPages] = useState(1);
   const [dirQueryTimeMs, setDirQueryTimeMs] = useState<number | null>(null);
   const directoryListAbortRef = useRef<AbortController | null>(null);
+  const directoryListRequestSequenceRef = useRef(0);
   const [dirListError, setDirListError] = useState('');
+  const [dirSearchTooShort, setDirSearchTooShort] = useState(false);
   const [isDirectoryBulkDeleteOpen, setIsDirectoryBulkDeleteOpen] = useState(false);
   const [directoryBulkDeleteScope, setDirectoryBulkDeleteScope] = useState<'filtered' | 'all'>('filtered');
   const [directoryBulkDeletePreview, setDirectoryBulkDeletePreview] = useState<any>(null);
@@ -2653,6 +2655,7 @@ export default function App() {
 
   const loadDirectory = async (targetPage = dirPage) => {
     if (!session) return;
+    const requestSequence = ++directoryListRequestSequenceRef.current;
     directoryListAbortRef.current?.abort();
     const controller = new AbortController();
     directoryListAbortRef.current = controller;
@@ -2668,19 +2671,21 @@ export default function App() {
         page: requestedPage,
         pageSize: dirPageSize
       }, controller.signal);
-      if (directoryListAbortRef.current !== controller) return;
+      if (directoryListAbortRef.current !== controller || directoryListRequestSequenceRef.current !== requestSequence) return;
       const items = Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : []);
       setDirectory(items);
       setDirTotal(Number(data?.total ?? items.length) || 0);
       setDirPage(Number(data?.page ?? requestedPage) || requestedPage);
       setDirTotalPages(Math.max(1, Number(data?.totalPages ?? 1) || 1));
       setDirQueryTimeMs(Number.isFinite(Number(data?.queryTimeMs)) ? Number(data.queryTimeMs) : null);
+      setDirSearchTooShort(Boolean(data?.searchTooShort));
     } catch (e: any) {
-      if (e?.name === 'AbortError' || directoryListAbortRef.current !== controller) return;
+      if (e?.name === 'AbortError' || directoryListAbortRef.current !== controller || directoryListRequestSequenceRef.current !== requestSequence) return;
       console.error('Error loading directory:', e);
       setDirectory([]);
       setDirTotal(0);
       setDirTotalPages(1);
+      setDirSearchTooShort(false);
       setDirListError(e?.message === 'UNAUTHORIZED' ? '' : 'Не удалось загрузить справочник.');
       if (e && (e.message === 'UNAUTHORIZED' || e.message === 'Failed to fetch')) {
         handleAuthError();
@@ -4901,7 +4906,26 @@ export default function App() {
           </div>
         );
       case 'fullName':
-        return <span className="text-[15px] font-medium text-slate-900">{entry.name || renderDirectoryDash()}</span>;
+        return (
+          <div>
+            <span className="text-[15px] font-medium text-slate-900">{entry.name || renderDirectoryDash()}</span>
+            {dirSearchQuery.trim() && entry.matchedFields?.length ? (
+              <div className="mt-1 flex max-w-[260px] flex-wrap gap-1" aria-label="Поля совпадения">
+                {entry.matchedFields.map(field => (
+                  <span key={field} className="rounded bg-blue-50 px-1.5 py-0.5 text-[9px] font-bold text-blue-700">
+                    {({
+                      name: 'ФИО', organization: 'Организация', phone: 'Телефон', phone2: 'Доп. телефон',
+                      email: 'Email', comment: 'Комментарий', position: 'Должность', department: 'Отдел',
+                      group: 'Группа', website: 'Сайт', inn: 'ИНН', kpp: 'КПП', ogrn: 'ОГРН',
+                      address: 'Адрес', tags: 'Теги', internalExtension: 'Внутренний',
+                      linkedExternalNumber: 'Внешний', responsibleUserId: 'Ответственный'
+                    } as Record<string, string>)[field] || field}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        );
       case 'phone':
         return primaryPhone ? (
           <div className="flex items-center gap-2 font-mono font-bold text-blue-800 dark:text-rose-200">
@@ -7250,6 +7274,8 @@ export default function App() {
                 <input
                   type="text"
                   value={dirSearchQuery}
+                  maxLength={240}
+                  aria-label="Глобальный поиск по справочнику"
                   onChange={(e) => {
                     setDirSearchQuery(e.target.value);
                     setDirPage(1);
@@ -7257,6 +7283,11 @@ export default function App() {
                   placeholder="Поиск по справочнику..."
                   className="w-full min-w-0 bg-slate-50 border border-slate-200 rounded-lg py-2 pl-9 pr-3 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all font-light"
                 />
+                {dirSearchTooShort && (
+                  <div className="absolute left-0 top-full z-10 mt-1 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[10px] font-semibold text-amber-700 shadow-sm">
+                    Введите не менее 2 символов.
+                  </div>
+                )}
               </div>
 
               <div className="flex min-w-0 max-w-full flex-wrap gap-2 md:flex-nowrap">
@@ -7518,7 +7549,11 @@ export default function App() {
               <tbody className="divide-y divide-slate-100">
                 {(() => {
                   const list = Array.isArray(directory) ? directory : [];
-                  const emptyText = dirSearchQuery.trim() ? 'По запросу ничего не найдено' : 'Контакты не найдены';
+                  const emptyText = dirSearchTooShort
+                    ? 'Введите не менее 2 символов для поиска'
+                    : dirSearchQuery.trim()
+                      ? 'По запросу ничего не найдено'
+                      : 'Контакты не найдены';
 
                   if (dirListError) {
                     return (

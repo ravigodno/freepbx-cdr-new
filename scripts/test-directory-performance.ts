@@ -11,6 +11,8 @@ import {
   listDirectoryContactsSql,
   lookupDirectoryPhoneSql,
   normalizeDirectoryLookupPhone,
+  normalizeDirectorySearchText,
+  normalizeDirectorySearchTokens,
 } from '../server/directoryPerformance.js';
 import { queryPBXPulsDb } from '../server/pbxpulsDb.js';
 
@@ -40,10 +42,14 @@ async function main() {
   assert(!lookupBody.includes('fetchDirectoryAll'), 'initial lookup must not request all=true');
   assert(apiSource.includes("app.get('/api/directory/contacts'"), 'paginated endpoint is missing');
   assert(apiSource.includes("app.get('/api/directory',"), 'compatibility endpoint is missing');
-  assert(apiSource.includes('search: req.query.q || req.query.search'), 'backend must preserve q/search compatibility');
+  assert(apiSource.includes("const rawSearch = String(req.query.q || req.query.search || '')"), 'backend must preserve q/search compatibility');
+  assert(apiSource.includes("req.query.isSpam || 'all'"), 'missing spamMode must mean all contacts');
   assert(directoryApiSource.includes("'/api/directory/contacts'"), 'frontend must use the SQL list endpoint');
   assert(directoryApiSource.includes('params.set(key, String(value))'), 'query parameters must be URL encoded');
+  assert(directoryApiSource.includes("value === 'all' && key !== 'spamMode'"), 'frontend must preserve spamMode=all');
   assert(appSource.includes('directoryListAbortRef.current !== controller'), 'stale directory requests must not replace newer results');
+  assert(appSource.includes('directoryListRequestSequenceRef.current !== requestSequence'), 'request sequence must reject stale responses');
+  assert(apiSource.includes('responsibleUserSearchIdsByToken'), 'responsible user search mapping is missing');
   assert.equal((apiSource.match(/await enrichCallsWithDirectoryBulk\(calls, localDb, req\)/g) || []).length >= 2, true);
   assert(importSource.includes("invalidateDirectoryPerformanceCaches('import_completed')"));
   assert(importSource.includes("invalidateDirectoryPerformanceCaches('import_rollback')"));
@@ -51,6 +57,10 @@ async function main() {
   const countRows = await queryPBXPulsDb('SELECT COUNT(*) count FROM directory_contacts');
   const actualCount = Number(countRows[0]?.count || 0);
   assert.equal(actualCount, 100000, 'read-only benchmark expects the current 100000-contact database');
+  assert.equal(normalizeDirectorySearchText('  Ёлкин\u00a0Иванов-Алексей  '), 'елкин иванов алексей');
+  assert.deepEqual(normalizeDirectorySearchTokens('Иванов Алексей Иванов'), ['иванов', 'алексей']);
+  assert.deepEqual(normalizeDirectorySearchTokens('x'), []);
+  assert.deepEqual(normalizeDirectorySearchTokens('https://www.Example.com'), ['example', 'com']);
 
   const rssBeforePage = process.memoryUsage().rss;
   invalidateDirectoryPerformanceCaches('test_start');
@@ -149,6 +159,30 @@ async function main() {
     const searched = await listDirectoryContactsSql({ page: 1, pageSize: 25, search: companySeed }, internalAccess);
     assert(searched.items.length <= 25);
     assert(searched.totalCount >= searched.items.length);
+  }
+  const multiFieldSeedRows = await queryPBXPulsDb(
+    `SELECT c.id,c.name,m.metadata_json,m.metadata_value,m.value
+     FROM directory_contacts c
+     JOIN directory_contact_metadata m ON m.contact_id=c.id AND m.metadata_key='position'
+     WHERE c.name<>'' AND COALESCE(m.metadata_json,m.metadata_value,m.value,'')<>''
+     ORDER BY c.id LIMIT 1`
+  );
+  const multiFieldSeed = multiFieldSeedRows[0];
+  if (multiFieldSeed) {
+    const nameTokens = normalizeDirectorySearchTokens(multiFieldSeed.name);
+    const rawPosition = multiFieldSeed.metadata_json || multiFieldSeed.metadata_value || multiFieldSeed.value || '';
+    let position = String(rawPosition);
+    try { position = JSON.parse(position); } catch (_error) {}
+    const positionTokens = normalizeDirectorySearchTokens(position);
+    if (nameTokens.length && positionTokens[0]) {
+      const combined = await listDirectoryContactsSql({
+        page: 1,
+        pageSize: 50,
+        search: `${positionTokens[0]} ${nameTokens.slice().reverse().join(' ')}`
+      }, internalAccess);
+      assert(combined.items.some(item => item.id === String(multiFieldSeed.id)), 'tokens from name and metadata must match in either order');
+      assert.equal(combined.totalCount >= combined.items.length, true);
+    }
   }
   const shared = await listDirectoryContactsSql({ page: 1, pageSize: 25, visibility: 'shared' }, internalAccess);
   assert(shared.items.length <= 25);

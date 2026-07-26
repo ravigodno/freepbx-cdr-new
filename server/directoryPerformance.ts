@@ -21,6 +21,8 @@ export type DirectoryListInput = {
   ownerUserId?: unknown;
   sortBy?: unknown;
   sortDirection?: unknown;
+  responsibleUserSearchIdsByToken?: Record<string, string[]>;
+  phoneSecondaryOnly?: boolean;
 };
 
 type CompactContact = {
@@ -64,6 +66,41 @@ const boolParam = (value: unknown): boolean | null => {
   return null;
 };
 const elapsed = (started: number): number => Number((performance.now() - started).toFixed(2));
+const DIRECTORY_SEARCH_METADATA_KEYS = [
+  'phones', 'position', 'department', 'group', 'website', 'inn', 'kpp', 'ogrn',
+  'address', 'tags', 'internalExtension', 'linkedExternalNumber', 'responsibleUserId'
+] as const;
+
+export function normalizeDirectorySearchText(value: unknown): string {
+  return text(value, 240)
+    .normalize('NFKC')
+    .replace(/[\u200B-\u200D\u2060\uFEFF]/gu, '')
+    .replace(/\u00A0/gu, ' ')
+    .replace(/https?:\/\//giu, ' ')
+    .replace(/\bwww\./giu, ' ')
+    .toLocaleLowerCase('ru-RU')
+    .replace(/ё/gu, 'е')
+    .replace(/[^\p{L}\p{N}@]+/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim();
+}
+
+export function normalizeDirectorySearchTokens(value: unknown): string[] {
+  const normalized = normalizeDirectorySearchText(value);
+  if (!normalized) return [];
+  return Array.from(new Set(normalized.split(' ').filter(token => token.length >= 2))).slice(0, 8);
+}
+
+const escapeLike = (value: string): string => value.replace(/!/g, '!!').replace(/%/g, '!%').replace(/_/g, '!_');
+const likeClause = (column: string) => `${column} LIKE ? ESCAPE '!'`;
+const metadataSearchValueSql = `COALESCE(sm.metadata_value,sm.value,sm.metadata_json,'')`;
+const metadataKeyPlaceholders = DIRECTORY_SEARCH_METADATA_KEYS.map(() => '?').join(',');
+const typeAliases: Record<string, string[]> = {
+  client: ['client'], клиент: ['client'],
+  supplier: ['supplier'], постав: ['supplier'],
+  government: ['government'], гос: ['government'],
+  internal: ['internal'], внутр: ['internal']
+};
 
 export function normalizeDirectoryLookupPhone(value: unknown) {
   const rawDigits = digits(value);
@@ -235,29 +272,113 @@ const buildFilters = (input: DirectoryListInput, access: DirectoryAccessContext)
     where.push('c.owner_user_id = ?');
     params.push(ownerUserId);
   }
-  const search = text(input.search, 160).normalize('NFKC');
+  const search = text(input.search, 240).normalize('NFKC');
+  const tokens = normalizeDirectorySearchTokens(search);
+  const searchTooShort = Boolean(search && !tokens.length && !buildDirectoryPhoneSearchPlan(search));
   if (search) {
     const phoneSearch = buildDirectoryPhoneSearchPlan(search);
     if (phoneSearch) {
-      where.push(phoneSearch.sql);
-      params.push(...phoneSearch.params);
-    } else if (search.length >= 2) {
-      const prefix = `${search}%`;
-      where.push('(c.name LIKE ? OR c.company LIKE ? OR c.email LIKE ?)');
-      params.push(prefix, prefix, prefix);
-    }
+      if (input.phoneSecondaryOnly) {
+        const phonePattern = `%${escapeLike(phoneSearch.digits)}%`;
+        where.push(`(
+          ${likeClause('c.phone2')}
+          OR EXISTS (
+            SELECT 1 FROM directory_contact_metadata spm
+            WHERE spm.contact_id=c.id
+              AND spm.metadata_key IN ('phones','linkedExternalNumber','internalExtension')
+              AND COALESCE(spm.metadata_value,spm.value,spm.metadata_json,'') LIKE ? ESCAPE '!'
+          )
+        )`);
+        params.push(phonePattern, phonePattern);
+      } else {
+        where.push(phoneSearch.sql);
+        params.push(...phoneSearch.params);
+      }
+    } else if (tokens.length) {
+      for (const token of tokens) {
+        const pattern = `%${escapeLike(token)}%`;
+        const tokenClauses = [
+          likeClause('c.name'), likeClause('c.company'), likeClause('c.email'),
+          likeClause('c.comment'), likeClause('c.phone2')
+        ];
+        const tokenParams: any[] = [pattern, pattern, pattern, pattern, pattern];
+        const digitsToken = token.replace(/\D/g, '');
+        if (digitsToken.length >= 3) {
+          const phonePlan = buildDirectoryPhoneSearchPlan(digitsToken);
+          if (phonePlan) {
+            tokenClauses.push(phonePlan.sql);
+            tokenParams.push(...phonePlan.params);
+          }
+        }
+        const aliasTypes = Object.entries(typeAliases)
+          .filter(([alias]) => alias.startsWith(token) || token.startsWith(alias))
+          .flatMap(([, values]) => values);
+        if (aliasTypes.length) {
+          tokenClauses.push(`c.type IN (${aliasTypes.map(() => '?').join(',')})`);
+          tokenParams.push(...aliasTypes);
+        }
+        tokenClauses.push(
+          `EXISTS (
+             SELECT 1 FROM directory_contact_metadata sm
+             WHERE sm.contact_id=c.id
+               AND sm.metadata_key IN (${metadataKeyPlaceholders})
+               AND ${metadataSearchValueSql} LIKE ? ESCAPE '!'
+           )`
+        );
+        tokenParams.push(...DIRECTORY_SEARCH_METADATA_KEYS, pattern);
+        const responsibleIds = input.responsibleUserSearchIdsByToken?.[token] || [];
+        if (responsibleIds.length) {
+          tokenClauses.push(
+            `EXISTS (
+               SELECT 1 FROM directory_contact_metadata rum
+               WHERE rum.contact_id=c.id
+                 AND rum.metadata_key='responsibleUserId'
+                 AND COALESCE(rum.metadata_value,rum.value,'') IN (${responsibleIds.map(() => '?').join(',')})
+             )`
+          );
+          tokenParams.push(...responsibleIds);
+        }
+        where.push(`(${tokenClauses.join(' OR ')})`);
+        params.push(...tokenParams);
+      }
+    } else if (searchTooShort) where.push('0=1');
   }
-  return { whereSql: where.join(' AND '), params, search };
+  return { whereSql: where.join(' AND '), params, search, tokens, searchTooShort };
 };
 
-const sortSql = (input: DirectoryListInput): string => {
+const sortSql = (input: DirectoryListInput, search: string): { sql: string; params: any[] } => {
   const field = text(input.sortBy, 32);
   const direction = text(input.sortDirection, 8).toLowerCase() === 'desc' ? 'DESC' : 'ASC';
+  if (search) {
+    const normalized = normalizeDirectorySearchText(search);
+    const phone = buildDirectoryPhoneSearchPlan(search);
+    if (phone?.mode === 'exact') {
+      return {
+        sql: `CASE WHEN ${phone.sql} THEN 0 ELSE 8 END,c.name ASC,c.id ASC`,
+        params: phone.params
+      };
+    }
+    if (phone) {
+      return { sql: 'c.phone_normalized ASC,c.id ASC', params: [] };
+    }
+    const exact = normalized;
+    const prefix = `${escapeLike(normalized)}%`;
+    return {
+      sql: `CASE
+        WHEN c.email = ? THEN 1
+        WHEN c.name = ? THEN 2
+        WHEN ${likeClause('c.name')} THEN 3
+        WHEN c.company = ? THEN 4
+        WHEN ${likeClause('c.company')} THEN 5
+        ELSE 8 END,c.name ASC,c.id ASC`,
+      params: [exact, exact, prefix, exact, prefix]
+    };
+  }
   const fields: Record<string, string> = {
     name: 'c.name', normalized_name: 'c.name', organization: 'c.company',
     createdAt: 'c.created_at', created_at: 'c.created_at', phone: 'c.phone_normalized', phone_normalized: 'c.phone_normalized'
   };
-  return `${fields[field] || 'c.name'} ${direction}, c.id ${direction}`;
+  return { sql: `${fields[field] || 'c.name'} ${direction},c.id ${direction}`, params: [] };
 };
 
 export async function listDirectoryContactsSql(input: DirectoryListInput, access: DirectoryAccessContext) {
@@ -266,6 +387,7 @@ export async function listDirectoryContactsSql(input: DirectoryListInput, access
   const page = Math.max(1, Math.min(1_000_000, Number(input.page) || 1));
   const offset = (page - 1) * pageSize;
   const filters = buildFilters(input, access);
+  const order = sortSql(input, filters.search);
   const cacheKey = JSON.stringify([countGeneration, access.privileged, access.userId, filters.whereSql, filters.params]);
   let totalCount = 0;
   let directoryCountMs = 0;
@@ -282,13 +404,13 @@ export async function listDirectoryContactsSql(input: DirectoryListInput, access
   }
   const queryStarted = performance.now();
   const rows = await queryPBXPulsDb(
-    `SELECT c.id,c.name,c.company,c.phone,c.phone_normalized,c.phone2,c.email,c.contact_type,c.owner_user_id,
+    `SELECT c.id,c.name,c.company,c.phone,c.phone_normalized,c.phone2,c.email,c.comment,c.contact_type,c.owner_user_id,
             c.visibility,c.type,c.is_spam,c.is_blacklisted,c.created_at,c.updated_at
      FROM directory_contacts c
      WHERE ${filters.whereSql}
-     ORDER BY ${sortSql(input)}
+     ORDER BY ${order.sql}
      LIMIT ${pageSize} OFFSET ${offset}`,
-    filters.params
+    [...filters.params, ...order.params]
   );
   const directoryQueryMs = elapsed(queryStarted);
   const metadataStarted = performance.now();
@@ -297,23 +419,47 @@ export async function listDirectoryContactsSql(input: DirectoryListInput, access
     `SELECT contact_id,metadata_key,metadata_value,metadata_json,value
      FROM directory_contact_metadata
      WHERE contact_id IN (${ids.map(() => '?').join(',')})
-       AND metadata_key IN ('phones','position','department','group','responsibleUserId')
+       AND metadata_key IN (${DIRECTORY_SEARCH_METADATA_KEYS.map(() => '?').join(',')})
      ORDER BY contact_id,metadata_key`,
-    ids
+    [...ids, ...DIRECTORY_SEARCH_METADATA_KEYS]
   ) : [];
   const metadataJoinMs = elapsed(metadataStarted);
   const metadata = parseMetadata(metadataRows);
-  const items = rows.map(row => rowToContact(row, metadata.get(String(row.id)) || {}));
+  const items = rows.map(row => {
+    const itemMetadata = metadata.get(String(row.id)) || {};
+    const item: any = rowToContact(row, itemMetadata);
+    if (filters.tokens.length) {
+      const fields: Record<string, unknown> = {
+        name: row.name, organization: row.company, phone: row.phone, phone2: row.phone2,
+        email: row.email, comment: row.comment, position: itemMetadata.position,
+        department: itemMetadata.department, group: itemMetadata.group, website: itemMetadata.website,
+        inn: itemMetadata.inn, kpp: itemMetadata.kpp, ogrn: itemMetadata.ogrn,
+        address: itemMetadata.address, tags: itemMetadata.tags,
+        internalExtension: itemMetadata.internalExtension,
+        linkedExternalNumber: itemMetadata.linkedExternalNumber,
+        responsibleUserId: itemMetadata.responsibleUserId
+      };
+      item.matchedFields = Object.entries(fields)
+        .filter(([, value]) => {
+          const haystack = normalizeDirectorySearchText(Array.isArray(value) ? value.join(' ') : value);
+          return filters.tokens.some(token => haystack.includes(token));
+        })
+        .map(([key]) => key)
+        .slice(0, 6);
+    }
+    return item;
+  });
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
   const nextPage = page < totalPages ? page + 1 : null;
   const previousPage = page > 1 ? page - 1 : null;
-  return {
+  const response = {
     items,
     page,
     pageSize,
     total: totalCount,
     totalCount,
     totalPages,
+    searchTooShort: filters.searchTooShort,
     nextCursor: nextPage ? Buffer.from(String(nextPage)).toString('base64url') : null,
     previousCursor: previousPage ? Buffer.from(String(previousPage)).toString('base64url') : null,
     hasNext: nextPage !== null,
@@ -327,6 +473,14 @@ export async function listDirectoryContactsSql(input: DirectoryListInput, access
       total_ms: elapsed(totalStarted)
     }
   };
+  if (
+    response.totalCount === 0
+    && !input.phoneSecondaryOnly
+    && buildDirectoryPhoneSearchPlan(input.search)
+  ) {
+    return listDirectoryContactsSql({ ...input, phoneSecondaryOnly: true }, access);
+  }
+  return response;
 }
 
 const compactFields = `c.id,c.name,c.company,c.phone,c.phone_normalized,c.phone2,c.email,c.contact_type,c.owner_user_id,

@@ -65,6 +65,7 @@
     "test:directory-performance": "tsx scripts/test-directory-performance.ts",
     "test:directory-single-contact": "tsx scripts/test-directory-single-contact.ts",
     "directory:performance:index-preview": "tsx scripts/preview-directory-performance-indexes.ts",
+    "directory:search:projection-preview": "tsx scripts/preview-directory-search-projection.ts",
     "test:directory-bulk-delete": "tsx scripts/test-directory-bulk-delete.ts",
     "test:ai-platform-simple-ux": "tsx scripts/test-ai-platform-simple-ux.ts",
     "test:ai-agent-creation-wizard": "tsx scripts/test-ai-agent-creation-wizard.ts",

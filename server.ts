@@ -84,6 +84,8 @@ import {
   invalidateDirectoryPerformanceCaches,
   listDirectoryContactsSql,
   lookupDirectoryPhoneSql,
+  normalizeDirectorySearchText,
+  normalizeDirectorySearchTokens,
   type DirectoryAccessContext
 } from './server/directoryPerformance.js';
 import {
@@ -11693,13 +11695,31 @@ const directorySqlListResponse = async (req: Request, res: any) => {
   const localDb = await readLocalDb();
   const authUser = (req as any).user;
   const dbUser = getAuthenticatedDbUser(localDb, req);
-  const spamMode = String(req.query.spamMode || req.query.isSpam || 'exclude_spam');
+  const spamMode = String(req.query.spamMode || req.query.isSpam || 'all');
   const visibilityMode = String(req.query.visibilityMode || req.query.visibility || 'all');
+  const rawSearch = String(req.query.q || req.query.search || '');
+  const searchTokens = normalizeDirectorySearchTokens(rawSearch);
+  const privileged = canManageGlobalDirectoryColumns(req);
+  const responsibleUserSearchIdsByToken = Object.fromEntries(searchTokens.map(token => {
+    const ids = (localDb.users || [])
+      .filter((user: any) => {
+        const searchable = [
+          normalizeAccessUserFullName(user.fullName),
+          user.username,
+          user.extension,
+          privileged ? user.id : ''
+        ].map(normalizeDirectorySearchText).join(' ');
+        return searchable.includes(token);
+      })
+      .map((user: any) => String(user.id || '').trim())
+      .filter(Boolean);
+    return [token, ids];
+  }));
   const userJoinStarted = performance.now();
   const result = await listDirectoryContactsSql({
     page: req.query.page,
     pageSize: req.query.pageSize,
-    search: req.query.q || req.query.search,
+    search: rawSearch,
     type: req.query.type,
     visibility: ['shared_only', 'exclude_private'].includes(visibilityMode)
       ? 'shared'
@@ -11713,7 +11733,8 @@ const directorySqlListResponse = async (req: Request, res: any) => {
     group: req.query.group,
     ownerUserId: visibilityMode === 'my_private_only' ? getDirectoryUserId(dbUser, authUser) : undefined,
     sortBy: req.query.sortBy,
-    sortDirection: req.query.sortDirection
+    sortDirection: req.query.sortDirection,
+    responsibleUserSearchIdsByToken
   }, getDirectorySqlAccessContext(localDb, req));
   const favorites = new Set(getDirectoryFavoriteContactIds(localDb, req));
   result.items = result.items.map((entry: any) => ({
