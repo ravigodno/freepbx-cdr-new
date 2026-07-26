@@ -92,8 +92,8 @@ import QualityTab from './modules/monitoring/tabs/monitoring/QualityTab';
 import DevicesMapTab from './modules/monitoring/tabs/monitoring/DevicesMapTab';
 import HealthReportTab from './modules/monitoring/tabs/monitoring/HealthReportTab';
 import { DirectoryStatusIcon } from './modules/directory/components/DirectoryStatusIcon';
-import { fetchDirectory, fetchDirectoryAll, saveDirectoryEntry, deleteDirectoryEntry, toggleDirectoryBlacklist, toggleDirectorySpam, previewDirectoryImport, previewDirectoryImportOwnership, previewDirectoryBulkDelete, applyDirectoryBulkDelete, createDirectoryImportJob, getDirectoryImportJob, cancelDirectoryImportJob, resumeDirectoryImportJob, previewDirectoryImportRollback, getDirectoryImportJobErrors, fetchDirectoryColumnSettings, saveMyDirectoryColumnSettings, resetMyDirectoryColumnSettings, saveGlobalDirectoryColumnSettings, resetGlobalDirectoryColumnSettings, setDirectoryFavorite } from './modules/directory/services/directoryApi';
-import { calculateDirectoryImportDigest, DIRECTORY_IMPORT_MAX_BYTES, isSupportedDirectoryImportFile, summarizeDirectoryImportSource, type DirectoryImportDigestStatus, type DirectoryImportSourceKind, type DirectoryImportSourceSummary } from './modules/directory/utils/directoryImportSource';
+import { fetchDirectory, fetchDirectoryAll, saveDirectoryEntry, deleteDirectoryEntry, toggleDirectoryBlacklist, toggleDirectorySpam, previewDirectoryImport, previewDirectoryImportOwnership, previewDirectoryBulkDelete, applyDirectoryBulkDelete, createDirectoryImportJob, prepareDirectoryImportSource, deleteDirectoryImportSource, getDirectoryImportJob, cancelDirectoryImportJob, resumeDirectoryImportJob, previewDirectoryImportRollback, getDirectoryImportJobErrors, fetchDirectoryColumnSettings, saveMyDirectoryColumnSettings, resetMyDirectoryColumnSettings, saveGlobalDirectoryColumnSettings, resetGlobalDirectoryColumnSettings, setDirectoryFavorite, type DirectoryImportPreparedSource } from './modules/directory/services/directoryApi';
+import { calculateDirectoryImportDigest, getDirectoryImportDigestCapability, DIRECTORY_IMPORT_MAX_BYTES, isSupportedDirectoryImportFile, summarizeDirectoryImportSource, type DirectoryImportDigestStatus, type DirectoryImportSourceKind, type DirectoryImportSourceSummary } from './modules/directory/utils/directoryImportSource';
 import CDRPage from './modules/cdr/pages/CDRPage';
 import LegacyCDRTable from './modules/cdr/components/LegacyCDRTable';
 import CDRProcessModal from './modules/cdr/components/CDRProcessModal';
@@ -946,12 +946,14 @@ export default function App() {
   const [isAdminPanelExpanded, setIsAdminPanelExpanded] = useState(false);
   const directoryImportFileInputRef = useRef<HTMLInputElement | null>(null);
   const directoryImportDigestRequestRef = useRef(0);
+  const directoryImportTextPrepareTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [directoryImportSourceKind, setDirectoryImportSourceKind] = useState<DirectoryImportSourceKind>('file');
   const [isDirectoryImportDragging, setIsDirectoryImportDragging] = useState(false);
   const [directoryImportSourceError, setDirectoryImportSourceError] = useState('');
   const [directoryImportSourceSummary, setDirectoryImportSourceSummary] = useState<DirectoryImportSourceSummary | null>(null);
   const [directoryImportDigestStatus, setDirectoryImportDigestStatus] = useState<DirectoryImportDigestStatus>('idle');
   const [directoryImportSourceDigest, setDirectoryImportSourceDigest] = useState('');
+  const [directoryImportPreparedSources, setDirectoryImportPreparedSources] = useState<Partial<Record<DirectoryImportSourceKind, DirectoryImportPreparedSource>>>({});
   const [importText, setImportText] = useState('');
   const [importFileText, setImportFileText] = useState('');
   const [importFileError, setImportFileError] = useState('');
@@ -1212,19 +1214,74 @@ export default function App() {
     }
   };
 
-  const calculateImportSourceDigest = async (source: Blob) => {
+  const prepareImportSource = async (kind: DirectoryImportSourceKind, source: Blob, filename: string) => {
+    if (!session?.token) return;
     const requestId = ++directoryImportDigestRequestRef.current;
     setDirectoryImportDigestStatus('calculating');
     setDirectoryImportSourceDigest('');
+    const capability = getDirectoryImportDigestCapability(window);
+    const useBrowserDigest = capability.browserSubtle && source.size <= 8 * 1024 * 1024;
+    let browserDigest = '';
+    let diagnosticErrorCode: string | null = capability.errorCode;
+    console.info('[DIRECTORY_IMPORT_DIGEST]', {
+      digestProvider: useBrowserDigest ? 'web_crypto_then_backend' : 'backend_stream',
+      secureContext: capability.secureContext,
+      fileSize: source.size,
+      errorCode: diagnosticErrorCode
+    });
     try {
-      const digest = await calculateDirectoryImportDigest(source);
+      const browserDigestPromise = useBrowserDigest
+        ? calculateDirectoryImportDigest(source).catch(() => {
+            diagnosticErrorCode = 'WEB_CRYPTO_FAILED';
+            return '';
+          })
+        : Promise.resolve('');
+      setImportProgress({ stage: 'reading', processed: 0, total: source.size, message: 'Загрузка файла…' });
+      const result = await prepareDirectoryImportSource(session.token, source, {
+        filename,
+        diagnostics: {
+          digestProvider: useBrowserDigest ? 'web_crypto_then_backend' : 'backend_stream',
+          secureContext: capability.secureContext,
+          browserCrypto: capability.browserCrypto,
+          browserSubtle: capability.browserSubtle,
+          errorCode: diagnosticErrorCode
+        },
+        onProgress: (loaded, total) => {
+          if (requestId === directoryImportDigestRequestRef.current) setImportProgress({ stage: 'reading', processed: loaded, total, message: 'Загрузка файла…' });
+        },
+        onUploaded: () => {
+          if (requestId === directoryImportDigestRequestRef.current) setImportProgress({ stage: 'parsing', processed: source.size, total: source.size, message: 'Расчёт контрольной суммы…' });
+        }
+      });
+      browserDigest = await browserDigestPromise;
       if (requestId !== directoryImportDigestRequestRef.current) return;
-      setDirectoryImportSourceDigest(digest);
+      if (browserDigest && browserDigest !== result.source.sourceHash) throw Object.assign(new Error('Контрольная сумма браузера не совпала с серверной.'), { code: 'DIGEST_MISMATCH' });
+      setDirectoryImportPreparedSources(current => ({ ...current, [kind]: result.source }));
+      setDirectoryImportSourceDigest(result.source.sourceHash);
       setDirectoryImportDigestStatus('ready');
-    } catch (_error) {
+      setDirectoryImportSourceSummary(current => current ? {
+        ...current,
+        rows: result.source.rowCount,
+        delimiter: result.source.delimiter,
+        encoding: result.source.encoding
+      } : current);
+      setImportProgress({ stage: 'complete', processed: source.size, total: source.size, message: 'Источник готов' });
+    } catch (error: any) {
       if (requestId !== directoryImportDigestRequestRef.current) return;
+      console.info('[DIRECTORY_IMPORT_DIGEST]', {
+        digestProvider: 'backend_stream',
+        secureContext: capability.secureContext,
+        fileSize: source.size,
+        errorCode: String(error?.code || 'SOURCE_PREPARATION_FAILED').slice(0, 80)
+      });
       setDirectoryImportDigestStatus('error');
-      setDirectoryImportSourceError('Не удалось рассчитать контрольную сумму источника.');
+      setDirectoryImportPreparedSources(current => {
+        const next = { ...current };
+        delete next[kind];
+        return next;
+      });
+      setDirectoryImportSourceError(error?.message || 'Контрольная сумма не рассчитана.');
+      setImportProgress({ stage: 'error', processed: 0, total: source.size, message: 'Ошибка подготовки файла' });
     }
   };
 
@@ -1239,6 +1296,12 @@ export default function App() {
   };
 
   const handleDirectoryImportFile = (file: File) => {
+    directoryImportDigestRequestRef.current++;
+    setDirectoryImportPreparedSources(current => {
+      const next = { ...current };
+      delete next.file;
+      return next;
+    });
     setDirectoryImportSourceError('');
     if (!isSupportedDirectoryImportFile(file.name)) {
       setDirectoryImportSourceError('Поддерживаются только файлы CSV и TXT.');
@@ -1258,7 +1321,7 @@ export default function App() {
     setImportFileText('');
     resetPreparedDirectoryImport();
     setImportProgress({ stage: 'reading', processed: 0, total: file.size, message: 'Чтение файла' });
-    void calculateImportSourceDigest(file);
+    void prepareImportSource('file', file, file.name);
     const reader = new FileReader();
     reader.onprogress = event => {
       if (event.lengthComputable) setImportProgress({ stage: 'reading', processed: event.loaded, total: event.total, message: 'Чтение файла' });
@@ -1273,7 +1336,7 @@ export default function App() {
       try {
         setImportFileText(text);
         setDirectoryImportSourceSummary(summarizeDirectoryImportSource(text, 'file', file.name, file.size));
-        setImportProgress({ stage: 'complete', processed: file.size, total: file.size, message: 'Источник подготовлен' });
+        if (directoryImportDigestRequestRef.current === 0) setImportProgress({ stage: 'reading', processed: file.size, total: file.size, message: 'Расчёт контрольной суммы…' });
       } catch (_error) {
         setDirectoryImportSourceError('Не удалось разобрать структуру файла.');
         setImportProgress({ stage: 'error', processed: 0, total: file.size, message: 'Ошибка подготовки файла' });
@@ -1294,11 +1357,17 @@ export default function App() {
   };
 
   const handleDirectoryImportTextChange = (text: string) => {
+    directoryImportDigestRequestRef.current++;
+    if (directoryImportTextPrepareTimerRef.current) clearTimeout(directoryImportTextPrepareTimerRef.current);
+    setDirectoryImportPreparedSources(current => {
+      const next = { ...current };
+      delete next.text;
+      return next;
+    });
     setImportText(text);
     setDirectoryImportSourceError('');
     resetPreparedDirectoryImport();
     if (!text.trim()) {
-      directoryImportDigestRequestRef.current++;
       setDirectoryImportSourceSummary(null);
       setDirectoryImportDigestStatus('idle');
       setDirectoryImportSourceDigest('');
@@ -1307,7 +1376,7 @@ export default function App() {
     const source = new Blob([text], { type: 'text/csv;charset=utf-8' });
     try {
       setDirectoryImportSourceSummary(summarizeDirectoryImportSource(text, 'text', 'Вставленные данные', source.size));
-      void calculateImportSourceDigest(source);
+      directoryImportTextPrepareTimerRef.current = setTimeout(() => void prepareImportSource('text', source, 'pasted-directory-import.csv'), 500);
     } catch (_error) {
       setDirectoryImportSourceSummary(null);
       setDirectoryImportSourceError('Не удалось определить структуру вставленных данных.');
@@ -1335,6 +1404,13 @@ export default function App() {
     setDirectoryImportSourceSummary(null);
     setDirectoryImportDigestStatus('idle');
     setDirectoryImportSourceDigest('');
+    const prepared = directoryImportPreparedSources[kind];
+    if (prepared && session?.token) void deleteDirectoryImportSource(session.token, prepared.sourceId).catch(() => {});
+    setDirectoryImportPreparedSources(current => {
+      const next = { ...current };
+      delete next[kind];
+      return next;
+    });
     if (kind === 'file') {
       setImportSourceFile(null);
       setImportFileName('');
@@ -1350,6 +1426,7 @@ export default function App() {
     resetPreparedDirectoryImport();
     const text = kind === 'file' ? importFileText : importText;
     const source = kind === 'file' ? importSourceFile : (text.trim() ? new Blob([text], { type: 'text/csv;charset=utf-8' }) : null);
+    const prepared = directoryImportPreparedSources[kind];
     if (!source || !text.trim()) {
       directoryImportDigestRequestRef.current++;
       setDirectoryImportSourceSummary(null);
@@ -1358,13 +1435,23 @@ export default function App() {
       return;
     }
     setDirectoryImportSourceSummary(summarizeDirectoryImportSource(text, kind, kind === 'file' ? importFileName : 'Вставленные данные', source.size));
-    void calculateImportSourceDigest(source);
+    if (prepared?.status === 'ready') {
+      setDirectoryImportSourceDigest(prepared.sourceHash);
+      setDirectoryImportDigestStatus('ready');
+    } else {
+      void prepareImportSource(kind, source, kind === 'file' ? importFileName : 'pasted-directory-import.csv');
+    }
   };
 
   const openDirectoryImportPreview = () => {
     const text = directoryImportSourceKind === 'file' ? importFileText : importText;
     if (!text.trim()) {
       setDirectoryImportSourceError(directoryImportSourceKind === 'file' ? 'Сначала выберите непустой CSV или TXT файл.' : 'Вставьте CSV из буфера обмена.');
+      return;
+    }
+    const prepared = directoryImportPreparedSources[directoryImportSourceKind];
+    if (!prepared || prepared.status !== 'ready' || !prepared.sourceHash) {
+      setDirectoryImportSourceError('Дождитесь завершения подготовки источника.');
       return;
     }
     setImportProgress({ stage: 'parsing', processed: 0, total: 1, message: 'Разбор строк и столбцов' });
@@ -2026,22 +2113,17 @@ export default function App() {
       return;
     }
     if (!session?.token) return;
-    const source = directoryImportSourceKind === 'file'
-      ? importSourceFile
-      : (importText.trim() ? new Blob([importText], { type: 'text/csv' }) : null);
-    if (!source) {
-      setImportFileError('Повторно выберите исходный CSV-файл.');
+    const preparedSource = directoryImportPreparedSources[directoryImportSourceKind];
+    if (!preparedSource || preparedSource.status !== 'ready' || !preparedSource.sourceHash) {
+      setImportFileError('Источник не готов. Повторите подготовку файла.');
       return;
     }
     setIsImporting(true);
     setImportFileError('');
     setImportProgress({ stage: 'validating', processed: 0, total: parsedImportEntries.length, message: 'Создание управляемой задачи' });
     try {
-      const sourceHash = directoryImportDigestStatus === 'ready' && directoryImportSourceDigest
-        ? directoryImportSourceDigest
-        : await calculateDirectoryImportDigest(source);
-      const data = await createDirectoryImportJob(session.token, source, {
-        filename: directoryImportSourceKind === 'file' ? (importFileName || 'directory-import.csv') : 'pasted-directory-import.csv',
+      const sourceHash = preparedSource.sourceHash;
+      const data = await createDirectoryImportJob(session.token, preparedSource.sourceId, {
         atomicityMode: directoryImportAtomicity,
         duplicateStrategy: directoryImportDuplicateStrategy,
         batchSize: 500,
@@ -2775,11 +2857,9 @@ export default function App() {
     setImportFileError('');
     setImportProgress({ stage: 'validating', processed: 0, total: parsedImportEntries.length, message: 'Проверка ошибок и дублей' });
     try {
-      const source = directoryImportSourceKind === 'file'
-        ? importSourceFile
-        : (importText.trim() ? new Blob([importText], { type: 'text/csv' }) : null);
-      if (!source) throw new Error('Повторно выберите исходный CSV-файл.');
-      const ownership = await previewDirectoryImportOwnership(session.token, source, {
+      const preparedSource = directoryImportPreparedSources[directoryImportSourceKind];
+      if (!preparedSource || preparedSource.status !== 'ready' || !preparedSource.sourceHash) throw new Error('Источник не готов. Повторите подготовку файла.');
+      const ownership = await previewDirectoryImportOwnership(session.token, preparedSource.sourceId, {
         unknownResponsibleStrategy: directoryUnknownResponsibleStrategy,
         responsibleUserMappings: directoryResponsibleMappings
       });
@@ -6830,7 +6910,8 @@ export default function App() {
                   <div className="min-w-0"><div className="truncate text-sm font-black text-slate-800">{directoryImportSourceSummary.name}</div><div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500"><span>{directoryImportSourceSummary.kind==='file'?`${(directoryImportSourceSummary.bytes/1024/1024).toFixed(2)} МБ`:`${directoryImportSourceSummary.characters.toLocaleString('ru-RU')} символов`}</span><span>{directoryImportSourceSummary.rows.toLocaleString('ru-RU')} строк</span><span>Разделитель: <b>{directoryImportSourceSummary.delimiter}</b></span><span>Кодировка: <b>{directoryImportSourceSummary.encoding}</b></span></div></div>
                   <div className="flex flex-wrap gap-2"><button type="button" onClick={()=>directoryImportSourceKind==='file'?directoryImportFileInputRef.current?.click():document.getElementById('directory-import-textarea')?.focus()} className="rounded-lg border bg-white px-3 py-1.5 text-xs font-bold text-slate-700">Заменить</button><button type="button" onClick={()=>clearDirectoryImportSource()} className="rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-bold text-rose-700">Очистить</button></div>
                 </div>
-                <div aria-live="polite" className={`mt-2 text-[11px] font-bold ${directoryImportDigestStatus==='error'?'text-rose-700':directoryImportDigestStatus==='ready'?'text-emerald-700':'text-slate-500'}`}>{directoryImportDigestStatus==='calculating'?'Расчёт контрольной суммы…':directoryImportDigestStatus==='ready'?'Контрольная сумма рассчитана':directoryImportDigestStatus==='error'?'Ошибка подготовки файла':'Ожидание подготовки'}</div>
+                <div aria-live="polite" className={`mt-2 text-[11px] font-bold ${directoryImportDigestStatus==='error'?'text-rose-700':directoryImportDigestStatus==='ready'?'text-emerald-700':'text-slate-500'}`}>{directoryImportDigestStatus==='calculating'?'Загрузка и расчёт контрольной суммы…':directoryImportDigestStatus==='ready'?'Источник готов · контрольная сумма рассчитана сервером':directoryImportDigestStatus==='error'?'Ошибка подготовки файла':'Ожидание подготовки'}</div>
+                {directoryImportDigestStatus==='error'&&<button type="button" onClick={()=>{const source=directoryImportSourceKind==='file'?importSourceFile:(importText.trim()?new Blob([importText],{type:'text/csv'}):null);if(source)void prepareImportSource(directoryImportSourceKind,source,directoryImportSourceKind==='file'?(importFileName||'directory-import.csv'):'pasted-directory-import.csv')}} className="mt-2 rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-bold text-rose-700">Повторить подготовку</button>}
               </div>}
               <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-end"><button type="button" onClick={()=>clearDirectoryImportSource()} disabled={!directoryImportSourceSummary} className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-600 disabled:opacity-40">Очистить</button><button type="button" onClick={handleDownloadTemplate} className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-600">Скачать шаблон</button><button type="button" onClick={openDirectoryImportPreview} disabled={!directoryImportSourceSummary||directoryImportDigestStatus!=='ready'} className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-bold text-white hover:bg-blue-700 disabled:opacity-40">Открыть предпросмотр</button></div>
             </div>}

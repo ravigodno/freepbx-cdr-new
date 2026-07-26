@@ -4,6 +4,13 @@ export const DIRECTORY_IMPORT_MAX_BYTES = 100 * 1024 * 1024;
 
 export type DirectoryImportSourceKind = 'file' | 'text';
 export type DirectoryImportDigestStatus = 'idle' | 'calculating' | 'ready' | 'error';
+export interface DirectoryImportDigestCapability {
+  secureContext: boolean;
+  browserCrypto: boolean;
+  browserSubtle: boolean;
+  digestProvider: 'web_crypto' | 'backend_stream';
+  errorCode: 'INSECURE_CONTEXT' | 'SUBTLE_UNAVAILABLE' | null;
+}
 
 export interface DirectoryImportSourceSummary {
   kind: DirectoryImportSourceKind;
@@ -22,6 +29,19 @@ const importHeaders = new Set([
 
 export function isSupportedDirectoryImportFile(name: string): boolean {
   return /\.(csv|txt)$/i.test(String(name || '').trim());
+}
+
+export function getDirectoryImportDigestCapability(scope: Pick<typeof globalThis, 'crypto'> & { isSecureContext?: boolean } = globalThis): DirectoryImportDigestCapability {
+  const secureContext = scope.isSecureContext === true;
+  const browserCrypto = !!scope.crypto;
+  const browserSubtle = !!scope.crypto?.subtle;
+  return {
+    secureContext,
+    browserCrypto,
+    browserSubtle,
+    digestProvider: browserSubtle ? 'web_crypto' : 'backend_stream',
+    errorCode: browserSubtle ? null : (!secureContext ? 'INSECURE_CONTEXT' : 'SUBTLE_UNAVAILABLE')
+  };
 }
 
 export function summarizeDirectoryImportSource(

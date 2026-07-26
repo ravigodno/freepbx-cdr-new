@@ -24,6 +24,7 @@ import { normalizeQualityMetrics } from './server/qualityMetrics.js';
 import crypto from 'crypto';
 import { createDirectoryContactId } from './server/directoryContactIds.js';
 import { registerDirectoryImportJobRoutes } from './server/directoryImportJobs.js';
+import { registerDirectoryImportSourceRoutes } from './server/directoryImportSources.js';
 import http from 'http';
 import https from 'https';
 import { CallEntry, MissedCallStatus, AppSettings, DashboardStats, UserRole, WebUser } from './src/types.js';
@@ -7867,6 +7868,10 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json({ limit: '25mb' }));
+registerDirectoryImportSourceRoutes(app, {
+  requireAuth: requireAuth(),
+  hasPermission: checkUserPermission
+});
 registerDirectoryImportJobRoutes(app, {
   requireAuth: requireAuth(),
   hasPermission: checkUserPermission,

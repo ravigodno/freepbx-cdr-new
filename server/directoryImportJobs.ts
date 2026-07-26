@@ -12,6 +12,11 @@ import {
   type DirectoryResponsibleUser,
   type DirectoryUnknownResponsibleStrategy
 } from './directoryOwnership.js';
+import {
+  directoryImportSourceFilePath,
+  getReadyDirectoryImportSource,
+  verifyDirectoryImportSource
+} from './directoryImportSources.js';
 
 type AtomicityMode = 'rollback_on_error' | 'partial';
 type DuplicateStrategy = 'skip' | 'update' | 'create';
@@ -577,13 +582,15 @@ const processJob = async (jobId: string, deps: RegisterDependencies): Promise<vo
 export function registerDirectoryImportJobRoutes(app: Express, deps: RegisterDependencies): void {
   const rawCsv = express.raw({ type: ['text/csv', 'text/plain', 'application/octet-stream'], limit: MAX_IMPORT_BYTES });
   const optionsFromRequest = (req: Request): ImportOptions => {
-    const strategy = safeText(req.header('x-import-unknown-responsible-strategy'), 20);
+    const strategy = safeText(req.body?.unknownResponsibleStrategy || req.header('x-import-unknown-responsible-strategy'), 20);
     const unknownResponsibleStrategy: DirectoryUnknownResponsibleStrategy = ['clear', 'skip', 'map'].includes(strategy)
       ? strategy as DirectoryUnknownResponsibleStrategy
       : 'clear';
     let responsibleUserMappings: Record<string, string> = {};
     try {
-      const parsed = JSON.parse(req.header('x-import-responsible-mappings') || '{}');
+      const parsed = req.body?.responsibleUserMappings && typeof req.body.responsibleUserMappings === 'object'
+        ? req.body.responsibleUserMappings
+        : JSON.parse(req.header('x-import-responsible-mappings') || '{}');
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
         responsibleUserMappings = Object.fromEntries(Object.entries(parsed)
           .map(([source, target]) => [safeText(source, 100), safeText(target, 100)])
@@ -598,7 +605,15 @@ export function registerDirectoryImportJobRoutes(app: Express, deps: RegisterDep
   app.post('/api/directory/import-jobs/preview', deps.requireAuth, rawCsv, async (req, res) => {
     if (!(await isAllowed(req, deps, 'import_directory'))) return res.status(403).json({ error: 'Нет прав на предпросмотр импорта' });
     try {
-      const content = Buffer.isBuffer(req.body) ? req.body : Buffer.from(String(req.body || ''), 'utf8');
+      let content: Buffer;
+      if (req.body?.sourceId) {
+        const authUser = (req as any).user || {};
+        const source = getReadyDirectoryImportSource(req.body.sourceId, actorLabel(req), ['su', 'admin'].includes(String(authUser.role || '')));
+        await verifyDirectoryImportSource(source);
+        content = fs.readFileSync(directoryImportSourceFilePath(source));
+      } else {
+        content = Buffer.isBuffer(req.body) ? req.body : Buffer.from(String(req.body || ''), 'utf8');
+      }
       if (!content.length) return res.status(400).json({ error: 'CSV-файл пуст' });
       const parsed = parseImportRows(content.toString('utf8'));
       const options = optionsFromRequest(req);
@@ -615,18 +630,28 @@ export function registerDirectoryImportJobRoutes(app: Express, deps: RegisterDep
   app.post('/api/directory/import-jobs', deps.requireAuth, rawCsv, async (req, res) => {
     if (!(await isAllowed(req, deps, 'import_directory'))) return res.status(403).json({ error: 'Нет прав на массовый импорт' });
     try {
-      const content = Buffer.isBuffer(req.body) ? req.body : Buffer.from(String(req.body || ''), 'utf8');
+      const authUser = (req as any).user || {};
+      const preparedSource = req.body?.sourceId
+        ? getReadyDirectoryImportSource(req.body.sourceId, actorLabel(req), ['su', 'admin'].includes(String(authUser.role || '')))
+        : null;
+      if (preparedSource) await verifyDirectoryImportSource(preparedSource);
+      const content = preparedSource
+        ? fs.readFileSync(directoryImportSourceFilePath(preparedSource))
+        : (Buffer.isBuffer(req.body) ? req.body : Buffer.from(String(req.body || ''), 'utf8'));
       if (!content.length) return res.status(400).json({ error: 'CSV-файл пуст' });
-      const sourceHash = sha256(content);
+      const sourceHash = preparedSource?.sha256 || sha256(content);
       let decodedFilename = req.header('x-import-filename') || 'directory-import.csv';
+      if (preparedSource) decodedFilename = preparedSource.original_filename;
       try { decodedFilename = decodeURIComponent(decodedFilename); } catch (_error) {}
       const sourceFilename = safeText(decodedFilename, 255).replace(/[^\p{L}\p{N}_. -]/gu, '_');
-      const atomicityMode: AtomicityMode = req.header('x-import-atomicity') === 'partial' ? 'partial' : 'rollback_on_error';
-      const duplicateStrategy: DuplicateStrategy = ['skip', 'update', 'create'].includes(String(req.header('x-import-duplicate-strategy')))
-        ? req.header('x-import-duplicate-strategy') as DuplicateStrategy
+      const requestedAtomicity = req.body?.atomicityMode || req.header('x-import-atomicity');
+      const atomicityMode: AtomicityMode = requestedAtomicity === 'partial' ? 'partial' : 'rollback_on_error';
+      const requestedDuplicateStrategy = req.body?.duplicateStrategy || req.header('x-import-duplicate-strategy');
+      const duplicateStrategy: DuplicateStrategy = ['skip', 'update', 'create'].includes(String(requestedDuplicateStrategy))
+        ? requestedDuplicateStrategy as DuplicateStrategy
         : 'skip';
       if (atomicityMode === 'rollback_on_error' && duplicateStrategy === 'update') return res.status(400).json({ error: 'В атомарном режиме обновление существующих контактов запрещено; выберите пропуск дублей.' });
-      const batchSize = Math.max(100, Math.min(1000, Number(req.header('x-import-batch-size') || 500)));
+      const batchSize = Math.max(100, Math.min(1000, Number(req.body?.batchSize || req.header('x-import-batch-size') || 500)));
       const parsed = parseImportRows(content.toString('utf8'));
       const totalRows = parsed.rows.length + parsed.errors.length;
       const importOptions = optionsFromRequest(req);
@@ -634,7 +659,7 @@ export function registerDirectoryImportJobRoutes(app: Express, deps: RegisterDep
       if (importOptions.unknownResponsibleStrategy === 'map' && responsiblePreview.unknownResponsibleRows > 0) {
         return res.status(400).json({ error: 'Сопоставьте всех неизвестных ответственных перед импортом.', preview: responsiblePreview });
       }
-      const idempotencyKey = safeText(req.header('idempotency-key') || `${actorLabel(req)}:${sourceHash}:${atomicityMode}:${duplicateStrategy}`, 191);
+      const idempotencyKey = safeText(req.body?.idempotencyKey || req.header('idempotency-key') || `${actorLabel(req)}:${sourceHash}:${atomicityMode}:${duplicateStrategy}`, 191);
       const connection = await getConnection();
       try {
         const [existing] = await connection.execute<any[]>('SELECT * FROM directory_import_jobs WHERE idempotency_key=? LIMIT 1', [idempotencyKey]);
@@ -643,8 +668,18 @@ export function registerDirectoryImportJobRoutes(app: Express, deps: RegisterDep
         const jobId = `dij_${crypto.randomUUID()}`;
         const sourcePath = path.join(DIRECTORY_IMPORT_ROOT, `${jobId}.csv`);
         const temporaryPath = `${sourcePath}.tmp`;
-        fs.writeFileSync(temporaryPath, content, { mode: 0o600 });
-        fs.renameSync(temporaryPath, sourcePath);
+        if (preparedSource) {
+          try {
+            fs.linkSync(directoryImportSourceFilePath(preparedSource), temporaryPath);
+          } catch (_error) {
+            fs.copyFileSync(directoryImportSourceFilePath(preparedSource), temporaryPath);
+          }
+          fs.chmodSync(temporaryPath, 0o600);
+          fs.renameSync(temporaryPath, sourcePath);
+        } else {
+          fs.writeFileSync(temporaryPath, content, { mode: 0o600 });
+          fs.renameSync(temporaryPath, sourcePath);
+        }
         fs.writeFileSync(`${sourcePath}.options.json`, JSON.stringify(importOptions), { mode: 0o600 });
         await connection.execute(
           `INSERT INTO directory_import_jobs(id,source_filename,source_hash,source_path,total_rows,status,cancel_requested,started_by,updated_at,mode,duplicate_strategy,batch_size,atomicity_mode,idempotency_key)
@@ -653,7 +688,7 @@ export function registerDirectoryImportJobRoutes(app: Express, deps: RegisterDep
         );
         const job = await selectJob(connection, jobId);
         setImmediate(() => void processJob(jobId, deps));
-        res.status(202).json({ created: true, idempotent: false, job: safeJob(job!) });
+        res.status(202).json({ created: true, idempotent: false, sourceId: preparedSource?.id || null, sourceHash, job: safeJob(job!) });
       } finally {
         await connection.end();
       }

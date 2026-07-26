@@ -168,8 +168,71 @@ export async function applyDirectoryBulkDelete(token: string, previewId: string,
   return data;
 }
 
-export async function createDirectoryImportJob(token: string, file: Blob, options: {
+export interface DirectoryImportPreparedSource {
+  sourceId: string;
+  originalFilename: string;
+  size: number;
+  sourceHash: string;
+  rowCount: number;
+  delimiter: string;
+  encoding: 'UTF-8';
+  status: 'ready';
+  expiresAt: string;
+  digestProvider: 'node_stream_sha256';
+}
+
+export function prepareDirectoryImportSource(token: string, source: Blob, options: {
   filename: string;
+  diagnostics: {
+    digestProvider: string;
+    secureContext: boolean;
+    browserCrypto: boolean;
+    browserSubtle: boolean;
+    errorCode: string | null;
+  };
+  onProgress?: (loaded: number, total: number) => void;
+  onUploaded?: () => void;
+}): Promise<{ source: DirectoryImportPreparedSource; reused: boolean }> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/directory/import-sources');
+    xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+    xhr.setRequestHeader('X-Import-Filename', encodeURIComponent(options.filename));
+    xhr.setRequestHeader('X-Import-Source-Size', String(source.size));
+    xhr.setRequestHeader('X-Import-Digest-Provider', options.diagnostics.digestProvider);
+    xhr.setRequestHeader('X-Import-Secure-Context', String(options.diagnostics.secureContext));
+    xhr.setRequestHeader('X-Import-Browser-Crypto', String(options.diagnostics.browserCrypto));
+    xhr.setRequestHeader('X-Import-Browser-Subtle', String(options.diagnostics.browserSubtle));
+    if (options.diagnostics.errorCode) xhr.setRequestHeader('X-Import-Digest-Error-Code', options.diagnostics.errorCode);
+    xhr.upload.onprogress = event => options.onProgress?.(event.loaded, event.lengthComputable ? event.total : source.size);
+    xhr.upload.onload = () => options.onUploaded?.();
+    xhr.onerror = () => reject(new Error('Загрузка источника была прервана.'));
+    xhr.onabort = () => reject(new Error('Загрузка источника была прервана.'));
+    xhr.onload = () => {
+      const data = (() => { try { return JSON.parse(xhr.responseText || '{}'); } catch (_error) { return {}; } })();
+      if (xhr.status === 401) {
+        handleAuthExpiredResponse(new Response(null, { status: 401 }));
+        reject(new Error('UNAUTHORIZED'));
+      } else if (xhr.status < 200 || xhr.status >= 300) {
+        reject(Object.assign(new Error(data.error || 'Сервер не смог сохранить временный источник.'), { code: data.errorCode }));
+      } else {
+        resolve(data);
+      }
+    };
+    xhr.send(source);
+  });
+}
+
+export async function deleteDirectoryImportSource(token: string, sourceId: string) {
+  const resp = await fetch(`/api/directory/import-sources/${encodeURIComponent(sourceId)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  return parseDirectorySettingsResponse(resp, 'Не удалось очистить временный источник.');
+}
+
+export async function createDirectoryImportJob(token: string, sourceId: string, options: {
   atomicityMode: 'rollback_on_error' | 'partial';
   duplicateStrategy: 'skip' | 'update' | 'create';
   batchSize?: number;
@@ -181,21 +244,14 @@ export async function createDirectoryImportJob(token: string, file: Blob, option
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
-      'Content-Type': 'text/csv',
-      'X-Import-Filename': encodeURIComponent(options.filename),
-      'X-Import-Atomicity': options.atomicityMode,
-      'X-Import-Duplicate-Strategy': options.duplicateStrategy,
-      'X-Import-Batch-Size': String(options.batchSize || 500),
-      'X-Import-Unknown-Responsible-Strategy': options.unknownResponsibleStrategy,
-      'X-Import-Responsible-Mappings': JSON.stringify(options.responsibleUserMappings || {}),
-      'Idempotency-Key': options.idempotencyKey
+      'Content-Type': 'application/json'
     },
-    body: file
+    body: JSON.stringify({ sourceId, ...options })
   });
   return parseDirectorySettingsResponse(resp, 'Не удалось создать задачу импорта.');
 }
 
-export async function previewDirectoryImportOwnership(token: string, file: Blob, options: {
+export async function previewDirectoryImportOwnership(token: string, sourceId: string, options: {
   unknownResponsibleStrategy: 'clear' | 'skip' | 'map';
   responsibleUserMappings?: Record<string, string>;
 }) {
@@ -203,11 +259,9 @@ export async function previewDirectoryImportOwnership(token: string, file: Blob,
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
-      'Content-Type': 'text/csv',
-      'X-Import-Unknown-Responsible-Strategy': options.unknownResponsibleStrategy,
-      'X-Import-Responsible-Mappings': JSON.stringify(options.responsibleUserMappings || {})
+      'Content-Type': 'application/json'
     },
-    body: file
+    body: JSON.stringify({ sourceId, ...options })
   });
   return parseDirectorySettingsResponse(resp, 'Не удалось проверить владельцев контактов.');
 }

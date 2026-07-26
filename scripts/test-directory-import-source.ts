@@ -4,6 +4,7 @@ import { webcrypto } from 'node:crypto';
 import { Blob as NodeBlob } from 'node:buffer';
 import {
   calculateDirectoryImportDigest,
+  getDirectoryImportDigestCapability,
   DIRECTORY_IMPORT_MAX_BYTES,
   isSupportedDirectoryImportFile,
   summarizeDirectoryImportSource
@@ -33,6 +34,20 @@ const digest = await calculateDirectoryImportDigest(
 );
 assert.equal(digest, 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
 await assert.rejects(() => calculateDirectoryImportDigest(new Blob(['abc']), null as any), /DIGEST_UNAVAILABLE/);
+assert.deepEqual(getDirectoryImportDigestCapability({ crypto: webcrypto as Crypto, isSecureContext: true }), {
+  secureContext: true,
+  browserCrypto: true,
+  browserSubtle: true,
+  digestProvider: 'web_crypto',
+  errorCode: null
+});
+assert.deepEqual(getDirectoryImportDigestCapability({ crypto: {} as Crypto, isSecureContext: false }), {
+  secureContext: false,
+  browserCrypto: true,
+  browserSubtle: false,
+  digestProvider: 'backend_stream',
+  errorCode: 'INSECURE_CONTEXT'
+});
 
 const app = fs.readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
 for (const marker of [
@@ -55,6 +70,9 @@ assert.doesNotMatch(app, /isImportOpen|setIsImportOpen|aria-label="Загруз�
 assert.equal((app.match(/createDirectoryImportJob\(/g) || []).length, 1);
 assert.match(app, /const handleExecuteImport = async \(\) =>[\s\S]*createDirectoryImportJob\(/);
 assert.doesNotMatch(app.match(/const handleDirectoryImportFile[\s\S]*?const handleFileUpload/)?.[0] || '', /createDirectoryImportJob|handleExecuteImport/);
-assert.match(app, /const sourceHash = directoryImportDigestStatus === 'ready'/);
+assert.match(app, /prepareDirectoryImportSource\(session\.token, source/);
+assert.match(app, /createDirectoryImportJob\(session\.token, preparedSource\.sourceId/);
+assert.match(app, /previewDirectoryImportOwnership\(session\.token, preparedSource\.sourceId/);
+assert.doesNotMatch(app, /createDirectoryImportJob\(session\.token, source,/);
 
 console.log('directory import source and embedded UI tests: OK');
