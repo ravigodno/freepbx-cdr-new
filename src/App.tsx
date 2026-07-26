@@ -5095,7 +5095,7 @@ export default function App() {
 
   const hasDirectoryContactFormField = (fieldKey: DirectoryVisibleColumnKey): boolean => visibleDirectoryContactFormFields.includes(fieldKey);
 
-  const directoryFormInputClass = 'w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500';
+  const directoryFormInputClass = 'min-h-10 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500';
   const directoryFormMonoInputClass = directoryFormInputClass + ' font-mono';
 
   const renderDirectoryContactFormField = (fieldKey: DirectoryVisibleColumnKey) => {
@@ -5138,7 +5138,7 @@ export default function App() {
       case 'phone':
         return <label className="space-y-1 text-xs font-semibold text-slate-650"><span>Телефон</span><input type="text" value={dirNumber} onChange={(e) => setDirNumber(e.target.value)} placeholder="100 или 79781234567" className={directoryFormMonoInputClass} /></label>;
       case 'phone2':
-        return <label className="space-y-1 text-xs font-semibold text-slate-650 md:col-span-2"><span>Доп. телефон</span><textarea value={dirPhonesText} onChange={(e) => setDirPhonesText(e.target.value)} rows={3} placeholder="Каждый номер с новой строки или через запятую" className={directoryFormMonoInputClass} /></label>;
+        return <label className="space-y-1 text-xs font-semibold text-slate-650"><span>Доп. телефон</span><textarea value={dirPhonesText} onChange={(e) => setDirPhonesText(e.target.value)} rows={1} placeholder="Номера через запятую" className={directoryFormMonoInputClass} /></label>;
       case 'email':
         return <label className="space-y-1 text-xs font-semibold text-slate-650"><span>Email</span><input type="email" value={dirEmail} onChange={(e) => setDirEmail(e.target.value)} className={directoryFormInputClass} /></label>;
       case 'website':
@@ -5150,21 +5150,21 @@ export default function App() {
       case 'ogrn':
         return <label className="space-y-1 text-xs font-semibold text-slate-650"><span>ОГРН</span><input type="text" value={dirOgrn} onChange={(e) => setDirOgrn(e.target.value)} className={directoryFormMonoInputClass} /></label>;
       case 'address':
-        return <label className="space-y-1 text-xs font-semibold text-slate-650 md:col-span-2"><span>Адрес</span><input type="text" value={dirAddress} onChange={(e) => setDirAddress(e.target.value)} placeholder="Город, улица, офис" className={directoryFormInputClass} /></label>;
+        return <label className="space-y-1 text-xs font-semibold text-slate-650"><span>Адрес</span><input type="text" value={dirAddress} onChange={(e) => setDirAddress(e.target.value)} placeholder="Город, улица, офис" className={directoryFormInputClass} /></label>;
       case 'department':
         return <label className="space-y-1 text-xs font-semibold text-slate-650"><span>Отдел / группа</span><input type="text" value={dirDepartment} onChange={(e) => setDirDepartment(e.target.value)} placeholder="Продажи, IT, Бухгалтерия" className={directoryFormInputClass} /></label>;
       case 'group':
         return <label className="space-y-1 text-xs font-semibold text-slate-650"><span>Группа</span><input type="text" value={dirGroup} onChange={(e) => setDirGroup(e.target.value)} placeholder="Клиенты, Поставщики" className={directoryFormInputClass} /></label>;
       case 'tags':
-        return <label className="space-y-1 text-xs font-semibold text-slate-650 md:col-span-2"><span>Теги</span><input type="text" value={dirTagsText} onChange={(e) => setDirTagsText(e.target.value)} placeholder="VIP; Клиент; тендер" className={directoryFormInputClass} /></label>;
+        return <label className="space-y-1 text-xs font-semibold text-slate-650 sm:col-span-2"><span>Теги</span><input type="text" value={dirTagsText} onChange={(e) => setDirTagsText(e.target.value)} placeholder="VIP; Клиент; тендер" className={directoryFormInputClass} /></label>;
       case 'internalExtension':
         return <label className="space-y-1 text-xs font-semibold text-slate-650"><span>Внутренний номер</span><input type="text" value={dirInternalExtension} onChange={(e) => setDirInternalExtension(e.target.value)} placeholder="101" className={directoryFormMonoInputClass} /></label>;
       case 'linkedExternalNumber':
         return <label className="space-y-1 text-xs font-semibold text-slate-650"><span>Связанный внешний номер</span><input type="text" value={dirLinkedExternalNumber} onChange={(e) => setDirLinkedExternalNumber(e.target.value)} placeholder="79781234567" className={directoryFormMonoInputClass} /></label>;
       case 'responsibleUserId':
-        return <label className="space-y-1 text-xs font-semibold text-slate-650"><span>Ответственный сотрудник</span><input type="text" value={dirResponsibleUserId} onChange={(e) => setDirResponsibleUserId(e.target.value)} placeholder="u1" className={directoryFormInputClass} /></label>;
+        return <label className="space-y-1 text-xs font-semibold text-slate-650 sm:col-span-2"><span>Ответственный сотрудник</span><input type="text" value={dirResponsibleUserId} onChange={(e) => setDirResponsibleUserId(e.target.value)} placeholder="u1" className={directoryFormInputClass} /></label>;
       case 'comment':
-        return <label className="space-y-1 text-xs font-semibold text-slate-650 md:col-span-2"><span>Комментарий</span><textarea value={dirComment} onChange={(e) => setDirComment(e.target.value)} rows={3} placeholder="Комментарий, примечание, источник" className={directoryFormInputClass} /></label>;
+        return <label className="space-y-1 text-xs font-semibold text-slate-650 sm:col-span-2"><span>Комментарий</span><textarea value={dirComment} onChange={(e) => setDirComment(e.target.value)} rows={3} placeholder="Комментарий, примечание, источник" className={directoryFormInputClass} /></label>;
       default:
         return null;
     }
