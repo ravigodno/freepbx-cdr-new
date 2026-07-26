@@ -2662,6 +2662,7 @@ export default function App() {
         page: requestedPage,
         pageSize: dirPageSize
       }, controller.signal);
+      if (directoryListAbortRef.current !== controller) return;
       const items = Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : []);
       setDirectory(items);
       setDirTotal(Number(data?.total ?? items.length) || 0);
@@ -2669,7 +2670,7 @@ export default function App() {
       setDirTotalPages(Math.max(1, Number(data?.totalPages ?? 1) || 1));
       setDirQueryTimeMs(Number.isFinite(Number(data?.queryTimeMs)) ? Number(data.queryTimeMs) : null);
     } catch (e: any) {
-      if (e?.name === 'AbortError') return;
+      if (e?.name === 'AbortError' || directoryListAbortRef.current !== controller) return;
       console.error('Error loading directory:', e);
       setDirectory([]);
       setDirTotal(0);

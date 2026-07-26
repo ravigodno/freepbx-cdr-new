@@ -68,6 +68,48 @@ export function normalizeDirectoryLookupPhone(value: unknown) {
   return { rawDigits, canonical, national, suffix7: national.slice(-7), variants };
 }
 
+export type DirectoryPhoneSearchPlan = {
+  digits: string;
+  mode: 'exact' | 'prefix' | 'prefix_suffix';
+  sql: string;
+  params: string[];
+};
+
+export function buildDirectoryPhoneSearchPlan(value: unknown): DirectoryPhoneSearchPlan | null {
+  const search = text(value, 160).normalize('NFKC');
+  if (!search || !/^[\d\s()+./-]+$/u.test(search)) return null;
+  const searchDigits = digits(search);
+  if (searchDigits.length < 3) return null;
+
+  if (searchDigits.length >= 10) {
+    const phone = normalizeDirectoryLookupPhone(searchDigits);
+    return {
+      digits: searchDigits,
+      mode: 'exact',
+      sql: `c.phone_normalized IN (${phone.variants.map(() => '?').join(',')})`,
+      params: phone.variants
+    };
+  }
+
+  const prefixes = new Set([searchDigits]);
+  if (searchDigits.startsWith('9')) {
+    prefixes.add(`7${searchDigits}`);
+    prefixes.add(`8${searchDigits}`);
+  }
+  const clauses = Array.from(prefixes).map(() => 'c.phone_normalized LIKE ?');
+  const params = Array.from(prefixes).map(prefix => `${prefix}%`);
+  if (searchDigits.length >= 5) {
+    clauses.push('c.phone_normalized LIKE ?');
+    params.push(`%${searchDigits}`);
+  }
+  return {
+    digits: searchDigits,
+    mode: searchDigits.length >= 5 ? 'prefix_suffix' : 'prefix',
+    sql: `(${clauses.join(' OR ')})`,
+    params
+  };
+}
+
 const accessClause = (access: DirectoryAccessContext, params: any[]): string => {
   if (access.privileged || access.internal) return '1=1';
   params.push(access.userId);
@@ -169,12 +211,11 @@ const buildFilters = (input: DirectoryListInput, access: DirectoryAccessContext)
     params.push(ownerUserId);
   }
   const search = text(input.search, 160).normalize('NFKC');
-  const searchDigits = digits(search);
   if (search) {
-    if (searchDigits && searchDigits.length >= 7) {
-      const phone = normalizeDirectoryLookupPhone(searchDigits);
-      where.push(`c.phone_normalized IN (${phone.variants.map(() => '?').join(',')})`);
-      params.push(...phone.variants);
+    const phoneSearch = buildDirectoryPhoneSearchPlan(search);
+    if (phoneSearch) {
+      where.push(phoneSearch.sql);
+      params.push(...phoneSearch.params);
     } else if (search.length >= 2) {
       const prefix = `${search}%`;
       where.push('(c.name LIKE ? OR c.company LIKE ? OR c.email LIKE ?)');
