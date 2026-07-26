@@ -36,6 +36,17 @@ export interface DirectoryOwnershipAppliedSummary {
   unknownResponsibleUserIds: Array<{ id: string; count: number }>;
 }
 
+export interface DirectoryImportEffectiveRow {
+  entry: any;
+  index: number;
+  preview: any;
+  diagnostics: any[];
+  hasErrors: boolean;
+  duplicate: boolean;
+  skipped: boolean;
+  transformationWarnings: string[];
+}
+
 export const directoryImportPipelineSteps: Array<{ id: DirectoryImportPipelineStep; label: string }> = [
   { id: 'source', label: 'Источник' },
   { id: 'validation', label: 'Проверка данных' },
@@ -110,4 +121,72 @@ export function getDirectoryImportDisabledReason(
   if (!state.confirmationReady) return 'Подтвердите параметры импорта.';
   if (!state.importStepReady) return 'Перейдите к финальному шагу импорта.';
   return '';
+}
+
+const responsibleError = (value: unknown): boolean => /^responsibleUserId\s*:/i.test(String(value || '').trim());
+
+export function normalizeDirectoryEntriesForOwnership(
+  entries: any[],
+  preview: DirectoryOwnershipPreviewLike | null,
+  strategy: 'clear' | 'skip' | 'map',
+  mappings: Record<string, string>
+): any[] {
+  const unknownIds = new Set((preview?.unknownResponsibleUserIds || []).map(item => String(item.id)));
+  return entries.map(entry => {
+    const responsibleUserId = String(entry?.responsibleUserId || '');
+    if (strategy === 'clear') {
+      return { ...entry, visibility: 'shared', responsibleUserId: null };
+    }
+    if (strategy === 'map' && mappings[responsibleUserId]) {
+      return { ...entry, responsibleUserId: mappings[responsibleUserId] };
+    }
+    if (strategy === 'skip' && unknownIds.has(responsibleUserId)) {
+      // Validate the remaining row fields without retaining a stale ownership error.
+      return { ...entry, visibility: 'shared', responsibleUserId: null };
+    }
+    return entry;
+  });
+}
+
+export function buildDirectoryEffectiveRows(
+  entries: any[],
+  previewRows: any[],
+  ownershipPreview: DirectoryOwnershipPreviewLike | null,
+  strategy: 'clear' | 'skip' | 'map',
+  mappings: Record<string, string>
+): DirectoryImportEffectiveRow[] {
+  const previewByIndex = new Map(previewRows.map(row => [Number(row.index), row]));
+  const unknownIds = new Set((ownershipPreview?.unknownResponsibleUserIds || []).map(item => String(item.id)));
+  const normalizedEntries = normalizeDirectoryEntriesForOwnership(entries, ownershipPreview, strategy, mappings);
+  return normalizedEntries.map((entry, index) => {
+    const originalEntry = entries[index] || {};
+    const originalResponsible = String(originalEntry.responsibleUserId || '');
+    const skipped = strategy === 'skip' && unknownIds.has(originalResponsible);
+    const mapped = strategy === 'map' && !!mappings[originalResponsible];
+    const ownershipResolved = strategy === 'clear' || skipped || mapped;
+    const sourcePreview = previewByIndex.get(index) || {};
+    const previewErrors = (sourcePreview.errors || []).filter((message: string) => !(ownershipResolved && responsibleError(message)));
+    const entryErrors = (originalEntry._importErrors || []).filter((message: string) => !(ownershipResolved && responsibleError(message)));
+    const preview = { ...sourcePreview, entry, errors: previewErrors };
+    const transformationWarnings = strategy === 'clear' && originalResponsible
+      ? [`Ответственный ${originalResponsible} будет очищен`]
+      : skipped
+        ? [`Строка будет исключена: ответственный ${originalResponsible} не найден`]
+        : mapped
+          ? [`Ответственный ${originalResponsible} будет сопоставлен с ${mappings[originalResponsible]}`]
+          : [];
+    return {
+      entry: { ...entry, _importErrors: entryErrors },
+      index,
+      preview,
+      diagnostics: [
+        ...(originalEntry._importDiagnostics || []),
+        ...previewErrors.map((message: string) => ({ field: 'row', reason: message }))
+      ],
+      hasErrors: entryErrors.length > 0 || previewErrors.length > 0,
+      duplicate: !skipped && !!sourcePreview.duplicateId,
+      skipped,
+      transformationWarnings
+    };
+  });
 }

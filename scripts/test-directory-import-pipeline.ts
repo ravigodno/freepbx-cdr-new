@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {
   applyDirectoryOwnershipPreview,
+  buildDirectoryEffectiveRows,
   getDirectoryImportActiveStep,
   getDirectoryImportDisabledReason
 } from '../src/modules/directory/utils/directoryImportPipeline.js';
@@ -41,6 +42,42 @@ assert.deepEqual({
   clearedExisting: 4000
 });
 
+const entries = Array.from({ length: 100000 }, (_, index) => ({
+  name: `Контакт ${index + 1}`,
+  number: String(100000 + index),
+  visibility: 'shared',
+  responsibleUserId: index < 96000 ? `u${3 + (index % 48)}` : 'u1',
+  _importErrors: [],
+  _importDiagnostics: []
+}));
+const stalePreviewRows = entries.map((entry, index) => ({
+  index,
+  entry,
+  errors: index < 96000 ? [`responsibleUserId: пользователь ${entry.responsibleUserId} не найден`] : [],
+  duplicateId: null
+}));
+const ownershipPreview = {
+  totalContacts: 100000,
+  invalidRows: 0,
+  unknownResponsibleRows: 96000,
+  unknownResponsibleUserIds,
+  existingResponsibleUserIds: [{ id: 'u1', count: 4000 }]
+};
+const effectiveClearRows = buildDirectoryEffectiveRows(entries, stalePreviewRows, ownershipPreview, 'clear', {});
+assert.equal(effectiveClearRows.length, 100000);
+assert.equal(effectiveClearRows.filter(row => row.hasErrors).length, 0);
+assert.equal(effectiveClearRows.filter(row => !row.hasErrors && !row.duplicate && !row.skipped).length, 100000);
+assert.ok(effectiveClearRows.every(row => row.entry.visibility === 'shared'));
+assert.ok(effectiveClearRows.every(row => row.entry.responsibleUserId === null));
+assert.ok(effectiveClearRows.slice(0, 96000).every(row => row.transformationWarnings.length === 1));
+
+const effectiveMapRows = buildDirectoryEffectiveRows(entries, stalePreviewRows, ownershipPreview, 'map', {});
+assert.equal(effectiveMapRows.filter(row => row.hasErrors).length, 96000);
+const effectiveSkipRows = buildDirectoryEffectiveRows(entries, stalePreviewRows, ownershipPreview, 'skip', {});
+assert.equal(effectiveSkipRows.filter(row => row.hasErrors).length, 0);
+assert.equal(effectiveSkipRows.filter(row => row.skipped).length, 96000);
+assert.equal(effectiveSkipRows.filter(row => !row.skipped && !row.hasErrors).length, 4000);
+
 const base = {
   sourceReady: true,
   validationReady: true,
@@ -72,7 +109,7 @@ for (const marker of [
   'Подтверждение параметров импорта',
   'Я проверил параметры импорта',
   'Начать импорт',
-  'Пересчёт владения, видимости и готовых строк',
+  'Применяем настройки…',
   'Настройки применены',
   'Будут ',
   'rollback выполняется по',
@@ -81,7 +118,9 @@ for (const marker of [
 
 const recalculation = app.match(/const recalculateDirectoryOwnership[\s\S]*?const handlePreviewImport/)?.[0] || '';
 assert.match(recalculation, /previewDirectoryImportOwnership/);
-assert.doesNotMatch(recalculation, /prepareDirectoryImportSource|calculateDirectoryImportDigest|previewDirectoryImport\(/);
+assert.match(recalculation, /normalizeDirectoryEntriesForOwnership/);
+assert.match(recalculation, /previewDirectoryImport\(session\.token, batch\)/);
+assert.doesNotMatch(recalculation, /prepareDirectoryImportSource|calculateDirectoryImportDigest/);
 assert.match(app, /onChange=\{event=>\{const strategy=[\s\S]*recalculateDirectoryOwnership\(strategy,directoryResponsibleMappings\)/);
 assert.doesNotMatch(app.match(/const recalculateDirectoryOwnership[\s\S]*?finally/)?.[0] || '', /handleExecuteImport|createDirectoryImportJob/);
 
