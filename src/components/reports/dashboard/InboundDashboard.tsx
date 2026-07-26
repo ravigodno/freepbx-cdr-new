@@ -36,6 +36,8 @@ import {
 } from 'recharts';
 import { getServerNow } from '../../../utils/serverClock';
 import { DirectoryEntry, AppSettings } from '../../../types';
+import { StatsKpiCard } from './StatsKpiCard';
+import { UniqueNumbersExportButton } from './UniqueNumbersExportButton';
 
 interface SlaSummary {
   slaThresholdSeconds: number;
@@ -46,6 +48,11 @@ interface SlaSummary {
   slaPercent: number;
   averageWaitSeconds: number | null;
   maxWaitSeconds: number | null;
+  answeredAverageWaitSeconds?: number | null;
+  answeredMedianWaitSeconds?: number | null;
+  averageTalkSeconds?: number | null;
+  totalTalkSeconds?: number;
+  waitCalculationSource?: 'duration_minus_billsec' | 'answer_time';
   waitBuckets?: {
     under10: number;
     from10to20: number;
@@ -122,6 +129,7 @@ interface InboundDashboardProps {
   loading: boolean;
   effectiveAnswerSlaSeconds: number;
   inboundCallDetails: InboundCallDetail[];
+  exportParams: URLSearchParams;
 }
 
 interface InboundCallDetail {
@@ -146,9 +154,17 @@ function safeNumber(value: unknown): number {
 
 function formatDuration(seconds: number): string {
   const safe = Math.max(0, safeNumber(seconds));
-  const minutes = Math.floor(safe / 60);
-  const rest = Math.round(safe % 60);
-  return `${minutes}:${String(rest).padStart(2, '0')}`;
+  const rounded = Math.round(safe);
+  const hours = Math.floor(rounded / 3600);
+  const minutes = Math.floor((rounded % 3600) / 60);
+  const rest = rounded % 60;
+  return hours > 0
+    ? `${hours}:${String(minutes).padStart(2, '0')}:${String(rest).padStart(2, '0')}`
+    : `${minutes}:${String(rest).padStart(2, '0')}`;
+}
+
+function formatNullableDuration(seconds: number | null | undefined): string {
+  return seconds === null || seconds === undefined || !Number.isFinite(Number(seconds)) ? '—' : formatDuration(Number(seconds));
 }
 
 function formatDayLabel(dayStr: string): string {
@@ -170,7 +186,8 @@ export function InboundDashboard({
   heatmap,
   loading,
   effectiveAnswerSlaSeconds,
-  inboundCallDetails
+  inboundCallDetails,
+  exportParams
 }: InboundDashboardProps) {
 
   const [detailSearch, setDetailSearch] = useState('');
@@ -506,6 +523,13 @@ export function InboundDashboard({
           </div>
         </div>
 
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4" id="inbound-conversation-kpis">
+        <StatsKpiCard loading={loading} label="Среднее ожидание" value={formatNullableDuration(slaSummary?.answeredAverageWaitSeconds)} hint={slaSummary?.waitCalculationSource === 'answer_time' ? 'До ответа' : 'Fallback duration − billsec'} icon={Clock} tone="orange" />
+        <StatsKpiCard loading={loading} label="Медиана ожидания" value={formatNullableDuration(slaSummary?.answeredMedianWaitSeconds)} hint="Только отвеченные" icon={Clock} tone="orange" />
+        <StatsKpiCard loading={loading} label="Средний разговор" value={formatNullableDuration(slaSummary?.averageTalkSeconds)} hint="По billsec" icon={PhoneIncoming} tone="blue" />
+        <StatsKpiCard loading={loading} label="Разговорное время" value={formatNullableDuration(slaSummary?.totalTalkSeconds)} hint="Сумма billsec" icon={PhoneIncoming} tone="purple" />
       </div>
 
       {/* THREE TELEMETRY CHARTS IN A ROW (AS IN IMAGE) */}
@@ -902,6 +926,7 @@ export function InboundDashboard({
               <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-slate-400" />
               <input value={detailSearch} onChange={event => setDetailSearch(event.target.value)} placeholder="Поиск номера, DID, сотрудника" className="h-9 w-64 rounded-lg border border-slate-200 bg-white pl-8 pr-3 text-xs font-semibold outline-none focus:border-blue-500 dark:border-slate-700 dark:bg-slate-950" />
             </label>
+            <UniqueNumbersExportButton direction="incoming" params={exportParams} disabled={loading} />
             <button type="button" onClick={exportInboundCsv} disabled={!filteredInboundDetails.length} className="inline-flex h-9 items-center gap-2 rounded-lg bg-emerald-600 px-3 text-xs font-black text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50">
               <Download className="h-4 w-4" />Экспорт CSV
             </button>

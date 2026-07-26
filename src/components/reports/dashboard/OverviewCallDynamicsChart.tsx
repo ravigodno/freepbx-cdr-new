@@ -120,32 +120,35 @@ export function OverviewCallDynamicsChart({ data, groupType, startDate, endDate 
 
   return (
     <div className="rounded-2xl border border-slate-200/70 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-      <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
-        <div>
-          <h3 className="text-base font-black text-slate-950 dark:text-white">Динамика звонков</h3>
-          <p className="mt-0.5 text-[10px] font-semibold text-slate-500 dark:text-slate-400">Количество звонков — левая шкала, SLA — правая шкала в процентах.</p>
+      <div>
+        <h3 className="text-base font-black text-slate-950 dark:text-white">Динамика звонков</h3>
+        <p className="mt-0.5 text-[10px] font-semibold text-slate-500 dark:text-slate-400">Количество звонков — левая шкала, SLA — правая шкала в процентах.</p>
+      </div>
+      <div className="mt-4 grid min-w-0 gap-3 lg:grid-cols-[minmax(0,1fr)_190px] lg:items-stretch">
+        <div className="h-[390px] min-w-0 overflow-visible">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={chartData} margin={{ top: 10, right: 18, left: 0, bottom: 8 }}>
+              <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 7" vertical={false} />
+              <XAxis dataKey="label" minTickGap={30} tick={{ fontSize: 10, fill: '#64748b' }} />
+              <YAxis yAxisId="count" allowDecimals={false} tick={{ fontSize: 10, fill: '#64748b' }} width={38} />
+              <YAxis yAxisId="sla" orientation="right" domain={[0, 100]} tickFormatter={value => `${value}%`} tick={{ fontSize: 10, fill: '#7c3aed' }} width={42} />
+              <Tooltip content={<OverviewTooltip />} />
+              {series.filter(item => selected.has(item.key)).map(item => (
+                <Line key={item.key} yAxisId={item.percent ? 'sla' : 'count'} type="monotone" dataKey={item.key} name={item.label} stroke={item.color} strokeWidth={2} dot={false} activeDot={{ r: 4 }} isAnimationActive={false} connectNulls={false} />
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
         </div>
-        <div className="flex max-w-3xl flex-wrap gap-1 rounded-xl bg-slate-100 p-1 dark:bg-slate-800">
-          <button type="button" onClick={() => setSelected(new Set(allSeries))} className={['rounded-lg px-2.5 py-1 text-[10px] font-bold transition', allSelected ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:bg-white dark:text-slate-300 dark:hover:bg-slate-700'].join(' ')}>Все</button>
+        <div role="group" aria-label="Серии графика" className="grid grid-cols-2 gap-1.5 rounded-xl border border-slate-200 bg-slate-50 p-2 lg:grid-cols-1 lg:content-start dark:border-slate-700 dark:bg-slate-800/60">
+          <button type="button" aria-pressed={allSelected} onClick={() => setSelected(new Set(allSeries))} className={['flex h-9 items-center gap-2 rounded-lg px-2.5 text-left text-xs font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500', allSelected ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:bg-white dark:text-slate-300 dark:hover:bg-slate-700'].join(' ')}>
+            <span className="h-2.5 w-2.5 rounded-full border-2 border-current" />Все
+          </button>
           {series.map(item => (
-            <button type="button" key={item.key} onClick={() => toggleSeries(item.key)} className={['rounded-lg px-2.5 py-1 text-[10px] font-bold transition', selected.has(item.key) ? 'text-white shadow-sm' : 'text-slate-500 hover:bg-white dark:text-slate-400 dark:hover:bg-slate-700'].join(' ')} style={selected.has(item.key) ? { backgroundColor: item.color } : undefined}>{item.label}</button>
+            <button type="button" aria-pressed={selected.has(item.key)} key={item.key} onClick={() => toggleSeries(item.key)} className={['flex h-9 items-center gap-2 rounded-lg border px-2.5 text-left text-xs font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500', selected.has(item.key) ? 'border-slate-200 bg-white text-slate-900 shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white' : 'border-transparent text-slate-500 hover:bg-white dark:text-slate-400 dark:hover:bg-slate-700'].join(' ')}>
+              <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: item.color }} />{item.label}
+            </button>
           ))}
         </div>
-      </div>
-
-      <div className="mt-4 h-[390px] min-w-0">
-        <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={chartData} margin={{ top: 10, right: 18, left: 0, bottom: 8 }}>
-            <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 7" vertical={false} />
-            <XAxis dataKey="label" minTickGap={30} tick={{ fontSize: 10, fill: '#64748b' }} />
-            <YAxis yAxisId="count" allowDecimals={false} tick={{ fontSize: 10, fill: '#64748b' }} width={38} />
-            <YAxis yAxisId="sla" orientation="right" domain={[0, 100]} tickFormatter={value => `${value}%`} tick={{ fontSize: 10, fill: '#7c3aed' }} width={42} />
-            <Tooltip content={<OverviewTooltip />} />
-            {series.filter(item => selected.has(item.key)).map(item => (
-              <Line key={item.key} yAxisId={item.percent ? 'sla' : 'count'} type="monotone" dataKey={item.key} name={item.label} stroke={item.color} strokeWidth={2} dot={false} activeDot={{ r: 4 }} isAnimationActive={false} connectNulls={false} />
-            ))}
-          </LineChart>
-        </ResponsiveContainer>
       </div>
     </div>
   );

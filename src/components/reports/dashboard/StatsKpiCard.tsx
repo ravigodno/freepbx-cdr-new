@@ -37,6 +37,7 @@ export function StatsKpiCard({
   icon: Icon,
   tone,
   badge
+  ,loading = false
 }: {
   label: string;
   value: string | number;
@@ -44,6 +45,7 @@ export function StatsKpiCard({
   icon: LucideIcon;
   tone: KpiTone;
   badge?: string;
+  loading?: boolean;
 }) {
   const classes = toneClasses[tone];
 
@@ -52,7 +54,7 @@ export function StatsKpiCard({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="truncate text-[11px] font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">{label}</div>
-          <div className="mt-2 truncate font-mono text-[28px] font-black leading-none text-slate-950 dark:text-white">{value}</div>
+          {loading ? <div className="mt-2 h-7 w-24 animate-pulse rounded bg-slate-200 dark:bg-slate-700" aria-label="Загрузка показателя" /> : <div className="mt-2 truncate font-mono text-[28px] font-black leading-none text-slate-950 dark:text-white">{value}</div>}
         </div>
         <div className={['flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border', classes.icon].join(' ')}>
           <Icon className="h-5 w-5" />

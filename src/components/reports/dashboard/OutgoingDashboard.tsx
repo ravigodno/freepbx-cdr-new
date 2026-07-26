@@ -3,14 +3,15 @@ import { Clock, Download, Info, PhoneCall, PhoneMissed, PhoneOutgoing, Target, U
 import { Bar, BarChart, CartesianGrid, Cell, ComposedChart, Legend, Line, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { StatsKpiCard } from './StatsKpiCard';
 import { getServerNow } from '../../../utils/serverClock';
+import { UniqueNumbersExportButton } from './UniqueNumbersExportButton';
 
-type Props={startDate:string;endDate:string;group:string;department:string;employee:string;extensions:string[];emptyDepartmentSelection:boolean;refreshKey:number};
+type Props={startDate:string;endDate:string;group:string;department:string;employee:string;extensions:string[];emptyDepartmentSelection:boolean;refreshKey:number;exportParams:URLSearchParams};
 const colors=['#2563eb','#16a34a','#f59e0b','#ef4444','#8b5cf6','#64748b'];
 const input='h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold dark:border-slate-700 dark:bg-slate-900';
 function token(){try{return JSON.parse(localStorage.getItem('asterisk_cdr_session')||'{}').token||''}catch{return ''}}
-function duration(v:any){if(v==null)return '—';const n=Math.round(Number(v)||0);return `${Math.floor(n/60)}:${String(n%60).padStart(2,'0')}`}
+function duration(v:any){if(v==null)return '—';const n=Math.max(0,Math.round(Number(v)||0)),h=Math.floor(n/3600),m=Math.floor((n%3600)/60),s=n%60;return h?`${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`:`${m}:${String(s).padStart(2,'0')}`}
 function Panel({title,subtitle,children,className=''}:{title:string;subtitle?:string;children:React.ReactNode;className?:string}){return <section className={`rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 ${className}`}><div className="mb-4 flex items-start justify-between gap-3"><div><h3 className="text-sm font-black text-slate-950 dark:text-white">{title}</h3>{subtitle&&<p className="mt-1 text-[11px] font-semibold text-slate-500 dark:text-slate-400">{subtitle}</p>}</div><Info className="h-4 w-4 shrink-0 text-slate-400"/></div>{children}</section>}
-export function OutgoingDashboard({startDate,endDate,group,department,employee,extensions,emptyDepartmentSelection,refreshKey}:Props){
+export function OutgoingDashboard({startDate,endDate,group,department,employee,extensions,emptyDepartmentSelection,refreshKey,exportParams}:Props){
  const [data,setData]=useState<any>(null),[loading,setLoading]=useState(false),[error,setError]=useState('');
  const [page,setPage]=useState(1),[heatMetric,setHeatMetric]=useState('attempts');
  const params=useMemo(()=>{const p=new URLSearchParams({startDate,endDate,group,department,employee,page:String(page),pageSize:'25'});if(extensions.length)p.set('extensions',extensions.join(','));if(emptyDepartmentSelection)p.set('emptySelection','true');return p},[startDate,endDate,group,department,employee,extensions.join(','),emptyDepartmentSelection,page]);
@@ -43,6 +44,7 @@ export function OutgoingDashboard({startDate,endDate,group,department,employee,e
      <p className="text-xs font-semibold text-slate-500 dark:text-slate-400">Один звонок на связанный набор CDR по linkedid; экспорт учитывает текущий поиск и общие фильтры отчёта</p>
     </div>
     <div className="flex flex-wrap items-center gap-2">
+     <UniqueNumbersExportButton direction="outgoing" params={exportParams} disabled={loading}/>
      <button type="button" disabled={!data?.details?.rows?.length} className="inline-flex h-9 items-center gap-2 rounded-lg bg-emerald-600 px-3 text-xs font-black text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50" onClick={()=>{const rows=data?.details?.rows||[];const escape=(value:any)=>`"${String(value??'').replace(/"/g,'""')}"`;const csv=[['Дата и время','Внутренний номер','Пользователь','Внешний номер','Транк','Результат','Ожидание, сек','Разговор, сек','Попыток по номеру'].map(escape).join(';'),...rows.map((r:any)=>[r.calldate,r.internalExtension,r.user||'',r.externalNumber,r.trunk,r.result,r.waitSeconds??'',r.billsec,r.attemptsForNumber].map(escape).join(';'))].join('\n');const a=document.createElement('a');const url=URL.createObjectURL(new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'}));a.href=url;a.download=`outgoing-calls-${getServerNow().toISOString().slice(0,10)}.csv`;a.click();URL.revokeObjectURL(url)}}><Download className="h-4 w-4"/>Экспорт CSV</button>
     </div>
    </div>

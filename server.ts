@@ -171,6 +171,9 @@ import { registerLogAnalysisRoutes } from './server/logAnalysis/router.js';
 import { registerCallIntelligenceRoutes } from './server/callIntelligence/router.js';
 import { startLogAnalysisCollector } from './server/logAnalysis/service.js';
 import { registerOutgoingReportRoutes } from './server/outgoingReports.js';
+import { registerUniqueNumberExportRoutes } from './server/reportUniqueNumbers.js';
+import { calculateAnsweredIncomingMetrics } from './server/reportIncomingMetrics.js';
+import { writePBXPulsAuditLog } from './server/pbxpulsEvents.js';
 import { mergeDeviceNetworkIdentity, readIpNeighborMacs } from './server/deviceNetworkIdentity.js';
 import { getLatestRtcpQuality, qualityVariableForChannel, recordAsteriskRtcpQuality } from './server/rtcpQualityCollector.js';
 import { voiceHash } from './server/ai-platform/voice/voiceEncryption.js';
@@ -2404,6 +2407,11 @@ type SlaMetrics = {
   slaPercent: number;
   averageWaitSeconds: number | null;
   maxWaitSeconds: number | null;
+  answeredAverageWaitSeconds: number | null;
+  answeredMedianWaitSeconds: number | null;
+  averageTalkSeconds: number | null;
+  totalTalkSeconds: number;
+  waitCalculationSource: 'duration_minus_billsec';
   waitBuckets: SlaWaitBuckets;
 };
 
@@ -2462,7 +2470,7 @@ const calculateWaitSeconds = (cdrRow: any): number | null => {
   // When a dedicated ring/wait field is unavailable, duration - billsec is the safest
   // approximation for answered inbound waiting time. For missed inbound calls billsec is
   // normally 0, so duration approximates how long the caller waited before hangup/failure.
-  if (disposition === 'ANSWERED' && Number.isFinite(duration) && Number.isFinite(billsec) && duration >= billsec) {
+  if (disposition === 'ANSWERED' && Number.isFinite(duration) && Number.isFinite(billsec)) {
     return Math.max(0, Math.round(duration - billsec));
   }
 
@@ -2520,6 +2528,7 @@ const calculateSlaMetrics = (rows: any[], slaThresholdSeconds: number): SlaMetri
     }
   });
 
+  const conversationMetrics = calculateAnsweredIncomingMetrics(rows, isIncoming, calculateWaitSeconds);
   return {
     slaThresholdSeconds,
     inboundCalls,
@@ -2529,6 +2538,7 @@ const calculateSlaMetrics = (rows: any[], slaThresholdSeconds: number): SlaMetri
     slaPercent: inboundCalls ? Math.round((slaAnsweredCalls / inboundCalls) * 100) : 0,
     averageWaitSeconds: waitCount ? Math.round(waitSum / waitCount) : null,
     maxWaitSeconds,
+    ...conversationMetrics,
     waitBuckets
   };
 };
@@ -22851,6 +22861,25 @@ registerOutgoingReportRoutes(app, {
   readLocalDb,
   queryCdr: queryFreePBXCDR,
   isDemoMode
+});
+registerUniqueNumberExportRoutes(app, {
+  requireAuth,
+  checkPermission: checkUserPermission,
+  readLocalDb,
+  queryCdr: queryFreePBXCDR,
+  isDemoMode,
+  bulkLookup: async (phones, req, localDb) => bulkLookupDirectoryPhonesSql(phones, getDirectorySqlAccessContext(localDb, req), 20_000),
+  audit: async (req, details) => {
+    const user: any = (req as any).user || {};
+    await writePBXPulsAuditLog({
+      actor_label: user.username,
+      action: 'reports.unique_numbers.export',
+      entity_type: 'call_report',
+      details,
+      ip_address: req.ip,
+      user_agent: req.get('user-agent')
+    });
+  }
 });
 
 // API fallback must stay before Vite/static SPA fallback so missing API routes return JSON, not index.html.

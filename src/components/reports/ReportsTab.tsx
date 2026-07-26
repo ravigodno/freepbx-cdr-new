@@ -77,6 +77,11 @@ interface SlaSummary {
   slaPercent: number;
   averageWaitSeconds: number | null;
   maxWaitSeconds: number | null;
+  answeredAverageWaitSeconds?: number | null;
+  answeredMedianWaitSeconds?: number | null;
+  averageTalkSeconds?: number | null;
+  totalTalkSeconds?: number;
+  waitCalculationSource?: 'duration_minus_billsec' | 'answer_time';
   waitBuckets?: {
     under10: number;
     from10to20: number;
@@ -410,6 +415,12 @@ export default function ReportsTab({
       .map(item => String(item.extension || '').trim())
       .filter(item => internalExtensionPattern.test(item));
   }, [department, employee, employeeSummary, internalExt]);
+  const reportExportParams = useMemo(() => {
+    const params = new URLSearchParams({ startDate, endDate, startTime, endTime, status: statusFilter, trunk: trunkFilter });
+    if (outgoingExtensions.length) params.set('extensions', outgoingExtensions.join(','));
+    else if (internalExt.trim()) params.set('extension', internalExt.trim());
+    return params;
+  }, [startDate, endDate, startTime, endTime, statusFilter, trunkFilter, outgoingExtensions.join(','), internalExt]);
 
   const effectiveAnswerSlaSeconds = usedSettings?.answerSlaSeconds ?? settings?.answerSlaSeconds ?? slaSummary?.slaThresholdSeconds ?? 20;
   const slaPercentValue = slaSummary && Number.isFinite(Number(slaSummary.slaPercent)) ? Number(slaSummary.slaPercent) : summary.sla;
@@ -481,6 +492,7 @@ export default function ReportsTab({
           loading={loading}
           effectiveAnswerSlaSeconds={effectiveAnswerSlaSeconds}
           inboundCallDetails={inboundCallDetails}
+          exportParams={reportExportParams}
         />
       ) : activeTab === 'outgoing' ? (
         <OutgoingDashboard
@@ -492,6 +504,7 @@ export default function ReportsTab({
           extensions={outgoingExtensions}
           emptyDepartmentSelection={department !== 'all' && employee === 'all' && !internalExt.trim() && outgoingExtensions.length === 0}
           refreshKey={refreshes}
+          exportParams={reportExportParams}
         />
       ) : activeTab === 'departments' ? (
         <DepartmentsDashboard 
