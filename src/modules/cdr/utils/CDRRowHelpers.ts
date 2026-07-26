@@ -282,7 +282,7 @@ export function buildCdrRowViewModel(call: any, directory: any[], relatedLegs: a
 
   const displayedDst = getCalleeNumber() || call.dst || 'Неизвестно';
 
-  const dMatch = directory.find(e => directoryEntryMatchesNumber(e, displayedSrc));
+  const dMatch = call.srcDirectoryContact || directory.find(e => directoryEntryMatchesNumber(e, displayedSrc));
   const isSrcInternal = isInternalExt(displayedSrc);
 
   let callerName = '';
@@ -308,9 +308,9 @@ export function buildCdrRowViewModel(call: any, directory: any[], relatedLegs: a
   }
 
   const isMultiInternalDst = displayedDst.split(',').map(v => v.trim()).filter(Boolean).every(isInternalExt);
-  const dstContact = isMultiNumberValue(displayedDst)
+  const dstContact = call.dstDirectoryContact || (isMultiNumberValue(displayedDst)
     ? null
-    : directory.find(e => directoryEntryMatchesNumber(e, displayedDst));
+    : directory.find(e => directoryEntryMatchesNumber(e, displayedDst)));
   const isDstInternal = isInternalExt(displayedDst) || isMultiInternalDst;
 
   let calleeName = '';

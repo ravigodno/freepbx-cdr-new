@@ -12,6 +12,8 @@ export interface DirectoryFetchFilters {
   visibilityMode?: 'all' | 'shared_only' | 'private_only' | 'my_private_only' | 'exclude_private' | 'exclude_shared';
   page?: number;
   pageSize?: number;
+  sortBy?: 'name' | 'organization' | 'createdAt' | 'phone';
+  sortDirection?: 'asc' | 'desc';
   all?: boolean;
 }
 
@@ -55,11 +57,13 @@ function buildDirectoryUrl(filters: DirectoryFetchFilters = {}) {
   return params.toString() ? '/api/directory?' + params.toString() : '/api/directory';
 }
 
-export async function fetchDirectory(token: string, filters: DirectoryFetchFilters = {}): Promise<DirectoryPageResponse> {
-  const resp = await fetch(buildDirectoryUrl(filters), {
+export async function fetchDirectory(token: string, filters: DirectoryFetchFilters = {}, signal?: AbortSignal): Promise<DirectoryPageResponse & { queryTimeMs?: number }> {
+  const legacyUrl = buildDirectoryUrl(filters);
+  const resp = await fetch(legacyUrl.replace(/^\/api\/directory/, '/api/directory/contacts'), {
     headers: {
       Authorization: `Bearer ${token}`
-    }
+    },
+    signal
   });
 
   if (resp.status === 401) {

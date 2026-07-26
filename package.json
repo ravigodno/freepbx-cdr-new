@@ -62,6 +62,8 @@
     "test:directory-contact-ids": "tsx scripts/test-directory-contact-ids.ts",
     "test:directory-import-jobs": "tsx scripts/test-directory-import-jobs.ts",
     "test:directory-ownership": "tsx scripts/test-directory-ownership.ts",
+    "test:directory-performance": "tsx scripts/test-directory-performance.ts",
+    "directory:performance:index-preview": "tsx scripts/preview-directory-performance-indexes.ts",
     "test:directory-bulk-delete": "tsx scripts/test-directory-bulk-delete.ts",
     "test:ai-platform-simple-ux": "tsx scripts/test-ai-platform-simple-ux.ts",
     "test:ai-agent-creation-wizard": "tsx scripts/test-ai-agent-creation-wizard.ts",

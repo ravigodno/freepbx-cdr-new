@@ -4,6 +4,7 @@ import { writePBXPulsSystemEvent } from './pbxpulsEvents.js';
 import { getPBXPulsSetting } from './pbxpulsSettings.js';
 import { getPBXPulsDbConfig, getPBXPulsDbConnectionOptions } from './pbxpulsDbConfig.js';
 import { createDirectoryContactId } from './directoryContactIds.js';
+import { invalidateDirectoryPerformanceCaches } from './directoryPerformance.js';
 
 export type DirectoryWriteMode = 'legacy' | 'sql';
 export type DirectorySqlContactType = 'common' | 'personal';
@@ -137,6 +138,7 @@ export async function createDirectoryContactSql(input: DirectorySqlContactInput,
 
     const metadataResult = await upsertDirectoryMetadataWithConnection(connection, normalized.id, normalized.metadata);
     await connection.commit();
+    invalidateDirectoryPerformanceCaches('contact_create');
 
     await writeDirectoryContactAuditEvent('directory_sql_contact_created', normalized, actor, metadataResult.metadataCount);
     return {
@@ -198,6 +200,7 @@ export async function updateDirectoryContactSql(id: string, input: DirectorySqlC
 
     const metadataResult = await upsertDirectoryMetadataWithConnection(connection, normalized.id, normalized.metadata);
     await connection.commit();
+    invalidateDirectoryPerformanceCaches('contact_update');
 
     await writeDirectoryContactAuditEvent('directory_sql_contact_updated', normalized, actor, metadataResult.metadataCount);
     return {
@@ -234,6 +237,7 @@ export async function deleteDirectoryContactSql(id: string, actor: DirectorySqlA
     if (Number(result.affectedRows || 0) < 1) throw new Error('Directory SQL contact delete affected no rows');
 
     await connection.commit();
+    invalidateDirectoryPerformanceCaches('contact_delete');
 
     await writeDirectoryContactAuditEvent('directory_sql_contact_deleted', {
       id: contactId,
@@ -288,6 +292,7 @@ export async function deleteDirectoryContactsSql(ids: string[], actor: Directory
       deleted += Number(result.affectedRows || 0);
     }
     await connection.commit();
+    invalidateDirectoryPerformanceCaches('contact_bulk_delete');
     await writePBXPulsSystemEvent({
       event_type: 'directory_sql_contacts_bulk_deleted',
       severity: 'warning',
@@ -322,6 +327,7 @@ export async function upsertDirectoryContactMetadataSql(
 
     const metadataResult = await upsertDirectoryMetadataWithConnection(connection, normalizedContactId, metadata);
     await connection.commit();
+    invalidateDirectoryPerformanceCaches('contact_metadata_update');
 
     await writeDirectoryContactAuditEvent('directory_sql_contact_updated', {
       id: normalizedContactId,

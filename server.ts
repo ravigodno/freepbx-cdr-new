@@ -78,6 +78,15 @@ import {
   type DirectoryWriteMode
 } from './server/pbxpulsDirectoryWriteMode.js';
 import {
+  bulkLookupDirectoryPhonesSql,
+  getDirectoryContactSql,
+  getDirectoryPerformanceCacheStats,
+  invalidateDirectoryPerformanceCaches,
+  listDirectoryContactsSql,
+  lookupDirectoryPhoneSql,
+  type DirectoryAccessContext
+} from './server/directoryPerformance.js';
+import {
   previewCreateDirectoryContactSql,
   previewDeleteDirectoryContactSql,
   previewUpdateDirectoryContactSql,
@@ -3544,6 +3553,37 @@ const directoryEntryMatchesNumber = (entry: any, num: any): boolean => {
 const findDirectoryContactByNumber = (directory: any[], num: any): any | null => {
   return (directory || []).find(entry => directoryEntryMatchesNumber(entry, num)) || null;
 };
+
+const enrichCallsWithDirectoryBulk = async (calls: any[], localDb: any, req: Request): Promise<{ lookupMs: number; sqlQueryCount: number }> => {
+  const phones = Array.from(new Set((calls || []).flatMap(call => [call?.src, call?.dst]).map(value => String(value || '').trim()).filter(Boolean)));
+  const result = await bulkLookupDirectoryPhonesSql(phones, getDirectorySqlAccessContext(localDb, req, true), 2000);
+  for (const call of calls || []) {
+    const srcKey = onlyDigits(call.src);
+    const dstKey = onlyDigits(call.dst);
+    const srcCanonical = srcKey.length >= 10 ? `7${srcKey.slice(-10)}` : srcKey;
+    const dstCanonical = dstKey.length >= 10 ? `7${dstKey.slice(-10)}` : dstKey;
+    const srcContact = result.matches[srcCanonical] || null;
+    const dstContact = result.matches[dstCanonical] || null;
+    call.srcDirectoryContact = srcContact;
+    call.dstDirectoryContact = dstContact;
+    const resolved = srcContact || dstContact;
+    if (resolved) {
+      call.resolvedName = resolved.name;
+      call.resolvedType = resolved.type;
+    }
+  }
+  console.info('[DIRECTORY_CDR_BULK]', JSON.stringify({ calls: calls.length, uniquePhones: phones.length, matched: result.matched, lookupMs: result.lookupMs, sqlQueryCount: result.sqlQueryCount }));
+  return { lookupMs: result.lookupMs, sqlQueryCount: result.sqlQueryCount };
+};
+
+const getEnrichedDirectoryContacts = (calls: any[]): any[] => Array.from(
+  new Map(
+    (calls || [])
+      .flatMap(call => [call?.srcDirectoryContact, call?.dstDirectoryContact])
+      .filter(Boolean)
+      .map(contact => [String(contact.id || ''), contact])
+  ).values()
+);
 
 const parseBool = (value: any): boolean => {
   const s = String(value ?? '').trim().toLowerCase();
@@ -7233,6 +7273,16 @@ async function getDirectoryRuntimeSnapshotForRequest(localDb: any, req: Request)
     authUser: (req as any).user,
     dbUser: getAuthenticatedDbUser(localDb, req)
   });
+}
+
+function getDirectorySqlAccessContext(localDb: any, req: Request, internal = false): DirectoryAccessContext {
+  const authUser = (req as any).user || {};
+  const dbUser = getAuthenticatedDbUser(localDb, req);
+  return {
+    privileged: authUser.role === 'su' || authUser.role === 'admin',
+    userId: getDirectoryUserId(dbUser, authUser),
+    internal
+  };
 }
 
 const LIVE_DIRECTORY_SNAPSHOT_TTL_MS = 15000;
@@ -11614,10 +11664,11 @@ app.put('/api/directory/:id/favorite', requireAuth(), async (req, res) => {
 
   try {
     const localDb = await readLocalDb();
-    const directoryRuntime = await getDirectoryRuntimeSnapshotForRequest(localDb, req);
     const contactId = String(req.params.id || '').trim();
-    const visibleContact = applyDirectoryAccessAndFilters(directoryRuntime.contacts, req, localDb)
-      .find(entry => String(entry.id || '') === contactId);
+    const visibleContact = await getDirectoryStorageMode() === 'sql'
+      ? await getDirectoryContactSql(contactId, getDirectorySqlAccessContext(localDb, req))
+      : applyDirectoryAccessAndFilters((await getDirectoryRuntimeSnapshotForRequest(localDb, req)).contacts, req, localDb)
+        .find(entry => String(entry.id || '') === contactId);
     if (!visibleContact) return res.status(404).json({ error: 'Контакт не найден или недоступен' });
 
     const userId = getCurrentDirectoryUserId(localDb, req);
@@ -11637,15 +11688,143 @@ app.put('/api/directory/:id/favorite', requireAuth(), async (req, res) => {
   }
 });
 
+const directorySqlListResponse = async (req: Request, res: any) => {
+  const requestStarted = performance.now();
+  const localDb = await readLocalDb();
+  const authUser = (req as any).user;
+  const dbUser = getAuthenticatedDbUser(localDb, req);
+  const spamMode = String(req.query.spamMode || req.query.isSpam || 'exclude_spam');
+  const visibilityMode = String(req.query.visibilityMode || req.query.visibility || 'all');
+  const userJoinStarted = performance.now();
+  const result = await listDirectoryContactsSql({
+    page: req.query.page,
+    pageSize: req.query.pageSize,
+    search: req.query.q || req.query.search,
+    type: req.query.type,
+    visibility: ['shared_only', 'exclude_private'].includes(visibilityMode)
+      ? 'shared'
+      : ['private_only', 'my_private_only', 'exclude_shared'].includes(visibilityMode)
+        ? 'private'
+        : req.query.visibility,
+    isSpam: spamMode === 'exclude_spam' ? false : spamMode === 'only_spam' ? true : req.query.isSpam,
+    organization: req.query.organization || req.query.company,
+    responsibleUserId: req.query.responsibleUserId || req.query.responsible,
+    department: req.query.department,
+    group: req.query.group,
+    ownerUserId: visibilityMode === 'my_private_only' ? getDirectoryUserId(dbUser, authUser) : undefined,
+    sortBy: req.query.sortBy,
+    sortDirection: req.query.sortDirection
+  }, getDirectorySqlAccessContext(localDb, req));
+  const favorites = new Set(getDirectoryFavoriteContactIds(localDb, req));
+  result.items = result.items.map((entry: any) => ({
+    ...entry,
+    responsibleUserLabel: getDirectoryResponsibleUserLabel(entry.responsibleUserId, localDb),
+    isFavorite: favorites.has(String(entry.id)),
+    canEdit: canEditDirectoryEntry(entry, authUser, dbUser, localDb.settings)
+  }));
+  const userJoinMs = Number((performance.now() - userJoinStarted - result.metrics.total_ms).toFixed(2));
+  const serializationStarted = performance.now();
+  const initialPayload = { ...result, queryTimeMs: result.metrics.total_ms };
+  const initialJson = JSON.stringify(initialPayload);
+  const serializationMs = Number((performance.now() - serializationStarted).toFixed(2));
+  const metrics = {
+    ...result.metrics,
+    user_join_ms: Math.max(0, userJoinMs),
+    serialization_ms: serializationMs,
+    response_size_bytes: Buffer.byteLength(initialJson),
+    total_ms: Number((performance.now() - requestStarted).toFixed(2))
+  };
+  const body = JSON.stringify({ ...result, queryTimeMs: metrics.total_ms, metrics });
+  console.info('[DIRECTORY_PERF]', JSON.stringify({
+    directory_count_ms: metrics.directory_count_ms,
+    directory_query_ms: metrics.directory_query_ms,
+    metadata_join_ms: metrics.metadata_join_ms,
+    user_join_ms: metrics.user_join_ms,
+    serialization_ms: metrics.serialization_ms,
+    response_size_bytes: Buffer.byteLength(body),
+    contacts_loaded: result.items.length,
+    total_ms: metrics.total_ms
+  }));
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store');
+  res.send(body);
+};
+
+app.get('/api/directory/contacts', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_directory'))) return res.status(403).json({ error: 'Access denied: view_directory permission required' });
+  try {
+    if (await getDirectoryStorageMode() !== 'sql') return res.redirect(307, `/api/directory?${new URLSearchParams(req.query as any).toString()}`);
+    await directorySqlListResponse(req, res);
+  } catch (error: any) {
+    res.status(500).json({ error: sanitizePBXPulsDbError(error) });
+  }
+});
+
+app.get('/api/directory/search', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_directory'))) return res.status(403).json({ error: 'Access denied: view_directory permission required' });
+  try {
+    await directorySqlListResponse(req, res);
+  } catch (error: any) {
+    res.status(500).json({ error: sanitizePBXPulsDbError(error) });
+  }
+});
+
+app.post('/api/directory/lookup-phone', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_directory'))) return res.status(403).json({ error: 'Access denied: view_directory permission required' });
+  try {
+    const localDb = await readLocalDb();
+    const result = await lookupDirectoryPhoneSql(req.body?.rawPhone, getDirectorySqlAccessContext(localDb, req));
+    res.json({ ...result, ...(result.contact || {}), contact: undefined });
+  } catch (error: any) {
+    res.status(500).json({ error: sanitizePBXPulsDbError(error) });
+  }
+});
+
+app.post('/api/directory/lookup-phones', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_directory'))) return res.status(403).json({ error: 'Access denied: view_directory permission required' });
+  const phones = Array.isArray(req.body?.phones) ? req.body.phones : [];
+  if (phones.length > 200) return res.status(400).json({ error: 'Допускается не более 200 номеров.' });
+  try {
+    const localDb = await readLocalDb();
+    res.json(await bulkLookupDirectoryPhonesSql(phones, getDirectorySqlAccessContext(localDb, req), 200));
+  } catch (error: any) {
+    res.status(500).json({ error: sanitizePBXPulsDbError(error) });
+  }
+});
+
+app.get('/api/directory/stats', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_directory'))) return res.status(403).json({ error: 'Access denied: view_directory permission required' });
+  try {
+    const localDb = await readLocalDb();
+    const result = await listDirectoryContactsSql({ page: 1, pageSize: 1 }, getDirectorySqlAccessContext(localDb, req));
+    res.json({ totalCount: result.totalCount, cache: getDirectoryPerformanceCacheStats(), queryTimeMs: result.metrics.total_ms });
+  } catch (error: any) {
+    res.status(500).json({ error: sanitizePBXPulsDbError(error) });
+  }
+});
+
+app.get('/api/directory/contacts/:id', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_directory'))) return res.status(403).json({ error: 'Access denied: view_directory permission required' });
+  try {
+    const localDb = await readLocalDb();
+    const entry = await getDirectoryContactSql(req.params.id, getDirectorySqlAccessContext(localDb, req));
+    if (!entry) return res.status(404).json({ error: 'Контакт не найден' });
+    res.json({ ...entry, responsibleUserLabel: getDirectoryResponsibleUserLabel(entry.responsibleUserId, localDb) });
+  } catch (error: any) {
+    res.status(500).json({ error: sanitizePBXPulsDbError(error) });
+  }
+});
+
 app.get('/api/directory', requireAuth(), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_directory'))) {
     return res.status(403).json({ error: 'Access denied: view_directory permission required' });
   }
 
   try {
+    const all = ['1', 'true', 'yes'].includes(String(req.query.all || '').trim().toLowerCase());
+    if (!all && await getDirectoryStorageMode() === 'sql') return void await directorySqlListResponse(req, res);
     const localDb = await readLocalDb();
     const directoryRuntime = await getDirectoryRuntimeSnapshotForRequest(localDb, req);
-    const all = ['1', 'true', 'yes'].includes(String(req.query.all || '').trim().toLowerCase());
     if (all) {
       return res.json(sortDirectoryEntriesForRequest(applyDirectoryAccessAndFilters(directoryRuntime.contacts, req, localDb), req, localDb));
     }
@@ -12545,6 +12724,14 @@ app.get('/api/directory/:id', requireAuth(), async (req, res) => {
     return res.status(403).json({ error: 'Access denied: view_directory permission required' });
   }
   const localDb = await readLocalDb();
+  if (await getDirectoryStorageMode() === 'sql') {
+    const entry = await getDirectoryContactSql(req.params.id, getDirectorySqlAccessContext(localDb, req));
+    if (!entry) return res.status(404).json({ error: 'Контакт не найден' });
+    return res.json(normalizeDirectoryEntry({
+      ...entry,
+      responsibleUserLabel: getDirectoryResponsibleUserLabel(entry.responsibleUserId, localDb)
+    }, localDb.settings));
+  }
   const directoryRuntime = await getDirectoryRuntimeSnapshotForRequest(localDb, req);
   const entry = (directoryRuntime.contacts || []).find((item: any) => item.id === req.params.id);
   if (!entry) return res.status(404).json({ error: 'Контакт не найден' });
@@ -15591,8 +15778,8 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
       };
     });
 
-    const directoryRuntime = await getDirectoryRuntimeSnapshotForRequest(localDb, req);
-    const directory = directoryRuntime.contacts;
+    await enrichCallsWithDirectoryBulk(calls, localDb, req);
+    const directory = getEnrichedDirectoryContacts(calls);
     const transferEventsByLinkedId = await loadCelBlindTransferEvents(
       settings,
       isDemo,
@@ -15627,29 +15814,6 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
       } else {
         call.processed = false;
         call.comment = '';
-      }
-
-      // Resolve phone numbers against directory entries
-      const cleanNum = (num: string) => {
-        if (!num) return '';
-        return num.trim();
-      };
-
-      const findContact = (num: string) => {
-        const val = cleanNum(num);
-        if (!val) return null;
-        return findDirectoryContactByNumber(directory, val);
-      };
-
-      const srcContact = findContact(call.src);
-      const dstContact = findContact(call.dst);
-
-      if (srcContact) {
-        call.resolvedName = srcContact.name;
-        call.resolvedType = srcContact.type;
-      } else if (dstContact) {
-        call.resolvedName = dstContact.name;
-        call.resolvedType = dstContact.type;
       }
 
       callMap.set(call.uniqueid, call);
@@ -16012,8 +16176,8 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
       };
     });
 
-    const directoryRuntime = await getDirectoryRuntimeSnapshotForRequest(localDb, req);
-    const directory = directoryRuntime.contacts;
+    await enrichCallsWithDirectoryBulk(calls, localDb, req);
+    const directory = getEnrichedDirectoryContacts(calls);
     const callMap = new Map<string, CallEntry>();
     calls.forEach(c => {
       const local = localDb.missedCallStatuses.find(status => status.uniqueid === c.uniqueid);
@@ -16027,23 +16191,6 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
         c.comment = '';
       }
 
-      const cleanNum = (num: string) => num ? num.trim() : '';
-      const findContact = (num: string) => {
-        const val = cleanNum(num);
-        if (!val) return null;
-        return findDirectoryContactByNumber(directory, val);
-      };
-
-      const srcContact = findContact(c.src);
-      const dstContact = findContact(c.dst);
-
-      if (srcContact) {
-        c.resolvedName = srcContact.name;
-        c.resolvedType = srcContact.type;
-      } else if (dstContact) {
-        c.resolvedName = dstContact.name;
-        c.resolvedType = dstContact.type;
-      }
       callMap.set(c.uniqueid, c);
     });
 

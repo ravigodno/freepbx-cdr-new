@@ -17,6 +17,7 @@ import {
   getReadyDirectoryImportSource,
   verifyDirectoryImportSource
 } from './directoryImportSources.js';
+import { invalidateDirectoryPerformanceCaches } from './directoryPerformance.js';
 
 type AtomicityMode = 'rollback_on_error' | 'partial';
 type DuplicateStrategy = 'skip' | 'update' | 'create';
@@ -561,6 +562,7 @@ const processJob = async (jobId: string, deps: RegisterDependencies): Promise<vo
     job = (await selectJob(connection, jobId))!;
     const finalStatus = job.failed_rows > 0 ? 'completed_with_errors' : 'completed';
     await connection.execute(`UPDATE directory_import_jobs SET status=?,processed_rows=total_rows,current_row=total_rows+1,finished_at=?,updated_at=? WHERE id=?`, [finalStatus, nowSql(), nowSql(), jobId]);
+    invalidateDirectoryPerformanceCaches('import_completed');
     await writePBXPulsSystemEvent({
       event_type: 'directory_import_job_completed',
       severity: job.failed_rows > 0 ? 'warning' : 'info',
@@ -751,6 +753,7 @@ export function registerDirectoryImportJobRoutes(app: Express, deps: RegisterDep
         [reset,reset,reset,reset,reset,reset,reset,reset,reset,nowSql(),jobId]
       );
       await connection.commit();
+      invalidateDirectoryPerformanceCaches('import_resume');
       if (!result.affectedRows) return res.status(409).json({ error: 'Job нельзя продолжить' });
       setImmediate(() => void processJob(jobId, deps));
       res.status(202).json({ success: true, jobId, status: 'queued' });
@@ -804,6 +807,7 @@ export function registerDirectoryImportJobRoutes(app: Express, deps: RegisterDep
       if (!job) return res.status(404).json({ error: 'Import job не найден' });
       if (job.rollback_status === 'completed') return res.json({ success: true, idempotent: true, deleted: Number(job.rolled_back_rows || 0) });
       const deleted = await rollbackCreatedContacts(connection, jobId);
+      invalidateDirectoryPerformanceCaches('import_rollback');
       res.json({ success: true, idempotent: false, deleted });
     } finally { await connection.end(); }
   });

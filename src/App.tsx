@@ -238,7 +238,7 @@ interface DirectoryColumnConfig {
   className?: string;
 }
 
-const DIRECTORY_PAGE_SIZE = 20;
+const DIRECTORY_PAGE_SIZE = 50;
 const requiredDirectoryColumns: DirectoryRequiredColumnKey[] = ['type', 'fullName', 'phone'];
 const systemDirectoryColumns: DirectorySystemColumnKey[] = ['actions'];
 type DirectoryVisibleColumnKey = DirectoryRequiredColumnKey | DirectoryOptionalColumnKey;
@@ -893,9 +893,11 @@ export default function App() {
   const [dirSpamMode, setDirSpamMode] = useState<'all' | 'exclude_spam' | 'only_spam'>('exclude_spam');
   const [dirVisibilityMode, setDirVisibilityMode] = useState<'all' | 'shared_only' | 'private_only' | 'my_private_only' | 'exclude_private' | 'exclude_shared'>('all');
   const [dirPage, setDirPage] = useState(1);
-  const [dirPageSize] = useState(DIRECTORY_PAGE_SIZE);
+  const [dirPageSize, setDirPageSize] = useState(DIRECTORY_PAGE_SIZE);
   const [dirTotal, setDirTotal] = useState(0);
   const [dirTotalPages, setDirTotalPages] = useState(1);
+  const [dirQueryTimeMs, setDirQueryTimeMs] = useState<number | null>(null);
+  const directoryListAbortRef = useRef<AbortController | null>(null);
   const [dirListError, setDirListError] = useState('');
   const [isDirectoryBulkDeleteOpen, setIsDirectoryBulkDeleteOpen] = useState(false);
   const [directoryBulkDeleteScope, setDirectoryBulkDeleteScope] = useState<'filtered' | 'all'>('filtered');
@@ -2645,6 +2647,9 @@ export default function App() {
 
   const loadDirectory = async (targetPage = dirPage) => {
     if (!session) return;
+    directoryListAbortRef.current?.abort();
+    const controller = new AbortController();
+    directoryListAbortRef.current = controller;
     const requestedPage = Math.max(1, Number(targetPage || 1));
     setIsLoadingDirectory(true);
     setDirListError('');
@@ -2656,13 +2661,15 @@ export default function App() {
         visibilityMode: dirVisibilityMode,
         page: requestedPage,
         pageSize: dirPageSize
-      });
+      }, controller.signal);
       const items = Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : []);
       setDirectory(items);
       setDirTotal(Number(data?.total ?? items.length) || 0);
       setDirPage(Number(data?.page ?? requestedPage) || requestedPage);
       setDirTotalPages(Math.max(1, Number(data?.totalPages ?? 1) || 1));
+      setDirQueryTimeMs(Number.isFinite(Number(data?.queryTimeMs)) ? Number(data.queryTimeMs) : null);
     } catch (e: any) {
+      if (e?.name === 'AbortError') return;
       console.error('Error loading directory:', e);
       setDirectory([]);
       setDirTotal(0);
@@ -2672,20 +2679,14 @@ export default function App() {
         handleAuthError();
       }
     } finally {
-      setIsLoadingDirectory(false);
+      if (directoryListAbortRef.current === controller) setIsLoadingDirectory(false);
     }
   };
 
   const loadDirectoryLookup = async () => {
-    if (!session) return;
-    try {
-      const data = await fetchDirectoryAll(session.token, { spamMode: 'all', visibilityMode: 'all' });
-      setDirectoryLookup(Array.isArray(data) ? data : []);
-    } catch (e: any) {
-      if (e && (e.message === 'UNAUTHORIZED' || e.message === 'Failed to fetch')) {
-        handleAuthError();
-      }
-    }
+    // Large directories are enriched by bounded server-side phone lookup.
+    // Keep this compatibility state empty instead of requesting all contacts.
+    setDirectoryLookup([]);
   };
 
   const handleSaveDirEntry = async (e: React.FormEvent) => {
@@ -7529,9 +7530,14 @@ export default function App() {
           </div>
           <div className="flex flex-col gap-2 border-t border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600 sm:flex-row sm:items-center sm:justify-between">
             <div className="font-semibold">
-              Страница {dirPage} из {dirTotalPages}. Всего контактов: {dirTotal.toLocaleString('ru-RU')}
+              Страница {dirPage} из {dirTotalPages}. Найдено: {dirTotal.toLocaleString('ru-RU')}{dirQueryTimeMs!==null?` · ${Math.round(dirQueryTimeMs)} мс`:''}
             </div>
             <div className="flex flex-wrap items-center gap-2">
+              <label className="flex items-center gap-1 font-medium text-slate-500">На странице
+                <select value={dirPageSize} onChange={event=>{setDirPageSize(Number(event.target.value));setDirPage(1)}} className="rounded border border-slate-200 bg-white px-2 py-1.5 text-xs">
+                  {[25,50,100,200].map(size=><option key={size} value={size}>{size}</option>)}
+                </select>
+              </label>
               <span className="font-medium text-slate-500">
                 Показано {dirTotal === 0 ? 0 : ((dirPage - 1) * dirPageSize) + 1}-{Math.min(dirPage * dirPageSize, dirTotal)} из {dirTotal.toLocaleString('ru-RU')}
               </span>
