@@ -213,6 +213,7 @@ const parseImportRows = (content: string): { rows: ImportRow[]; errors: Array<{ 
   return { rows, errors };
 };
 
+export const parseDirectoryImportRows = parseImportRows;
 export const parseDirectoryImportRowsForTest = parseImportRows;
 
 export const buildDirectoryResponsiblePreview = (

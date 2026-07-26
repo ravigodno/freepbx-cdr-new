@@ -20,6 +20,7 @@ interface DirectoryContactFormLayoutProps {
   error?: string;
   showAdvanced: boolean;
   customFieldKeys: string[];
+  canManageBlacklist: boolean;
   isSaving: boolean;
   renderField: (fieldKey: string) => React.ReactNode;
   onToggleAdvanced: () => void;
@@ -113,16 +114,18 @@ export default function DirectoryContactFormLayout({
   error,
   showAdvanced,
   customFieldKeys,
+  canManageBlacklist,
   isSaving,
   renderField,
   onToggleAdvanced,
   onCancel,
   onSubmit
 }: DirectoryContactFormLayoutProps) {
-  const standardFields = [...leftSections, ...rightSections].flatMap(section => [...section.fields]);
+  const systemFields = canManageBlacklist ? ['visibility', 'isSpam', 'isBlacklisted'] : ['visibility', 'isSpam'];
+  const standardFields = [...leftSections, ...rightSections].flatMap(section => section.title === 'Системные поля / видимость' ? systemFields : [...section.fields]);
   const basicCount = [...leftSections, ...rightSections]
     .filter(section => !section.advanced)
-    .reduce((count, section) => count + section.fields.length, 0);
+    .reduce((count, section) => count + (section.title === 'Системные поля / видимость' ? systemFields.length : section.fields.length), 0);
   const totalCount = standardFields.length + customFieldKeys.length;
   const shownCount = showAdvanced ? totalCount : basicCount;
   const visibleLeftSections = leftSections.filter(section => showAdvanced || !section.advanced);
@@ -176,7 +179,9 @@ export default function DirectoryContactFormLayout({
             {visibleRightSections.map(section => {
               const fields = section.title === 'Дополнительные реквизиты'
                 ? [...section.fields, ...customFieldKeys]
-                : section.fields;
+                : section.title === 'Системные поля / видимость'
+                  ? systemFields
+                  : section.fields;
               return <FormSection key={section.title} section={section} fields={fields} renderField={renderField} />;
             })}
           </div>

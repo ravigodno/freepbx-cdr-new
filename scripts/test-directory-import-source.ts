@@ -50,6 +50,7 @@ assert.deepEqual(getDirectoryImportDigestCapability({ crypto: {} as Crypto, isSe
 });
 
 const app = fs.readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+const csvHelp = fs.readFileSync(new URL('../src/modules/directory/components/DirectoryCsvColumnsHelp.tsx', import.meta.url), 'utf8');
 for (const marker of [
   'Источник данных',
   'Перетащите CSV или TXT сюда',
@@ -65,6 +66,38 @@ for (const marker of [
   'focus-visible:ring-2',
   'aria-live="polite"'
 ]) assert.ok(app.includes(marker), `missing embedded import UI marker: ${marker}`);
+
+for (const marker of [
+  'role="tablist" aria-label="Импорт и управление справочником"',
+  'Личные контакты и синхронизация',
+  'Корпоративный CSV',
+  'Импорт по ссылке',
+  'Управление справочником',
+  "directoryPageMode === 'directory_admin'",
+  "window.history.pushState({}, '', '/management/directory/import')",
+  "window.history.pushState({}, '', '/directory/import-contacts')",
+  "window.history.pushState({}, '', '/management/directory/import-url')",
+  "window.history.pushState({}, '', '/management/directory/admin')",
+  'handleSaveDirectoryUrlSettings',
+  'saveDirectoryUrlSettings',
+  'Настройки сохранены. Выполняется синхронизация справочника…',
+  'Синхронизация по ссылке включена',
+  'Синхронизация выполняется',
+  'role="progressbar"',
+  'Это история предыдущего запуска, а не ошибка текущей страницы.',
+  'Автоматический вызов выполняется внешним cron',
+  'CSV/JSON, расписание и ручная синхронизация',
+  "hasPermission('manage_directory_import')",
+  "hasPermission('directory_import_contacts')"
+]) assert.ok(app.includes(marker), `missing unified import marker: ${marker}`);
+assert.equal((app.match(/<h2 className="flex items-center gap-2 break-words text-lg font-black text-slate-900">[\s\S]*?Импорт контактов[\s\S]*?<\/h2>/g) || []).length, 1);
+assert.equal((app.match(/Импорт справочника по ссылке/g) || []).length, 1);
+assert.equal((app.match(/Панель администратора справочника/g) || []).length, 0);
+assert.ok(app.includes('Сервисные операции вынесены из списка контактов.'));
+for (const marker of ['Описание CSV-столбцов', 'responsibleUserId', 'linkedExternalNumber', 'visibility=shared', 'Пример CSV', 'Скачать пример CSV', 'pbxpuls_directory_import_example.csv', '\\uFEFF']) {
+  assert.ok(csvHelp.includes(marker), `missing CSV columns help marker: ${marker}`);
+}
+assert.match(app, /const handleSyncDirectoryUrl = async \(\) =>[\s\S]*await saveDirectoryUrlSettings\(\)[\s\S]*fetch\('\/api\/directory\/sync-url'/);
 
 assert.doesNotMatch(app, /isImportOpen|setIsImportOpen|aria-label="Загрузка CSV-файла"|Загрузка откроется в отдельном окне/);
 assert.equal((app.match(/createDirectoryImportJob\(/g) || []).length, 1);

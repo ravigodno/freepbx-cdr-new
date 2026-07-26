@@ -49,6 +49,9 @@ async function main() {
   assert(directoryApiSource.includes("value === 'all' && key !== 'spamMode'"), 'frontend must preserve spamMode=all');
   assert(appSource.includes('directoryListAbortRef.current !== controller'), 'stale directory requests must not replace newer results');
   assert(appSource.includes('directoryListRequestSequenceRef.current !== requestSequence'), 'request sequence must reject stale responses');
+  assert(appSource.includes('aria-label="Прогресс поиска по справочнику"'), 'search progress bar is missing');
+  assert(appSource.includes('Выполняется поиск по справочнику…'), 'search progress status is missing');
+  assert(appSource.includes('aria-label="Сбросить поиск"'), 'search reset button is missing');
   assert(apiSource.includes('responsibleUserSearchIdsByToken'), 'responsible user search mapping is missing');
   assert.equal((apiSource.match(/await enrichCallsWithDirectoryBulk\(calls, localDb, req\)/g) || []).length >= 2, true);
   assert(importSource.includes("invalidateDirectoryPerformanceCaches('import_completed')"));

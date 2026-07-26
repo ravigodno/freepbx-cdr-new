@@ -245,6 +245,7 @@ export interface DirectoryEntry {
   updatedAt?: string;
   isFavorite?: boolean;
   matchedFields?: string[];
+  customFields?: Record<string, unknown>;
 }
 
 export type ContactSyncDirection = 'import_only' | 'export_only' | 'two_way';

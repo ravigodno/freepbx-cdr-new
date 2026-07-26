@@ -22,8 +22,8 @@ import { TcpdumpTextStreamParser, type SipCaptureEvent } from './server/sipCaptu
 import { buildSafeSipBpf, buildSipDialogs, redactSipSecrets, SIP_CAPTURE_LIMITS, validateCaptureHost, validateCapturePort } from './server/sipDialogs.js';
 import { normalizeQualityMetrics } from './server/qualityMetrics.js';
 import crypto from 'crypto';
-import { createDirectoryContactId } from './server/directoryContactIds.js';
-import { registerDirectoryImportJobRoutes } from './server/directoryImportJobs.js';
+import { createDirectoryContactId, createUniqueDirectoryContactId } from './server/directoryContactIds.js';
+import { parseDirectoryImportRows, registerDirectoryImportJobRoutes } from './server/directoryImportJobs.js';
 import { registerDirectoryImportSourceRoutes } from './server/directoryImportSources.js';
 import http from 'http';
 import https from 'https';
@@ -82,6 +82,7 @@ import {
   getDirectoryContactSql,
   getDirectoryPerformanceCacheStats,
   invalidateDirectoryPerformanceCaches,
+  listDirectoryContactsForSyncSql,
   listDirectoryContactsSql,
   lookupDirectoryPhoneSql,
   normalizeDirectorySearchText,
@@ -3266,6 +3267,7 @@ const normalizeDirectoryEntry = (entry: any, settings?: AppSettings): any => {
     deviceType: String(entry?.deviceType || entry?.sipType || entry?.technology || '').trim(),
     transferPhoneNumbers: Array.isArray(entry?.transferPhoneNumbers) ? entry.transferPhoneNumbers : [],
     comment: String(entry?.comment || entry?.notes || '').trim(),
+    _sourceFingerprint: String(entry?._sourceFingerprint || '').trim(),
     createdAt: entry?.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
@@ -3732,7 +3734,35 @@ const upsertDirectoryEntries = (current: any[], incoming: any[], mode: string): 
   return { directory, added, updated };
 };
 
-const writeDirectoryImportedEntries = async (localDb: any, req: Request, incoming: any[], mode: string): Promise<{ added: number; updated: number; source: string }> => {
+const directorySyncComparable = (entry: any, settings?: AppSettings) => ({
+  name: String(entry?.name || '').trim(),
+  company: String(entry?.company || '').trim(),
+  phones: normalizeDirectoryPhones(entry, settings).sort(),
+  email: String(entry?.email || '').trim().toLowerCase(),
+  comment: String(entry?.comment || '').trim(),
+  type: String(entry?.type || 'client'),
+  visibility: String(entry?.visibility || 'shared'),
+  ownerUserId: String(entry?.ownerUserId || ''),
+  isSpam: Boolean(entry?.isSpam),
+  isBlacklisted: Boolean(entry?.isBlacklisted),
+  position: String(entry?.position || '').trim(),
+  department: String(entry?.department || '').trim(),
+  group: String(entry?.group || '').trim(),
+  website: String(entry?.website || '').trim(),
+  inn: String(entry?.inn || '').trim(),
+  kpp: String(entry?.kpp || '').trim(),
+  ogrn: String(entry?.ogrn || '').trim(),
+  address: String(entry?.address || '').trim(),
+  internalExtension: String(entry?.internalExtension || '').trim(),
+  linkedExternalNumber: String(entry?.linkedExternalNumber || '').trim(),
+  responsibleUserId: String(entry?.responsibleUserId || '').trim(),
+  tags: (Array.isArray(entry?.tags) ? entry.tags : []).map((value: any) => String(value || '').trim()).filter(Boolean).sort()
+});
+
+const directorySyncEntriesEqual = (left: any, right: any, settings?: AppSettings) =>
+  JSON.stringify(directorySyncComparable(left, settings)) === JSON.stringify(directorySyncComparable(right, settings));
+
+const writeDirectoryImportedEntries = async (localDb: any, req: Request, incoming: any[], mode: string): Promise<{ added: number; updated: number; unchanged: number; source: string }> => {
   const actor = getDirectoryStorageModeActor(req);
   const writeDecision = await getDirectoryWriteRuntimeDecision('create', actor);
   if (writeDecision.blocked || (!writeDecision.useLegacy && !writeDecision.useSql)) {
@@ -3741,36 +3771,114 @@ const writeDirectoryImportedEntries = async (localDb: any, req: Request, incomin
   if (writeDecision.useLegacy) {
     const result = upsertDirectoryEntries(localDb.directory || [], incoming, mode);
     localDb.directory = result.directory;
-    return { added: result.added, updated: result.updated, source: 'data/db.json' };
+    return { added: result.added, updated: result.updated, unchanged: 0, source: 'data/db.json' };
   }
 
-  const runtime = await getDirectoryRuntimeSnapshotForRequest(localDb, req);
-  const known = [...(runtime.contacts || [])];
+  const known = await getDirectoryStorageMode() === 'sql'
+    ? await listDirectoryContactsForSyncSql()
+    : [...((await getDirectoryRuntimeSnapshotForRequest(localDb, req)).contacts || [])];
+  const knownIds = new Set(known.map(entry => String(entry?.id || '')).filter(Boolean));
+  const byPhone = new Map<string, any>();
+  const byEmail = new Map<string, any>();
+  const indexKnownEntry = (entry: any) => {
+    for (const phone of normalizeDirectoryPhones(entry, localDb.settings)) {
+      if (!byPhone.has(phone)) byPhone.set(phone, entry);
+    }
+    const email = String(entry?.email || '').trim().toLowerCase();
+    if (email && !byEmail.has(email)) byEmail.set(email, entry);
+  };
+  known.forEach(indexKnownEntry);
   let added = 0;
   let updated = 0;
+  let unchanged = 0;
   for (const entry of incoming) {
-    const duplicate = known.find(existing => (
-      (entry.phones || []).some((phone: string) => directoryEntryMatchesNumber(existing, phone))
-      || (!!entry.email && String(existing.email || '').trim().toLowerCase() === String(entry.email).trim().toLowerCase())
-    ));
-    if (duplicate && mode !== 'append') {
+    const normalizedPhones = normalizeDirectoryPhones(entry, localDb.settings);
+    const normalizedEmail = String(entry.email || '').trim().toLowerCase();
+    let duplicate = (normalizedEmail ? byEmail.get(normalizedEmail) : null)
+      || normalizedPhones.map(phone => byPhone.get(phone)).find(Boolean);
+    if (!duplicate && (normalizedPhones.length || normalizedEmail)) {
+      const clauses: string[] = [];
+      const params: any[] = [];
+      if (normalizedPhones.length) {
+        clauses.push(`phone_normalized IN (${normalizedPhones.map(() => '?').join(',')})`);
+        params.push(...normalizedPhones);
+      }
+      if (normalizedEmail) {
+        clauses.push('LOWER(email) = ?');
+        params.push(normalizedEmail);
+      }
+      const persisted = await queryPBXPulsDb(
+        `SELECT id,phone_normalized AS phone,email,import_row_fingerprint
+         FROM directory_contacts
+         WHERE ${clauses.join(' OR ')}
+         ORDER BY import_row_fingerprint IS NULL,id
+         LIMIT 1`,
+        params
+      );
+      if (persisted[0]) {
+        duplicate = {
+          id: String(persisted[0].id),
+          phone: String(persisted[0].phone || ''),
+          phones: [String(persisted[0].phone || '')].filter(Boolean),
+          email: String(persisted[0].email || ''),
+          importRowFingerprint: String(persisted[0].import_row_fingerprint || '')
+        };
+        indexKnownEntry(duplicate);
+      }
+    }
+    if (duplicate) {
+      if (mode === 'append') {
+        unchanged++;
+        continue;
+      }
+      if (entry?._sourceFingerprint && duplicate?.importRowFingerprint === entry._sourceFingerprint) {
+        unchanged++;
+        continue;
+      }
+      if (directorySyncEntriesEqual(duplicate, entry, localDb.settings)) {
+        unchanged++;
+        continue;
+      }
       const merged = {
         ...duplicate,
         ...entry,
         id: duplicate.id,
-        phones: Array.from(new Set([...(duplicate.phones || []), ...(entry.phones || [])])),
+        phones: Array.from(new Set(entry.phones || [])),
+        phone2: entry.phones?.[1] || '',
         tags: Array.from(new Set([...(duplicate.tags || []), ...(entry.tags || [])]))
       };
       await updateDirectoryContactSql(String(duplicate.id), merged, actor);
+      if (entry?._sourceFingerprint) {
+        await queryPBXPulsDb(
+          'UPDATE directory_contacts SET import_row_fingerprint=? WHERE id=?',
+          [entry._sourceFingerprint, String(duplicate.id)]
+        );
+        duplicate.importRowFingerprint = entry._sourceFingerprint;
+      }
       Object.assign(duplicate, merged);
+      indexKnownEntry(duplicate);
       updated++;
     } else {
-      const result = await createDirectoryContactSql(entry, actor);
-      known.push({ ...entry, id: result.contactId });
+      // URL/CSV input is not trusted to allocate the SQL primary key. This also
+      // prevents duplicate source IDs from aborting a large synchronization.
+      const contactId = await createUniqueDirectoryContactId(id => knownIds.has(id));
+      const newEntry = { ...entry, id: contactId };
+      const result = await createDirectoryContactSql(newEntry, actor);
+      if (entry?._sourceFingerprint) {
+        await queryPBXPulsDb(
+          'UPDATE directory_contacts SET import_row_fingerprint=? WHERE id=?',
+          [entry._sourceFingerprint, result.contactId]
+        );
+      }
+      const created: any = { ...newEntry, id: result.contactId };
+      created.importRowFingerprint = entry?._sourceFingerprint || '';
+      known.push(created);
+      knownIds.add(result.contactId);
+      indexKnownEntry(created);
       added++;
     }
   }
-  return { added, updated, source: 'pbxpuls_sql' };
+  return { added, updated, unchanged, source: 'pbxpuls_sql' };
 };
 
 const fetchTextFromUrl = (url: string): Promise<string> => {
@@ -3804,7 +3912,26 @@ const parseDirectoryPayload = (text: string, format: string, settings?: AppSetti
     const list = Array.isArray(data) ? data : (Array.isArray(data.contacts) ? data.contacts : []);
     return list.map(e => normalizeDirectoryEntry(e, settings)).filter(e => e.name && e.phones?.length);
   }
-  return parseDirectoryText(text, settings);
+  const parsed = parseDirectoryImportRows(text);
+  if (parsed.errors.length) {
+    throw new Error(`URL CSV validation failed: ${parsed.errors.length} invalid rows`);
+  }
+  return parsed.rows.map(row => normalizeDirectoryEntry({
+    name: row.name,
+    company: row.company,
+    phone: row.phone,
+    phone2: row.phone2,
+    email: row.email,
+    comment: row.comment,
+    type: row.type,
+    visibility: row.visibility,
+    ownerUserId: row.ownerUserId,
+    responsibleUserId: row.responsibleUserId,
+    isSpam: row.isSpam,
+    isBlacklisted: row.isBlacklisted,
+    ...row.metadata,
+    _sourceFingerprint: row.fingerprint
+  }, settings));
 };
 
 function runAMICommand(settings: AppSettings, command: string): Promise<{ success: boolean; message: string }> {
@@ -3859,7 +3986,7 @@ function runAMICommand(settings: AppSettings, command: string): Promise<{ succes
   });
 }
 
-async function syncDirectoryFromConfiguredUrl(localDb: any, req: Request): Promise<{ count: number; added: number; updated: number; source: string; message: string }> {
+async function syncDirectoryFromConfiguredUrl(localDb: any, req: Request): Promise<{ count: number; added: number; updated: number; unchanged: number; source: string; message: string }> {
   const settings = localDb.settings || {};
   const url = String(settings.directoryImportUrl || '').trim();
   if (!url) throw new Error('URL импорта справочника не задан');
@@ -3871,9 +3998,11 @@ async function syncDirectoryFromConfiguredUrl(localDb: any, req: Request): Promi
   const result = await writeDirectoryImportedEntries(localDb, req, entries, mode);
   localDb.settings.directoryLastSyncAt = new Date().toISOString();
   localDb.settings.directoryLastSyncStatus = 'success';
-  localDb.settings.directoryLastSyncMessage = `Загружено: ${entries.length}, добавлено: ${result.added}, обновлено: ${result.updated}`;
-  return { count: entries.length, added: result.added, updated: result.updated, source: result.source, message: localDb.settings.directoryLastSyncMessage };
+  localDb.settings.directoryLastSyncMessage = `Проверено: ${entries.length}, добавлено: ${result.added}, обновлено: ${result.updated}, без изменений: ${result.unchanged}`;
+  return { count: entries.length, added: result.added, updated: result.updated, unchanged: result.unchanged, source: result.source, message: localDb.settings.directoryLastSyncMessage };
 }
+
+let directoryUrlSyncInFlight = false;
 
 
 
@@ -11473,7 +11602,7 @@ function sanitizeDirectoryVisibleColumns(input: any): string[] {
 
   for (const value of values) {
     const key = String(value || '').trim();
-    if (DIRECTORY_VISIBLE_COLUMN_KEYS.includes(key) && !next.includes(key)) {
+    if ((DIRECTORY_VISIBLE_COLUMN_KEYS.includes(key) || /^custom:[a-z0-9_]{1,100}$/.test(key)) && !next.includes(key)) {
       next.push(key);
     }
   }
@@ -11555,6 +11684,52 @@ app.get('/api/directory/column-settings', requireAuth(), async (req, res) => {
     res.json(getEffectiveDirectoryColumnSettings(localDb, req));
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Не удалось загрузить настройки столбцов' });
+  }
+});
+
+app.get('/api/directory/custom-fields', requireAuth(), async (req, res) => {
+  if (!(await checkUserPermission(req, 'view_directory'))) {
+    return res.status(403).json({ error: 'Access denied: view_directory permission required' });
+  }
+  try {
+    const rows = await queryPBXPulsDb(
+      `SELECT id,field_key AS fieldKey,field_name AS fieldName,field_type AS fieldType,
+              is_required AS isRequired,is_visible AS isVisible,show_in_card AS showInCard,
+              show_in_search AS showInSearch,sort_order AS sortOrder
+       FROM directory_custom_fields
+       WHERE entity_type='directory_contact' AND is_visible=1
+       ORDER BY sort_order,field_name,id`
+    );
+    res.json({ items: rows, canManage: canManageGlobalDirectoryColumns(req) });
+  } catch (error: any) {
+    res.status(500).json({ error: sanitizePBXPulsDbError(error) || 'Не удалось загрузить пользовательские столбцы' });
+  }
+});
+
+app.post('/api/directory/custom-fields', requireAuth(), async (req, res) => {
+  if (!canManageGlobalDirectoryColumns(req)) {
+    return res.status(403).json({ error: 'Access denied: su/admin required' });
+  }
+  const fieldName = String(req.body?.fieldName || '').trim().slice(0, 100);
+  const allowedTypes = new Set(['string', 'text', 'number', 'date', 'boolean', 'phone', 'email']);
+  const fieldType = allowedTypes.has(String(req.body?.fieldType || '')) ? String(req.body.fieldType) : 'string';
+  if (fieldName.length < 2) return res.status(400).json({ error: 'Название столбца должно содержать минимум 2 символа' });
+  const fieldKey = `custom_${crypto.randomUUID().replace(/-/g, '').slice(0, 20)}`;
+  const id = `dir_cf_${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`;
+  const createdBy = getDirectoryColumnUserKey(req);
+  try {
+    await queryPBXPulsDb(
+      `INSERT INTO directory_custom_fields
+        (id,field_key,field_name,field_type,entity_type,is_required,is_visible,visibility,sort_order,
+         show_in_card,show_in_search,show_in_caller_popup,created_by,created_at,updated_at)
+       VALUES (?,?,?,?, 'directory_contact',0,1,'common',100,1,?,0,?,NOW(),NOW())`,
+      [id, fieldKey, fieldName, fieldType, req.body?.showInSearch === true ? 1 : 0, createdBy]
+    );
+    res.status(201).json({
+      item: { id, fieldKey, fieldName, fieldType, isRequired: 0, isVisible: 1, showInCard: 1, showInSearch: req.body?.showInSearch === true ? 1 : 0, sortOrder: 100 }
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: sanitizePBXPulsDbError(error) || 'Не удалось создать пользовательский столбец' });
   }
 });
 
@@ -12628,6 +12803,11 @@ app.post('/api/directory/import-url/test', requireAuth(), async (req, res) => {
 
 // Sync directory from configured URL (Admins or cron token)
 app.post('/api/directory/sync-url', async (req, res) => {
+  if (directoryUrlSyncInFlight) {
+    res.status(409).json({ error: 'Синхронизация справочника по ссылке уже выполняется', errorCode: 'DIRECTORY_URL_SYNC_IN_PROGRESS' });
+    return;
+  }
+  directoryUrlSyncInFlight = true;
   try {
     const localDb = await readLocalDb();
     if (!isDirectoryUrlImportEnabled(localDb.settings)) {
@@ -12670,6 +12850,8 @@ app.post('/api/directory/sync-url', async (req, res) => {
     }
   } catch (error: any) {
     res.status(500).json({ error: error.message });
+  } finally {
+    directoryUrlSyncInFlight = false;
   }
 });
 
@@ -12738,7 +12920,8 @@ app.get('/api/directory/sync-status', requireAuth(), async (req, res) => {
     syncAsteriskBlacklist: !!localDb.settings.directorySyncAsteriskBlacklist,
     lastSyncAt: localDb.settings.directoryLastSyncAt || '',
     lastSyncStatus: localDb.settings.directoryLastSyncStatus || '',
-    lastSyncMessage: localDb.settings.directoryLastSyncMessage || ''
+    lastSyncMessage: localDb.settings.directoryLastSyncMessage || '',
+    running: directoryUrlSyncInFlight
   });
 });
 

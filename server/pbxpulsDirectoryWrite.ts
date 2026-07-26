@@ -175,7 +175,7 @@ export async function updateDirectoryContactSql(id: string, input: DirectorySqlC
       `UPDATE directory_contacts
        SET name = ?, company = ?, phone = ?, phone_normalized = ?, phone2 = ?, email = ?, comment = ?,
            contact_type = ?, owner_user_id = ?, visibility = ?, type = ?, is_spam = ?, is_blacklisted = ?,
-           updated_at = COALESCE(?, NOW())
+           import_row_fingerprint = NULL, updated_at = COALESCE(?, NOW())
        WHERE id = ?`,
       [
         normalized.name,

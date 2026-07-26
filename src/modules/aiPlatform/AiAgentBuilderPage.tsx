@@ -15,27 +15,33 @@ import VoiceGatewayPanel from'./VoiceGatewayPanel';
 import VoiceMediaPanel from'./VoiceMediaPanel';
 import RealtimeVoicePanel from'./RealtimeVoicePanel';
 import IntegrationManagementPanel from'./IntegrationManagementPanel';
+import ScriptsTab from'../../components/ScriptsTab';
+import AiAssistantTab from'../../components/AiAssistantTab';
 
 interface Props{
+ session:any;hasPermission:(permission:any)=>boolean;canViewPlatform:boolean;
  canCreateAgents?:boolean;
  canViewIntegrations?:boolean;canCreateIntegrations?:boolean;canEditIntegrations?:boolean;canTestIntegrations?:boolean;
  token:string;canCreate:boolean;canViewKnowledge:boolean;canViewTraining:boolean;canViewTransfers:boolean;canTestTransfer:boolean;canViewCallbacks:boolean;canManageCallbacks:boolean;canAssignActions:boolean;canViewVoice:boolean;canManageVoice:boolean;canTestVoice:boolean;canViewMedia:boolean;canTestMedia:boolean;canViewRealtime:boolean;canTestRealtime:boolean;canViewLive:boolean;canConfigureLive:boolean;canEnableLive:boolean;canCheckLive:boolean;canViewVoiceAgents:boolean;canManageVoiceAgents:boolean;canTestVoiceAgents:boolean;canViewVoiceTranscripts:boolean;canExportVoiceTranscripts:boolean;canViewVoiceSettings:boolean;canManageVoiceSettings:boolean;canViewAiExtensions:boolean;canCreateAiExtensions:boolean;canUpdateAiExtensions:boolean;canPublishAiExtensions:boolean;canViewHandoff:boolean;canConfigureHandoff:boolean;canPublishHandoff:boolean;canPublishAgents?:boolean;canExpertMode?:boolean;
 }
-const sectionFromPath=():AiPlatformSection=>location.pathname.startsWith('/ai-platform/skills')?'skills':location.pathname.startsWith('/ai-platform/knowledge')?'knowledge':location.pathname.startsWith('/ai-platform/conversations')?'conversations':location.pathname.startsWith('/ai-platform/settings')||location.pathname.startsWith('/ai-platform/diagnostics')||/\/agents\/\d+\/diagnostics$/.test(location.pathname)?'settings':'agents';
+const sectionFromPath=():AiPlatformSection=>location.pathname.startsWith('/ai-platform/scripts')?'scripts':location.pathname.startsWith('/ai-platform/assistant')?'assistant':location.pathname.startsWith('/ai-platform/skills')?'skills':location.pathname.startsWith('/ai-platform/knowledge')?'knowledge':location.pathname.startsWith('/ai-platform/conversations')?'conversations':location.pathname.startsWith('/ai-platform/settings')||location.pathname.startsWith('/ai-platform/diagnostics')||/\/agents\/\d+\/diagnostics$/.test(location.pathname)?'settings':'agents';
 
 export default function AiAgentBuilderPage(props:Props){
  const{token}=props,[section]=useState(sectionFromPath),agentId=Number(location.pathname.match(/^\/ai-platform\/agents\/(\d+)/)?.[1]||0),[expertMode,setExpertMode]=useState(()=>props.canExpertMode&&localStorage.getItem('pbxpuls_ai_expert_mode')==='true');
+ const canViewScripts=props.hasPermission('view_scripts'),canViewAssistant=props.hasPermission('view_ai_assistant');
  useEffect(()=>{if(props.canExpertMode)localStorage.setItem('pbxpuls_ai_expert_mode',String(expertMode))},[expertMode,props.canExpertMode]);
  const permissions=useMemo(()=>({...props,canEdit:props.canCreate,canPublishAgents:props.canPublishAgents}),[props]);
  return <section className="mx-auto max-w-[1440px] space-y-4">
-  <AiPlatformNavigation active={section}/>
+  <AiPlatformNavigation active={section} canViewPlatform={props.canViewPlatform} canViewScripts={canViewScripts} canViewAssistant={canViewAssistant}/>
   <main className="min-w-0">
-   {section==='agents'&&!agentId&&<AiPlatformAgentList token={token} canEdit={props.canCreate} canCreate={Boolean(props.canCreateAgents??props.canCreate)}/>}
-   {section==='agents'&&agentId>0&&<AiAgentEditor token={token} agentId={agentId} expertMode={Boolean(expertMode)} permissions={permissions}/>}
-   {section==='skills'&&<SimpleSurface title="Навыки" text="Настройте, что AI-сотрудники умеют делать."><SkillBuilderPanel token={token} agentId={1} enabled canManage={props.canCreate}/></SimpleSurface>}
-   {section==='knowledge'&&<SimpleSurface title="Базы знаний" text="Подключите инструкции, ответы и справочники."><AgentKnowledgeTrainingPage token={token} agentId={1} enabled canViewKnowledge={props.canViewKnowledge} canViewTraining={props.canViewTraining}/></SimpleSurface>}
-   {section==='conversations'&&<SimpleSurface title="Разговоры" text="Каждый звонок показан одной понятной записью."><VoiceAgentsManagementPage token={token} canView={props.canViewVoiceAgents} canManage={false} canTest={props.canTestVoiceAgents} canViewTranscripts={props.canViewVoiceTranscripts} canExportTranscripts={props.canExportVoiceTranscripts} canConfigureVoice={false} simpleMode={!expertMode}/></SimpleSurface>}
-   {section==='settings'&&<SettingsWorkspace {...props} expertMode={Boolean(expertMode)} onExpertModeChange={setExpertMode}/>}
+   {section==='agents'&&props.canViewPlatform&&!agentId&&<AiPlatformAgentList token={token} canEdit={props.canCreate} canCreate={Boolean(props.canCreateAgents??props.canCreate)}/>}
+   {section==='agents'&&props.canViewPlatform&&agentId>0&&<AiAgentEditor token={token} agentId={agentId} expertMode={Boolean(expertMode)} permissions={permissions}/>}
+   {section==='scripts'&&canViewScripts&&<ScriptsTab session={props.session} hasPermission={props.hasPermission}/>}
+   {section==='assistant'&&canViewAssistant&&<AiAssistantTab session={props.session} hasPermission={props.hasPermission}/>}
+   {section==='skills'&&props.canViewPlatform&&<SimpleSurface title="Навыки" text="Настройте, что AI-сотрудники умеют делать."><SkillBuilderPanel token={token} agentId={1} enabled canManage={props.canCreate}/></SimpleSurface>}
+   {section==='knowledge'&&props.canViewPlatform&&<SimpleSurface title="Базы знаний" text="Подключите инструкции, ответы и справочники."><AgentKnowledgeTrainingPage token={token} agentId={1} enabled canViewKnowledge={props.canViewKnowledge} canViewTraining={props.canViewTraining}/></SimpleSurface>}
+   {section==='conversations'&&props.canViewPlatform&&<SimpleSurface title="Разговоры" text="Каждый звонок показан одной понятной записью."><VoiceAgentsManagementPage token={token} canView={props.canViewVoiceAgents} canManage={false} canTest={props.canTestVoiceAgents} canViewTranscripts={props.canViewVoiceTranscripts} canExportTranscripts={props.canExportVoiceTranscripts} canConfigureVoice={false} simpleMode={!expertMode}/></SimpleSurface>}
+   {section==='settings'&&props.canViewPlatform&&<SettingsWorkspace {...props} expertMode={Boolean(expertMode)} onExpertModeChange={setExpertMode}/>}
   </main>
  </section>
 }

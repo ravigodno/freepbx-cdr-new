@@ -28,6 +28,7 @@ async function main() {
   assert(updateRoute.includes("getDirectoryStorageMode() === 'sql'"));
   assert(updateRoute.includes('getDirectoryContactSql(req.params.id'));
   assert(updateRoute.includes('updateDirectoryContactSql(req.params.id'));
+  assert(writeSource.includes('import_row_fingerprint = NULL'));
   assert(appSource.includes('fetchDirectoryContact(session.token, contactId, controller.signal)'));
   assert(appSource.includes("setDirectoryContactLoadState('loaded')"));
   assert(appSource.includes("setDirectoryContactLoadState('not_found')"));

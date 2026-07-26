@@ -36,6 +36,18 @@ export interface DirectoryColumnSettingsResponse {
   updatedBy?: string | null;
 }
 
+export interface DirectoryCustomFieldDefinition {
+  id: string;
+  fieldKey: string;
+  fieldName: string;
+  fieldType: 'string' | 'text' | 'number' | 'date' | 'boolean' | 'phone' | 'email';
+  isRequired: number | boolean;
+  isVisible: number | boolean;
+  showInCard: number | boolean;
+  showInSearch: number | boolean;
+  sortOrder: number;
+}
+
 async function parseDirectorySettingsResponse(resp: Response, fallbackError: string) {
   if (resp.status === 401) {
     handleAuthExpiredResponse(resp);
@@ -433,6 +445,20 @@ export async function fetchDirectoryColumnSettings(token: string): Promise<Direc
   });
 
   return parseDirectorySettingsResponse(resp, 'Не удалось загрузить настройки столбцов');
+}
+
+export async function fetchDirectoryCustomFields(token: string): Promise<{ items: DirectoryCustomFieldDefinition[]; canManage: boolean }> {
+  const resp = await fetch('/api/directory/custom-fields', { headers: { Authorization: `Bearer ${token}` } });
+  return parseDirectorySettingsResponse(resp, 'Не удалось загрузить пользовательские столбцы');
+}
+
+export async function createDirectoryCustomField(token: string, input: { fieldName: string; fieldType: DirectoryCustomFieldDefinition['fieldType']; showInSearch: boolean }): Promise<{ item: DirectoryCustomFieldDefinition }> {
+  const resp = await fetch('/api/directory/custom-fields', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify(input)
+  });
+  return parseDirectorySettingsResponse(resp, 'Не удалось создать пользовательский столбец');
 }
 
 export async function saveMyDirectoryColumnSettings(token: string, visibleColumns: string[]): Promise<DirectoryColumnSettingsResponse> {

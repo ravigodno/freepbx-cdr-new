@@ -13,6 +13,7 @@ import {
   Pause,
   Loader2,
   CheckCircle,
+  X,
   XCircle,
   AlertCircle,
   Calendar,
@@ -62,13 +63,11 @@ import {
   Wrench,
   ShieldCheck,
   Palette,
-  Scroll,
   Bot,
   Star
 } from 'lucide-react';
 import { CallEntry, DashboardStats, AppSettings, UserRole, DirectoryEntry } from './types';
-import ScriptsTab from './components/ScriptsTab';
-import AiAssistantTab from './components/AiAssistantTab';
+import DirectoryCsvColumnsHelp from './modules/directory/components/DirectoryCsvColumnsHelp';
 import DirectoryContactFormLayout from './modules/directory/components/DirectoryContactFormLayout';
 import AiAgentBuilderPage from './modules/aiPlatform/AiAgentBuilderPage';
 import AIPBXAdminTab from './components/AIPBXAdminTab';
@@ -93,7 +92,7 @@ import QualityTab from './modules/monitoring/tabs/monitoring/QualityTab';
 import DevicesMapTab from './modules/monitoring/tabs/monitoring/DevicesMapTab';
 import HealthReportTab from './modules/monitoring/tabs/monitoring/HealthReportTab';
 import { DirectoryStatusIcon } from './modules/directory/components/DirectoryStatusIcon';
-import { fetchDirectory, fetchDirectoryAll, fetchDirectoryContact, saveDirectoryEntry, deleteDirectoryEntry, toggleDirectoryBlacklist, toggleDirectorySpam, previewDirectoryImport, previewDirectoryImportOwnership, previewDirectoryBulkDelete, applyDirectoryBulkDelete, createDirectoryImportJob, prepareDirectoryImportSource, deleteDirectoryImportSource, getDirectoryImportJob, cancelDirectoryImportJob, resumeDirectoryImportJob, previewDirectoryImportRollback, getDirectoryImportJobErrors, fetchDirectoryColumnSettings, saveMyDirectoryColumnSettings, resetMyDirectoryColumnSettings, saveGlobalDirectoryColumnSettings, resetGlobalDirectoryColumnSettings, setDirectoryFavorite, type DirectoryImportPreparedSource } from './modules/directory/services/directoryApi';
+import { fetchDirectory, fetchDirectoryAll, fetchDirectoryContact, saveDirectoryEntry, deleteDirectoryEntry, toggleDirectoryBlacklist, toggleDirectorySpam, previewDirectoryImport, previewDirectoryImportOwnership, previewDirectoryBulkDelete, applyDirectoryBulkDelete, createDirectoryImportJob, prepareDirectoryImportSource, deleteDirectoryImportSource, getDirectoryImportJob, cancelDirectoryImportJob, resumeDirectoryImportJob, previewDirectoryImportRollback, getDirectoryImportJobErrors, fetchDirectoryColumnSettings, saveMyDirectoryColumnSettings, resetMyDirectoryColumnSettings, saveGlobalDirectoryColumnSettings, resetGlobalDirectoryColumnSettings, fetchDirectoryCustomFields, createDirectoryCustomField, setDirectoryFavorite, type DirectoryImportPreparedSource, type DirectoryCustomFieldDefinition } from './modules/directory/services/directoryApi';
 import { calculateDirectoryImportDigest, getDirectoryImportDigestCapability, DIRECTORY_IMPORT_MAX_BYTES, isSupportedDirectoryImportFile, summarizeDirectoryImportSource, type DirectoryImportDigestStatus, type DirectoryImportSourceKind, type DirectoryImportSourceSummary } from './modules/directory/utils/directoryImportSource';
 import { applyDirectoryOwnershipPreview, buildDirectoryEffectiveRows, directoryImportPipelineSteps, getDirectoryImportActiveStep, getDirectoryImportDisabledReason, normalizeDirectoryEntriesForOwnership } from './modules/directory/utils/directoryImportPipeline';
 import CDRPage from './modules/cdr/pages/CDRPage';
@@ -155,11 +154,12 @@ type DirectoryOptionalColumnKey =
   | 'internalExtension'
   | 'linkedExternalNumber'
   | 'responsibleUserId';
-type DirectoryColumnKey = DirectoryRequiredColumnKey | DirectoryOptionalColumnKey | DirectorySystemColumnKey;
+type DirectoryCustomColumnKey = `custom:${string}`;
+type DirectoryColumnKey = DirectoryRequiredColumnKey | DirectoryOptionalColumnKey | DirectorySystemColumnKey | DirectoryCustomColumnKey;
 
 type ContactSyncProvider = 'google' | 'yandex' | 'mailru' | 'file';
 type ContactFileSourceFormat = 'google_csv' | 'mailru_csv' | 'generic_csv' | 'yandex_vcf' | 'generic_vcf';
-type DirectoryPageMode = 'list' | 'import' | 'personal_import' | 'contact_new' | 'contact_edit';
+type DirectoryPageMode = 'list' | 'import' | 'personal_import' | 'url_import' | 'directory_admin' | 'contact_new' | 'contact_edit';
 type OnlineContactSyncProvider = Exclude<ContactSyncProvider, 'file'>;
 type ContactSyncStatus = 'connected' | 'disconnected' | 'error' | 'not_configured';
 type ContactSyncAuthType = 'oauth' | 'carddav' | 'file';
@@ -242,33 +242,10 @@ interface DirectoryColumnConfig {
 const DIRECTORY_PAGE_SIZE = 50;
 const requiredDirectoryColumns: DirectoryRequiredColumnKey[] = ['type', 'fullName', 'phone'];
 const systemDirectoryColumns: DirectorySystemColumnKey[] = ['actions'];
-type DirectoryVisibleColumnKey = DirectoryRequiredColumnKey | DirectoryOptionalColumnKey;
+type DirectoryVisibleColumnKey = DirectoryRequiredColumnKey | DirectoryOptionalColumnKey | DirectoryCustomColumnKey;
 
 type DirectoryColumnSettingsSource = 'user' | 'global' | 'system';
 const defaultDirectoryVisibleColumns: DirectoryVisibleColumnKey[] = ['type', 'fullName', 'phone', 'email', 'organization', 'visibility', 'isSpam'];
-const directoryContactFormFieldOrder: DirectoryVisibleColumnKey[] = [
-  'type',
-  'visibility',
-  'isSpam',
-  'organization',
-  'fullName',
-  'position',
-  'phone',
-  'phone2',
-  'email',
-  'website',
-  'inn',
-  'kpp',
-  'ogrn',
-  'address',
-  'department',
-  'group',
-  'tags',
-  'internalExtension',
-  'linkedExternalNumber',
-  'responsibleUserId',
-  'comment'
-];
 const optionalDirectoryColumns: DirectoryColumnConfig[] = [
   { key: 'visibility', label: 'Видимость' },
   { key: 'isSpam', label: 'Спам' },
@@ -309,7 +286,7 @@ const sanitizeDirectoryVisibleColumns = (columns: unknown): DirectoryVisibleColu
   const values = Array.isArray(columns) ? columns : [];
   const sanitized: DirectoryVisibleColumnKey[] = [];
   values.forEach(column => {
-    if (visibleDirectoryColumnKeys.includes(column as DirectoryVisibleColumnKey) && !sanitized.includes(column as DirectoryVisibleColumnKey)) {
+    if ((visibleDirectoryColumnKeys.includes(column as DirectoryVisibleColumnKey) || /^custom:[a-z0-9_]{1,100}$/.test(String(column))) && !sanitized.includes(column as DirectoryVisibleColumnKey)) {
       sanitized.push(column as DirectoryVisibleColumnKey);
     }
   });
@@ -666,6 +643,7 @@ export default function App() {
   const isAdminRole = (role?: string | null) => role === 'admin' || role === 'su';
   const isDirectoryContactImportEnabled = () => settings?.directoryImportEnabled !== false;
   const canOpenPersonalContactImport = () => isDirectoryContactImportEnabled() && (isAdminRole(session?.role) || hasPermission('directory_import_contacts'));
+  const canOpenCompanyDirectoryImport = () => isAdminRole(session?.role) || hasPermission('manage_directory_import');
   const getPersonalContactImportUnavailableMessage = () => {
     if (!isDirectoryContactImportEnabled()) return 'Импорт контактов отключен администратором.';
     if (!isAdminRole(session?.role) && !hasPermission('directory_import_contacts')) return 'У вас нет прав на импорт контактов.';
@@ -785,12 +763,22 @@ export default function App() {
   const [activeView, setActiveView] = useState<'calls' | 'directory' | 'reports' | 'marketing' | 'monitoring' | 'management' | 'balance' | 'settings' | 'about' | 'scripts' | 'ai-assistant' | 'ai-pbx-admin' | 'ai-platform'>(() => {
     const params = new URLSearchParams(window.location.search);
     const saved = localStorage.getItem('asterisk_cdr_active_view') as 'calls' | 'directory' | 'reports' | 'marketing' | 'monitoring' | 'management' | 'balance' | 'about' | 'scripts' | 'ai-assistant' | 'ai-pbx-admin' | 'ai-platform' | null;
-    if (/^\/ai-platform(?:\/(?:agents(?:\/\d+(?:\/(?:knowledge|voice|diagnostics))?)?|skills|knowledge|conversations|settings|diagnostics))?$/.test(window.location.pathname)) return 'ai-platform';
+    if (/^\/ai-platform(?:\/(?:agents(?:\/\d+(?:\/(?:knowledge|voice|diagnostics))?)?|scripts|assistant|skills|knowledge|conversations|settings|diagnostics))?$/.test(window.location.pathname)) return 'ai-platform';
     if (window.location.pathname === '/management/directory/import') return 'directory';
+    if (window.location.pathname === '/management/directory/import-url') return 'directory';
+    if (window.location.pathname === '/management/directory/admin') return 'directory';
     if (window.location.pathname === '/directory/import-contacts') return 'directory';
     if (/^\/management\/directory\/contact\/new$/.test(window.location.pathname)) return saved && saved !== 'directory' ? saved : 'directory';
     if (/^\/management\/directory\/contact\/[^/]+\/edit$/.test(window.location.pathname)) return 'directory';
     if (params.get('tab') === 'marketing' || params.get('yandexOAuth')) return 'marketing';
+    if (saved === 'scripts') {
+      window.history.replaceState({}, '', '/ai-platform/scripts');
+      return 'ai-platform';
+    }
+    if (saved === 'ai-assistant') {
+      window.history.replaceState({}, '', '/ai-platform/assistant');
+      return 'ai-platform';
+    }
     return saved || 'calls';
   });
   const [liveSessionsData, setLiveSessionsData] = useState<any>(null);
@@ -818,7 +806,7 @@ export default function App() {
 
   useEffect(() => {
     localStorage.setItem('asterisk_cdr_active_view', activeView);
-    if (activeView !== 'ai-platform' && /^\/ai-platform(?:\/(?:agents(?:\/\d+(?:\/(?:knowledge|voice|diagnostics))?)?|skills|knowledge|conversations|settings|diagnostics))?$/.test(window.location.pathname)) window.history.replaceState({}, '', '/');
+    if (activeView !== 'ai-platform' && /^\/ai-platform(?:\/(?:agents(?:\/\d+(?:\/(?:knowledge|voice|diagnostics))?)?|scripts|assistant|skills|knowledge|conversations|settings|diagnostics))?$/.test(window.location.pathname)) window.history.replaceState({}, '', '/');
     if (activeView !== 'directory' && /^\/(?:management\/directory|directory\/import-contacts)/.test(window.location.pathname)) {
       window.history.replaceState({}, '', '/');
     }
@@ -889,6 +877,7 @@ export default function App() {
   const [dirType, setDirType] = useState<'internal' | 'client' | 'supplier' | 'government'>('client');
   const [dirVisibility, setDirVisibility] = useState<'shared' | 'private'>('shared');
   const [dirComment, setDirComment] = useState('');
+  const [dirCustomFieldValues, setDirCustomFieldValues] = useState<Record<string, string>>({});
   const [dirError, setDirError] = useState('');
   const [dirNotice, setDirNotice] = useState('');
   const [isSavingDir, setIsSavingDir] = useState(false);
@@ -913,6 +902,11 @@ export default function App() {
   const [isDirectoryBulkDeleteBusy, setIsDirectoryBulkDeleteBusy] = useState(false);
   const [dirFormShowAllFields, setDirFormShowAllFields] = useState(false);
   const [isDirectoryColumnsPanelOpen, setIsDirectoryColumnsPanelOpen] = useState(false);
+  const [directoryCustomFields, setDirectoryCustomFields] = useState<DirectoryCustomFieldDefinition[]>([]);
+  const [newDirectoryColumnName, setNewDirectoryColumnName] = useState('');
+  const [newDirectoryColumnType, setNewDirectoryColumnType] = useState<DirectoryCustomFieldDefinition['fieldType']>('string');
+  const [newDirectoryColumnSearchable, setNewDirectoryColumnSearchable] = useState(false);
+  const [isCreatingDirectoryColumn, setIsCreatingDirectoryColumn] = useState(false);
   const [selectedDirectoryVisibleColumns, setSelectedDirectoryVisibleColumns] = useState<DirectoryVisibleColumnKey[]>(loadDirectoryVisibleColumns);
 
   const [directoryColumnSettingsSource, setDirectoryColumnSettingsSource] = useState<DirectoryColumnSettingsSource>('system');
@@ -922,6 +916,8 @@ export default function App() {
   const [directoryPageMode, setDirectoryPageMode] = useState<DirectoryPageMode>(() => {
     if (window.location.pathname === '/management/directory/import') return 'import';
     if (window.location.pathname === '/directory/import-contacts') return 'personal_import';
+    if (window.location.pathname === '/management/directory/import-url') return 'url_import';
+    if (window.location.pathname === '/management/directory/admin') return 'directory_admin';
     if (window.location.pathname === '/management/directory/contact/new') return 'contact_new';
     if (/^\/management\/directory\/contact\/[^/]+\/edit$/.test(window.location.pathname)) return 'contact_edit';
     return 'list';
@@ -933,6 +929,7 @@ export default function App() {
   const [urlImportTestResult, setUrlImportTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [isTestingUrlImport, setIsTestingUrlImport] = useState(false);
   const [isSyncingDirectoryUrl, setIsSyncingDirectoryUrl] = useState(false);
+  const [urlSyncElapsedSeconds, setUrlSyncElapsedSeconds] = useState(0);
   const [contactSyncAccounts, setContactSyncAccounts] = useState<ContactSyncProviderAccount[]>([]);
   const [contactSyncMessage, setContactSyncMessage] = useState('');
   const [contactSyncBusyProvider, setContactSyncBusyProvider] = useState<ContactSyncProvider | null>(null);
@@ -952,7 +949,6 @@ export default function App() {
   const [contactFilePreviewSummary, setContactFilePreviewSummary] = useState<ContactFilePreviewSummary | null>(null);
 
   // --- ADMIN DIRECTORY IMPORT / EXPORT & NORMALIZATION STATE ---
-  const [isAdminPanelExpanded, setIsAdminPanelExpanded] = useState(false);
   const directoryImportFileInputRef = useRef<HTMLInputElement | null>(null);
   const directoryImportDigestRequestRef = useRef(0);
   const directoryOwnershipRequestRef = useRef(0);
@@ -1067,6 +1063,7 @@ export default function App() {
     setDirType('client');
     setDirVisibility('shared');
     setDirComment('');
+    setDirCustomFieldValues({});
     setDirError('');
     setDirFormShowAllFields(false);
   };
@@ -1651,6 +1648,25 @@ export default function App() {
     }
   };
 
+  const saveDirectoryUrlSettings = async (): Promise<boolean> => {
+    if (!draftSettings || !session || !isAdminRole(session.role)) return false;
+    const resp = await fetch('/api/settings', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${session.token}`
+      },
+      body: JSON.stringify(draftSettings)
+    });
+    if (resp.status === 401) {
+      handleAuthError(resp);
+      return false;
+    }
+    if (!resp.ok) return false;
+    setSettings(draftSettings);
+    return true;
+  };
+
   const handleSyncDirectoryUrl = async () => {
     if (!hasPermission('manage_directory_import')) {
       alert('Нет прав на синхронизацию справочника.');
@@ -1658,8 +1674,15 @@ export default function App() {
     }
 
     setIsSyncingDirectoryUrl(true);
+    setUrlSyncElapsedSeconds(0);
     setUrlImportTestResult(null);
     try {
+      const saved = await saveDirectoryUrlSettings();
+      if (!saved) {
+        setUrlImportTestResult({ success: false, message: 'Не удалось сохранить текущие настройки. Синхронизация не запущена.' });
+        return;
+      }
+      setUrlImportTestResult({ success: true, message: 'Настройки сохранены. Выполняется синхронизация справочника…' });
       const resp = await fetch('/api/directory/sync-url', {
         method: 'POST',
         headers: {
@@ -1682,6 +1705,12 @@ export default function App() {
       setIsSyncingDirectoryUrl(false);
     }
   };
+
+  useEffect(() => {
+    if (!isSyncingDirectoryUrl) return;
+    const timer = window.setInterval(() => setUrlSyncElapsedSeconds(value => value + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, [isSyncingDirectoryUrl]);
 
 
   const contactSyncProviderLabels: Record<ContactSyncProvider, string> = {
@@ -1760,6 +1789,15 @@ export default function App() {
       loadContactSyncAccounts();
     }
   }, [directoryPageMode, loadContactSyncAccounts, settings?.directoryImportEnabled]);
+
+  useEffect(() => {
+    if (!session) return;
+    const companyImportDenied = ['import', 'url_import'].includes(directoryPageMode) && !canOpenCompanyDirectoryImport();
+    const adminToolsDenied = directoryPageMode === 'directory_admin' && !isAdminRole(session.role);
+    if (!companyImportDenied && !adminToolsDenied) return;
+    setDirectoryPageMode('personal_import');
+    window.history.replaceState({}, '', '/directory/import-contacts');
+  }, [session?.role, session?.permissions, directoryPageMode, settings?.directoryImportEnabled]);
 
   const handleContactSyncSettingsChange = async (provider: OnlineContactSyncProvider, syncDirection: ContactSyncDirection) => {
     const account = getContactSyncAccount(provider);
@@ -2745,7 +2783,8 @@ export default function App() {
         tags: dirTagsText.split(/[;,|]+/).map(t => t.trim()).filter(Boolean),
         isSpam: dirIsSpam,
         isBlacklisted: dirIsBlacklisted,
-        comment: dirComment
+        comment: dirComment,
+        customFields: dirCustomFieldValues
       };
 
       const data = await saveDirectoryEntry(session?.token || '', payload, editingDirEntry?.id);
@@ -2859,6 +2898,23 @@ export default function App() {
     setActiveView('directory');
     if (canOpenPersonalContactImport()) loadContactSyncAccounts();
     window.history.pushState({}, '', '/directory/import-contacts');
+  };
+
+  const openDirectoryUrlImportPage = () => {
+    setDirectoryPageMode('url_import');
+    setDirectoryContactEditId(null);
+    setActiveView('directory');
+    setUrlImportTestResult(null);
+    void loadAdminSettings();
+    window.history.pushState({}, '', '/management/directory/import-url');
+  };
+
+  const openDirectoryAdminPage = () => {
+    if (!isAdminRole(session?.role)) return;
+    setDirectoryPageMode('directory_admin');
+    setDirectoryContactEditId(null);
+    setActiveView('directory');
+    window.history.pushState({}, '', '/management/directory/admin');
   };
 
   const closeDirectoryImportPage = () => {
@@ -3095,6 +3151,7 @@ export default function App() {
     setDirType(entry.type);
     setDirVisibility(entry.visibility === 'private' ? 'private' : 'shared');
     setDirComment(entry.comment || '');
+    setDirCustomFieldValues(Object.fromEntries(Object.entries(entry.customFields || {}).map(([key, value]) => [key, String(value ?? '')])));
     setDirError('');
     setDirectoryContactLoadState('loaded');
     setDirectoryContactLoadWarning(Array.isArray((entry as any).loadWarnings) ? (entry as any).loadWarnings.join(' ') : '');
@@ -3525,6 +3582,23 @@ export default function App() {
       }
     } catch (e) {
       alert('Произошла ошибка сетевого соединения.');
+    } finally {
+      setIsSavingSettings(false);
+    }
+  };
+
+  const handleSaveDirectoryUrlSettings = async () => {
+    if (!draftSettings || !session || !isAdminRole(session.role)) return;
+    setIsSavingSettings(true);
+    setUrlImportTestResult(null);
+    try {
+      if (!(await saveDirectoryUrlSettings())) {
+        setUrlImportTestResult({ success: false, message: 'Не удалось сохранить настройки импорта по ссылке.' });
+        return;
+      }
+      setUrlImportTestResult({ success: true, message: 'Настройки импорта по ссылке сохранены.' });
+    } catch {
+      setUrlImportTestResult({ success: false, message: 'Не удалось сохранить настройки: ошибка связи с сервером.' });
     } finally {
       setIsSavingSettings(false);
     }
@@ -4732,15 +4806,21 @@ export default function App() {
   };
 
 
+  const customDirectoryColumnConfigs: DirectoryColumnConfig[] = directoryCustomFields.map(field => ({
+    key: `custom:${field.fieldKey}` as DirectoryCustomColumnKey,
+    label: field.fieldName,
+    className: 'min-w-[160px] max-w-[240px]'
+  }));
+  const allDirectoryColumnConfigs: DirectoryColumnConfig[] = [...directoryColumnConfigs, ...customDirectoryColumnConfigs];
   const effectiveDirectoryColumnConfigs: DirectoryColumnConfig[] = [
     ...selectedDirectoryVisibleColumns
-      .map(columnKey => directoryColumnConfigs.find(column => column.key === columnKey))
+      .map(columnKey => allDirectoryColumnConfigs.find(column => column.key === columnKey))
       .filter((column): column is DirectoryColumnConfig => Boolean(column)),
     ...systemDirectoryColumnConfigs
   ];
 
   const draftDirectoryOrderConfigs: DirectoryColumnConfig[] = draftDirectoryVisibleColumns
-    .map(columnKey => directoryColumnConfigs.find(column => column.key === columnKey))
+    .map(columnKey => allDirectoryColumnConfigs.find(column => column.key === columnKey))
     .filter((column): column is DirectoryColumnConfig => Boolean(column));
 
   const formatDirectoryCellText = (value: unknown): string => {
@@ -4755,7 +4835,7 @@ export default function App() {
     return 'Клиент';
   };
 
-  const toggleDraftDirectoryColumn = (columnKey: DirectoryOptionalColumnKey) => {
+  const toggleDraftDirectoryColumn = (columnKey: DirectoryOptionalColumnKey | DirectoryCustomColumnKey) => {
     setDraftDirectoryVisibleColumns(prev => prev.includes(columnKey)
       ? prev.filter(key => key !== columnKey)
       : [...prev, columnKey]
@@ -4801,11 +4881,50 @@ export default function App() {
     }
   };
 
-  useEffect(() => {
-    if (activeView === 'directory' && session?.token) {
-      loadDirectoryColumnSettingsFromApi();
+  const loadDirectoryCustomFieldsFromApi = async () => {
+    if (!session?.token) return;
+    try {
+      const response = await fetchDirectoryCustomFields(session.token);
+      setDirectoryCustomFields(response.items || []);
+    } catch (error: any) {
+      setDirectoryColumnSettingsStatus(error?.message || 'Не удалось загрузить пользовательские столбцы');
     }
-  }, [activeView, session?.token]);
+  };
+
+  useEffect(() => {
+    if ((activeView === 'directory' || (activeView === 'settings' && settingsTab === 'directory')) && session?.token) {
+      loadDirectoryColumnSettingsFromApi();
+      loadDirectoryCustomFieldsFromApi();
+    }
+  }, [activeView, settingsTab, session?.token]);
+
+  const handleCreateDirectoryCustomColumn = async () => {
+    if (!session?.token || !canManageGlobalDirectoryColumns || newDirectoryColumnName.trim().length < 2) return;
+    setIsCreatingDirectoryColumn(true);
+    setDirectoryColumnSettingsStatus('');
+    try {
+      const response = await createDirectoryCustomField(session.token, {
+        fieldName: newDirectoryColumnName.trim(),
+        fieldType: newDirectoryColumnType,
+        showInSearch: newDirectoryColumnSearchable
+      });
+      const customKey = `custom:${response.item.fieldKey}` as DirectoryCustomColumnKey;
+      const nextVisibleColumns = sanitizeDirectoryVisibleColumns([...draftDirectoryVisibleColumns, customKey]);
+      await saveGlobalDirectoryColumnSettings(session.token, nextVisibleColumns);
+      setDirectoryCustomFields(prev => [...prev, response.item]);
+      setSelectedDirectoryVisibleColumns(nextVisibleColumns);
+      setDraftDirectoryVisibleColumns(nextVisibleColumns);
+      setDirectoryColumnSettingsSource('global');
+      setNewDirectoryColumnName('');
+      setNewDirectoryColumnType('string');
+      setNewDirectoryColumnSearchable(false);
+      setDirectoryColumnSettingsStatus(`Столбец «${response.item.fieldName}» добавлен для всех пользователей.`);
+    } catch (error: any) {
+      setDirectoryColumnSettingsStatus(error?.message || 'Не удалось создать пользовательский столбец');
+    } finally {
+      setIsCreatingDirectoryColumn(false);
+    }
+  };
 
   const saveDirectoryColumnSettings = async () => {
     if (!session?.token) return;
@@ -5051,54 +5170,17 @@ export default function App() {
           </div>
         );
       default:
+        if (columnKey.startsWith('custom:')) {
+          return renderDirectoryTextCell(entry.customFields?.[columnKey.slice('custom:'.length)], 'max-w-[220px]');
+        }
         return renderDirectoryDash();
     }
   };
 
-  const hasDirectoryFormFieldValue = (fieldKey: DirectoryVisibleColumnKey): boolean => {
-    const original = editingDirEntry as any;
-    const originalPhones = editingDirEntry ? getEntryPhones(editingDirEntry) : [];
-    const originalExtraPhones = originalPhones.slice(1).join('');
-    const values: Record<DirectoryVisibleColumnKey, unknown> = {
-      type: dirType,
-      fullName: dirName || original?.name,
-      phone: dirNumber || originalPhones[0] || original?.number,
-      visibility: original?.visibility,
-      isSpam: dirIsSpam || original?.isSpam,
-      organization: dirCompany || original?.company,
-      position: dirPosition || original?.position,
-      phone2: dirPhonesText || originalExtraPhones,
-      email: dirEmail || original?.email,
-      website: dirWebsite || original?.website,
-      inn: dirInn || original?.inn,
-      kpp: dirKpp || original?.kpp,
-      ogrn: dirOgrn || original?.ogrn,
-      address: dirAddress || original?.address,
-      comment: dirComment || original?.comment,
-      department: dirDepartment || original?.department,
-      group: dirGroup || original?.group,
-      tags: dirTagsText || (Array.isArray(original?.tags) ? original.tags.join('; ') : ''),
-      internalExtension: dirInternalExtension || original?.internalExtension,
-      linkedExternalNumber: dirLinkedExternalNumber || original?.linkedExternalNumber,
-      responsibleUserId: dirResponsibleUserId || original?.responsibleUserId
-    };
-    return String(values[fieldKey] ?? '').trim().length > 0;
-  };
-
-  const visibleDirectoryContactFormFields: DirectoryVisibleColumnKey[] = dirFormShowAllFields
-    ? directoryContactFormFieldOrder
-    : directoryContactFormFieldOrder.filter(fieldKey => {
-      if (requiredDirectoryColumns.includes(fieldKey as DirectoryRequiredColumnKey)) return true;
-      if (selectedDirectoryVisibleColumns.includes(fieldKey)) return true;
-      return !!editingDirEntry && hasDirectoryFormFieldValue(fieldKey);
-    });
-
-  const hasDirectoryContactFormField = (fieldKey: DirectoryVisibleColumnKey): boolean => visibleDirectoryContactFormFields.includes(fieldKey);
-
   const directoryFormInputClass = 'min-h-10 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500';
   const directoryFormMonoInputClass = directoryFormInputClass + ' font-mono';
 
-  const renderDirectoryContactFormField = (fieldKey: DirectoryVisibleColumnKey) => {
+  const renderDirectoryContactFormField = (fieldKey: DirectoryVisibleColumnKey | 'isBlacklisted') => {
     switch (fieldKey) {
       case 'type':
         return (
@@ -5127,6 +5209,13 @@ export default function App() {
           <label className="flex min-h-[58px] items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">
             <input type="checkbox" checked={dirIsSpam} onChange={(e) => setDirIsSpam(e.target.checked)} className="rounded border-amber-300 text-amber-600" />
             Спам
+          </label>
+        );
+      case 'isBlacklisted':
+        return (
+          <label className="flex min-h-[58px] items-center gap-2 rounded-lg border border-slate-300 bg-slate-100 px-3 py-2 text-xs font-bold text-slate-800">
+            <input type="checkbox" checked={dirIsBlacklisted} onChange={(e) => setDirIsBlacklisted(e.target.checked)} className="rounded border-slate-400 text-slate-800 focus:ring-slate-500" />
+            Чёрный список
           </label>
         );
       case 'organization':
@@ -5166,6 +5255,21 @@ export default function App() {
       case 'comment':
         return <label className="space-y-1 text-xs font-semibold text-slate-650 sm:col-span-2"><span>Комментарий</span><textarea value={dirComment} onChange={(e) => setDirComment(e.target.value)} rows={3} placeholder="Комментарий, примечание, источник" className={directoryFormInputClass} /></label>;
       default:
+        if (fieldKey.startsWith('custom:')) {
+          const customFieldKey = fieldKey.slice('custom:'.length);
+          const definition = directoryCustomFields.find(field => field.fieldKey === customFieldKey);
+          if (!definition) return null;
+          const value = dirCustomFieldValues[customFieldKey] || '';
+          const setValue = (nextValue: string) => setDirCustomFieldValues(previous => ({ ...previous, [customFieldKey]: nextValue }));
+          if (definition.fieldType === 'boolean') {
+            return <label className="flex min-h-[58px] items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-700"><input type="checkbox" checked={value === 'true'} onChange={event => setValue(String(event.target.checked))} className="rounded border-slate-300 text-blue-600" />{definition.fieldName}</label>;
+          }
+          if (definition.fieldType === 'text') {
+            return <label className="space-y-1 text-xs font-semibold text-slate-650 sm:col-span-2"><span>{definition.fieldName}</span><textarea value={value} onChange={event => setValue(event.target.value)} rows={3} className={directoryFormInputClass} /></label>;
+          }
+          const inputType = definition.fieldType === 'number' ? 'number' : definition.fieldType === 'date' ? 'date' : definition.fieldType === 'email' ? 'email' : definition.fieldType === 'phone' ? 'tel' : 'text';
+          return <label className="space-y-1 text-xs font-semibold text-slate-650"><span>{definition.fieldName}</span><input type={inputType} value={value} onChange={event => setValue(event.target.value)} className={definition.fieldType === 'phone' ? directoryFormMonoInputClass : directoryFormInputClass} /></label>;
+        }
         return null;
     }
   };
@@ -5825,56 +5929,8 @@ export default function App() {
                 </button>
               )}
 
-              {hasPermission('view_scripts') && (
-                <button
-                  onClick={() => setActiveView('scripts')}
-                  className={`flex items-center ${isSidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl transition-all relative group cursor-pointer ${
-                    activeView === 'scripts'
-                      ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-900/30 shadow-inner'
-                      : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent'
-                  }`}
-                  title={isSidebarExpanded ? "" : "Скрипты разговоров"}
-                >
-                  <Scroll className="h-5 w-5 shrink-0" />
-                  {isSidebarExpanded && (
-                    <span className="text-xs font-semibold truncate animate-fade-in text-slate-705 dark:text-slate-200">
-                      Скрипты разговоров
-                    </span>
-                  )}
-                  {!isSidebarExpanded && (
-                    <span className="absolute left-full ml-3 px-2 py-1 rounded bg-slate-950 text-white text-[10px] font-bold opacity-0 group-hover:opacity-100 transition-opacity z-50 whitespace-nowrap shadow-md pointer-events-none">
-                      Скрипты разговоров
-                    </span>
-                  )}
-                </button>
-              )}
-
-              {hasPermission('view_ai_assistant') && (
-                <button
-                  onClick={() => setActiveView('ai-assistant')}
-                  className={`flex items-center ${isSidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl transition-all relative group cursor-pointer ${
-                    activeView === 'ai-assistant'
-                      ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-900/30 shadow-inner'
-                      : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent'
-                  }`}
-                  title={isSidebarExpanded ? "" : "AI-автоответчик"}
-                >
-                  <Bot className="h-5 w-5 shrink-0" />
-                  {isSidebarExpanded && (
-                    <span className="text-xs font-semibold truncate animate-fade-in text-slate-705 dark:text-slate-200">
-                      AI-автоответчик
-                    </span>
-                  )}
-                  {!isSidebarExpanded && (
-                    <span className="absolute left-full ml-3 px-2 py-1 rounded bg-slate-950 text-white text-[10px] font-bold opacity-0 group-hover:opacity-100 transition-opacity z-50 whitespace-nowrap shadow-md pointer-events-none">
-                      AI-автоответчик
-                    </span>
-                  )}
-                </button>
-              )}
-
-              {hasPermission('view_ai_platform') && (
-                <button onClick={() => { setActiveView('ai-platform'); window.history.replaceState({}, '', '/ai-platform/agents'); }} className={`flex items-center ${isSidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl transition-all relative group cursor-pointer ${activeView === 'ai-platform' ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-900/30 shadow-inner' : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent'}`} title={isSidebarExpanded ? '' : 'AI Platform'}>
+              {(hasPermission('view_ai_platform') || hasPermission('view_scripts') || hasPermission('view_ai_assistant')) && (
+                <button onClick={() => { setActiveView('ai-platform'); window.history.replaceState({}, '', hasPermission('view_ai_platform') ? '/ai-platform/agents' : hasPermission('view_scripts') ? '/ai-platform/scripts' : '/ai-platform/assistant'); }} className={`flex items-center ${isSidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl transition-all relative group cursor-pointer ${activeView === 'ai-platform' ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-900/30 shadow-inner' : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent'}`} title={isSidebarExpanded ? '' : 'AI Platform'}>
                   <Bot className="h-5 w-5 shrink-0" />{isSidebarExpanded && <span className="text-xs font-semibold truncate">AI Platform</span>}
                 </button>
               )}
@@ -6012,7 +6068,7 @@ export default function App() {
                 <div>
                   <h1 className="text-base font-bold text-slate-900 dark:text-slate-100 tracking-tight flex items-center gap-2 font-sans uppercase">
                     {activeView === 'calls' && 'Реестр звонков'}
-                    {activeView === 'directory' && (directoryPageMode === 'import' ? 'Админский CSV импорт' : directoryPageMode === 'personal_import' ? 'Личный импорт контактов' : directoryPageMode === 'contact_new' ? 'Новый контакт' : directoryPageMode === 'contact_edit' ? 'Редактирование контакта' : 'Телефонный справочник')}
+                    {activeView === 'directory' && (['import', 'personal_import', 'url_import', 'directory_admin'].includes(directoryPageMode) ? 'Импорт и управление контактами' : directoryPageMode === 'contact_new' ? 'Новый контакт' : directoryPageMode === 'contact_edit' ? 'Редактирование контакта' : 'Телефонный справочник')}
                     {activeView === 'reports' && 'Отчеты и Аналитика'}
                     {activeView === 'marketing' && 'Маркетинг'}
                     {activeView === 'monitoring' && 'Мониторинг звонков'}
@@ -6852,46 +6908,6 @@ export default function App() {
       </>
     )}
 
-      {activeView === 'directory' && directoryPageMode === 'personal_import' && (
-        <section className="min-w-0 max-w-full space-y-4">
-          <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div className="min-w-0">
-                <h2 className="flex items-center gap-2 break-words text-lg font-black text-slate-900">
-                  <Upload className="h-5 w-5 text-blue-600" />
-                  Импорт контактов
-                </h2>
-                <p className="mt-1 max-w-3xl text-xs leading-relaxed text-slate-500">
-                  {isAdminRole(session?.role) || hasPermission('manage_directory_import')
-                    ? 'Выберите назначение: личный справочник пользователя или общий справочник PBXPuls.'
-                    : 'Контакты будут импортированы только в ваш личный справочник.'}
-                </p>
-              </div>
-              <button type="button" onClick={closeDirectoryImportPage} className="shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50">
-                Назад в справочник
-              </button>
-            </div>
-          </div>
-          {(isAdminRole(session?.role) || hasPermission('manage_directory_import')) && (
-            <div className="flex flex-wrap items-center gap-3 rounded-xl border border-blue-200 bg-blue-50 p-4 text-xs shadow-sm">
-              <span className="font-black text-slate-800">Куда импортировать:</span>
-              <select value={contactImportVisibility} onChange={event => setContactImportVisibility(event.target.value as 'private' | 'shared')} className="rounded-lg border border-blue-200 bg-white px-3 py-2 font-bold text-slate-700">
-                <option value="private">В мой личный справочник</option>
-                <option value="shared">В общий справочник</option>
-              </select>
-              <button type="button" onClick={openDirectoryImportPage} className="rounded-lg border border-blue-200 bg-white px-3 py-2 font-bold text-blue-700 hover:bg-blue-100">
-                Расширенный CSV / URL импорт
-              </button>
-            </div>
-          )}
-          {getPersonalContactImportUnavailableMessage() ? (
-            <div className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-sm font-bold text-amber-900 shadow-sm">
-              {getPersonalContactImportUnavailableMessage()}
-            </div>
-          ) : renderPersonalContactImportPanel()}
-        </section>
-      )}
-
       {activeView === 'directory' && (directoryPageMode === 'contact_new' || directoryPageMode === 'contact_edit') && (
         <section className="min-w-0">
           {directoryPageMode === 'contact_edit' && directoryContactEditId && (directoryContactLoadState !== 'loaded' || !editingDirEntry) ? (
@@ -6909,8 +6925,9 @@ export default function App() {
               error={dirError}
               showAdvanced={dirFormShowAllFields}
               customFieldKeys={selectedDirectoryVisibleColumns.filter(column => String(column).startsWith('custom:')).map(String)}
+              canManageBlacklist={hasPermission('manage_blacklist')}
               isSaving={isSavingDir}
-              renderField={fieldKey => renderDirectoryContactFormField(fieldKey as DirectoryVisibleColumnKey)}
+              renderField={fieldKey => renderDirectoryContactFormField(fieldKey as DirectoryVisibleColumnKey | 'isBlacklisted')}
               onToggleAdvanced={() => setDirFormShowAllFields(value => !value)}
               onCancel={closeDirectoryContactFormPage}
               onSubmit={handleSaveDirEntry}
@@ -6919,17 +6936,23 @@ export default function App() {
         </section>
       )}
 
-      {activeView === 'directory' && directoryPageMode === 'import' && (
+      {activeView === 'directory' && ['import', 'personal_import', 'url_import', 'directory_admin'].includes(directoryPageMode) && (
         <section className="min-w-0 max-w-full space-y-4">
           <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div className="min-w-0">
                 <h2 className="flex items-center gap-2 break-words text-lg font-black text-slate-900">
                   <Upload className="h-5 w-5 text-blue-600" />
-                  Админский CSV импорт
+                  Импорт контактов
                 </h2>
                 <p className="mt-1 max-w-3xl text-xs leading-relaxed text-slate-500">
-                  Загрузите CSV-файл с контактами, проверьте обязательные поля, возможные ошибки и дубли перед сохранением. XLSX предусмотрен архитектурно, текущий импорт выполняется через CSV без новых зависимостей. Если visibility не заполнено, будет shared; если isSpam не заполнено, будет false. Телефон должен содержать от 2 до 11 цифр.
+                  {directoryPageMode === 'personal_import'
+                    ? 'Импортируйте личные контакты из CSV/vCard или подключённых сервисов.'
+                    : directoryPageMode === 'url_import'
+                      ? 'Настройте регулярную загрузку CSV/JSON по защищённой ссылке.'
+                      : directoryPageMode === 'directory_admin'
+                        ? 'Экспорт, шаблоны и административное обслуживание телефонного справочника.'
+                      : 'Корпоративный CSV проходит проверку, настройку владения и подтверждение перед созданием import job.'}
                 </p>
               </div>
               <button type="button" onClick={closeDirectoryImportPage} className="shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50">
@@ -6938,6 +6961,192 @@ export default function App() {
             </div>
           </div>
 
+          <div className="grid gap-2 rounded-xl border border-slate-200 bg-white p-2 shadow-sm sm:grid-cols-2 xl:grid-cols-4" role="tablist" aria-label="Импорт и управление справочником">
+            {canOpenPersonalContactImport() && (
+              <button type="button" role="tab" aria-selected={directoryPageMode === 'personal_import'} onClick={openPersonalContactImportPage} className={`rounded-lg px-4 py-3 text-left transition ${directoryPageMode === 'personal_import' ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-50 text-slate-700 hover:bg-blue-50'}`}>
+                <span className="block text-sm font-black">Личные контакты и синхронизация</span>
+                <span className={`mt-1 block text-[11px] ${directoryPageMode === 'personal_import' ? 'text-blue-100' : 'text-slate-500'}`}>CSV/vCard, Google, Yandex и Mail.ru</span>
+              </button>
+            )}
+            {canOpenCompanyDirectoryImport() && (
+              <button type="button" role="tab" aria-selected={directoryPageMode === 'import'} onClick={openDirectoryImportPage} className={`rounded-lg px-4 py-3 text-left transition ${directoryPageMode === 'import' ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-50 text-slate-700 hover:bg-blue-50'}`}>
+                <span className="block text-sm font-black">Корпоративный CSV</span>
+                <span className={`mt-1 block text-[11px] ${directoryPageMode === 'import' ? 'text-blue-100' : 'text-slate-500'}`}>Digest, ownership preview, import jobs и rollback</span>
+              </button>
+            )}
+            {canOpenCompanyDirectoryImport() && (
+              <button type="button" role="tab" aria-selected={directoryPageMode === 'url_import'} onClick={openDirectoryUrlImportPage} className={`rounded-lg px-4 py-3 text-left transition ${directoryPageMode === 'url_import' ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-50 text-slate-700 hover:bg-blue-50'}`}>
+                <span className="block text-sm font-black">Импорт по ссылке</span>
+                <span className={`mt-1 block text-[11px] ${directoryPageMode === 'url_import' ? 'text-blue-100' : 'text-slate-500'}`}>CSV/JSON, расписание и ручная синхронизация</span>
+              </button>
+            )}
+            {isAdminRole(session?.role) && (
+              <button type="button" role="tab" aria-selected={directoryPageMode === 'directory_admin'} onClick={openDirectoryAdminPage} className={`rounded-lg px-4 py-3 text-left transition ${directoryPageMode === 'directory_admin' ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-50 text-slate-700 hover:bg-blue-50'}`}>
+                <span className="block text-sm font-black">Управление справочником</span>
+                <span className={`mt-1 block text-[11px] ${directoryPageMode === 'directory_admin' ? 'text-blue-100' : 'text-slate-500'}`}>Экспорт, шаблон, нормализация и удаление</span>
+              </button>
+            )}
+          </div>
+
+          {directoryPageMode === 'directory_admin' ? (
+            <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="flex flex-col gap-2 border-b border-slate-100 pb-4 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h3 className="flex items-center gap-2 text-base font-black text-slate-900"><Sliders className="h-5 w-5 text-blue-600" />Управление справочником</h3>
+                  <p className="mt-1 max-w-3xl text-xs leading-relaxed text-slate-500">Сервисные операции вынесены из списка контактов. Импорт выполняется в соответствующих вкладках выше.</p>
+                </div>
+                <span className="w-fit rounded-full bg-blue-100 px-2.5 py-1 text-[10px] font-black uppercase tracking-wide text-blue-700">Администратор</span>
+              </div>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <button type="button" onClick={handleDownloadTemplate} className="flex min-h-24 flex-col items-start justify-between rounded-xl border border-blue-200 bg-blue-50 p-4 text-left transition hover:bg-blue-100">
+                  <Download className="h-5 w-5 text-blue-600" />
+                  <span><span className="block text-sm font-black text-slate-900">Скачать шаблон</span><span className="mt-1 block text-[11px] text-slate-500">CSV Excel для корпоративного импорта</span></span>
+                </button>
+                <button type="button" onClick={handleExportCSV} className="flex min-h-24 flex-col items-start justify-between rounded-xl border border-slate-200 bg-slate-50 p-4 text-left transition hover:bg-slate-100">
+                  <Download className="h-5 w-5 text-slate-600" />
+                  <span><span className="block text-sm font-black text-slate-900">Экспорт в CSV</span><span className="mt-1 block text-[11px] text-slate-500">Выгрузить справочник с текущими фильтрами</span></span>
+                </button>
+                <button type="button" onClick={handleNormalizeDirectoryDb} disabled={isNormalizingDb} className="flex min-h-24 flex-col items-start justify-between rounded-xl border border-amber-200 bg-amber-50 p-4 text-left transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50">
+                  <RefreshCw className={`h-5 w-5 text-amber-700 ${isNormalizingDb ? 'animate-spin' : ''}`} />
+                  <span><span className="block text-sm font-black text-slate-900">{isNormalizingDb ? 'Выполняется нормализация…' : 'Нормализовать номера'}</span><span className="mt-1 block text-[11px] text-slate-500">Применить настроенные маски телефонов</span></span>
+                </button>
+                {session?.role === 'su' && (
+                  <button type="button" onClick={() => {
+                    setDirectoryBulkDeleteScope('filtered');
+                    setDirectoryBulkDeletePreview(null);
+                    setDirectoryBulkDeleteConfirmation('');
+                    setDirectoryBulkDeleteStatus('');
+                    setIsDirectoryBulkDeleteOpen(true);
+                  }} className="flex min-h-24 flex-col items-start justify-between rounded-xl border border-rose-200 bg-rose-50 p-4 text-left transition hover:bg-rose-100">
+                    <Trash2 className="h-5 w-5 text-rose-700" />
+                    <span><span className="block text-sm font-black text-rose-900">Массовое удаление</span><span className="mt-1 block text-[11px] text-rose-700">Только su, обязательно через preview</span></span>
+                  </button>
+                )}
+              </div>
+              {normalizedCount !== null && (
+                <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-800">
+                  <span><b>Нормализация завершена.</b> Изменено номеров: {normalizedCount.toLocaleString('ru-RU')}.</span>
+                  <button type="button" onClick={() => setNormalizedCount(null)} className="rounded-md p-1 text-emerald-700 hover:bg-emerald-100" aria-label="Закрыть сообщение"><X className="h-4 w-4" /></button>
+                </div>
+              )}
+            </div>
+          ) : directoryPageMode === 'personal_import' || !canOpenCompanyDirectoryImport() ? (
+            <>
+              {canOpenCompanyDirectoryImport() && (
+                <div className="flex flex-wrap items-center gap-3 rounded-xl border border-blue-200 bg-blue-50 p-4 text-xs shadow-sm">
+                  <span className="font-black text-slate-800">Куда импортировать:</span>
+                  <select value={contactImportVisibility} onChange={event => setContactImportVisibility(event.target.value as 'private' | 'shared')} className="rounded-lg border border-blue-200 bg-white px-3 py-2 font-bold text-slate-700">
+                    <option value="private">В мой личный справочник</option>
+                    <option value="shared">В общий справочник</option>
+                  </select>
+                </div>
+              )}
+              {getPersonalContactImportUnavailableMessage() ? (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-sm font-bold text-amber-900 shadow-sm">
+                  {getPersonalContactImportUnavailableMessage()}
+                </div>
+              ) : renderPersonalContactImportPanel()}
+            </>
+          ) : directoryPageMode === 'url_import' ? (
+            <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+              {!draftSettings ? (
+                <div className="py-10 text-center text-sm font-bold text-slate-500">Загрузка настроек импорта…</div>
+              ) : (
+                <>
+                  <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <h3 className="flex items-center gap-2 text-base font-black text-slate-900"><Globe className="h-5 w-5 text-blue-600" />Импорт справочника по ссылке</h3>
+                      <p className="mt-1 text-xs text-slate-500">Проверка и синхронизация используют существующий backend workflow. Сначала сохраните изменённые параметры.</p>
+                    </div>
+                    <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700">
+                      <input type="checkbox" checked={draftSettings.directoryImportEnabled ?? true} onChange={(e) => setDraftSettings({ ...draftSettings, directoryImportEnabled: e.target.checked })} className="rounded border-slate-300 text-blue-600" />
+                      Источник включён
+                    </label>
+                  </div>
+                  {(() => {
+                    const enabled = draftSettings.directoryImportEnabled !== false && Boolean(String(draftSettings.directoryImportUrl || '').trim());
+                    const schedule = draftSettings.directoryImportSchedule || 'manual';
+                    const scheduleLabel = schedule === 'hourly' ? 'каждый час' : schedule === 'daily' ? 'каждый день' : schedule === 'weekly' ? 'раз в неделю' : 'только вручную';
+                    const automatic = enabled && schedule !== 'manual';
+                    return (
+                      <div className={`mb-4 rounded-xl border p-4 ${enabled ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50'}`} role="status" aria-live="polite">
+                        <div className={`flex items-center gap-2 text-sm font-black ${enabled ? 'text-emerald-900' : 'text-amber-900'}`}>
+                          <span aria-hidden="true">{enabled ? '●' : '○'}</span>
+                          {enabled ? `Синхронизация по ссылке включена · ${scheduleLabel}` : 'Синхронизация по ссылке не активна'}
+                        </div>
+                        <p className={`mt-1 text-xs ${enabled ? 'text-emerald-800' : 'text-amber-800'}`}>
+                          {automatic
+                            ? 'Расписание сохранено. Автоматический вызов выполняется внешним cron по показанной ниже команде.'
+                            : enabled
+                              ? 'Автоматическое расписание отключено. Используйте кнопку «Синхронизировать сейчас».'
+                              : 'Укажите URL и включите источник, затем сохраните настройки.'}
+                        </p>
+                      </div>
+                    );
+                  })()}
+                  <div className="grid min-w-0 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+                    <label className="min-w-0 text-xs font-bold text-slate-600 md:col-span-2 xl:col-span-4">URL файла CSV/JSON
+                      <input type="url" value={draftSettings.directoryImportUrl || ''} onChange={(e) => setDraftSettings({ ...draftSettings, directoryImportUrl: e.target.value })} placeholder="https://site.ru/contacts.csv" className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900" />
+                    </label>
+                    <label className="text-xs font-bold text-slate-600">Формат
+                      <select value={draftSettings.directoryImportFormat || 'csv'} onChange={(e) => setDraftSettings({ ...draftSettings, directoryImportFormat: e.target.value as any })} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs">
+                        <option value="csv">CSV</option><option value="json">JSON</option>
+                      </select>
+                    </label>
+                    <label className="text-xs font-bold text-slate-600">Режим
+                      <select value={draftSettings.directoryImportMode || 'upsert'} onChange={(e) => setDraftSettings({ ...draftSettings, directoryImportMode: e.target.value as any })} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs">
+                        <option value="upsert">Обновлять/добавлять</option><option value="append">Только добавить</option><option value="overwrite">Полностью заменить</option>
+                      </select>
+                    </label>
+                    <label className="text-xs font-bold text-slate-600">Период
+                      <select value={draftSettings.directoryImportSchedule || 'manual'} onChange={(e) => setDraftSettings({ ...draftSettings, directoryImportSchedule: e.target.value as any })} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs">
+                        <option value="manual">Только вручную</option><option value="hourly">Каждый час</option><option value="daily">Каждый день</option><option value="weekly">Раз в неделю</option>
+                      </select>
+                    </label>
+                    <label className="text-xs font-bold text-slate-600">Sync token для cron
+                      <input type="text" readOnly value={draftSettings.directorySyncToken || ''} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-mono text-slate-700" />
+                    </label>
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button type="button" onClick={handleSaveDirectoryUrlSettings} disabled={isSavingSettings} className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-50">{isSavingSettings ? 'Сохранение…' : 'Сохранить настройки'}</button>
+                    <button type="button" onClick={handleTestUrlImport} disabled={isTestingUrlImport || draftSettings.directoryImportEnabled === false} className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-800 hover:bg-slate-50 disabled:opacity-50">{isTestingUrlImport ? 'Проверка…' : 'Проверить ссылку'}</button>
+                    <button type="button" onClick={handleSyncDirectoryUrl} disabled={isSyncingDirectoryUrl || draftSettings.directoryImportEnabled === false} className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-bold text-white hover:bg-blue-700 disabled:opacity-50">{isSyncingDirectoryUrl ? 'Синхронизация…' : 'Синхронизировать сейчас'}</button>
+                  </div>
+                  {isSyncingDirectoryUrl && (
+                    <div className="mt-4 rounded-xl border border-blue-200 bg-blue-50 p-4" role="status" aria-live="polite">
+                      <div className="flex items-center justify-between gap-3 text-xs font-black text-blue-900">
+                        <span>Синхронизация выполняется</span>
+                        <span>{urlSyncElapsedSeconds} сек.</span>
+                      </div>
+                      <div className="mt-3 h-2 overflow-hidden rounded-full bg-blue-100" role="progressbar" aria-label="Синхронизация справочника по ссылке" aria-valuetext={`Выполняется ${urlSyncElapsedSeconds} секунд`}>
+                        <div className="h-full w-1/3 animate-pulse rounded-full bg-blue-600" />
+                      </div>
+                      <p className="mt-2 text-xs text-blue-800">Не закрывайте страницу. Загружаем источник, сопоставляем контакты и сохраняем изменения.</p>
+                    </div>
+                  )}
+                  <div className="mt-3 overflow-x-auto rounded-lg border border-slate-200 bg-slate-50 p-2 text-[11px] text-slate-500">
+                    <code>Cron: curl -s -X POST http://127.0.0.1:3000/api/directory/sync-url -H &quot;X-Sync-Token: {draftSettings.directorySyncToken || 'TOKEN'}&quot;</code>
+                  </div>
+                  {urlImportTestResult && <div role="status" className={`mt-3 rounded-lg border p-3 text-xs font-bold ${urlImportTestResult.success ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-blue-200 bg-blue-50 text-blue-700'}`}>{urlImportTestResult.message}</div>}
+                  {!isSyncingDirectoryUrl && (draftSettings.directoryLastSyncAt || draftSettings.directoryLastSyncMessage) && (
+                    draftSettings.directoryLastSyncStatus === 'error' ? (
+                      <details className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+                        <summary className="cursor-pointer font-bold">Предыдущая попытка {draftSettings.directoryLastSyncAt ? new Date(draftSettings.directoryLastSyncAt).toLocaleString('ru-RU') : ''} завершилась ошибкой</summary>
+                        <p className="mt-2 break-words text-amber-800">{draftSettings.directoryLastSyncMessage || 'Причина не указана'}</p>
+                        <p className="mt-2 text-[11px] text-amber-700">Это история предыдущего запуска, а не ошибка текущей страницы.</p>
+                      </details>
+                    ) : (
+                      <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-900">
+                        Последняя успешная синхронизация: <b>{draftSettings.directoryLastSyncAt ? new Date(draftSettings.directoryLastSyncAt).toLocaleString('ru-RU') : '—'}</b><br />
+                        {draftSettings.directoryLastSyncMessage || 'Выполнено успешно'}
+                      </div>
+                    )
+                  )}
+                </>
+              )}
+            </div>
+          ) : (
+            <>
           <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
             <div className="grid grid-cols-2 gap-px bg-slate-200 sm:grid-cols-3 lg:grid-cols-6" aria-label="Этапы импорта">
               {directoryImportPipelineSteps.map((step,index)=>{
@@ -7094,113 +7303,14 @@ export default function App() {
 
           {isDirectoryImportCancelOpen&&<div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm"><div role="dialog" aria-modal="true" aria-label="Остановить импорт" className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-2xl"><h3 className="text-lg font-black text-slate-900">Остановить импорт?</h3><p className="mt-2 text-sm text-slate-600">Текущий пакет завершится безопасно. Выберите, что сделать с уже добавленными этим заданием контактами.</p><div className="mt-5 grid gap-2"><button type="button" onClick={()=>handleCancelDirectoryImport('preserve')} className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-left text-sm font-bold text-amber-900">Остановить и сохранить уже добавленные</button><button type="button" onClick={()=>handleCancelDirectoryImport('rollback')} className="rounded-lg border border-rose-300 bg-rose-50 px-4 py-3 text-left text-sm font-bold text-rose-900">Остановить и откатить этот импорт</button><button type="button" onClick={()=>setIsDirectoryImportCancelOpen(false)} className="rounded-lg border border-slate-200 px-4 py-3 text-sm font-bold text-slate-700">Продолжить импорт</button></div></div></div>}
           {directoryImportRollbackPreview&&<div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm"><div className="flex items-start justify-between gap-3"><div><h4 className="font-black text-rose-900">Предпросмотр отката</h4><p className="mt-1 text-rose-800">Будет удалено контактов: <b>{Number(directoryImportRollbackPreview.contactsToDelete||0).toLocaleString('ru-RU')}</b>; связанных записей: <b>{Number(directoryImportRollbackPreview.metadataToDelete||0).toLocaleString('ru-RU')}</b>.</p><p className="mt-1 text-xs text-rose-700">Откат не выполнен. Для удаления требуется отдельное подтверждение.</p></div><button type="button" onClick={()=>setDirectoryImportRollbackPreview(null)} className="rounded border border-rose-200 bg-white px-2 py-1 text-xs font-bold">Закрыть</button></div></div>}
+            </>
+          )}
         </section>
       )}
 
       {activeView === 'directory' && directoryPageMode === 'list' && (
         <>
           <section id="directory-panel" className="flex flex-col gap-4">
-        {/* Admin Directory Controls Panel */}
-        {isAdminRole(session?.role) && (
-          <div className="order-last bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3 shadow-sm select-none">
-            <div 
-              className="flex items-center justify-between cursor-pointer"
-              onClick={() => setIsAdminPanelExpanded(!isAdminPanelExpanded)}
-            >
-              <div className="flex items-center gap-2">
-                <Sliders className="h-4.5 w-4.5 text-blue-600" />
-                <h3 className="text-sm font-bold text-slate-800 font-sans">Панель администратора справочника</h3>
-                <span className="text-[11px] text-slate-400 font-normal">
-                  ({isAdminPanelExpanded ? 'нажмите, чтобы свернуть' : 'нажмите, чтобы развернуть'})
-                </span></div>
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] bg-blue-100 text-red-750 font-bold uppercase tracking-wider px-2 py-0.5 rounded">
-                  Администратор
-                </span>
-                {isAdminPanelExpanded ? (
-                  <ChevronUp className="h-4 w-4 text-slate-400" />
-                ) : (
-                  <ChevronDown className="h-4 w-4 text-slate-400" />
-                )}
-              </div></div>
-
-            {isAdminPanelExpanded && (
-              <div className="space-y-3.5 pt-2 border-t border-slate-200">
-                <p className="text-xs text-slate-550 font-light max-w-3xl leading-relaxed">
-                  Управляйте справочником пакетно: импортируйте контакты из CSV/TXT файлов (скачайте шаблон ниже как образец структуры для Excel), экспортируйте полную базу данных справочника в формат CSV, или запустите глобальный процесс нормализации телефонных номеров по настроенным маскам.
-                </p>
-
-                <div className="flex flex-wrap gap-2.5">
-                  {hasPermission('manage_directory_import') && (
-                  <>
-                  <button
-                    onClick={openDirectoryImportPage}
-                    className="flex items-center gap-1.5 px-3.5 py-2 bg-gradient-to-r from-red-600 to-rose-700 hover:from-red-600 hover:to-rose-600 text-white rounded-lg text-xs font-semibold cursor-pointer shadow-xs transition-all active:scale-95 select-none"
-                  >
-                    <Upload className="h-3.5 w-3.5" />
-                    CSV импорт справочника
-                  </button>
-
-                  <button
-                    onClick={handleDownloadTemplate}
-                    className="flex items-center gap-1.5 px-3.5 py-2 bg-white hover:bg-slate-100 text-blue-600 rounded-lg text-xs font-semibold cursor-pointer border border-blue-200 shadow-xs transition-all active:scale-95 select-none"
-                  >
-                    <Download className="h-3.5 w-3.5 text-red-500" />
-                    Шаблон импорта (CSV Excel)
-                  </button>
-
-                  <button
-                    onClick={handleExportCSV}
-                    className="flex items-center gap-1.5 px-3.5 py-2 bg-white hover:bg-slate-100 text-slate-700 rounded-lg text-xs font-semibold cursor-pointer border border-slate-200 shadow-xs transition-all active:scale-95 select-none"
-                  >
-                    <Download className="h-3.5 w-3.5 text-slate-500" />
-                    Экспорт в CSV
-                  </button>
-
-                  <button
-                    onClick={handleNormalizeDirectoryDb}
-                    disabled={isNormalizingDb}
-                    className="flex items-center gap-1.5 px-3.5 py-2 bg-white hover:bg-slate-100 text-slate-700 rounded-lg text-xs font-semibold cursor-pointer border border-slate-200 shadow-xs disabled:opacity-50 transition-all active:scale-95 select-none"
-                  >
-                    <RefreshCw className={`h-3.5 w-3.5 text-slate-500 ${isNormalizingDb ? 'animate-spin' : ''}`} />
-                    {isNormalizingDb ? 'Выполняется нормализация...' : 'Нормализовать все номера в базе'}
-                  </button>
-                  </>
-                  )}
-                  {session?.role === 'su' && <button
-                    type="button"
-                    onClick={() => {
-                      setDirectoryBulkDeleteScope('filtered');
-                      setDirectoryBulkDeletePreview(null);
-                      setDirectoryBulkDeleteConfirmation('');
-                      setDirectoryBulkDeleteStatus('');
-                      setIsDirectoryBulkDeleteOpen(true);
-                    }}
-                    className="flex items-center gap-1.5 rounded-lg border border-rose-200 bg-white px-3.5 py-2 text-xs font-semibold text-rose-700 shadow-xs transition-all hover:bg-rose-50 active:scale-95"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                    Массовое удаление
-                  </button>}
-                </div>
-
-                {/* Normalization result banner feedback */}
-                {normalizedCount !== null && (
-                  <div className="p-3 bg-emerald-50 border border-emerald-150 rounded-lg text-xs text-emerald-800 flex items-center justify-between font-sans shadow-inner animate-fade-in">
-                    <div className="flex items-center gap-2">
-                      <CheckCircle className="h-4.5 w-4.5 text-emerald-600" />
-                      <span>
-                        Нормализация успешно завершена! Проверены все записи в справочнике. Число измененных номеров: <strong>{normalizedCount}</strong>.
-                      </span></div>
-                    <button onClick={() => setNormalizedCount(null)} className="text-emerald-500 hover:text-emerald-700 text-sm font-semibold select-none cursor-pointer">
-                      &times;
-                    </button>
-          </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-
         {dirNotice && (
           <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-bold text-emerald-800 shadow-sm">
             {dirNotice}
@@ -7223,8 +7333,23 @@ export default function App() {
                     setDirPage(1);
                   }}
                   placeholder="Поиск по справочнику..."
-                  className="w-full min-w-0 bg-slate-50 border border-slate-200 rounded-lg py-2 pl-9 pr-3 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all font-light"
+                  className="w-full min-w-0 bg-slate-50 border border-slate-200 rounded-lg py-2 pl-9 pr-9 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all font-light"
                 />
+                {dirSearchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDirSearchQuery('');
+                      setDirPage(1);
+                      setDirSearchTooShort(false);
+                    }}
+                    className="absolute right-2 top-1.5 inline-flex h-6 w-6 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                    aria-label="Сбросить поиск"
+                    title="Сбросить поиск"
+                  >
+                    <X className="h-3.5 w-3.5" aria-hidden="true" />
+                  </button>
+                )}
                 {dirSearchTooShort && (
                   <div className="absolute left-0 top-full z-10 mt-1 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[10px] font-semibold text-amber-700 shadow-sm">
                     Введите не менее 2 символов.
@@ -7317,10 +7442,11 @@ export default function App() {
                 setDraftDirectoryVisibleColumns(selectedDirectoryVisibleColumns);
                 setIsDirectoryColumnsPanelOpen(open => !open);
               }}
-              className="flex shrink-0 items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 shadow-sm transition-all hover:bg-slate-50"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 shadow-sm transition-all hover:bg-slate-50"
+              title="Настроить столбцы"
+              aria-label="Настроить столбцы"
             >
               <Sliders className="h-4 w-4" />
-              Настроить столбцы
             </button>
 
             {(hasPermission('edit_directory') || hasPermission('edit_own_directory_contacts')) && (
@@ -7334,6 +7460,25 @@ export default function App() {
               </button>
             )}
           </div>
+          {isLoadingDirectory && dirSearchQuery.trim().length >= 2 && (
+            <div className="mt-3 border-t border-slate-100 pt-3" role="status" aria-live="polite">
+              <div className="mb-1.5 flex items-center justify-between gap-3 text-[11px] font-bold text-blue-700">
+                <span className="inline-flex items-center gap-1.5">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                  Выполняется поиск по справочнику…
+                </span>
+                <span className="shrink-0 text-slate-400">Серверный поиск</span>
+              </div>
+              <div
+                className="h-1.5 overflow-hidden rounded-full bg-blue-100"
+                role="progressbar"
+                aria-label="Прогресс поиска по справочнику"
+                aria-valuetext="Поиск выполняется"
+              >
+                <div className="h-full w-1/3 animate-pulse rounded-full bg-blue-600 motion-reduce:w-full motion-reduce:animate-none" />
+              </div>
+            </div>
+          )}
         </div>
 
         {isDirectoryColumnsPanelOpen && (
@@ -7381,6 +7526,17 @@ export default function App() {
                           checked={draftDirectoryVisibleColumns.includes(column.key as DirectoryOptionalColumnKey)}
                           onChange={() => toggleDraftDirectoryColumn(column.key as DirectoryOptionalColumnKey)}
                           className="h-3.5 w-3.5 shrink-0 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        <span className="min-w-0 truncate">{column.label}</span>
+                      </label>
+                    ))}
+                    {customDirectoryColumnConfigs.map(column => (
+                      <label key={column.key} className="flex min-w-0 items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-800 hover:bg-blue-100">
+                        <input
+                          type="checkbox"
+                          checked={draftDirectoryVisibleColumns.includes(column.key as DirectoryCustomColumnKey)}
+                          onChange={() => toggleDraftDirectoryColumn(column.key as DirectoryCustomColumnKey)}
+                          className="h-3.5 w-3.5 shrink-0 rounded border-blue-300 text-blue-600 focus:ring-blue-500"
                         />
                         <span className="min-w-0 truncate">{column.label}</span>
                       </label>
@@ -7605,16 +7761,8 @@ export default function App() {
       </Suspense>
     )}
 
-    {activeView === 'scripts' && hasPermission('view_scripts') && (
-      <ScriptsTab session={session} hasPermission={hasPermission} />
-    )}
-
-    {activeView === 'ai-assistant' && hasPermission('view_ai_assistant') && (
-      <AiAssistantTab session={session} hasPermission={hasPermission} />
-    )}
-
-    {activeView === 'ai-platform' && hasPermission('view_ai_platform') && (
-      <AiAgentBuilderPage token={session.token} canCreate={hasPermission('create_ai_agents')||hasPermission('edit_ai_agents')} canPublishAgents={hasPermission('publish_ai_agents')} canExpertMode={hasPermission('ai_platform_expert_mode')} canViewKnowledge={hasPermission('view_ai_knowledge')} canViewTraining={hasPermission('view_ai_training')} canViewTransfers={hasPermission('view_ai_transfer_requests')} canTestTransfer={hasPermission('test_ai_human_transfer')} canViewCallbacks={hasPermission('view_ai_callback_requests')} canManageCallbacks={hasPermission('manage_ai_callback_requests')} canAssignActions={hasPermission('assign_ai_actions')} canViewVoice={hasPermission('view_ai_voice_status')} canManageVoice={hasPermission('manage_ai_voice_bindings')} canTestVoice={hasPermission('test_ai_voice_gateway')} canViewMedia={hasPermission('view_ai_voice_media_status')} canTestMedia={hasPermission('test_ai_voice_media')} canViewRealtime={hasPermission('view_ai_realtime_voice_status')} canTestRealtime={hasPermission('test_ai_realtime_voice')} canViewLive={hasPermission('view_ai_voice_live_test')} canConfigureLive={hasPermission('configure_ai_voice_live_test')} canEnableLive={hasPermission('enable_ai_voice_live_test')} canCheckLive={hasPermission('execute_ai_voice_live_test_checks')} canViewVoiceAgents={hasPermission('view_ai_voice_agents')||hasPermission('view_ai_agents')} canManageVoiceAgents={hasPermission('manage_ai_voice_agents')&&hasPermission('manage_ai_voice_routes')} canTestVoiceAgents={hasPermission('test_ai_voice_agents')} canViewVoiceTranscripts={hasPermission('view_ai_voice_transcripts')} canExportVoiceTranscripts={hasPermission('export_ai_voice_transcripts')} canViewVoiceSettings={hasPermission('view_ai_voice_catalog')} canManageVoiceSettings={hasPermission('generate_ai_voice_preview')&&hasPermission('manage_ai_voice_profiles')&&hasPermission('manage_ai_agents')} canViewAiExtensions={hasPermission('view_ai_extensions')||hasPermission('view_ai_telephony')} canCreateAiExtensions={hasPermission('create_ai_extensions')} canUpdateAiExtensions={hasPermission('update_ai_extensions')||hasPermission('configure_ai_telephony')} canPublishAiExtensions={hasPermission('publish_ai_extensions')} canViewHandoff={hasPermission('view_ai_handoff')} canConfigureHandoff={hasPermission('configure_ai_handoff')} canPublishHandoff={hasPermission('publish_ai_handoff')} />
+    {activeView === 'ai-platform' && (hasPermission('view_ai_platform') || hasPermission('view_scripts') || hasPermission('view_ai_assistant')) && (
+      <AiAgentBuilderPage session={session} hasPermission={hasPermission} canViewPlatform={hasPermission('view_ai_platform')} token={session.token} canCreate={hasPermission('create_ai_agents')||hasPermission('edit_ai_agents')} canPublishAgents={hasPermission('publish_ai_agents')} canExpertMode={hasPermission('ai_platform_expert_mode')} canViewKnowledge={hasPermission('view_ai_knowledge')} canViewTraining={hasPermission('view_ai_training')} canViewTransfers={hasPermission('view_ai_transfer_requests')} canTestTransfer={hasPermission('test_ai_human_transfer')} canViewCallbacks={hasPermission('view_ai_callback_requests')} canManageCallbacks={hasPermission('manage_ai_callback_requests')} canAssignActions={hasPermission('assign_ai_actions')} canViewVoice={hasPermission('view_ai_voice_status')} canManageVoice={hasPermission('manage_ai_voice_bindings')} canTestVoice={hasPermission('test_ai_voice_gateway')} canViewMedia={hasPermission('view_ai_voice_media_status')} canTestMedia={hasPermission('test_ai_voice_media')} canViewRealtime={hasPermission('view_ai_realtime_voice_status')} canTestRealtime={hasPermission('test_ai_realtime_voice')} canViewLive={hasPermission('view_ai_voice_live_test')} canConfigureLive={hasPermission('configure_ai_voice_live_test')} canEnableLive={hasPermission('enable_ai_voice_live_test')} canCheckLive={hasPermission('execute_ai_voice_live_test_checks')} canViewVoiceAgents={hasPermission('view_ai_voice_agents')||hasPermission('view_ai_agents')} canManageVoiceAgents={hasPermission('manage_ai_voice_agents')&&hasPermission('manage_ai_voice_routes')} canTestVoiceAgents={hasPermission('test_ai_voice_agents')} canViewVoiceTranscripts={hasPermission('view_ai_voice_transcripts')} canExportVoiceTranscripts={hasPermission('export_ai_voice_transcripts')} canViewVoiceSettings={hasPermission('view_ai_voice_catalog')} canManageVoiceSettings={hasPermission('generate_ai_voice_preview')&&hasPermission('manage_ai_voice_profiles')&&hasPermission('manage_ai_agents')} canViewAiExtensions={hasPermission('view_ai_extensions')||hasPermission('view_ai_telephony')} canCreateAiExtensions={hasPermission('create_ai_extensions')} canUpdateAiExtensions={hasPermission('update_ai_extensions')||hasPermission('configure_ai_telephony')} canPublishAiExtensions={hasPermission('publish_ai_extensions')} canViewHandoff={hasPermission('view_ai_handoff')} canConfigureHandoff={hasPermission('configure_ai_handoff')} canPublishHandoff={hasPermission('publish_ai_handoff')} />
     )}
 
 
@@ -7820,7 +7968,8 @@ export default function App() {
                             <span>{freepbxApiTestResult.message}</span>
                           </div>
                         )}
-                      </div></div>
+                      </div>
+                    </div>
                   )}
                   {settingsTab === 'directory' && draftSettings && (
                     <div className="space-y-5">
@@ -7843,84 +7992,84 @@ export default function App() {
                       </div>
 
                       <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <h4 className="flex items-center gap-2 text-sm font-black text-slate-900"><Sliders className="h-4 w-4 text-blue-600" />Столбцы справочника</h4>
+                            <p className="mt-1 text-[11px] leading-relaxed text-slate-500">Выберите видимые столбцы и их порядок. Обязательные поля остаются включёнными.</p>
+                          </div>
+                          <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-bold text-slate-600">
+                            {getDirectoryColumnSettingsSourceLabel(directoryColumnSettingsSource)}
+                          </span>
+                        </div>
+
+                        {directoryColumnSettingsStatus && (
+                          <p className="mt-3 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700" role="status">
+                            {directoryColumnSettingsStatus}
+                          </p>
+                        )}
+
+                        <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                          {[...optionalDirectoryColumns, ...customDirectoryColumnConfigs].map(column => (
+                            <label key={column.key} className="flex min-w-0 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700">
+                              <input
+                                type="checkbox"
+                                checked={draftDirectoryVisibleColumns.includes(column.key as DirectoryVisibleColumnKey)}
+                                onChange={() => toggleDraftDirectoryColumn(column.key as DirectoryOptionalColumnKey | DirectoryCustomColumnKey)}
+                                className="rounded border-slate-300 text-blue-600"
+                              />
+                              <span className="min-w-0 flex-1 truncate">{column.label}</span>
+                              {String(column.key).startsWith('custom:') && <span className="text-[9px] font-bold uppercase text-blue-600">свой</span>}
+                            </label>
+                          ))}
+                        </div>
+
+                        <div className="mt-4 space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                          <div className="text-[11px] font-black uppercase tracking-wide text-slate-500">Порядок столбцов</div>
+                          {draftDirectoryOrderConfigs.map((column, index) => (
+                            <div key={column.key} className="flex min-w-0 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs">
+                              <span className="min-w-0 flex-1 truncate font-semibold text-slate-700">{column.label}</span>
+                              <button type="button" onClick={() => moveDraftDirectoryColumn(column.key as DirectoryVisibleColumnKey, -1)} disabled={index === 0} className="rounded border px-2 py-1 font-bold disabled:opacity-30" aria-label={`Переместить ${column.label} выше`}>↑</button>
+                              <button type="button" onClick={() => moveDraftDirectoryColumn(column.key as DirectoryVisibleColumnKey, 1)} disabled={index === draftDirectoryOrderConfigs.length - 1} className="rounded border px-2 py-1 font-bold disabled:opacity-30" aria-label={`Переместить ${column.label} ниже`}>↓</button>
+                            </div>
+                          ))}
+                        </div>
+
+                        {canManageGlobalDirectoryColumns && (
+                          <div className="mt-4 rounded-xl border border-blue-200 bg-blue-50 p-3">
+                            <h5 className="text-xs font-black text-blue-900">Добавить свой столбец для всех</h5>
+                            <p className="mt-1 text-[11px] text-blue-700">Определение создаётся в существующей модели дополнительных полей справочника.</p>
+                            <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-[minmax(180px,1fr)_180px_auto]">
+                              <input value={newDirectoryColumnName} onChange={event => setNewDirectoryColumnName(event.target.value)} maxLength={100} placeholder="Название столбца" className="rounded-lg border border-blue-200 bg-white px-3 py-2 text-xs" />
+                              <select value={newDirectoryColumnType} onChange={event => setNewDirectoryColumnType(event.target.value as DirectoryCustomFieldDefinition['fieldType'])} className="rounded-lg border border-blue-200 bg-white px-3 py-2 text-xs">
+                                <option value="string">Строка</option><option value="text">Длинный текст</option><option value="number">Число</option><option value="date">Дата</option><option value="boolean">Да / нет</option><option value="phone">Телефон</option><option value="email">Email</option>
+                              </select>
+                              <button type="button" onClick={handleCreateDirectoryCustomColumn} disabled={isCreatingDirectoryColumn || newDirectoryColumnName.trim().length < 2} className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">
+                                {isCreatingDirectoryColumn ? 'Добавление…' : 'Добавить для всех'}
+                              </button>
+                            </div>
+                            <label className="mt-2 flex items-center gap-2 text-[11px] font-semibold text-blue-800"><input type="checkbox" checked={newDirectoryColumnSearchable} onChange={event => setNewDirectoryColumnSearchable(event.target.checked)} className="rounded border-blue-300 text-blue-600" />Учитывать поле в глобальном поиске</label>
+                          </div>
+                        )}
+
+                        <div className="mt-4 flex flex-wrap justify-end gap-2">
+                          <button type="button" onClick={resetDirectoryColumnSettings} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600">Сбросить мои</button>
+                          <button type="button" onClick={saveDirectoryColumnSettings} className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white">Сохранить мои</button>
+                          {canManageGlobalDirectoryColumns && <button type="button" onClick={saveGlobalDirectoryColumnSettingsForAll} className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700">Сохранить для всех</button>}
+                        </div>
+                      </div>
+
+                      <div className="rounded-2xl border border-slate-200 bg-white p-4">
                         <h4 className="mb-3 flex items-center gap-2 text-sm font-black text-slate-900"><Upload className="h-4 w-4 text-blue-600" />Настройки импорта</h4>
                         <p className="mb-3 text-[11px] leading-relaxed text-slate-500">Эти настройки только разрешают или запрещают источники импорта. Личные подключения пользователей находятся в Справочник → Импорт контактов.</p>
                         <div className="grid min-w-0 max-w-full grid-cols-1 gap-2 md:grid-cols-2">
-                          <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700"><input type="checkbox" checked={draftSettings.directoryImportEnabled ?? true} onChange={(e) => setDraftSettings({ ...draftSettings, directoryImportEnabled: e.target.checked })} className="rounded border-slate-300 text-blue-600" />Импорт справочника по ссылке</label>
                           <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700"><input type="checkbox" checked={draftSettings.googleImportEnabled ?? true} onChange={(e) => setDraftSettings({ ...draftSettings, googleImportEnabled: e.target.checked })} className="rounded border-slate-300 text-blue-600" />Google Contacts import</label>
                           <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700"><input type="checkbox" checked={draftSettings.fileImportEnabled ?? true} onChange={(e) => setDraftSettings({ ...draftSettings, fileImportEnabled: e.target.checked })} className="rounded border-slate-300 text-blue-600" />CSV/vCard import</label>
                           <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700"><input type="checkbox" checked={draftSettings.yandexCarddavEnabled ?? true} onChange={(e) => setDraftSettings({ ...draftSettings, yandexCarddavEnabled: e.target.checked })} className="rounded border-slate-300 text-blue-600" />Yandex advanced import</label>
                           <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700"><input type="checkbox" checked={draftSettings.mailruCarddavEnabled ?? true} onChange={(e) => setDraftSettings({ ...draftSettings, mailruCarddavEnabled: e.target.checked })} className="rounded border-slate-300 text-blue-600" />Mail.ru advanced import</label>
                         </div>
+                        <DirectoryCsvColumnsHelp />
                       </div>
-
-                      <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                        <h4 className="text-sm font-black text-slate-900 mb-3 flex items-center gap-2"><Globe className="h-4 w-4 text-blue-600" />Импорт справочника по ссылке</h4>
-                        <div className="grid min-w-0 max-w-full grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-                          <label className="min-w-0 max-w-full break-words md:col-span-4 text-xs font-bold text-slate-600">URL файла CSV/JSON
-                            <input type="text" value={draftSettings.directoryImportUrl || ''} onChange={(e) => setDraftSettings({ ...draftSettings, directoryImportUrl: e.target.value })} placeholder="https://site.ru/contacts.csv" className="mt-1 w-full min-w-0 max-w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900" />
-                          </label>
-                          <label className="min-w-0 max-w-full break-words text-xs font-bold text-slate-600">Формат
-                            <select value={draftSettings.directoryImportFormat || 'csv'} onChange={(e) => setDraftSettings({ ...draftSettings, directoryImportFormat: e.target.value as any })} className="mt-1 w-full min-w-0 max-w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs">
-                              <option value="csv">CSV</option>
-                              <option value="json">JSON</option>
-                            </select>
-                          </label>
-                          <label className="min-w-0 max-w-full break-words text-xs font-bold text-slate-600">Режим
-                            <select value={draftSettings.directoryImportMode || 'upsert'} onChange={(e) => setDraftSettings({ ...draftSettings, directoryImportMode: e.target.value as any })} className="mt-1 w-full min-w-0 max-w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs">
-                              <option value="upsert">Обновлять/добавлять</option>
-                              <option value="append">Только добавить</option>
-                              <option value="overwrite">Полностью заменить</option>
-                            </select>
-                          </label>
-                          <label className="min-w-0 max-w-full break-words text-xs font-bold text-slate-600">Период
-                            <select value={draftSettings.directoryImportSchedule || 'manual'} onChange={(e) => setDraftSettings({ ...draftSettings, directoryImportSchedule: e.target.value as any })} className="mt-1 w-full min-w-0 max-w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-xs">
-                              <option value="manual">Только вручную</option>
-                              <option value="hourly">Каждый час</option>
-                              <option value="daily">Каждый день</option>
-                              <option value="weekly">Раз в неделю</option>
-                            </select>
-                          </label>
-                          <label className="min-w-0 max-w-full break-words text-xs font-bold text-slate-600">Sync token для cron
-                            <input type="text" readOnly value={draftSettings.directorySyncToken || ''} className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-700 font-mono" />
-                          </label></div>
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          {hasPermission('manage_directory_import') && (
-                          <button type="button" onClick={handleTestUrlImport} disabled={isTestingUrlImport || draftSettings.directoryImportEnabled === false} className="px-4 py-2 rounded-lg bg-white border border-slate-200 text-slate-800 text-xs font-bold hover:bg-slate-50 disabled:opacity-50">{isTestingUrlImport ? 'Проверка...' : 'Проверить ссылку'}</button>
-                          )}
-                          {hasPermission('manage_directory_import') && (
-                          <button type="button" onClick={handleSyncDirectoryUrl} disabled={isSyncingDirectoryUrl || draftSettings.directoryImportEnabled === false} className="px-4 py-2 rounded-lg bg-blue-600 text-white text-xs font-bold hover:bg-blue-700 disabled:opacity-50">{isSyncingDirectoryUrl ? 'Синхронизация...' : 'Синхронизировать сейчас'}</button>
-                          )}
-                        </div>
-                        <div className="mt-3 text-[11px] text-slate-500 font-mono bg-slate-50 border border-slate-200 rounded-lg p-2 overflow-x-auto">
-                          Cron: curl -s -X POST http://127.0.0.1:3000/api/directory/sync-url -H "X-Sync-Token: {draftSettings.directorySyncToken || 'TOKEN'}"
-                        </div>
-                        {urlImportTestResult && (
-                          <div className={`mt-3 p-3 rounded-lg border text-xs font-bold ${urlImportTestResult.success ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-blue-50 border-blue-200 text-blue-700'}`}>{urlImportTestResult.message}</div>
-                        )}
-                        {(draftSettings.directoryLastSyncAt || draftSettings.directoryLastSyncMessage) && (
-                          <div className="mt-3 text-xs text-slate-600">
-                            Последняя синхронизация: <b>{draftSettings.directoryLastSyncAt || '—'}</b><br />
-                            Статус: <b>{draftSettings.directoryLastSyncStatus || '—'}</b> — {draftSettings.directoryLastSyncMessage || '—'}
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                        <h4 className="text-sm font-black text-slate-900 mb-3">Инструменты справочника</h4>
-                        <div className="flex flex-wrap gap-2">
-                          {hasPermission('manage_directory_import') && (
-                          <button type="button" onClick={openDirectoryImportPage} className="px-4 py-2 rounded-lg bg-blue-600 text-white text-xs font-bold hover:bg-blue-700">CSV импорт справочника</button>
-                          )}
-                          {hasPermission('manage_directory_import') && (
-                          <button type="button" onClick={handleExportCSV} className="px-4 py-2 rounded-lg bg-gradient-to-br from-slate-50 via-blue-50/40 to-sky-50/50 text-slate-800 text-xs font-bold hover:bg-slate-200">Экспорт CSV</button>
-                          )}
-                          {hasPermission('manage_directory_import') && (
-                          <button type="button" onClick={handleNormalizeDirectoryDb} disabled={isNormalizingDb} className="px-4 py-2 rounded-lg bg-gradient-to-br from-slate-50 via-blue-50/40 to-sky-50/50 text-slate-800 text-xs font-bold hover:bg-slate-200 disabled:opacity-50">Нормализовать базу</button>
-                          )}
-                        </div>
-                        {normalizedCount !== null && <div className="mt-3 text-xs text-emerald-700 font-bold">Обновлено записей: {normalizedCount}</div>}
-                      </div></div>
+                    </div>
                   )}
                   {settingsTab === 'access' && (
                     <AccessUsersTab

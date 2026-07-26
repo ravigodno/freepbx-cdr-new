@@ -55,6 +55,7 @@ type CompactContact = {
   loadWarnings?: string[];
   createdAt?: string | null;
   updatedAt?: string | null;
+  importRowFingerprint?: string;
 };
 
 const text = (value: unknown, max = 255): string => String(value ?? '').trim().slice(0, max);
@@ -204,6 +205,9 @@ const rowToContact = (row: any, metadata: Record<string, any> = {}, includeDetai
     createdAt: row.created_at || null,
     updatedAt: row.updated_at || null
   };
+  const standardMetadataKeys = new Set<string>(DIRECTORY_SEARCH_METADATA_KEYS);
+  const customFields = Object.fromEntries(Object.entries(metadata).filter(([key]) => !standardMetadataKeys.has(key)));
+  (contact as any).customFields = customFields;
   if (!includeDetails) return contact;
   return {
     ...contact,
@@ -216,7 +220,7 @@ const rowToContact = (row: any, metadata: Record<string, any> = {}, includeDetai
     internalExtension: text(metadata.internalExtension, 64),
     linkedExternalNumber: text(metadata.linkedExternalNumber, 100),
     tags: Array.isArray(metadata.tags) ? metadata.tags.map(value => text(value, 100)).filter(Boolean) : [],
-    customFields: metadata.customFields && typeof metadata.customFields === 'object' ? metadata.customFields : {}
+    customFields
   };
 };
 
@@ -235,6 +239,18 @@ export function invalidateDirectoryPerformanceCaches(_reason = 'directory_write'
 
 export function getDirectoryPerformanceCacheStats() {
   return { lookupEntries: lookupCache.size, lookupGeneration, countEntries: countCache.size, countGeneration };
+}
+
+export async function listDirectoryContactsForSyncSql(): Promise<CompactContact[]> {
+  const rows = await queryPBXPulsDb(
+    `SELECT ${compactFields}, c.comment, c.import_row_fingerprint
+     FROM directory_contacts c
+     ORDER BY c.import_row_fingerprint IS NULL, c.id`
+  );
+  return rows.map(row => ({
+    ...rowToContact(row, {}, true),
+    importRowFingerprint: text(row.import_row_fingerprint, 64)
+  }));
 }
 
 const buildFilters = (input: DirectoryListInput, access: DirectoryAccessContext) => {
@@ -323,9 +339,19 @@ const buildFilters = (input: DirectoryListInput, access: DirectoryAccessContext)
              WHERE sm.contact_id=c.id
                AND sm.metadata_key IN (${metadataKeyPlaceholders})
                AND ${metadataSearchValueSql} LIKE ? ESCAPE '!'
+           )`,
+          `EXISTS (
+             SELECT 1
+             FROM directory_contact_metadata csm
+             INNER JOIN directory_custom_fields csf ON csf.id=csm.field_id
+             WHERE csm.contact_id=c.id
+               AND csf.entity_type='directory_contact'
+               AND csf.is_visible=1
+               AND csf.show_in_search=1
+               AND COALESCE(csm.metadata_value,csm.value,csm.metadata_json,'') LIKE ? ESCAPE '!'
            )`
         );
-        tokenParams.push(...DIRECTORY_SEARCH_METADATA_KEYS, pattern);
+        tokenParams.push(...DIRECTORY_SEARCH_METADATA_KEYS, pattern, pattern);
         const responsibleIds = input.responsibleUserSearchIdsByToken?.[token] || [];
         if (responsibleIds.length) {
           tokenClauses.push(
@@ -419,9 +445,8 @@ export async function listDirectoryContactsSql(input: DirectoryListInput, access
     `SELECT contact_id,metadata_key,metadata_value,metadata_json,value
      FROM directory_contact_metadata
      WHERE contact_id IN (${ids.map(() => '?').join(',')})
-       AND metadata_key IN (${DIRECTORY_SEARCH_METADATA_KEYS.map(() => '?').join(',')})
      ORDER BY contact_id,metadata_key`,
-    [...ids, ...DIRECTORY_SEARCH_METADATA_KEYS]
+    ids
   ) : [];
   const metadataJoinMs = elapsed(metadataStarted);
   const metadata = parseMetadata(metadataRows);
