@@ -7,6 +7,11 @@ import { parseDirectoryCsv, validateDirectoryPhone } from '../shared/directoryIm
 import { getPBXPulsDbConnectionOptions } from './pbxpulsDbConfig.js';
 import { createUniqueDirectoryContactId } from './directoryContactIds.js';
 import { writePBXPulsSystemEvent } from './pbxpulsEvents.js';
+import {
+  resolveDirectoryResponsibleUser,
+  type DirectoryResponsibleUser,
+  type DirectoryUnknownResponsibleStrategy
+} from './directoryOwnership.js';
 
 type AtomicityMode = 'rollback_on_error' | 'partial';
 type DuplicateStrategy = 'skip' | 'update' | 'create';
@@ -25,6 +30,7 @@ type ImportRow = {
   comment: string;
   contactType: 'common' | 'personal';
   ownerUserId: string | null;
+  responsibleUserId: string;
   visibility: 'shared' | 'private';
   type: 'internal' | 'client' | 'supplier' | 'government';
   isSpam: number;
@@ -66,6 +72,13 @@ type JobRow = {
 type RegisterDependencies = {
   requireAuth: RequestHandler;
   hasPermission: (req: Request, permission: string) => Promise<boolean>;
+  listDirectoryUsers: () => Promise<DirectoryResponsibleUser[]>;
+};
+
+type ImportOptions = {
+  unknownResponsibleStrategy: DirectoryUnknownResponsibleStrategy;
+  responsibleUserMappings: Record<string, string>;
+  corporateImport: boolean;
 };
 
 const runningJobs = new Set<string>();
@@ -97,6 +110,12 @@ const actorLabel = (req: Request): string => {
   const user = (req as any).user || {};
   return safeText(user.id || user.username || user.role || 'unknown', 100);
 };
+
+const defaultImportOptions = (): ImportOptions => ({
+  unknownResponsibleStrategy: 'clear',
+  responsibleUserMappings: {},
+  corporateImport: true
+});
 
 const parseImportRows = (content: string): { rows: ImportRow[]; errors: Array<{ rowNumber: number; code: string; message: string }> } => {
   const csv = parseDirectoryCsv(content);
@@ -177,6 +196,7 @@ const parseImportRows = (content: string): { rows: ImportRow[]; errors: Array<{ 
       comment: stable.comment,
       contactType: visibility === 'private' ? 'personal' : 'common',
       ownerUserId: null,
+      responsibleUserId: String(metadata.responsibleUserId || ''),
       visibility,
       type,
       isSpam: boolValue(get(values, 'isspam', 'is_spam', 'спам')) ? 1 : 0,
@@ -188,6 +208,97 @@ const parseImportRows = (content: string): { rows: ImportRow[]; errors: Array<{ 
 };
 
 export const parseDirectoryImportRowsForTest = parseImportRows;
+
+export const buildDirectoryResponsiblePreview = (
+  parsed: ReturnType<typeof parseImportRows>,
+  users: DirectoryResponsibleUser[],
+  options: ImportOptions = defaultImportOptions()
+) => {
+  const unknownCounts = new Map<string, number>();
+  const existingCounts = new Map<string, number>();
+  let shared = 0;
+  let privateContacts = 0;
+  let withResponsible = 0;
+  for (const row of parsed.rows) {
+    if (row.visibility === 'private') privateContacts++;
+    else shared++;
+    if (!row.responsibleUserId) continue;
+    withResponsible++;
+    const resolution = resolveDirectoryResponsibleUser(row.responsibleUserId, users);
+    const target = options.responsibleUserMappings[row.responsibleUserId];
+    const mapped = target ? resolveDirectoryResponsibleUser(target, users) : null;
+    if (resolution.status === 'active' || mapped?.status === 'active') {
+      existingCounts.set(row.responsibleUserId, (existingCounts.get(row.responsibleUserId) || 0) + 1);
+    } else {
+      unknownCounts.set(row.responsibleUserId, (unknownCounts.get(row.responsibleUserId) || 0) + 1);
+    }
+  }
+  return {
+    totalContacts: parsed.rows.length + parsed.errors.length,
+    sharedContacts: shared,
+    privateContacts,
+    withResponsible,
+    withoutResponsible: parsed.rows.length - withResponsible,
+    uniqueResponsibleUserIds: new Set(parsed.rows.map(row => row.responsibleUserId).filter(Boolean)).size,
+    existingResponsibleUserIds: Array.from(existingCounts, ([id, count]) => ({ id, count })),
+    unknownResponsibleUserIds: Array.from(unknownCounts, ([id, count]) => ({ id, count })),
+    unknownResponsibleRows: Array.from(unknownCounts.values()).reduce((sum, count) => sum + count, 0),
+    invalidRows: parsed.errors.length,
+    recommendedStrategy: 'clear' as const,
+    corporateNormalization: options.corporateImport
+      ? { visibility: 'shared', responsibleUserId: null }
+      : null
+  };
+};
+
+export const applyDirectoryResponsibleOptionsForTest = (
+  parsed: ReturnType<typeof parseImportRows>,
+  users: DirectoryResponsibleUser[],
+  options: ImportOptions
+): ReturnType<typeof parseImportRows> => {
+  const errors = [...parsed.errors];
+  const rows: ImportRow[] = [];
+  for (const row of parsed.rows) {
+    const resolution = resolveDirectoryResponsibleUser(row.responsibleUserId, users);
+    const mappedIdentifier = options.responsibleUserMappings[row.responsibleUserId];
+    const mapped = mappedIdentifier ? resolveDirectoryResponsibleUser(mappedIdentifier, users) : null;
+    if (options.unknownResponsibleStrategy === 'clear') {
+      row.responsibleUserId = '';
+      row.metadata.responsibleUserId = '';
+      if (options.corporateImport) {
+        row.visibility = 'shared';
+        row.contactType = 'common';
+        row.ownerUserId = null;
+      }
+      rows.push(row);
+      continue;
+    }
+    if (!row.responsibleUserId) {
+      rows.push(row);
+      continue;
+    }
+    if (resolution.status === 'active') {
+      row.responsibleUserId = resolution.userId || '';
+      row.metadata.responsibleUserId = row.responsibleUserId;
+      rows.push(row);
+      continue;
+    }
+    if (options.unknownResponsibleStrategy === 'map' && mapped?.status === 'active') {
+      row.responsibleUserId = mapped.userId || '';
+      row.metadata.responsibleUserId = row.responsibleUserId;
+      rows.push(row);
+      continue;
+    }
+    errors.push({
+      rowNumber: row.rowNumber,
+      code: options.unknownResponsibleStrategy === 'skip' ? 'RESPONSIBLE_SKIPPED' : 'RESPONSIBLE_UNKNOWN',
+      message: options.unknownResponsibleStrategy === 'skip'
+        ? 'Строка пропущена: ответственный не найден или недоступен'
+        : 'Неизвестный ответственный не сопоставлен'
+    });
+  }
+  return { rows, errors };
+};
 
 const getConnection = (): Promise<Connection> => mysql.createConnection(getPBXPulsDbConnectionOptions());
 
@@ -261,7 +372,13 @@ const bulkInsertContacts = async (connection: Connection, job: JobRow, rows: Arr
     ) VALUES ${placeholders}`,
     values
   );
-  const metadataRows = rows.flatMap(row => Object.entries(row.metadata)
+  const metadataRows = rows.flatMap(row => Object.entries({
+    ...row.metadata,
+    createdBy: job.started_by,
+    sourceType: 'company_import',
+    sourceId: job.id,
+    sourceHash: job.source_hash
+  })
     .filter(([, value]) => value !== '' && value !== null && value !== undefined)
     .map(([key, value]) => [row.contactId, key, JSON.stringify(value), nowSql(), nowSql()]));
   if (metadataRows.length) {
@@ -293,8 +410,8 @@ const rollbackCreatedContacts = async (connection: Connection, jobId: string): P
 
 const updateExistingContact = async (connection: Connection, contactId: string, row: ImportRow) => {
   await connection.execute(
-    `UPDATE directory_contacts SET name=?,company=?,phone=?,phone_normalized=?,phone2=?,email=?,comment=?,visibility=?,type=?,is_spam=?,is_blacklisted=?,updated_at=? WHERE id=?`,
-    [row.name,row.company,row.phone,row.phoneNormalized,row.phone2,row.email,row.comment,row.visibility,row.type,row.isSpam,row.isBlacklisted,nowSql(),contactId]
+    `UPDATE directory_contacts SET name=?,company=?,phone=?,phone_normalized=?,phone2=?,email=?,comment=?,contact_type=?,owner_user_id=?,visibility=?,type=?,is_spam=?,is_blacklisted=?,updated_at=? WHERE id=?`,
+    [row.name,row.company,row.phone,row.phoneNormalized,row.phone2,row.email,row.comment,row.contactType,row.ownerUserId,row.visibility,row.type,row.isSpam,row.isBlacklisted,nowSql(),contactId]
   );
 };
 
@@ -308,7 +425,7 @@ const markJobFailed = async (connection: Connection, job: JobRow, error: any, er
   );
 };
 
-const processJob = async (jobId: string): Promise<void> => {
+const processJob = async (jobId: string, deps: RegisterDependencies): Promise<void> => {
   if (runningJobs.has(jobId)) return;
   runningJobs.add(jobId);
   let connection: Connection | null = null;
@@ -319,19 +436,29 @@ const processJob = async (jobId: string): Promise<void> => {
     await connection.execute(`UPDATE directory_import_jobs SET status='validating',started_at=COALESCE(started_at,?),finished_at=NULL,error_code=NULL,error_row=NULL,error_message=NULL,updated_at=? WHERE id=?`, [nowSql(), nowSql(), jobId]);
     const content = fs.readFileSync(job.source_path, 'utf8');
     if (sha256(content) !== job.source_hash) throw Object.assign(new Error('Import source hash changed'), { code: 'SOURCE_HASH_MISMATCH' });
-    const parsed = parseImportRows(content);
-    if (parsed.rows.length + parsed.errors.length !== job.total_rows) throw Object.assign(new Error('Import source row count changed'), { code: 'SOURCE_ROW_COUNT_MISMATCH' });
-    if (parsed.errors.length && job.atomicity_mode === 'rollback_on_error') throw Object.assign(new Error(`Validation failed at row ${parsed.errors[0].rowNumber}`), { code: parsed.errors[0].code, rowNumber: parsed.errors[0].rowNumber });
+    const sourceParsed = parseImportRows(content);
+    if (sourceParsed.rows.length + sourceParsed.errors.length !== job.total_rows) throw Object.assign(new Error('Import source row count changed'), { code: 'SOURCE_ROW_COUNT_MISMATCH' });
+    const optionsPath = `${job.source_path}.options.json`;
+    const options: ImportOptions = fs.existsSync(optionsPath)
+      ? { ...defaultImportOptions(), ...JSON.parse(fs.readFileSync(optionsPath, 'utf8')) }
+      : defaultImportOptions();
+    const parsed = applyDirectoryResponsibleOptionsForTest(sourceParsed, await deps.listDirectoryUsers(), options);
+    const blockingErrors = parsed.errors.filter(error => error.code !== 'RESPONSIBLE_SKIPPED');
+    if (blockingErrors.length && job.atomicity_mode === 'rollback_on_error') throw Object.assign(new Error(`Validation failed at row ${blockingErrors[0].rowNumber}`), { code: blockingErrors[0].code, rowNumber: blockingErrors[0].rowNumber });
     if (parsed.errors.length) {
       await insertJobRows(connection, job.id, parsed.errors.map(error => ({
         rowNumber: error.rowNumber,
         fingerprint: sha256(`invalid:${error.rowNumber}:${error.code}:${error.message}`),
         contactId: null,
-        status: 'failed',
+        status: error.code === 'RESPONSIBLE_SKIPPED' ? 'skipped' : 'failed',
         errorCode: error.code,
         errorMessage: error.message
       })));
-      await connection.execute(`UPDATE directory_import_jobs SET failed_rows=?,updated_at=? WHERE id=?`, [parsed.errors.length, nowSql(), job.id]);
+      const skipped = parsed.errors.filter(error => error.code === 'RESPONSIBLE_SKIPPED').length;
+      await connection.execute(
+        `UPDATE directory_import_jobs SET failed_rows=?,skipped_rows=?,updated_at=? WHERE id=?`,
+        [blockingErrors.length, skipped, nowSql(), job.id]
+      );
     }
     await connection.execute(`UPDATE directory_import_jobs SET status='importing',updated_at=? WHERE id=?`, [nowSql(), jobId]);
     job = (await selectJob(connection, jobId))!;
@@ -449,6 +576,41 @@ const processJob = async (jobId: string): Promise<void> => {
 
 export function registerDirectoryImportJobRoutes(app: Express, deps: RegisterDependencies): void {
   const rawCsv = express.raw({ type: ['text/csv', 'text/plain', 'application/octet-stream'], limit: MAX_IMPORT_BYTES });
+  const optionsFromRequest = (req: Request): ImportOptions => {
+    const strategy = safeText(req.header('x-import-unknown-responsible-strategy'), 20);
+    const unknownResponsibleStrategy: DirectoryUnknownResponsibleStrategy = ['clear', 'skip', 'map'].includes(strategy)
+      ? strategy as DirectoryUnknownResponsibleStrategy
+      : 'clear';
+    let responsibleUserMappings: Record<string, string> = {};
+    try {
+      const parsed = JSON.parse(req.header('x-import-responsible-mappings') || '{}');
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        responsibleUserMappings = Object.fromEntries(Object.entries(parsed)
+          .map(([source, target]) => [safeText(source, 100), safeText(target, 100)])
+          .filter(([source, target]) => source && target));
+      }
+    } catch (_error) {
+      throw Object.assign(new Error('RESPONSIBLE_MAPPING_INVALID'), { code: 'RESPONSIBLE_MAPPING_INVALID' });
+    }
+    return { unknownResponsibleStrategy, responsibleUserMappings, corporateImport: true };
+  };
+
+  app.post('/api/directory/import-jobs/preview', deps.requireAuth, rawCsv, async (req, res) => {
+    if (!(await isAllowed(req, deps, 'import_directory'))) return res.status(403).json({ error: 'Нет прав на предпросмотр импорта' });
+    try {
+      const content = Buffer.isBuffer(req.body) ? req.body : Buffer.from(String(req.body || ''), 'utf8');
+      if (!content.length) return res.status(400).json({ error: 'CSV-файл пуст' });
+      const parsed = parseImportRows(content.toString('utf8'));
+      const options = optionsFromRequest(req);
+      res.json({
+        success: true,
+        sourceHash: sha256(content),
+        preview: buildDirectoryResponsiblePreview(parsed, await deps.listDirectoryUsers(), options)
+      });
+    } catch (error: any) {
+      res.status(400).json({ error: safeImportErrorMessage(error) });
+    }
+  });
 
   app.post('/api/directory/import-jobs', deps.requireAuth, rawCsv, async (req, res) => {
     if (!(await isAllowed(req, deps, 'import_directory'))) return res.status(403).json({ error: 'Нет прав на массовый импорт' });
@@ -467,6 +629,11 @@ export function registerDirectoryImportJobRoutes(app: Express, deps: RegisterDep
       const batchSize = Math.max(100, Math.min(1000, Number(req.header('x-import-batch-size') || 500)));
       const parsed = parseImportRows(content.toString('utf8'));
       const totalRows = parsed.rows.length + parsed.errors.length;
+      const importOptions = optionsFromRequest(req);
+      const responsiblePreview = buildDirectoryResponsiblePreview(parsed, await deps.listDirectoryUsers(), importOptions);
+      if (importOptions.unknownResponsibleStrategy === 'map' && responsiblePreview.unknownResponsibleRows > 0) {
+        return res.status(400).json({ error: 'Сопоставьте всех неизвестных ответственных перед импортом.', preview: responsiblePreview });
+      }
       const idempotencyKey = safeText(req.header('idempotency-key') || `${actorLabel(req)}:${sourceHash}:${atomicityMode}:${duplicateStrategy}`, 191);
       const connection = await getConnection();
       try {
@@ -478,13 +645,14 @@ export function registerDirectoryImportJobRoutes(app: Express, deps: RegisterDep
         const temporaryPath = `${sourcePath}.tmp`;
         fs.writeFileSync(temporaryPath, content, { mode: 0o600 });
         fs.renameSync(temporaryPath, sourcePath);
+        fs.writeFileSync(`${sourcePath}.options.json`, JSON.stringify(importOptions), { mode: 0o600 });
         await connection.execute(
           `INSERT INTO directory_import_jobs(id,source_filename,source_hash,source_path,total_rows,status,cancel_requested,started_by,updated_at,mode,duplicate_strategy,batch_size,atomicity_mode,idempotency_key)
            VALUES(?,?,?,?,?,'queued',0,?,?,'upsert',?,?,?,?)`,
           [jobId, sourceFilename, sourceHash, sourcePath, totalRows, actorLabel(req), nowSql(), duplicateStrategy, batchSize, atomicityMode, idempotencyKey]
         );
         const job = await selectJob(connection, jobId);
-        setImmediate(() => void processJob(jobId));
+        setImmediate(() => void processJob(jobId, deps));
         res.status(202).json({ created: true, idempotent: false, job: safeJob(job!) });
       } finally {
         await connection.end();
@@ -549,7 +717,7 @@ export function registerDirectoryImportJobRoutes(app: Express, deps: RegisterDep
       );
       await connection.commit();
       if (!result.affectedRows) return res.status(409).json({ error: 'Job нельзя продолжить' });
-      setImmediate(() => void processJob(jobId));
+      setImmediate(() => void processJob(jobId, deps));
       res.status(202).json({ success: true, jobId, status: 'queued' });
     } catch (error) {
       await connection.rollback().catch(() => {});

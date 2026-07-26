@@ -154,7 +154,7 @@ export async function searchDirectoryInternalExtensions(
       const authUser = context.authUser || {};
       const dbUser = context.dbUser || {};
       const ownerUserId = getDirectoryRuntimeUserId(dbUser, authUser);
-      const params: any[] = [authUser?.role === 'su' ? 1 : 0, ownerUserId];
+      const params: any[] = [authUser?.role === 'su' || authUser?.role === 'admin' ? 1 : 0, ownerUserId];
       let searchSql = '';
 
       if (query) {
@@ -303,7 +303,7 @@ export async function searchDirectoryInternalExtensions(
 async function selectVisibleDirectoryContactRows(context: DirectoryRuntimeContext): Promise<DirectorySqlContactRow[]> {
   const authUser = context.authUser || {};
   const dbUser = context.dbUser || {};
-  const isSuperUser = authUser?.role === 'su';
+  const isPrivilegedReader = authUser?.role === 'su' || authUser?.role === 'admin';
   const ownerUserId = getDirectoryRuntimeUserId(dbUser, authUser);
 
   const rows = await queryPBXPulsDb(
@@ -316,7 +316,7 @@ async function selectVisibleDirectoryContactRows(context: DirectoryRuntimeContex
         OR owner_user_id = ?
      ORDER BY name ASC, company ASC, id ASC
      LIMIT 10000`,
-    [isSuperUser ? 1 : 0, ownerUserId]
+    [isPrivilegedReader ? 1 : 0, ownerUserId]
   );
 
   return rows as DirectorySqlContactRow[];

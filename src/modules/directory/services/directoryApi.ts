@@ -174,6 +174,8 @@ export async function createDirectoryImportJob(token: string, file: Blob, option
   duplicateStrategy: 'skip' | 'update' | 'create';
   batchSize?: number;
   idempotencyKey: string;
+  unknownResponsibleStrategy: 'clear' | 'skip' | 'map';
+  responsibleUserMappings?: Record<string, string>;
 }) {
   const resp = await fetch('/api/directory/import-jobs', {
     method: 'POST',
@@ -184,11 +186,30 @@ export async function createDirectoryImportJob(token: string, file: Blob, option
       'X-Import-Atomicity': options.atomicityMode,
       'X-Import-Duplicate-Strategy': options.duplicateStrategy,
       'X-Import-Batch-Size': String(options.batchSize || 500),
+      'X-Import-Unknown-Responsible-Strategy': options.unknownResponsibleStrategy,
+      'X-Import-Responsible-Mappings': JSON.stringify(options.responsibleUserMappings || {}),
       'Idempotency-Key': options.idempotencyKey
     },
     body: file
   });
   return parseDirectorySettingsResponse(resp, 'Не удалось создать задачу импорта.');
+}
+
+export async function previewDirectoryImportOwnership(token: string, file: Blob, options: {
+  unknownResponsibleStrategy: 'clear' | 'skip' | 'map';
+  responsibleUserMappings?: Record<string, string>;
+}) {
+  const resp = await fetch('/api/directory/import-jobs/preview', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'text/csv',
+      'X-Import-Unknown-Responsible-Strategy': options.unknownResponsibleStrategy,
+      'X-Import-Responsible-Mappings': JSON.stringify(options.responsibleUserMappings || {})
+    },
+    body: file
+  });
+  return parseDirectorySettingsResponse(resp, 'Не удалось проверить владельцев контактов.');
 }
 
 export async function getDirectoryImportJob(token: string, jobId: string) {

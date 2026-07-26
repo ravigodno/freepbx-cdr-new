@@ -92,7 +92,7 @@ import QualityTab from './modules/monitoring/tabs/monitoring/QualityTab';
 import DevicesMapTab from './modules/monitoring/tabs/monitoring/DevicesMapTab';
 import HealthReportTab from './modules/monitoring/tabs/monitoring/HealthReportTab';
 import { DirectoryStatusIcon } from './modules/directory/components/DirectoryStatusIcon';
-import { fetchDirectory, fetchDirectoryAll, saveDirectoryEntry, deleteDirectoryEntry, toggleDirectoryBlacklist, toggleDirectorySpam, previewDirectoryImport, previewDirectoryBulkDelete, applyDirectoryBulkDelete, createDirectoryImportJob, getDirectoryImportJob, cancelDirectoryImportJob, resumeDirectoryImportJob, previewDirectoryImportRollback, getDirectoryImportJobErrors, fetchDirectoryColumnSettings, saveMyDirectoryColumnSettings, resetMyDirectoryColumnSettings, saveGlobalDirectoryColumnSettings, resetGlobalDirectoryColumnSettings, setDirectoryFavorite } from './modules/directory/services/directoryApi';
+import { fetchDirectory, fetchDirectoryAll, saveDirectoryEntry, deleteDirectoryEntry, toggleDirectoryBlacklist, toggleDirectorySpam, previewDirectoryImport, previewDirectoryImportOwnership, previewDirectoryBulkDelete, applyDirectoryBulkDelete, createDirectoryImportJob, getDirectoryImportJob, cancelDirectoryImportJob, resumeDirectoryImportJob, previewDirectoryImportRollback, getDirectoryImportJobErrors, fetchDirectoryColumnSettings, saveMyDirectoryColumnSettings, resetMyDirectoryColumnSettings, saveGlobalDirectoryColumnSettings, resetGlobalDirectoryColumnSettings, setDirectoryFavorite } from './modules/directory/services/directoryApi';
 import CDRPage from './modules/cdr/pages/CDRPage';
 import LegacyCDRTable from './modules/cdr/components/LegacyCDRTable';
 import CDRProcessModal from './modules/cdr/components/CDRProcessModal';
@@ -959,6 +959,9 @@ export default function App() {
   const [directoryImportJob, setDirectoryImportJob] = useState<any>(null);
   const [directoryImportAtomicity, setDirectoryImportAtomicity] = useState<'rollback_on_error' | 'partial'>('rollback_on_error');
   const [directoryImportDuplicateStrategy, setDirectoryImportDuplicateStrategy] = useState<'skip' | 'update' | 'create'>('skip');
+  const [directoryUnknownResponsibleStrategy, setDirectoryUnknownResponsibleStrategy] = useState<'clear' | 'skip' | 'map'>('clear');
+  const [directoryResponsibleMappings, setDirectoryResponsibleMappings] = useState<Record<string, string>>({});
+  const [directoryOwnershipPreview, setDirectoryOwnershipPreview] = useState<any>(null);
   const [isDirectoryImportCancelOpen, setIsDirectoryImportCancelOpen] = useState(false);
   const [directoryImportRollbackPreview, setDirectoryImportRollbackPreview] = useState<any>(null);
   const [importProgress, setImportProgress] = useState({ stage: 'idle' as 'idle' | 'reading' | 'parsing' | 'validating' | 'importing' | 'complete' | 'error', processed: 0, total: 0, message: '' });
@@ -1069,6 +1072,7 @@ export default function App() {
 
   // Simple CSV / Text Parser
   const handleParseImport = (text: string) => {
+    setDirectoryOwnershipPreview(null);
     if (!text.trim()) {
       setParsedImportEntries([]);
       setImportFileError('');
@@ -1865,6 +1869,14 @@ export default function App() {
     }
 
     if (parsedImportEntries.length === 0) return;
+    if (!directoryOwnershipPreview) {
+      setImportFileError('Сначала выполните проверку ответственных и дублей.');
+      return;
+    }
+    if (directoryUnknownResponsibleStrategy === 'map' && Number(directoryOwnershipPreview.unknownResponsibleRows || 0) > 0) {
+      setImportFileError('Сопоставьте всех неизвестных ответственных перед импортом.');
+      return;
+    }
     const invalidRows = parsedImportEntries.filter((entry: any) => Array.isArray(entry._importErrors) && entry._importErrors.length > 0);
     if (invalidRows.length) {
       const reasons=new Map<string,number>();invalidRows.flatMap((entry:any)=>entry._importDiagnostics||[]).forEach((item:any)=>reasons.set(item.reason,(reasons.get(item.reason)||0)+1));
@@ -1891,7 +1903,9 @@ export default function App() {
         atomicityMode: directoryImportAtomicity,
         duplicateStrategy: directoryImportDuplicateStrategy,
         batchSize: 500,
-        idempotencyKey: `${sourceHash}:${directoryImportAtomicity}:${directoryImportDuplicateStrategy}`
+        idempotencyKey: `${sourceHash}:${directoryImportAtomicity}:${directoryImportDuplicateStrategy}:${directoryUnknownResponsibleStrategy}:${JSON.stringify(directoryResponsibleMappings)}`,
+        unknownResponsibleStrategy: directoryUnknownResponsibleStrategy,
+        responsibleUserMappings: directoryResponsibleMappings
       });
       setDirectoryImportJob(data.job);
       setImportProgress({ stage: 'importing', processed: Number(data.job?.processedRows || 0), total: Number(data.job?.totalRows || parsedImportEntries.length), message: 'Импорт выполняется на сервере' });
@@ -2562,6 +2576,7 @@ export default function App() {
   const openDirectoryImportPage = () => {
     setDirectoryPageMode('import');
     setActiveView('directory');
+    void loadAccessUsers();
     window.history.pushState({}, '', '/management/directory/import');
   };
 
@@ -2618,6 +2633,13 @@ export default function App() {
     setImportFileError('');
     setImportProgress({ stage: 'validating', processed: 0, total: parsedImportEntries.length, message: 'Проверка ошибок и дублей' });
     try {
+      const source = importSourceFile || (importText.trim() ? new Blob([importText], { type: 'text/csv' }) : null);
+      if (!source) throw new Error('Повторно выберите исходный CSV-файл.');
+      const ownership = await previewDirectoryImportOwnership(session.token, source, {
+        unknownResponsibleStrategy: directoryUnknownResponsibleStrategy,
+        responsibleUserMappings: directoryResponsibleMappings
+      });
+      setDirectoryOwnershipPreview(ownership.preview);
       const rows: any[] = [];
       let duplicateCount = 0;
       const batchSize = 500;
@@ -6573,7 +6595,7 @@ export default function App() {
               <div className="flex flex-wrap gap-2">
                 <button type="button" disabled={isImporting} onClick={() => setIsImportOpen(true)} className="rounded-lg border border-blue-200 bg-white px-3 py-2 text-xs font-bold text-blue-700 hover:bg-blue-50 disabled:opacity-40"><Upload className="mr-1 inline h-3.5 w-3.5" />{parsedImportEntries.length ? 'Загрузить другой файл' : 'Загрузить файл'}</button>
                 <button type="button" onClick={handlePreviewImport} disabled={isImporting || !parsedImportEntries.length} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50">Проверить ошибки и дубли</button>
-                <button type="button" onClick={handleExecuteImport} disabled={isImporting || !parsedImportEntries.length || importRowsWithState.some(row => row.hasErrors)} className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-50">Импортировать ({parsedImportEntries.length.toLocaleString('ru-RU')})</button>
+                <button type="button" onClick={handleExecuteImport} disabled={isImporting || !directoryOwnershipPreview || !parsedImportEntries.length || importRowsWithState.some(row => row.hasErrors) || (directoryUnknownResponsibleStrategy==='map'&&Number(directoryOwnershipPreview?.unknownResponsibleRows||0)>0)} className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-50">Импортировать ({parsedImportEntries.length.toLocaleString('ru-RU')})</button>
                 {directoryImportJob&&['queued','validating','importing','cancelling'].includes(directoryImportJob.status)&&<button type="button" disabled={directoryImportJob.status==='cancelling'} onClick={()=>setIsDirectoryImportCancelOpen(true)} className="rounded-lg border border-rose-300 bg-white px-3 py-2 text-xs font-black text-rose-700 disabled:opacity-40">Остановить импорт</button>}
               </div>
             </div>
@@ -6586,6 +6608,29 @@ export default function App() {
 
             {importFileError && <div className="m-4 rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800"><div className="font-bold">{importFileError}</div>{importDiagnostics.length>0&&<button type="button" onClick={()=>{setShowImportDiagnostics(true);setImportRowFilter('errors');setImportPreviewPage(1)}} className="mt-2 rounded border border-rose-300 bg-white px-3 py-1.5 font-bold">Показать строки с ошибками</button>}</div>}
             {importSuccessCount !== null && <div className="m-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs font-bold text-emerald-800">Контакты успешно импортированы: {importSuccessCount}</div>}
+            {parsedImportEntries.length>0&&!directoryImportJob&&<div className="border-b border-slate-200 p-4">
+              <h4 className="text-sm font-black text-slate-900">Владение и видимость</h4>
+              <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-6">
+                <span>Общих: <b>{Number(directoryOwnershipPreview?.sharedContacts??parsedImportEntries.filter((row:any)=>row.visibility==='shared').length).toLocaleString('ru-RU')}</b></span>
+                <span>Личных: <b>{Number(directoryOwnershipPreview?.privateContacts??parsedImportEntries.filter((row:any)=>row.visibility==='private').length).toLocaleString('ru-RU')}</b></span>
+                <span>С ответственным: <b>{Number(directoryOwnershipPreview?.withResponsible??parsedImportEntries.filter((row:any)=>row.responsibleUserId).length).toLocaleString('ru-RU')}</b></span>
+                <span>Без ответственного: <b>{Number(directoryOwnershipPreview?.withoutResponsible??parsedImportEntries.filter((row:any)=>!row.responsibleUserId).length).toLocaleString('ru-RU')}</b></span>
+                <span>Уникальных ID: <b>{Number(directoryOwnershipPreview?.uniqueResponsibleUserIds??new Set(parsedImportEntries.map((row:any)=>row.responsibleUserId).filter(Boolean)).size).toLocaleString('ru-RU')}</b></span>
+                <span className={Number(directoryOwnershipPreview?.unknownResponsibleRows||0)>0?'font-bold text-rose-700':''}>Неизвестных строк: <b>{directoryOwnershipPreview?Number(directoryOwnershipPreview.unknownResponsibleRows||0).toLocaleString('ru-RU'):'нажмите «Проверить»'}</b></span>
+              </div>
+              <label className="mt-3 block text-xs font-bold text-slate-700">Неизвестные ответственные
+                <select value={directoryUnknownResponsibleStrategy} onChange={event=>{setDirectoryUnknownResponsibleStrategy(event.target.value as typeof directoryUnknownResponsibleStrategy);setDirectoryOwnershipPreview(null)}} className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3 py-2">
+                  <option value="clear">Очистить ответственных и импортировать как shared — рекомендуется для корпоративного импорта</option>
+                  <option value="skip">Исключить строки с неизвестным ответственным</option>
+                  <option value="map">Сопоставить с существующими пользователями</option>
+                </select>
+              </label>
+              {directoryOwnershipPreview?.unknownResponsibleUserIds?.length>0&&<div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs">
+                <div className="font-black text-amber-900">Неизвестные responsibleUserId ({directoryOwnershipPreview.unknownResponsibleUserIds.length})</div>
+                <div className="mt-2 grid max-h-56 gap-2 overflow-auto sm:grid-cols-2 lg:grid-cols-3">{directoryOwnershipPreview.unknownResponsibleUserIds.map((item:any)=><label key={item.id} className="flex items-center gap-2"><span className="min-w-20 font-mono">{item.id} · {Number(item.count).toLocaleString('ru-RU')}</span>{directoryUnknownResponsibleStrategy==='map'&&<select value={directoryResponsibleMappings[item.id]||''} onChange={event=>setDirectoryResponsibleMappings(current=>({...current,[item.id]:event.target.value}))} className="min-w-0 flex-1 rounded border bg-white px-2 py-1"><option value="">Не сопоставлен</option>{accessUsers.filter(user=>!user.disabled).map(user=><option key={user.id} value={user.id}>{user.fullName||user.username} ({user.id})</option>)}</select>}</label>)}</div>
+              </div>}
+              <p className="mt-2 text-[11px] text-slate-500">Корпоративный режим сохраняет original source hash и importJobId; при стратегии очистки все строки нормализуются в shared, responsibleUserId не используется как владелец или признак rollback.</p>
+            </div>}
             {directoryImportJob&&['failed','cancelled','completed_with_errors'].includes(directoryImportJob.status)&&<div className="m-4 flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs"><span className="mr-auto font-bold text-amber-900">{directoryImportJob.status==='failed'?'Импорт остановлен':directoryImportJob.status==='cancelled'?'Импорт отменён':'Импорт завершён с ошибками'}</span><button type="button" onClick={handleResumeDirectoryImport} className="rounded border bg-white px-3 py-1.5 font-bold">Продолжить</button><button type="button" onClick={handlePreviewDirectoryImportRollback} className="rounded border bg-white px-3 py-1.5 font-bold">Откатить импорт</button>{Number(directoryImportJob.failedRows||0)>0&&<button type="button" onClick={handleDownloadDirectoryImportErrors} className="rounded border bg-white px-3 py-1.5 font-bold">Скачать ошибки</button>}</div>}
 
             {parsedImportEntries.length > 0 ? <>

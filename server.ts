@@ -98,6 +98,7 @@ import {
   hasOwnDirectoryEditPermission,
   restrictDirectoryContactInputToOwner
 } from './server/directoryContactAccess.js';
+import { canReadDirectoryContact } from './server/directoryOwnership.js';
 import {
   assertDirectorySqlWriteTestAllowed,
   getDirectorySqlWriteTestConfirmPhrase,
@@ -3266,9 +3267,7 @@ const isDirectorySuperUser = (authUser: any): boolean => authUser?.role === 'su'
 
 const canReadDirectoryEntry = (entry: any, authUser: any, dbUser: any, settings?: AppSettings): boolean => {
   const normalized = normalizeDirectoryEntry(entry, settings);
-  if (normalized.visibility !== 'private') return true;
-  if (isDirectorySuperUser(authUser)) return true;
-  return !!normalized.ownerUserId && normalized.ownerUserId === getDirectoryUserId(dbUser, authUser);
+  return canReadDirectoryContact(normalized, authUser, getDirectoryUserId(dbUser, authUser));
 };
 
 const canWriteDirectoryEntry = (entry: any, authUser: any, dbUser: any, settings?: AppSettings): boolean => {
@@ -3500,6 +3499,14 @@ const prepareDirectoryEntryForSave = (raw: any, localDb: any, req: Request, exis
   const ownerId = getDirectoryUserId(dbUser, authUser);
   const rawMerged = { ...(existing || {}), ...(raw || {}) };
   const metadataErrors = getDirectoryImportMetadataErrors(rawMerged);
+  const responsibleUserId = String(rawMerged?.responsibleUserId || '').trim();
+  if (responsibleUserId) {
+    const responsible = (localDb.users || []).find((user: any) =>
+      [user.id, user.username, user.externalId].some(value => String(value || '').trim().toLowerCase() === responsibleUserId.toLowerCase())
+    );
+    if (!responsible) metadataErrors.push(`responsibleUserId: пользователь ${responsibleUserId} не найден`);
+    else if (responsible.disabled === true || responsible.active === false) metadataErrors.push(`responsibleUserId: пользователь ${responsibleUserId} отключён`);
+  }
   if (metadataErrors.length) {
     const error = new Error(metadataErrors[0]) as any;
     error.code = 'INVALID_DIRECTORY_IMPORT_METADATA';
@@ -7860,7 +7867,21 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json({ limit: '25mb' }));
-registerDirectoryImportJobRoutes(app, { requireAuth: requireAuth(), hasPermission: checkUserPermission });
+registerDirectoryImportJobRoutes(app, {
+  requireAuth: requireAuth(),
+  hasPermission: checkUserPermission,
+  listDirectoryUsers: async () => {
+    const localDb = await readLocalDb();
+    return (localDb.users || []).map((user: any) => ({
+      id: user.id,
+      username: user.username,
+      externalId: user.externalId,
+      disabled: user.disabled === true,
+      active: user.active !== false,
+      tenantId: user.tenantId
+    }));
+  }
+});
 
 app.get('/api/system/time', (_req, res) => {
   const now = new Date();
