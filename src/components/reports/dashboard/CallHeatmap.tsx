@@ -1,3 +1,5 @@
+import type { ReactNode } from 'react';
+
 export type HeatmapHour = { hour: number; total: number; incoming: number; outgoing: number; answered: number; missed: number; lost: number };
 export type HeatmapDay = { day: string; hours: HeatmapHour[] };
 type LegacyPoint = { label: string; totalCalls: number; inboundCalls?: number; outboundCalls?: number; processedCalls?: number; missedCalls?: number; lostCalls?: number };
@@ -23,7 +25,23 @@ function buildFallbackHeatmap(data: LegacyPoint[]): HeatmapDay[] {
   }));
 }
 
-export function CallHeatmap({ data, heatmap }: { data: LegacyPoint[]; heatmap?: { days?: HeatmapDay[] } | null }) {
+export function CallHeatmap({
+  data,
+  heatmap,
+  title = 'Нагрузка по дням и часам',
+  subtitle = 'Полная почасовая карта суток: 00:00-24:00',
+  valueLabel = 'Всего',
+  headerAction,
+  formatValue = value => Number(value || 0).toLocaleString('ru-RU', { maximumFractionDigits: 1 })
+}: {
+  data: LegacyPoint[];
+  heatmap?: { days?: HeatmapDay[] } | null;
+  title?: string;
+  subtitle?: string;
+  valueLabel?: string;
+  headerAction?: ReactNode;
+  formatValue?: (value: number) => string;
+}) {
   const days = heatmap?.days?.length ? heatmap.days : buildFallbackHeatmap(data);
   const hours = Array.from({ length: 25 }, (_, hour) => hour);
   const max = Math.max(0, ...days.flatMap(day => day.hours.map(hour => Number(hour.total || 0))));
@@ -33,9 +51,10 @@ export function CallHeatmap({ data, heatmap }: { data: LegacyPoint[]; heatmap?: 
     <div className="flex h-full min-h-[300px] flex-col rounded-2xl border border-slate-200/70 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h3 className="text-base font-black text-slate-950 dark:text-white">Нагрузка по дням и часам</h3>
-          <p className="mt-0.5 text-xs font-semibold text-slate-500 dark:text-slate-400">Полная почасовая карта суток: 00:00-24:00</p>
+          <h3 className="text-base font-black text-slate-950 dark:text-white">{title}</h3>
+          <p className="mt-0.5 text-xs font-semibold text-slate-500 dark:text-slate-400">{subtitle}</p>
         </div>
+        {headerAction}
       </div>
       <div className="mt-4 flex-1 overflow-x-auto">
         <div className="min-w-[610px]">
@@ -47,8 +66,8 @@ export function CallHeatmap({ data, heatmap }: { data: LegacyPoint[]; heatmap?: 
               ...hours.map(hour => {
                 const cell = day.hours.find(item => Number(item.hour) === hour) || { hour, total: 0, incoming: 0, outgoing: 0, answered: 0, missed: 0, lost: 0 };
                 const interval = hour === 24 ? '24:00-24:00' : String(hour).padStart(2, '0') + ':00-' + String(hour).padStart(2, '0') + ':59';
-                const title = day.day + ' ' + interval + '\nВсего: ' + cell.total + '\nВходящих: ' + cell.incoming + '\nИсходящих: ' + cell.outgoing + '\nОбработанных: ' + cell.answered + '\nПропущенных: ' + cell.missed + '\nПотерянных: ' + cell.lost;
-                return <div key={day.day + hour} className="flex h-6 items-center justify-center rounded border border-white/70 text-[9px] font-black text-slate-700 shadow-sm ring-1 ring-slate-200/40 dark:border-slate-900 dark:text-slate-200 dark:ring-slate-800" style={{ backgroundColor: cellColor(Number(cell.total || 0), max) }} title={title}>{cell.total || ''}</div>;
+                const tooltip = day.day + ' ' + interval + '\n' + valueLabel + ': ' + formatValue(Number(cell.total || 0)) + '\nВходящих: ' + cell.incoming + '\nИсходящих: ' + cell.outgoing + '\nОбработанных: ' + cell.answered + '\nПропущенных: ' + cell.missed + '\nПотерянных: ' + cell.lost;
+                return <div key={day.day + hour} className="flex h-6 items-center justify-center rounded border border-white/70 text-[9px] font-black text-slate-700 shadow-sm ring-1 ring-slate-200/40 dark:border-slate-900 dark:text-slate-200 dark:ring-slate-800" style={{ backgroundColor: cellColor(Number(cell.total || 0), max) }} title={tooltip}>{cell.total ? formatValue(Number(cell.total)) : ''}</div>;
               })
             ])}
           </div>
