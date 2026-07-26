@@ -94,6 +94,7 @@ import HealthReportTab from './modules/monitoring/tabs/monitoring/HealthReportTa
 import { DirectoryStatusIcon } from './modules/directory/components/DirectoryStatusIcon';
 import { fetchDirectory, fetchDirectoryAll, saveDirectoryEntry, deleteDirectoryEntry, toggleDirectoryBlacklist, toggleDirectorySpam, previewDirectoryImport, previewDirectoryImportOwnership, previewDirectoryBulkDelete, applyDirectoryBulkDelete, createDirectoryImportJob, prepareDirectoryImportSource, deleteDirectoryImportSource, getDirectoryImportJob, cancelDirectoryImportJob, resumeDirectoryImportJob, previewDirectoryImportRollback, getDirectoryImportJobErrors, fetchDirectoryColumnSettings, saveMyDirectoryColumnSettings, resetMyDirectoryColumnSettings, saveGlobalDirectoryColumnSettings, resetGlobalDirectoryColumnSettings, setDirectoryFavorite, type DirectoryImportPreparedSource } from './modules/directory/services/directoryApi';
 import { calculateDirectoryImportDigest, getDirectoryImportDigestCapability, DIRECTORY_IMPORT_MAX_BYTES, isSupportedDirectoryImportFile, summarizeDirectoryImportSource, type DirectoryImportDigestStatus, type DirectoryImportSourceKind, type DirectoryImportSourceSummary } from './modules/directory/utils/directoryImportSource';
+import { applyDirectoryOwnershipPreview, directoryImportPipelineSteps, getDirectoryImportActiveStep, getDirectoryImportDisabledReason } from './modules/directory/utils/directoryImportPipeline';
 import CDRPage from './modules/cdr/pages/CDRPage';
 import LegacyCDRTable from './modules/cdr/components/LegacyCDRTable';
 import CDRProcessModal from './modules/cdr/components/CDRProcessModal';
@@ -973,6 +974,13 @@ export default function App() {
   const [directoryUnknownResponsibleStrategy, setDirectoryUnknownResponsibleStrategy] = useState<'clear' | 'skip' | 'map'>('clear');
   const [directoryResponsibleMappings, setDirectoryResponsibleMappings] = useState<Record<string, string>>({});
   const [directoryOwnershipPreview, setDirectoryOwnershipPreview] = useState<any>(null);
+  const [directoryOwnershipRawPreview, setDirectoryOwnershipRawPreview] = useState<any>(null);
+  const [directoryImportValidationReady, setDirectoryImportValidationReady] = useState(false);
+  const [directoryImportOwnershipReady, setDirectoryImportOwnershipReady] = useState(false);
+  const [directoryImportOwnershipApplying, setDirectoryImportOwnershipApplying] = useState(false);
+  const [directoryImportConflictPolicyReady, setDirectoryImportConflictPolicyReady] = useState(false);
+  const [directoryImportConfirmationChecked, setDirectoryImportConfirmationChecked] = useState(false);
+  const [directoryImportStepReady, setDirectoryImportStepReady] = useState(false);
   const [isDirectoryImportCancelOpen, setIsDirectoryImportCancelOpen] = useState(false);
   const [directoryImportRollbackPreview, setDirectoryImportRollbackPreview] = useState<any>(null);
   const [importProgress, setImportProgress] = useState({ stage: 'idle' as 'idle' | 'reading' | 'parsing' | 'validating' | 'importing' | 'complete' | 'error', processed: 0, total: 0, message: '' });
@@ -1084,6 +1092,13 @@ export default function App() {
   // Simple CSV / Text Parser
   const handleParseImport = (text: string) => {
     setDirectoryOwnershipPreview(null);
+    setDirectoryOwnershipRawPreview(null);
+    setDirectoryImportValidationReady(false);
+    setDirectoryImportOwnershipReady(false);
+    setDirectoryImportOwnershipApplying(false);
+    setDirectoryImportConflictPolicyReady(false);
+    setDirectoryImportConfirmationChecked(false);
+    setDirectoryImportStepReady(false);
     if (!text.trim()) {
       setParsedImportEntries([]);
       setImportFileError('');
@@ -2096,6 +2111,10 @@ export default function App() {
     }
 
     if (parsedImportEntries.length === 0) return;
+    if (!directoryImportValidationReady || !directoryImportOwnershipReady || !directoryImportConflictPolicyReady || !directoryImportConfirmationChecked || !directoryImportStepReady) {
+      setImportFileError(directoryImportDisabledReason || 'Завершите все шаги подготовки импорта.');
+      return;
+    }
     if (!directoryOwnershipPreview) {
       setImportFileError('Сначала выполните проверку ответственных и дублей.');
       return;
@@ -2226,6 +2245,18 @@ export default function App() {
     const diagnostics = [...(entry._importDiagnostics || []), ...(preview?.errors || []).map((message: string) => ({ field: 'row', reason: message }))];
     return { entry, index, preview, diagnostics, hasErrors: (entry._importErrors || []).length > 0 || (preview?.errors || []).length > 0, duplicate: !!preview?.duplicateId };
   }),[parsedImportEntries,importPreviewByIndex]);
+  const directoryImportErrorRows = importRowsWithState.filter(row => row.hasErrors).length + Number(directoryOwnershipPreview?.invalidRows || 0);
+  const directoryImportPipelineState = {
+    sourceReady: directoryImportDigestStatus === 'ready' && !!directoryImportPreparedSources[directoryImportSourceKind]?.sourceHash,
+    validationReady: directoryImportValidationReady,
+    ownershipReady: directoryImportOwnershipReady,
+    conflictPolicyReady: directoryImportConflictPolicyReady,
+    confirmationReady: directoryImportConfirmationChecked,
+    importStepReady: directoryImportStepReady
+  };
+  const directoryImportActiveStep = getDirectoryImportActiveStep(directoryImportPipelineState);
+  const directoryImportActiveStepIndex = directoryImportPipelineSteps.findIndex(step => step.id === directoryImportActiveStep);
+  const directoryImportDisabledReason = getDirectoryImportDisabledReason(directoryImportPipelineState, directoryImportErrorRows, directoryImportOwnershipApplying);
   const filteredImportRows = useMemo(()=>importRowsWithState.filter(row => importRowFilter === 'all'
     || (importRowFilter === 'errors' && row.hasErrors)
     || (importRowFilter === 'duplicates' && row.duplicate)
@@ -2235,13 +2266,13 @@ export default function App() {
   const visibleImportRows = filteredImportRows.slice((importPreviewPage - 1) * importPreviewPageSize, importPreviewPage * importPreviewPageSize);
   const importProgressPercent = importProgress.total > 0 ? Math.min(100, Math.round(importProgress.processed / importProgress.total * 100)) : 0;
   const importColumnDefinitions = [
-    ['type','Тип',(row:any)=>row.type],['visibility','Видимость',(row:any)=>row.visibility],['isSpam','Спам',(row:any)=>row.isSpam?'Да':'Нет'],
+    ['type','Тип',(row:any)=>row.type],['visibility','Видимость',(row:any)=>directoryImportOwnershipReady&&directoryUnknownResponsibleStrategy==='clear'?'shared':row.visibility],['isSpam','Спам',(row:any)=>row.isSpam?'Да':'Нет'],
     ['organization','Организация',(row:any)=>row.company],['fullName','ФИО',(row:any)=>row.name],['position','Должность',(row:any)=>row.position],
     ['phone','Телефон',(row:any)=>row.number],['phone2','Доп. телефон',(row:any)=>row.phones?.[1]],['email','Email',(row:any)=>row.email],
     ['website','Сайт',(row:any)=>row.website],['inn','ИНН',(row:any)=>row.inn],['kpp','КПП',(row:any)=>row.kpp],['ogrn','ОГРН',(row:any)=>row.ogrn],
     ['address','Адрес',(row:any)=>row.address],['comment','Комментарий',(row:any)=>row.comment],['department','Отдел',(row:any)=>row.department],
     ['group','Группа',(row:any)=>row.group],['tags','Теги',(row:any)=>(row.tags||[]).join('; ')],['internalExtension','Внутренний номер',(row:any)=>row.internalExtension],
-    ['linkedExternalNumber','Связанный номер',(row:any)=>row.linkedExternalNumber],['responsibleUserId','Ответственный',(row:any)=>row.responsibleUserId]
+    ['linkedExternalNumber','Связанный номер',(row:any)=>row.linkedExternalNumber],['responsibleUserId','Ответственный',(row:any)=>directoryImportOwnershipReady&&directoryUnknownResponsibleStrategy==='clear'?'':row.responsibleUserId]
   ] as const;
   const importReasonLabel = (reason: string) => ({
     invalid_length:'Неверная длина',invalid_characters:'Недопустимые символы',unsupported_prefix:'Недопустимый префикс',
@@ -2851,6 +2882,51 @@ export default function App() {
     isBlacklisted: entry.isBlacklisted
   });
 
+  const recalculateDirectoryOwnership = async (
+    strategy = directoryUnknownResponsibleStrategy,
+    mappings = directoryResponsibleMappings
+  ) => {
+    if (!session?.token || parsedImportEntries.length === 0) return;
+    const preparedSource = directoryImportPreparedSources[directoryImportSourceKind];
+    if (!preparedSource || preparedSource.status !== 'ready' || !preparedSource.sourceHash) {
+      setImportFileError('Источник не готов. Повторите подготовку файла.');
+      return;
+    }
+    setDirectoryImportOwnershipApplying(true);
+    setDirectoryImportOwnershipReady(false);
+    setDirectoryImportConflictPolicyReady(false);
+    setDirectoryImportConfirmationChecked(false);
+    setDirectoryImportStepReady(false);
+    setImportFileError('');
+    setImportProgress({ stage: 'validating', processed: 0, total: parsedImportEntries.length, message: 'Пересчёт владения и видимости…' });
+    try {
+      const ownership = await previewDirectoryImportOwnership(session.token, preparedSource.sourceId, {
+        unknownResponsibleStrategy: strategy,
+        responsibleUserMappings: mappings
+      });
+      const rawPreview = ownership.preview;
+      const appliedPreview = applyDirectoryOwnershipPreview(rawPreview, strategy);
+      setDirectoryOwnershipRawPreview(rawPreview);
+      setDirectoryOwnershipPreview({ ...rawPreview, ...appliedPreview });
+      const unresolvedMappings = strategy === 'map' && appliedPreview.unknownResponsibleRows > 0;
+      setDirectoryImportOwnershipReady(!unresolvedMappings);
+      setImportRowFilter('all');
+      setImportPreviewPage(1);
+      setImportProgress({
+        stage: 'complete',
+        processed: parsedImportEntries.length,
+        total: parsedImportEntries.length,
+        message: unresolvedMappings ? 'Сопоставьте неизвестных ответственных' : 'Настройки владения применены'
+      });
+    } catch (error: any) {
+      setDirectoryImportOwnershipReady(false);
+      setImportFileError(error?.message || 'Не удалось пересчитать владение и видимость.');
+      setImportProgress({ stage: 'error', processed: 0, total: parsedImportEntries.length, message: 'Ошибка пересчёта владения' });
+    } finally {
+      setDirectoryImportOwnershipApplying(false);
+    }
+  };
+
   const handlePreviewImport = async () => {
     if (!session?.token || parsedImportEntries.length === 0) return;
     setIsImporting(true);
@@ -2863,7 +2939,9 @@ export default function App() {
         unknownResponsibleStrategy: directoryUnknownResponsibleStrategy,
         responsibleUserMappings: directoryResponsibleMappings
       });
+      setDirectoryOwnershipRawPreview(ownership.preview);
       setDirectoryOwnershipPreview(ownership.preview);
+      setDirectoryImportOwnershipReady(false);
       const rows: any[] = [];
       let duplicateCount = 0;
       const batchSize = 500;
@@ -2876,6 +2954,10 @@ export default function App() {
       }
       setImportPreviewRows(rows);
       setImportDuplicateCount(duplicateCount);
+      setDirectoryImportValidationReady(true);
+      setDirectoryImportConflictPolicyReady(false);
+      setDirectoryImportConfirmationChecked(false);
+      setDirectoryImportStepReady(false);
       setImportProgress({ stage: 'complete', processed: parsedImportEntries.length, total: parsedImportEntries.length, message: 'Проверка завершена' });
     } catch (e: any) {
       if (e?.message === 'UNAUTHORIZED') {
@@ -2888,6 +2970,13 @@ export default function App() {
       setIsImporting(false);
     }
   };
+
+  useEffect(() => {
+    if (!parsedImportEntries.length || directoryImportValidationReady || isImporting) return;
+    const preparedSource = directoryImportPreparedSources[directoryImportSourceKind];
+    if (!preparedSource?.sourceHash) return;
+    void handlePreviewImport();
+  }, [parsedImportEntries.length]);
 
   const handleToggleSpam = async (entry: DirectoryEntry, enabled: boolean) => {
     if (!session) return;
@@ -6810,16 +6899,33 @@ export default function App() {
             </div>
           </div>
 
+          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div className="grid grid-cols-2 gap-px bg-slate-200 sm:grid-cols-3 lg:grid-cols-6" aria-label="Этапы импорта">
+              {directoryImportPipelineSteps.map((step,index)=>{
+                const complete=index<directoryImportActiveStepIndex;
+                const active=step.id===directoryImportActiveStep;
+                return <div key={step.id} aria-current={active?'step':undefined} className={`min-w-0 bg-white px-3 py-3 ${active?'ring-2 ring-inset ring-blue-500':''}`}>
+                  <div className={`text-[10px] font-black uppercase tracking-wide ${complete?'text-emerald-600':active?'text-blue-700':'text-slate-400'}`}>{complete?'✓':active?'●':'○'} Шаг {index+1}</div>
+                  <div className={`mt-1 truncate text-xs font-bold ${active?'text-slate-900':complete?'text-emerald-800':'text-slate-500'}`}>{step.label}</div>
+                </div>
+              })}
+            </div>
+          </div>
+
           <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 p-4">
               <div>
                 <h3 className="text-sm font-black text-slate-900">{directoryImportSourceSummary?.name || (directoryImportSourceKind==='text'&&importText.trim()?'Вставленные данные':importFileName || 'Источник не выбран')}</h3>
                 <p className="mt-1 text-xs text-slate-500">{parsedImportEntries.length ? `${parsedImportEntries.length.toLocaleString('ru-RU')} строк · ${importColumnDefinitions.length} столбец` : directoryImportSourceSummary ? `${directoryImportSourceSummary.rows.toLocaleString('ru-RU')} строк подготовлено` : 'Выберите файл или вставьте данные ниже.'}</p>
               </div>
-              <div className="flex flex-wrap gap-2">
-                <button type="button" disabled={isImporting} onClick={() => {selectDirectoryImportSourceKind('file');window.requestAnimationFrame(()=>directoryImportFileInputRef.current?.click())}} className="rounded-lg border border-blue-200 bg-white px-3 py-2 text-xs font-bold text-blue-700 hover:bg-blue-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-40"><Upload className="mr-1 inline h-3.5 w-3.5" />Выбрать файл</button>
-                <button type="button" onClick={()=>parsedImportEntries.length?void handlePreviewImport():openDirectoryImportPreview()} disabled={isImporting || (!parsedImportEntries.length && (!(directoryImportSourceKind==='file'?importFileText.trim():importText.trim()) || directoryImportDigestStatus!=='ready'))} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50">Проверить ошибки и дубли</button>
-                <button type="button" onClick={handleExecuteImport} disabled={isImporting || !directoryOwnershipPreview || !parsedImportEntries.length || importRowsWithState.some(row => row.hasErrors) || (directoryUnknownResponsibleStrategy==='map'&&Number(directoryOwnershipPreview?.unknownResponsibleRows||0)>0)} className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-50">Импортировать ({parsedImportEntries.length.toLocaleString('ru-RU')})</button>
+              <div className="flex max-w-md flex-col items-end gap-1">
+                {directoryImportActiveStep==='source'&&<button type="button" disabled={isImporting} onClick={() => {selectDirectoryImportSourceKind('file');window.requestAnimationFrame(()=>directoryImportFileInputRef.current?.click())}} className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-black text-white hover:bg-blue-700 disabled:opacity-40"><Upload className="mr-1 inline h-3.5 w-3.5" />Выбрать файл</button>}
+                {directoryImportActiveStep==='validation'&&<button type="button" onClick={()=>parsedImportEntries.length?void handlePreviewImport():openDirectoryImportPreview()} disabled={isImporting||!directoryImportPipelineState.sourceReady} className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-black text-white hover:bg-blue-700 disabled:opacity-40">Проверить данные</button>}
+                {directoryImportActiveStep==='ownership'&&<button type="button" onClick={()=>void recalculateDirectoryOwnership()} disabled={directoryImportOwnershipApplying||!directoryImportValidationReady} className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-black text-white hover:bg-blue-700 disabled:opacity-40">{directoryImportOwnershipApplying?'Пересчёт…':'Применить настройки'}</button>}
+                {directoryImportActiveStep==='conflicts'&&<button type="button" onClick={()=>{setDirectoryImportConflictPolicyReady(true);setDirectoryImportConfirmationChecked(false);setDirectoryImportStepReady(false)}} disabled={directoryImportErrorRows>0} className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-black text-white hover:bg-blue-700 disabled:opacity-40">Продолжить</button>}
+                {directoryImportActiveStep==='confirmation'&&<button type="button" onClick={()=>setDirectoryImportStepReady(true)} disabled={!directoryImportConfirmationChecked||directoryImportErrorRows>0} className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-black text-white hover:bg-blue-700 disabled:opacity-40">Перейти к импорту</button>}
+                {directoryImportActiveStep==='import'&&<button type="button" onClick={handleExecuteImport} disabled={isImporting||!!directoryImportDisabledReason} className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-black text-white hover:bg-emerald-700 disabled:opacity-40">Начать импорт {parsedImportEntries.length.toLocaleString('ru-RU')} контактов</button>}
+                {directoryImportDisabledReason&&<div className="text-right text-[11px] font-medium text-amber-700">{directoryImportDisabledReason}</div>}
                 {directoryImportJob&&['queued','validating','importing','cancelling'].includes(directoryImportJob.status)&&<button type="button" disabled={directoryImportJob.status==='cancelling'} onClick={()=>setIsDirectoryImportCancelOpen(true)} className="rounded-lg border border-rose-300 bg-white px-3 py-2 text-xs font-black text-rose-700 disabled:opacity-40">Остановить импорт</button>}
               </div>
             </div>
@@ -6840,25 +6946,53 @@ export default function App() {
                 <span>С ответственным: <b>{Number(directoryOwnershipPreview?.withResponsible??parsedImportEntries.filter((row:any)=>row.responsibleUserId).length).toLocaleString('ru-RU')}</b></span>
                 <span>Без ответственного: <b>{Number(directoryOwnershipPreview?.withoutResponsible??parsedImportEntries.filter((row:any)=>!row.responsibleUserId).length).toLocaleString('ru-RU')}</b></span>
                 <span>Уникальных ID: <b>{Number(directoryOwnershipPreview?.uniqueResponsibleUserIds??new Set(parsedImportEntries.map((row:any)=>row.responsibleUserId).filter(Boolean)).size).toLocaleString('ru-RU')}</b></span>
-                <span className={Number(directoryOwnershipPreview?.unknownResponsibleRows||0)>0?'font-bold text-rose-700':''}>Неизвестных строк: <b>{directoryOwnershipPreview?Number(directoryOwnershipPreview.unknownResponsibleRows||0).toLocaleString('ru-RU'):'нажмите «Проверить»'}</b></span>
+                <span className={Number(directoryOwnershipPreview?.unknownResponsibleRows||0)>0?'font-bold text-amber-700':''}>Неизвестные ответственные: <b>{directoryOwnershipPreview?Number(directoryOwnershipPreview.unknownResponsibleRows||0).toLocaleString('ru-RU'):'нажмите «Проверить»'}</b></span>
               </div>
               <label className="mt-3 block text-xs font-bold text-slate-700">Неизвестные ответственные
-                <select value={directoryUnknownResponsibleStrategy} onChange={event=>{setDirectoryUnknownResponsibleStrategy(event.target.value as typeof directoryUnknownResponsibleStrategy);setDirectoryOwnershipPreview(null)}} className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3 py-2">
+                <select value={directoryUnknownResponsibleStrategy} onChange={event=>{const strategy=event.target.value as typeof directoryUnknownResponsibleStrategy;setDirectoryUnknownResponsibleStrategy(strategy);void recalculateDirectoryOwnership(strategy,directoryResponsibleMappings)}} className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3 py-2">
                   <option value="clear">Очистить ответственных и импортировать как shared — рекомендуется для корпоративного импорта</option>
                   <option value="skip">Исключить строки с неизвестным ответственным</option>
                   <option value="map">Сопоставить с существующими пользователями</option>
                 </select>
               </label>
-              {directoryOwnershipPreview?.unknownResponsibleUserIds?.length>0&&<div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs">
-                <div className="font-black text-amber-900">Неизвестные responsibleUserId ({directoryOwnershipPreview.unknownResponsibleUserIds.length})</div>
-                <div className="mt-2 grid max-h-56 gap-2 overflow-auto sm:grid-cols-2 lg:grid-cols-3">{directoryOwnershipPreview.unknownResponsibleUserIds.map((item:any)=><label key={item.id} className="flex items-center gap-2"><span className="min-w-20 font-mono">{item.id} · {Number(item.count).toLocaleString('ru-RU')}</span>{directoryUnknownResponsibleStrategy==='map'&&<select value={directoryResponsibleMappings[item.id]||''} onChange={event=>setDirectoryResponsibleMappings(current=>({...current,[item.id]:event.target.value}))} className="min-w-0 flex-1 rounded border bg-white px-2 py-1"><option value="">Не сопоставлен</option>{accessUsers.filter(user=>!user.disabled).map(user=><option key={user.id} value={user.id}>{user.fullName||user.username} ({user.id})</option>)}</select>}</label>)}</div>
+              {directoryImportOwnershipApplying&&<div aria-live="polite" className="mt-3 rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs font-bold text-blue-800">Пересчёт владения, видимости и готовых строк…</div>}
+              {directoryImportOwnershipReady&&directoryUnknownResponsibleStrategy==='clear'&&<div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-900">
+                <div className="font-black">✓ Настройки применены</div>
+                <ul className="mt-2 list-disc space-y-1 pl-5">
+                  <li>{Number(directoryOwnershipPreview?.clearedUnknownRows||0).toLocaleString('ru-RU')} неизвестных ответственных будут очищены.</li>
+                  <li>{Number(directoryOwnershipPreview?.clearedExistingRows||0).toLocaleString('ru-RU')} существующих ответственных также будут очищены.</li>
+                  <li>Все {Number(directoryOwnershipPreview?.readyRows||0).toLocaleString('ru-RU')} контактов будут импортированы как общие.</li>
+                  <li><span className="font-mono">responsibleUserId</span> будет пустым; rollback выполняется по <span className="font-mono">importJobId</span>.</li>
+                </ul>
               </div>}
+              {directoryOwnershipRawPreview?.unknownResponsibleUserIds?.length>0&&<details className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs">
+                <summary className="cursor-pointer font-black text-amber-900">Будут {directoryUnknownResponsibleStrategy==='skip'?'исключены':'очищены'} ответственные: {directoryOwnershipRawPreview.unknownResponsibleUserIds.length} идентификаторов, {Number(directoryOwnershipRawPreview.unknownResponsibleRows||0).toLocaleString('ru-RU')} строк</summary>
+                <div className="mt-2 grid max-h-56 gap-2 overflow-auto sm:grid-cols-2 lg:grid-cols-3">{directoryOwnershipRawPreview.unknownResponsibleUserIds.map((item:any)=><label key={item.id} className="flex items-center gap-2"><span className="min-w-20 font-mono">{item.id} · {Number(item.count).toLocaleString('ru-RU')}</span>{directoryUnknownResponsibleStrategy==='map'&&<select value={directoryResponsibleMappings[item.id]||''} onChange={event=>{const mappings={...directoryResponsibleMappings,[item.id]:event.target.value};setDirectoryResponsibleMappings(mappings);void recalculateDirectoryOwnership('map',mappings)}} className="min-w-0 flex-1 rounded border bg-white px-2 py-1"><option value="">Не сопоставлен</option>{accessUsers.filter(user=>!user.disabled).map(user=><option key={user.id} value={user.id}>{user.fullName||user.username} ({user.id})</option>)}</select>}</label>)}</div>
+              </details>}
               <p className="mt-2 text-[11px] text-slate-500">Корпоративный режим сохраняет original source hash и importJobId; при стратегии очистки все строки нормализуются в shared, responsibleUserId не используется как владелец или признак rollback.</p>
             </div>}
             {directoryImportJob&&['failed','cancelled','completed_with_errors'].includes(directoryImportJob.status)&&<div className="m-4 flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs"><span className="mr-auto font-bold text-amber-900">{directoryImportJob.status==='failed'?'Импорт остановлен':directoryImportJob.status==='cancelled'?'Импорт отменён':'Импорт завершён с ошибками'}</span><button type="button" onClick={handleResumeDirectoryImport} className="rounded border bg-white px-3 py-1.5 font-bold">Продолжить</button><button type="button" onClick={handlePreviewDirectoryImportRollback} className="rounded border bg-white px-3 py-1.5 font-bold">Откатить импорт</button>{Number(directoryImportJob.failedRows||0)>0&&<button type="button" onClick={handleDownloadDirectoryImportErrors} className="rounded border bg-white px-3 py-1.5 font-bold">Скачать ошибки</button>}</div>}
 
             {parsedImportEntries.length > 0 ? <>
-              {!directoryImportJob&&<div className="grid gap-3 border-b border-slate-200 p-4 md:grid-cols-2"><label className="text-xs font-bold text-slate-700">Поведение при ошибке<select value={directoryImportAtomicity} onChange={event=>{const value=event.target.value as typeof directoryImportAtomicity;setDirectoryImportAtomicity(value);if(value==='rollback_on_error'&&directoryImportDuplicateStrategy==='update')setDirectoryImportDuplicateStrategy('skip')}} className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3 py-2"><option value="rollback_on_error">Откатить всё при ошибке</option><option value="partial">Импортировать остальные строки, ошибки пропустить</option></select></label><label className="text-xs font-bold text-slate-700">Если контакт уже существует<select value={directoryImportDuplicateStrategy} onChange={event=>setDirectoryImportDuplicateStrategy(event.target.value as typeof directoryImportDuplicateStrategy)} className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3 py-2"><option value="skip">Пропустить</option><option value="update" disabled={directoryImportAtomicity==='rollback_on_error'}>Обновить существующий</option><option value="create">Создать новый, если разрешено</option></select></label></div>}
+              {!directoryImportJob&&<div className="border-b border-slate-200 p-4"><div className="mb-3 text-xs font-bold text-blue-700">Рекомендуется для корпоративного справочника</div><div className="grid gap-3 md:grid-cols-2"><label className="text-xs font-bold text-slate-700">Поведение при ошибке<select value={directoryImportAtomicity} onChange={event=>{const value=event.target.value as typeof directoryImportAtomicity;setDirectoryImportAtomicity(value);if(value==='rollback_on_error'&&directoryImportDuplicateStrategy==='update')setDirectoryImportDuplicateStrategy('skip');setDirectoryImportConflictPolicyReady(false);setDirectoryImportConfirmationChecked(false);setDirectoryImportStepReady(false)}} className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3 py-2"><option value="rollback_on_error">Откатить всё при ошибке — рекомендуется</option><option value="partial">Импортировать остальные строки, ошибки пропустить</option></select></label><label className="text-xs font-bold text-slate-700">Если контакт уже существует<select value={directoryImportDuplicateStrategy} onChange={event=>{setDirectoryImportDuplicateStrategy(event.target.value as typeof directoryImportDuplicateStrategy);setDirectoryImportConflictPolicyReady(false);setDirectoryImportConfirmationChecked(false);setDirectoryImportStepReady(false)}} className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3 py-2"><option value="skip">Пропустить — рекомендуется</option><option value="update" disabled={directoryImportAtomicity==='rollback_on_error'}>Обновить существующий</option><option value="create">Создать новый, если разрешено</option></select></label></div></div>}
+              {!directoryImportJob&&directoryImportConflictPolicyReady&&<div className="border-b border-slate-200 bg-slate-50 p-4">
+                <div className="rounded-xl border border-blue-200 bg-white p-4">
+                  <h4 className="text-base font-black text-slate-900">Подтверждение параметров импорта</h4>
+                  <div className="mt-3 grid gap-2 text-xs text-slate-700 sm:grid-cols-2 lg:grid-cols-3">
+                    <span>Контактов: <b>{Number(directoryOwnershipPreview?.readyRows??parsedImportEntries.length).toLocaleString('ru-RU')}</b></span>
+                    <span>Visibility: <b>shared</b></span>
+                    <span>Ответственный: <b>не назначен</b></span>
+                    <span>Источник: <b>company_import</b></span>
+                    <span>Ошибок: <b>{directoryImportErrorRows.toLocaleString('ru-RU')}</b></span>
+                    <span>Дублей: <b>{importDuplicateCount.toLocaleString('ru-RU')}</b></span>
+                    <span>Режим при ошибке: <b>{directoryImportAtomicity==='rollback_on_error'?'откатить всё':'частичный импорт'}</b></span>
+                    <span>Batch size: <b>500</b></span>
+                    <span>Возможность остановки: <b>включена</b></span>
+                    <span>Rollback: <b>по importJobId</b></span>
+                  </div>
+                  <label className="mt-4 flex cursor-pointer items-start gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs font-bold text-slate-800"><input type="checkbox" checked={directoryImportConfirmationChecked} onChange={event=>{setDirectoryImportConfirmationChecked(event.target.checked);setDirectoryImportStepReady(false)}} className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600"/><span>Я проверил параметры импорта</span></label>
+                </div>
+              </div>}
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 p-3">
                 <div className="flex flex-wrap gap-1.5">
                   {([['all','Все',parsedImportEntries.length],['errors','Ошибки',importRowsWithState.filter(row=>row.hasErrors).length],['duplicates','Дубли',importRowsWithState.filter(row=>row.duplicate).length],['valid','Готовы',importRowsWithState.filter(row=>!row.hasErrors&&!row.duplicate).length]] as const).map(([value,label,count])=><button type="button" key={value} onClick={()=>{setImportRowFilter(value);setImportPreviewPage(1)}} className={`rounded-lg px-3 py-1.5 text-xs font-bold ${importRowFilter===value?'bg-blue-600 text-white':'border border-slate-200 bg-white text-slate-600'}`}>{label} · {count.toLocaleString('ru-RU')}</button>)}
@@ -6913,7 +7047,7 @@ export default function App() {
                 <div aria-live="polite" className={`mt-2 text-[11px] font-bold ${directoryImportDigestStatus==='error'?'text-rose-700':directoryImportDigestStatus==='ready'?'text-emerald-700':'text-slate-500'}`}>{directoryImportDigestStatus==='calculating'?'Загрузка и расчёт контрольной суммы…':directoryImportDigestStatus==='ready'?'Источник готов · контрольная сумма рассчитана сервером':directoryImportDigestStatus==='error'?'Ошибка подготовки файла':'Ожидание подготовки'}</div>
                 {directoryImportDigestStatus==='error'&&<button type="button" onClick={()=>{const source=directoryImportSourceKind==='file'?importSourceFile:(importText.trim()?new Blob([importText],{type:'text/csv'}):null);if(source)void prepareImportSource(directoryImportSourceKind,source,directoryImportSourceKind==='file'?(importFileName||'directory-import.csv'):'pasted-directory-import.csv')}} className="mt-2 rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-bold text-rose-700">Повторить подготовку</button>}
               </div>}
-              <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-end"><button type="button" onClick={()=>clearDirectoryImportSource()} disabled={!directoryImportSourceSummary} className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-600 disabled:opacity-40">Очистить</button><button type="button" onClick={handleDownloadTemplate} className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-600">Скачать шаблон</button><button type="button" onClick={openDirectoryImportPreview} disabled={!directoryImportSourceSummary||directoryImportDigestStatus!=='ready'} className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-bold text-white hover:bg-blue-700 disabled:opacity-40">Открыть предпросмотр</button></div>
+              <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end"><span className="mr-auto text-[11px] text-slate-500">{directoryImportPipelineState.sourceReady?'Источник готов. Следующий шаг — «Проверить данные».':'Дождитесь завершения подготовки источника.'}</span><button type="button" onClick={()=>clearDirectoryImportSource()} disabled={!directoryImportSourceSummary} className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-600 disabled:opacity-40">Очистить</button><button type="button" onClick={handleDownloadTemplate} className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-600">Скачать шаблон</button></div>
             </div>}
           </div>
 

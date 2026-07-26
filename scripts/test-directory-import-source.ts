@@ -55,7 +55,7 @@ for (const marker of [
   'Перетащите CSV или TXT сюда',
   'Вставьте CSV из буфера обмена',
   'Вставить из буфера',
-  'Открыть предпросмотр',
+  'Проверить данные',
   'directoryImportFileInputRef.current?.click()',
   "reader.readAsText(file, 'UTF-8')",
   "event.dataTransfer.files?.[0]",

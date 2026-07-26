@@ -58,6 +58,7 @@
     "test:directory-import-ui": "tsx scripts/test-directory-import-source.ts",
     "test:directory-import-digest": "tsx scripts/test-directory-import-source.ts",
     "test:directory-import-sources": "tsx scripts/test-directory-import-sources.ts",
+    "test:directory-import-pipeline": "tsx scripts/test-directory-import-pipeline.ts",
     "test:directory-contact-ids": "tsx scripts/test-directory-contact-ids.ts",
     "test:directory-import-jobs": "tsx scripts/test-directory-import-jobs.ts",
     "test:directory-ownership": "tsx scripts/test-directory-ownership.ts",
