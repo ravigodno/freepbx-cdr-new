@@ -1,4 +1,5 @@
 import { handleAuthExpiredResponse } from '../../../services/apiClient';
+import type { DirectoryEntry } from '../../../types';
 
 export interface DirectoryFetchFilters {
   q?: string;
@@ -98,6 +99,25 @@ export async function fetchDirectoryAll(token: string, filters: DirectoryFetchFi
   return Array.isArray(data) ? data : [];
 }
 
+export async function fetchDirectoryContact(token: string, contactId: string, signal?: AbortSignal): Promise<DirectoryEntry> {
+  const resp = await fetch(`/api/directory/contacts/${encodeURIComponent(contactId)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+    signal
+  });
+  if (resp.status === 401) {
+    handleAuthExpiredResponse(resp);
+    throw Object.assign(new Error('UNAUTHORIZED'), { code: 'UNAUTHORIZED', status: 401 });
+  }
+  const data = await resp.json().catch(() => ({}));
+  if (resp.status === 404) {
+    throw Object.assign(new Error(data.error || 'Контакт не найден'), { code: 'DIRECTORY_CONTACT_NOT_FOUND', status: 404 });
+  }
+  if (!resp.ok) {
+    throw Object.assign(new Error(data.error || 'Не удалось загрузить контакт'), { code: 'DIRECTORY_CONTACT_LOAD_FAILED', status: resp.status });
+  }
+  return data as DirectoryEntry;
+}
+
 export async function setDirectoryFavorite(token: string, contactId: string, favorite: boolean) {
   const resp = await fetch(`/api/directory/${encodeURIComponent(contactId)}/favorite`, {
     method: 'PUT',
@@ -119,7 +139,7 @@ export async function setDirectoryFavorite(token: string, contactId: string, fav
 }
 
 export async function saveDirectoryEntry(token: string, payload: any, id?: string) {
-  const resp = await fetch(id ? `/api/directory/${id}` : '/api/directory', {
+  const resp = await fetch(id ? `/api/directory/${encodeURIComponent(id)}` : '/api/directory', {
     method: id ? 'PUT' : 'POST',
     headers: {
       'Content-Type': 'application/json',

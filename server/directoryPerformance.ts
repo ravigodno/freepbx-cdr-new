@@ -31,6 +31,7 @@ type CompactContact = {
   phones: string[];
   phone2: string;
   email: string;
+  comment?: string;
   position: string;
   visibility: 'shared' | 'private';
   type: string;
@@ -40,6 +41,16 @@ type CompactContact = {
   responsibleUserId: string;
   department: string;
   group: string;
+  website?: string;
+  inn?: string;
+  kpp?: string;
+  ogrn?: string;
+  address?: string;
+  internalExtension?: string;
+  linkedExternalNumber?: string;
+  tags?: string[];
+  customFields?: Record<string, unknown>;
+  loadWarnings?: string[];
   createdAt?: string | null;
   updatedAt?: string | null;
 };
@@ -133,10 +144,10 @@ const parseMetadata = (rows: any[]): Map<string, Record<string, any>> => {
   return result;
 };
 
-const rowToContact = (row: any, metadata: Record<string, any> = {}): CompactContact => {
+const rowToContact = (row: any, metadata: Record<string, any> = {}, includeDetails = false): CompactContact => {
   const extraPhones = Array.isArray(metadata.phones) ? metadata.phones : [];
   const phones = Array.from(new Set([row.phone, row.phone2, ...extraPhones].map(value => text(value, 100)).filter(Boolean)));
-  return {
+  const contact: CompactContact = {
     id: text(row.id, 64),
     name: text(row.name),
     company: text(row.company),
@@ -155,6 +166,20 @@ const rowToContact = (row: any, metadata: Record<string, any> = {}): CompactCont
     group: text(metadata.group),
     createdAt: row.created_at || null,
     updatedAt: row.updated_at || null
+  };
+  if (!includeDetails) return contact;
+  return {
+    ...contact,
+    comment: text(row.comment, 10_000),
+    website: text(metadata.website),
+    inn: text(metadata.inn, 64),
+    kpp: text(metadata.kpp, 64),
+    ogrn: text(metadata.ogrn, 64),
+    address: text(metadata.address, 1000),
+    internalExtension: text(metadata.internalExtension, 64),
+    linkedExternalNumber: text(metadata.linkedExternalNumber, 100),
+    tags: Array.isArray(metadata.tags) ? metadata.tags.map(value => text(value, 100)).filter(Boolean) : [],
+    customFields: metadata.customFields && typeof metadata.customFields === 'object' ? metadata.customFields : {}
   };
 };
 
@@ -311,13 +336,20 @@ export async function getDirectoryContactSql(id: unknown, access: DirectoryAcces
   const params: any[] = [];
   const accessSql = accessClause(access, params);
   params.push(text(id, 64));
-  const rows = await queryPBXPulsDb(`SELECT ${compactFields} FROM directory_contacts c WHERE ${accessSql} AND c.id=? LIMIT 1`, params);
+  const rows = await queryPBXPulsDb(`SELECT ${compactFields},c.comment FROM directory_contacts c WHERE ${accessSql} AND c.id=? LIMIT 1`, params);
   if (!rows[0]) return null;
-  const metadataRows = await queryPBXPulsDb(
-    `SELECT contact_id,metadata_key,metadata_value,metadata_json,value FROM directory_contact_metadata WHERE contact_id=? ORDER BY metadata_key`,
-    [rows[0].id]
-  );
-  return rowToContact(rows[0], parseMetadata(metadataRows).get(String(rows[0].id)) || {});
+  try {
+    const metadataRows = await queryPBXPulsDb(
+      `SELECT contact_id,metadata_key,metadata_value,metadata_json,value FROM directory_contact_metadata WHERE contact_id=? ORDER BY metadata_key`,
+      [rows[0].id]
+    );
+    return rowToContact(rows[0], parseMetadata(metadataRows).get(String(rows[0].id)) || {}, true);
+  } catch (_error) {
+    return {
+      ...rowToContact(rows[0], {}, true),
+      loadWarnings: ['Основные данные загружены, но дополнительные поля временно недоступны.']
+    };
+  }
 }
 
 const cacheKeyForLookup = (phone: string, access: DirectoryAccessContext): string =>

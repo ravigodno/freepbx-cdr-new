@@ -92,7 +92,7 @@ import QualityTab from './modules/monitoring/tabs/monitoring/QualityTab';
 import DevicesMapTab from './modules/monitoring/tabs/monitoring/DevicesMapTab';
 import HealthReportTab from './modules/monitoring/tabs/monitoring/HealthReportTab';
 import { DirectoryStatusIcon } from './modules/directory/components/DirectoryStatusIcon';
-import { fetchDirectory, fetchDirectoryAll, saveDirectoryEntry, deleteDirectoryEntry, toggleDirectoryBlacklist, toggleDirectorySpam, previewDirectoryImport, previewDirectoryImportOwnership, previewDirectoryBulkDelete, applyDirectoryBulkDelete, createDirectoryImportJob, prepareDirectoryImportSource, deleteDirectoryImportSource, getDirectoryImportJob, cancelDirectoryImportJob, resumeDirectoryImportJob, previewDirectoryImportRollback, getDirectoryImportJobErrors, fetchDirectoryColumnSettings, saveMyDirectoryColumnSettings, resetMyDirectoryColumnSettings, saveGlobalDirectoryColumnSettings, resetGlobalDirectoryColumnSettings, setDirectoryFavorite, type DirectoryImportPreparedSource } from './modules/directory/services/directoryApi';
+import { fetchDirectory, fetchDirectoryAll, fetchDirectoryContact, saveDirectoryEntry, deleteDirectoryEntry, toggleDirectoryBlacklist, toggleDirectorySpam, previewDirectoryImport, previewDirectoryImportOwnership, previewDirectoryBulkDelete, applyDirectoryBulkDelete, createDirectoryImportJob, prepareDirectoryImportSource, deleteDirectoryImportSource, getDirectoryImportJob, cancelDirectoryImportJob, resumeDirectoryImportJob, previewDirectoryImportRollback, getDirectoryImportJobErrors, fetchDirectoryColumnSettings, saveMyDirectoryColumnSettings, resetMyDirectoryColumnSettings, saveGlobalDirectoryColumnSettings, resetGlobalDirectoryColumnSettings, setDirectoryFavorite, type DirectoryImportPreparedSource } from './modules/directory/services/directoryApi';
 import { calculateDirectoryImportDigest, getDirectoryImportDigestCapability, DIRECTORY_IMPORT_MAX_BYTES, isSupportedDirectoryImportFile, summarizeDirectoryImportSource, type DirectoryImportDigestStatus, type DirectoryImportSourceKind, type DirectoryImportSourceSummary } from './modules/directory/utils/directoryImportSource';
 import { applyDirectoryOwnershipPreview, buildDirectoryEffectiveRows, directoryImportPipelineSteps, getDirectoryImportActiveStep, getDirectoryImportDisabledReason, normalizeDirectoryEntriesForOwnership } from './modules/directory/utils/directoryImportPipeline';
 import CDRPage from './modules/cdr/pages/CDRPage';
@@ -863,6 +863,9 @@ export default function App() {
   const [consultTransferStatus, setConsultTransferStatus] = useState<ConsultTransferCapabilities | null>(null);
   const [isLoadingDirectory, setIsLoadingDirectory] = useState(false);
   const [editingDirEntry, setEditingDirEntry] = useState<DirectoryEntry | null>(null);
+  const [directoryContactLoadState, setDirectoryContactLoadState] = useState<'idle' | 'loading' | 'loaded' | 'not_found' | 'error'>('idle');
+  const [directoryContactLoadWarning, setDirectoryContactLoadWarning] = useState('');
+  const directoryContactLoadAbortRef = useRef<AbortController | null>(null);
   const [dirName, setDirName] = useState('');
   const [dirNumber, setDirNumber] = useState('');
   const [dirPhonesText, setDirPhonesText] = useState('');
@@ -1035,7 +1038,10 @@ export default function App() {
   };
 
   const resetDirFormFields = () => {
+    directoryContactLoadAbortRef.current?.abort();
     setEditingDirEntry(null);
+    setDirectoryContactLoadState('idle');
+    setDirectoryContactLoadWarning('');
     setDirName('');
     setDirNumber('');
     setDirPhonesText('');
@@ -3084,6 +3090,8 @@ export default function App() {
     setDirVisibility(entry.visibility === 'private' ? 'private' : 'shared');
     setDirComment(entry.comment || '');
     setDirError('');
+    setDirectoryContactLoadState('loaded');
+    setDirectoryContactLoadWarning(Array.isArray((entry as any).loadWarnings) ? (entry as any).loadWarnings.join(' ') : '');
     setDirFormShowAllFields(false);
   };
 
@@ -3875,11 +3883,38 @@ export default function App() {
   }, [session?.token, activeView, directoryPageMode, dirSearchQuery, dirTypeFilter, dirSpamMode, dirVisibilityMode, dirPage, dirPageSize]);
 
   useEffect(() => {
-    if (directoryPageMode !== 'contact_edit' || !directoryContactEditId) return;
-    if (editingDirEntry?.id === directoryContactEditId) return;
-    const entry = directory.find(item => item.id === directoryContactEditId) || directoryLookup.find(item => item.id === directoryContactEditId);
-    if (entry) populateDirectoryContactForm(entry);
-  }, [directoryPageMode, directoryContactEditId, directory, directoryLookup, editingDirEntry?.id]);
+    if (!session?.token || directoryPageMode !== 'contact_edit' || !directoryContactEditId) return;
+    const contactId = directoryContactEditId;
+    directoryContactLoadAbortRef.current?.abort();
+    const controller = new AbortController();
+    directoryContactLoadAbortRef.current = controller;
+    setDirectoryContactLoadState('loading');
+    setDirectoryContactLoadWarning('');
+    setDirError('');
+
+    void fetchDirectoryContact(session.token, contactId, controller.signal)
+      .then(entry => {
+        if (directoryContactLoadAbortRef.current !== controller) return;
+        populateDirectoryContactForm(entry);
+      })
+      .catch((error: any) => {
+        if (error?.name === 'AbortError' || directoryContactLoadAbortRef.current !== controller) return;
+        setEditingDirEntry(null);
+        setDirError('');
+        setDirectoryContactLoadWarning('');
+        if (error?.code === 'DIRECTORY_CONTACT_NOT_FOUND' || error?.status === 404) {
+          setDirectoryContactLoadState('not_found');
+          return;
+        }
+        if (error?.code === 'UNAUTHORIZED') {
+          handleAuthError();
+          return;
+        }
+        setDirectoryContactLoadState('error');
+      });
+
+    return () => controller.abort();
+  }, [session?.token, directoryPageMode, directoryContactEditId]);
 
   const getFirstAllowedActiveView = useCallback((): typeof activeView => {
     if (!session) return 'reports';
@@ -6864,12 +6899,22 @@ export default function App() {
             </div>
           </div>
 
-          {directoryPageMode === 'contact_edit' && directoryContactEditId && !editingDirEntry ? (
+          {directoryPageMode === 'contact_edit' && directoryContactEditId && (directoryContactLoadState !== 'loaded' || !editingDirEntry) ? (
             <div className="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-600 shadow-sm">
-              {isLoadingDirectory ? 'Загрузка контакта...' : 'Контакт не найден или недоступен для редактирования.'}
+              {directoryContactLoadState === 'not_found'
+                ? 'Контакт не найден или недоступен для редактирования.'
+                : directoryContactLoadState === 'error'
+                  ? 'Не удалось загрузить контакт. Повторите попытку.'
+                  : 'Загрузка контакта...'}
             </div>
           ) : (
             <form onSubmit={handleSaveDirEntry} className="rounded-xl border border-slate-200 bg-slate-50 p-4 shadow-sm space-y-4">
+              {directoryContactLoadWarning && (
+                <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                  <AlertCircle className="h-4.5 w-4.5 shrink-0" />
+                  <span>{directoryContactLoadWarning}</span>
+                </div>
+              )}
               {dirError && (
                 <div className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-600">
                   <AlertCircle className="h-4.5 w-4.5 shrink-0" />

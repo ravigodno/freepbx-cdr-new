@@ -12379,8 +12379,10 @@ app.put('/api/directory/:id', requireAuth(), async (req, res) => {
 
     const localDb = await readLocalDb();
     const dbUser = getAuthenticatedDbUser(localDb, req);
-    const directoryRuntime = await getDirectoryRuntimeSnapshotForRequest(localDb, req);
-    const existingEntry = (directoryRuntime.contacts || []).find((entry: any) => String(entry.id) === String(req.params.id));
+    const existingEntry = await getDirectoryStorageMode() === 'sql'
+      ? await getDirectoryContactSql(req.params.id, getDirectorySqlAccessContext(localDb, req))
+      : (await getDirectoryRuntimeSnapshotForRequest(localDb, req)).contacts
+        .find((entry: any) => String(entry.id) === String(req.params.id));
     if (!existingEntry) return res.status(404).json({ error: 'Контакт не найден' });
     if (!canEditDirectoryEntry(existingEntry, authUser, dbUser, localDb.settings)) {
       return res.status(403).json({ error: 'Можно редактировать только собственные личные контакты' });
