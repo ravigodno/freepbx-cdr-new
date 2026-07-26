@@ -69,6 +69,7 @@ import {
 import { CallEntry, DashboardStats, AppSettings, UserRole, DirectoryEntry } from './types';
 import ScriptsTab from './components/ScriptsTab';
 import AiAssistantTab from './components/AiAssistantTab';
+import DirectoryContactFormLayout from './modules/directory/components/DirectoryContactFormLayout';
 import AiAgentBuilderPage from './modules/aiPlatform/AiAgentBuilderPage';
 import AIPBXAdminTab from './components/AIPBXAdminTab';
 import packageJson from '../package.json';
@@ -5510,19 +5511,6 @@ export default function App() {
     );
   };
 
-  const renderDirectoryContactFormSection = (title: string, fieldKeys: DirectoryVisibleColumnKey[]) => {
-    const visibleFields = fieldKeys.filter(hasDirectoryContactFormField);
-    if (visibleFields.length === 0) return null;
-    return (
-      <div className="rounded-xl border border-slate-200 bg-white p-3">
-        <h4 className="mb-3 text-xs font-black uppercase tracking-wide text-slate-500">{title}</h4>
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-          {visibleFields.map(fieldKey => <React.Fragment key={fieldKey}>{renderDirectoryContactFormField(fieldKey)}</React.Fragment>)}
-        </div>
-      </div>
-    );
-  };
-
   if (!session) {
     return (
       <div id="login-container" className="min-h-screen relative overflow-hidden bg-gradient-to-br from-slate-50 via-blue-50/30 to-sky-50/40">
@@ -6905,26 +6893,9 @@ export default function App() {
       )}
 
       {activeView === 'directory' && (directoryPageMode === 'contact_new' || directoryPageMode === 'contact_edit') && (
-        <section className="mx-auto min-w-0 max-w-6xl space-y-4">
-          <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div className="min-w-0">
-                <h2 className="flex items-center gap-2 break-words text-lg font-black text-slate-900">
-                  <BookOpen className="h-5 w-5 text-blue-600" />
-                  {directoryPageMode === 'contact_edit' ? 'Редактирование контакта' : 'Новый контакт'}
-                </h2>
-                <p className="mt-1 max-w-3xl text-xs leading-relaxed text-slate-500">
-                  {directoryPageMode === 'contact_edit' ? 'Обновите данные контакта в справочнике PBXPuls.' : 'Создайте контакт в справочнике PBXPuls.'}
-                </p>
-              </div>
-              <button type="button" onClick={closeDirectoryContactFormPage} className="shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50">
-                Назад к справочнику
-              </button>
-            </div>
-          </div>
-
+        <section className="min-w-0">
           {directoryPageMode === 'contact_edit' && directoryContactEditId && (directoryContactLoadState !== 'loaded' || !editingDirEntry) ? (
-            <div className="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-600 shadow-sm">
+            <div className="mx-auto max-w-5xl rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-600 shadow-sm">
               {directoryContactLoadState === 'not_found'
                 ? 'Контакт не найден или недоступен для редактирования.'
                 : directoryContactLoadState === 'error'
@@ -6932,47 +6903,18 @@ export default function App() {
                   : 'Загрузка контакта...'}
             </div>
           ) : (
-            <form onSubmit={handleSaveDirEntry} className="rounded-xl border border-slate-200 bg-slate-50 p-4 shadow-sm space-y-4">
-              {directoryContactLoadWarning && (
-                <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
-                  <AlertCircle className="h-4.5 w-4.5 shrink-0" />
-                  <span>{directoryContactLoadWarning}</span>
-                </div>
-              )}
-              {dirError && (
-                <div className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-600">
-                  <AlertCircle className="h-4.5 w-4.5 shrink-0" />
-                  <span>{dirError}</span>
-                </div>
-              )}
-
-              <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white p-3">
-                <div className="text-xs text-slate-500">
-                  Сейчас показано полей: <span className="font-bold text-slate-800">{visibleDirectoryContactFormFields.length}</span>. Actions и ownerUserId в форму не выводятся.
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setDirFormShowAllFields(value => !value)}
-                  className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
-                >
-                  {dirFormShowAllFields ? 'Скрыть дополнительные поля' : 'Показать все поля'}
-                </button>
-              </div>
-
-              {renderDirectoryContactFormSection('Основное', ['type', 'fullName', 'phone'])}
-              {renderDirectoryContactFormSection('Контакты', ['phone2', 'email', 'website'])}
-              {renderDirectoryContactFormSection('Организация', ['organization', 'position', 'department', 'group'])}
-              {renderDirectoryContactFormSection('Дополнительно', ['inn', 'kpp', 'ogrn', 'address', 'comment', 'tags', 'internalExtension', 'linkedExternalNumber', 'responsibleUserId'])}
-              {renderDirectoryContactFormSection('Системные поля / видимость', ['visibility', 'isSpam'])}
-
-              <div className="flex flex-wrap justify-end gap-2 border-t border-slate-200 pt-3">
-                <button type="button" onClick={closeDirectoryContactFormPage} className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-medium text-slate-500 hover:bg-slate-50 hover:text-slate-800">Отмена</button>
-                <button type="submit" disabled={isSavingDir} className="flex min-w-[90px] items-center justify-center gap-1 rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50">
-                  {isSavingDir && <Loader2 className="h-3 w-3 animate-spin" />}
-                  <span>Сохранить</span>
-                </button>
-              </div>
-            </form>
+            <DirectoryContactFormLayout
+              mode={directoryPageMode === 'contact_edit' ? 'edit' : 'create'}
+              warning={directoryContactLoadWarning}
+              error={dirError}
+              showAdvanced={dirFormShowAllFields}
+              customFieldKeys={selectedDirectoryVisibleColumns.filter(column => String(column).startsWith('custom:')).map(String)}
+              isSaving={isSavingDir}
+              renderField={fieldKey => renderDirectoryContactFormField(fieldKey as DirectoryVisibleColumnKey)}
+              onToggleAdvanced={() => setDirFormShowAllFields(value => !value)}
+              onCancel={closeDirectoryContactFormPage}
+              onSubmit={handleSaveDirEntry}
+            />
           )}
         </section>
       )}
