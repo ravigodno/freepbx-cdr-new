@@ -22,6 +22,7 @@
     "test:live-snapshot-cache": "tsx scripts/test-live-snapshot-cache.ts",
     "test:quality-permission": "tsx scripts/test-quality-permission.ts",
     "test:quality": "tsx scripts/test-quality.ts",
+    "test:balance-provider-foundation": "tsx scripts/test-balance-provider-foundation.ts",
     "test:call-intelligence": "tsx scripts/test-call-intelligence.ts",
     "test:call-diagnosis": "tsx scripts/test-call-diagnosis.ts",
     "test:call-insights": "tsx scripts/test-call-insights.ts",

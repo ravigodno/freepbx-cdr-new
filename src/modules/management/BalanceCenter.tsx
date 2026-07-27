@@ -19,6 +19,25 @@ interface BalanceCenterProps {
   hasPermission: (perm: string) => boolean;
 }
 
+interface MtsBusinessSource {
+  id: 'mts_business';
+  provider: 'mts_business';
+  displayName: string;
+  enabled: boolean;
+  configured: boolean;
+  status: string;
+  safeErrorCode: string | null;
+  lookupType: 'msisdn' | 'account';
+  syncIntervalMinutes: number;
+  balance: number | null;
+  currency: 'RUB' | null;
+  creditLimit: number | null;
+  accountNumberMasked: string | null;
+  msisdnMasked: string | null;
+  measuredAt: string | null;
+  lastSuccessAt: string | null;
+}
+
 // Initial Mock Operators Data
 const INITIAL_OPERATORS = [
   {
@@ -286,6 +305,9 @@ export default function BalanceCenter({ session, hasPermission }: BalanceCenterP
 
   // Interactive core state
   const [operators, setOperators] = useState(INITIAL_OPERATORS);
+  const [mtsBusinessSource, setMtsBusinessSource] = useState<MtsBusinessSource | null>(null);
+  const [mtsBusinessLoading, setMtsBusinessLoading] = useState(false);
+  const [mtsBusinessAction, setMtsBusinessAction] = useState<'test' | 'sync' | null>(null);
   const [anomalies, setAnomalies] = useState(INITIAL_ANOMALIES);
   const [extRatings, setExtRatings] = useState(INITIAL_EXT_RATINGS);
   const [selectedExt, setSelectedExt] = useState<string | null>(null);
@@ -309,6 +331,71 @@ export default function BalanceCenter({ session, hasPermission }: BalanceCenterP
     setNoti({ type, text });
     setTimeout(() => setNoti(null), 5000);
   };
+
+  const balanceHeaders = useMemo(() => ({
+    Authorization: `Bearer ${session?.token || ''}`,
+    'Content-Type': 'application/json'
+  }), [session?.token]);
+
+  const loadMtsBusinessSource = async () => {
+    if (!session?.token) return;
+    setMtsBusinessLoading(true);
+    try {
+      const response = await fetch('/api/balance/sources', { headers: balanceHeaders });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) throw new Error(data.error || 'Не удалось загрузить MTS Business');
+      const source = Array.isArray(data.sources)
+        ? data.sources.find((item: any) => item?.id === 'mts_business')
+        : null;
+      setMtsBusinessSource(source || null);
+    } catch (error: any) {
+      showNoti('error', error.message || 'Источник MTS Business недоступен');
+    } finally {
+      setMtsBusinessLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadMtsBusinessSource();
+  }, [session?.token]);
+
+  const testMtsBusinessSource = async () => {
+    setMtsBusinessAction('test');
+    try {
+      const response = await fetch('/api/balance/sources/mts-business/test', { method: 'POST', headers: balanceHeaders });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.requestOk) throw new Error(data.safeMessage || 'Проверка MTS Business не выполнена');
+      showNoti('success', data.safeMessage || 'Подключение к MTS Business API работает');
+    } catch (error: any) {
+      showNoti('error', error.message || 'Проверка MTS Business не выполнена');
+    } finally {
+      setMtsBusinessAction(null);
+    }
+  };
+
+  const syncMtsBusinessSource = async () => {
+    setMtsBusinessAction('sync');
+    try {
+      const response = await fetch('/api/balance/sources/mts_business/sync', { method: 'POST', headers: balanceHeaders });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) throw new Error(data.safeMessage || 'Баланс MTS Business не обновлён');
+      await loadMtsBusinessSource();
+      showNoti('success', 'Баланс MTS Business обновлён');
+    } catch (error: any) {
+      showNoti('error', error.message || 'Баланс MTS Business не обновлён');
+    } finally {
+      setMtsBusinessAction(null);
+    }
+  };
+
+  const formatMtsAmount = (value: number | null, currency: string | null) => {
+    if (value === null) return 'Нет данных';
+    return `${value.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${currency === 'RUB' ? ' ₽' : currency ? ` ${currency}` : ''}`;
+  };
+
+  const formatMtsTime = (value: string | null) => value
+    ? new Date(value).toLocaleString('ru-RU')
+    : 'Нет данных';
 
   // UI state for modals / actions
   const [isTopUpOpen, setIsTopUpOpen] = useState(false);
@@ -1153,6 +1240,62 @@ export default function BalanceCenter({ session, hasPermission }: BalanceCenterP
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+              <tr className="bg-blue-50/40 transition-colors hover:bg-blue-50 dark:bg-blue-950/10 dark:hover:bg-blue-950/20">
+                <td className="py-4">
+                  <div className="font-black text-slate-900 dark:text-white">МТС Бизнес</div>
+                  <div className="mt-1 space-y-0.5 text-[10px] font-mono text-slate-400">
+                    <div>Номер: {mtsBusinessSource?.msisdnMasked || 'Нет данных'}</div>
+                    <div>Лицевой счёт: {mtsBusinessSource?.accountNumberMasked || 'Нет данных'}</div>
+                  </div>
+                </td>
+                <td className="py-4 font-mono text-[11px] text-slate-500">MTS Business API</td>
+                <td className={`py-4 text-right font-mono font-bold ${
+                  (mtsBusinessSource?.balance ?? 0) < 0 ? 'text-rose-600' : 'text-slate-900 dark:text-white'
+                }`}>
+                  <div>{formatMtsAmount(mtsBusinessSource?.balance ?? null, mtsBusinessSource?.currency ?? null)}</div>
+                  <div className="mt-1 text-[10px] font-semibold text-slate-400">
+                    Кредитный лимит: {formatMtsAmount(mtsBusinessSource?.creditLimit ?? null, mtsBusinessSource?.currency ?? null)}
+                  </div>
+                </td>
+                <td className="py-4 text-right text-slate-400">Нет данных</td>
+                <td className="py-4 text-right text-slate-400">Нет данных</td>
+                <td className="py-4 text-center text-slate-400">Нет данных</td>
+                <td className="py-4">
+                  <span className={`inline-flex items-center gap-1 text-[10px] font-bold ${
+                    mtsBusinessSource?.status === 'success' ? 'text-emerald-500' : 'text-slate-400'
+                  }`}>
+                    <span className={`h-1.5 w-1.5 rounded-full ${
+                      mtsBusinessSource?.status === 'success' ? 'bg-emerald-500' : 'bg-slate-400'
+                    }`}></span>
+                    {mtsBusinessSource?.configured ? 'Официальный API' : 'Не настроен'}
+                  </span>
+                </td>
+                <td className="py-4 text-right font-mono text-[10px] text-slate-400">
+                  {mtsBusinessLoading ? 'Загрузка…' : formatMtsTime(mtsBusinessSource?.lastSuccessAt || mtsBusinessSource?.measuredAt || null)}
+                </td>
+                <td className="py-4">
+                  <div className="flex min-w-[190px] flex-col items-stretch justify-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => void testMtsBusinessSource()}
+                      disabled={!canManageSources || mtsBusinessAction !== null}
+                      className="inline-flex items-center justify-center gap-1 rounded-lg border border-blue-200 bg-blue-50 px-2 py-1 text-[10px] font-bold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-300"
+                    >
+                      {mtsBusinessAction === 'test' && <RefreshCw className="h-3 w-3 animate-spin" />}
+                      Проверить подключение
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void syncMtsBusinessSource()}
+                      disabled={!canManageSources || mtsBusinessAction !== null}
+                      className="inline-flex items-center justify-center gap-1 rounded-lg bg-blue-600 px-2 py-1 text-[10px] font-bold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {mtsBusinessAction === 'sync' && <RefreshCw className="h-3 w-3 animate-spin" />}
+                      Обновить баланс
+                    </button>
+                  </div>
+                </td>
+              </tr>
               {operators.map(op => {
                 const daysLeft = op.avgSpend > 0 ? parseFloat((op.balance / op.avgSpend).toFixed(1)) : 999;
                 const opColor = getDaysColor(daysLeft);

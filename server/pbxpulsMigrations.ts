@@ -1519,7 +1519,50 @@ const MIGRATIONS: Migration[] = [
       `INSERT IGNORE INTO role_permissions(role_id,permission_id)
        SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key IN(
         'import_directory','cancel_directory_import','resume_directory_import','rollback_directory_import','view_directory_import_errors'
-       ) WHERE r.role_key IN('su','admin')`
+      ) WHERE r.role_key IN('su','admin')`
+    ]
+  },
+  {
+    key:'20260727_063_mts_business_balance_foundation',
+    description:'Add safe MTS Business balance sources and snapshots',
+    statements:[
+      `CREATE TABLE IF NOT EXISTS balance_sources(
+        id VARCHAR(64) PRIMARY KEY,
+        provider VARCHAR(64) NOT NULL,
+        display_name VARCHAR(191) NOT NULL,
+        enabled TINYINT(1) NOT NULL DEFAULT 0,
+        config_json LONGTEXT NOT NULL,
+        sync_interval_minutes INT NOT NULL DEFAULT 30,
+        status VARCHAR(32) NOT NULL DEFAULT 'disabled',
+        safe_error_code VARCHAR(64) NULL,
+        last_attempt_at DATETIME NULL,
+        last_success_at DATETIME NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NULL,
+        UNIQUE KEY uniq_balance_source_provider(provider),
+        KEY idx_balance_source_status(status,last_success_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS balance_snapshots(
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        source_id VARCHAR(64) NOT NULL,
+        balance_amount DECIMAL(20,6) NULL,
+        currency VARCHAR(16) NULL,
+        credit_limit DECIMAL(20,6) NULL,
+        account_number_masked VARCHAR(191) NULL,
+        msisdn_masked VARCHAR(64) NULL,
+        measured_at DATETIME NOT NULL,
+        provider_timestamp DATETIME NULL,
+        source_type VARCHAR(32) NOT NULL DEFAULT 'api',
+        raw_hash CHAR(64) NOT NULL,
+        metadata_json LONGTEXT NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        KEY idx_balance_snapshot_source_time(source_id,measured_at),
+        KEY idx_balance_snapshot_measured(measured_at),
+        CONSTRAINT fk_balance_snapshot_source FOREIGN KEY(source_id) REFERENCES balance_sources(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `INSERT IGNORE INTO balance_sources
+        (id,provider,display_name,enabled,config_json,sync_interval_minutes,status)
+       VALUES ('mts_business','mts_business','МТС Бизнес',0,'{}',30,'disabled')`
     ]
   }
 ];

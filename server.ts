@@ -172,6 +172,7 @@ import { registerCallIntelligenceRoutes } from './server/callIntelligence/router
 import { startLogAnalysisCollector } from './server/logAnalysis/service.js';
 import { registerOutgoingReportRoutes } from './server/outgoingReports.js';
 import { registerUniqueNumberExportRoutes } from './server/reportUniqueNumbers.js';
+import { registerBalanceRoutes } from './server/balance/router.js';
 import { calculateAnsweredIncomingMetrics } from './server/reportIncomingMetrics.js';
 import { writePBXPulsAuditLog } from './server/pbxpulsEvents.js';
 import { mergeDeviceNetworkIdentity, readIpNeighborMacs } from './server/deviceNetworkIdentity.js';
@@ -22881,6 +22882,10 @@ registerUniqueNumberExportRoutes(app, {
     });
   }
 });
+const balanceRuntime = registerBalanceRoutes(app, {
+  requireAuth,
+  checkPermission: checkUserPermission
+});
 
 // API fallback must stay before Vite/static SPA fallback so missing API routes return JSON, not index.html.
 app.use('/api', (req, res) => {
@@ -22916,6 +22921,7 @@ async function startServer() {
   startMonitoringRetentionRunner();
   startSecurityCollector();
   startLogAnalysisCollector();
+  balanceRuntime.start();
   startDtmfAmiListener(startupDb.settings).catch((e: any) => console.error('[DTMF] listener start failed:', e.message));
 
   app.listen(parseInt(PORT, 10), '0.0.0.0', () => {
@@ -22926,7 +22932,7 @@ async function startServer() {
 }
 
 let aiPlatformShutdownStarted=false;
-for(const signal of ['SIGTERM','SIGINT'] as const)process.once(signal,()=>{if(aiPlatformShutdownStarted)return;aiPlatformShutdownStarted=true;void aiPlatformRuntime.stop().finally(()=>process.exit(0))});
+for(const signal of ['SIGTERM','SIGINT'] as const)process.once(signal,()=>{if(aiPlatformShutdownStarted)return;aiPlatformShutdownStarted=true;balanceRuntime.stop();void aiPlatformRuntime.stop().finally(()=>process.exit(0))});
 
 startServer().catch((err) => {
   console.error('Fatal initialization error:', err);
