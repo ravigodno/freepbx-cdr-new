@@ -15707,7 +15707,7 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
         sqlParams.push(callbackWindowHours);
       }
 
-      sql += ' ORDER BY calldate DESC LIMIT 1000'; // Guard database read limits
+      sql += ' ORDER BY calldate DESC';
       
       try {
         calls = await queryFreePBXCDR(settings, false, sql, sqlParams);
@@ -16302,7 +16302,7 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
         sqlParams.push(callbackWindowHours);
       }
 
-      sql += ' ORDER BY calldate DESC LIMIT 1000';
+      sql += ' ORDER BY calldate DESC';
       
       try {
         calls = await queryFreePBXCDR(localDb.settings, false, sql, sqlParams);
