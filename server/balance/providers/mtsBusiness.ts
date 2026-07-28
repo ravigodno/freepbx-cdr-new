@@ -3,7 +3,7 @@ import fetch, { type RequestInit, type Response } from 'node-fetch';
 
 const ALLOWED_HOSTNAME = 'api.mts.ru';
 const DEFAULT_MAX_RESPONSE_BYTES = 1024 * 1024;
-const USER_AGENT = 'PBXPuls-Balance/5.6.39';
+const USER_AGENT = 'PBXPuls-Balance/5.6.40';
 const TRANSIENT_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
 
 export type MtsBusinessLookupType = 'msisdn' | 'account';

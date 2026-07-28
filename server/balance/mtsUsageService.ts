@@ -212,7 +212,12 @@ export class MtsUsageService {
     const params: any[] = [sourceId, sqlDate(from), sqlDate(to)];
     const detailKind = String(query.detailKind || '');
     if (detailKind === 'calls') conditions.push("e.event_type='network' AND e.network_event='call'");
-    if (detailKind === 'finance') conditions.push("NOT(e.event_type='network' AND e.network_event='call')");
+    if (detailKind === 'finance' || detailKind === 'charges') {
+      conditions.push("NOT(e.event_type='network' AND e.network_event='call')");
+      if (detailKind === 'charges') conditions.push("e.event_type<>'income'");
+      conditions.push('e.amount IS NOT NULL AND e.amount<>0');
+    }
+    if (detailKind === 'payments') conditions.push("e.event_type='income' AND e.amount IS NOT NULL AND e.amount<>0");
     const msisdnHash = String(query.msisdnHash || '');
     if (/^[a-f0-9]{64}$/.test(msisdnHash)) {
       conditions.push('e.msisdn_hash=?');
@@ -251,6 +256,20 @@ export class MtsUsageService {
     return {
       rows: rows.map(row => ({
         ...row,
+        auditStatus: row.eventType === 'network' && row.networkEvent === 'call'
+          ? ['exact', 'high'].includes(row.reconciliationStatus) ? 'confirmed'
+            : row.reconciliationStatus === 'medium' ? 'likely' : 'review'
+          : row.eventType === 'income' ? 'confirmed'
+            : ['periodical', 'network'].includes(row.eventType) ? 'expected' : 'review',
+        auditReason: row.eventType === 'network' && row.networkEvent === 'call'
+          ? row.reconciliationStatus === 'exact' ? 'Звонок точно найден в CDR по времени, номеру и длительности'
+            : row.reconciliationStatus === 'high' ? 'Звонок найден в CDR с высокой уверенностью'
+              : row.reconciliationStatus === 'medium' ? 'Есть вероятное совпадение в CDR — рекомендуется проверка'
+                : 'Соответствующий звонок в CDR не найден'
+          : row.eventType === 'income' ? 'Поступление средств по данным оператора'
+            : row.eventType === 'periodical' ? 'Регулярное начисление оператора за указанный период'
+              : row.eventType === 'network' ? 'Сетевая услуга оператора, не являющаяся звонком'
+                : 'Разовое или прочее списание — рекомендуется проверить основание',
         amount: numberOrNull(row.amount), discount: numberOrNull(row.discount), tax: numberOrNull(row.tax),
         balanceAfter: numberOrNull(row.balanceAfter), billedUnits: numberOrNull(row.billedUnits),
         actualUnits: numberOrNull(row.actualUnits), packageCounterBefore: numberOrNull(row.packageCounterBefore),
@@ -268,7 +287,12 @@ export class MtsUsageService {
     const params: any[] = [sourceId, sqlDate(from), sqlDate(to)];
     const detailKind = String(query.detailKind || '');
     if (detailKind === 'calls') conditions.push("event_type='network' AND network_event='call'");
-    if (detailKind === 'finance') conditions.push("NOT(event_type='network' AND network_event='call')");
+    if (detailKind === 'finance' || detailKind === 'charges') {
+      conditions.push("NOT(event_type='network' AND network_event='call')");
+      if (detailKind === 'charges') conditions.push("event_type<>'income'");
+      conditions.push('amount IS NOT NULL AND amount<>0');
+    }
+    if (detailKind === 'payments') conditions.push("event_type='income' AND amount IS NOT NULL AND amount<>0");
     const msisdnHash = String(query.msisdnHash || '');
     if (/^[a-f0-9]{64}$/.test(msisdnHash)) {
       conditions.push('msisdn_hash=?');
@@ -281,6 +305,7 @@ export class MtsUsageService {
     }
     const rows = await queryPBXPulsDb(
       `SELECT
+       COUNT(*) operationCount,
        SUM(CASE WHEN event_type<>'income' THEN amount ELSE 0 END) totalCharges,
        SUM(CASE WHEN event_type='network' AND network_event='call' THEN amount ELSE 0 END) callCharges,
        SUM(CASE WHEN event_type='network' AND network_event='sms' THEN amount ELSE 0 END) smsCharges,
@@ -296,6 +321,23 @@ export class MtsUsageService {
        SUM(CASE WHEN event_type='network' AND network_event='call' THEN billed_units ELSE 0 END) billedCallUnits,
        SUM(CASE WHEN event_type='network' AND network_event='call' AND amount=0 AND package_counter_used>0 THEN actual_units ELSE 0 END) packageCallSeconds,
        SUM(CASE WHEN event_type='network' AND network_event='call' AND amount<>0 THEN actual_units ELSE 0 END) paidCallSeconds,
+       SUM(CASE WHEN event_type='network' AND network_event='call' AND EXISTS(
+         SELECT 1 FROM balance_usage_cdr_matches m WHERE m.usage_event_id=balance_usage_events.id AND m.confidence IN('exact','high')
+       ) THEN amount ELSE 0 END) confirmedCallCharges,
+       SUM(CASE WHEN event_type='network' AND network_event='call' AND EXISTS(
+         SELECT 1 FROM balance_usage_cdr_matches m WHERE m.usage_event_id=balance_usage_events.id AND m.confidence='medium'
+       ) THEN amount ELSE 0 END) likelyCallCharges,
+       SUM(CASE WHEN event_type='network' AND network_event='call' AND NOT EXISTS(
+         SELECT 1 FROM balance_usage_cdr_matches m WHERE m.usage_event_id=balance_usage_events.id AND m.confidence IN('exact','high','medium')
+       ) THEN amount ELSE 0 END) unmatchedCallCharges,
+       SUM(CASE WHEN event_type='network' AND network_event='call' AND EXISTS(
+         SELECT 1 FROM balance_usage_cdr_matches m WHERE m.usage_event_id=balance_usage_events.id AND m.confidence IN('exact','high')
+       ) THEN 1 ELSE 0 END) confirmedCallCount,
+       SUM(CASE WHEN event_type='network' AND network_event='call' AND NOT EXISTS(
+         SELECT 1 FROM balance_usage_cdr_matches m WHERE m.usage_event_id=balance_usage_events.id AND m.confidence IN('exact','high','medium')
+       ) THEN 1 ELSE 0 END) unmatchedCallCount,
+       SUM(CASE WHEN event_type='periodical' OR (event_type='network' AND network_event<>'call') THEN amount ELSE 0 END) expectedServiceCharges,
+       SUM(CASE WHEN event_type IN('one_time','outcome','unknown') THEN amount ELSE 0 END) reviewServiceCharges,
        MIN(occurred_at) firstEventAt,MAX(occurred_at) lastEventAt
        FROM balance_usage_events WHERE ${conditions.join(' AND ')}`,
       params

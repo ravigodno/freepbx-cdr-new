@@ -8,13 +8,24 @@ type UsageRow = {
   counterparty: string | null; counterpartyMasked: string | null; actualUnits: number | null; billedUnits: number | null;
   billedUnitCode: string | null; actualUnitCode: string | null; amount: number | null; discount: number | null; tax: number | null;
   balanceAfter: number | null; categoryId: string | null; label: string | null; packageCounterUsed: number | null;
-  reconciliationStatus: string;
+  reconciliationStatus: string; auditStatus: 'confirmed' | 'likely' | 'expected' | 'review'; auditReason: string;
 };
 type SubscriberNumber = { id: string; label: string; accountId: string | null; accountLabel: string | null };
 
 const money = (value: number | null | undefined) => value == null ? 'Нет данных' : `${value.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽`;
 const time = (value: string | null) => value ? new Date(value).toLocaleString('ru-RU') : 'Нет данных';
 const number = (value: number | null | undefined, suffix = '') => value == null ? 'Нет данных' : `${value.toLocaleString('ru-RU')}${suffix}`;
+const eventLabel = (value: string | null) => ({
+  periodical: 'Абонентская плата', one_time: 'Разовая услуга', income: 'Поступление',
+  outcome: 'Прочее списание', network: 'Сетевая услуга', sms: 'SMS', data: 'Интернет'
+}[value || ''] || value || 'Неизвестная операция');
+const directionLabel = (value: string | null) => value === 'incoming' ? 'Входящий' : value === 'outgoing' ? 'Исходящий' : 'Нет данных';
+const auditPresentation = {
+  confirmed: ['Подтверждено', 'bg-emerald-100 text-emerald-700'],
+  likely: ['Вероятное совпадение', 'bg-blue-100 text-blue-700'],
+  expected: ['Ожидаемое', 'bg-slate-100 text-slate-700'],
+  review: ['Требует проверки', 'bg-amber-100 text-amber-800']
+} as const;
 
 export default function MtsUsageDetails({ token, canManage }: Props) {
   const today = useMemo(() => new Date(), []);
@@ -23,7 +34,7 @@ export default function MtsUsageDetails({ token, canManage }: Props) {
   const [eventType, setEventType] = useState('');
   const [networkEvent, setNetworkEvent] = useState('');
   const [direction, setDirection] = useState('');
-  const [detailKind, setDetailKind] = useState<'calls' | 'finance'>('calls');
+  const [detailKind, setDetailKind] = useState<'overview' | 'calls' | 'charges' | 'payments'>('overview');
   const [msisdnHash, setMsisdnHash] = useState('');
   const [accountHash, setAccountHash] = useState('');
   const [subscriberNumbers, setSubscriberNumbers] = useState<SubscriberNumber[]>([]);
@@ -43,8 +54,8 @@ export default function MtsUsageDetails({ token, canManage }: Props) {
     setError('');
     try {
       const query = new URLSearchParams({ ...range(), page: '1', pageSize: '100', detailKind });
-      if (detailKind === 'finance' && eventType) query.set('eventType', eventType);
-      if (detailKind === 'finance' && networkEvent) query.set('networkEvent', networkEvent);
+      if (detailKind === 'charges' && eventType) query.set('eventType', eventType);
+      if (detailKind === 'charges' && networkEvent) query.set('networkEvent', networkEvent);
       if (detailKind === 'calls' && direction) query.set('direction', direction);
       if (msisdnHash) query.set('msisdnHash', msisdnHash);
       if (accountHash) query.set('accountHash', accountHash);
@@ -100,7 +111,18 @@ export default function MtsUsageDetails({ token, canManage }: Props) {
     .filter(item => item.accountId && item.accountLabel)
     .map(item => [item.accountId!, { id: item.accountId!, label: item.accountLabel! }])).values()];
 
-  const cards: ReadonlyArray<readonly [string, string | number | null | undefined, string?]> = detailKind === 'calls'
+  const cards: ReadonlyArray<readonly [string, string | number | null | undefined, string?]> = detailKind === 'overview'
+    ? [
+        ['Списано оператором', summary.totalCharges],
+        ['Подтверждено CDR', summary.confirmedCallCharges],
+        ['Звонки требуют проверки', summary.unmatchedCallCharges],
+        ['Ожидаемые услуги', summary.expectedServiceCharges],
+        ['Прочие спорные списания', summary.reviewServiceCharges],
+        ['Поступления', summary.incomeAmount],
+        ['Подтверждено звонков', summary.confirmedCallCount, ' шт.'],
+        ['Не найдено в CDR', summary.unmatchedCallCount, ' шт.']
+      ]
+    : detailKind === 'calls'
     ? [
         ['Стоимость звонков', summary.callCharges],
         ['Всего звонков', summary.callCount, ' шт.'],
@@ -111,32 +133,38 @@ export default function MtsUsageDetails({ token, canManage }: Props) {
         ['Звонки из пакета', summary.packageCallSeconds, ' сек.'],
         ['Платные звонки', summary.paidCallSeconds, ' сек.']
       ] as const
-    : [
+    : detailKind === 'charges' ? [
         ['Списания всего', summary.totalCharges],
         ['Абонентская плата', summary.periodicCharges],
         ['Разовые услуги', summary.oneTimeCharges],
         ['SMS', summary.smsCharges],
         ['Интернет', summary.internetCharges],
-        ['Пополнения', summary.incomeAmount],
         ['Прочие списания', summary.outcomeAmount]
-      ] as const;
+      ] : [
+        ['Поступления', summary.incomeAmount],
+        ['Операций', summary.operationCount, ' шт.']
+      ];
 
   return (
     <div className="space-y-5">
       <div className="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1 dark:border-slate-700 dark:bg-slate-800">
+        <button className={`rounded-lg px-4 py-2 text-xs font-bold ${detailKind === 'overview' ? 'bg-white text-blue-700 shadow-sm dark:bg-slate-700 dark:text-blue-300' : 'text-slate-500'}`}
+          onClick={() => setDetailKind('overview')}>Сводка проверки</button>
         <button className={`rounded-lg px-4 py-2 text-xs font-bold ${detailKind === 'calls' ? 'bg-white text-blue-700 shadow-sm dark:bg-slate-700 dark:text-blue-300' : 'text-slate-500'}`}
           onClick={() => setDetailKind('calls')}>Звонки</button>
-        <button className={`rounded-lg px-4 py-2 text-xs font-bold ${detailKind === 'finance' ? 'bg-white text-blue-700 shadow-sm dark:bg-slate-700 dark:text-blue-300' : 'text-slate-500'}`}
-          onClick={() => setDetailKind('finance')}>Списания и платежи</button>
+        <button className={`rounded-lg px-4 py-2 text-xs font-bold ${detailKind === 'charges' ? 'bg-white text-blue-700 shadow-sm dark:bg-slate-700 dark:text-blue-300' : 'text-slate-500'}`}
+          onClick={() => setDetailKind('charges')}>Другие списания</button>
+        <button className={`rounded-lg px-4 py-2 text-xs font-bold ${detailKind === 'payments' ? 'bg-white text-blue-700 shadow-sm dark:bg-slate-700 dark:text-blue-300' : 'text-slate-500'}`}
+          onClick={() => setDetailKind('payments')}>Платежи и баланс</button>
       </div>
       <div className="flex flex-nowrap items-end gap-2 overflow-x-auto pb-1">
         <label className="shrink-0 text-[10px] text-slate-500">С даты<input className="input mt-1 block w-[132px]" type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} /></label>
         <label className="shrink-0 text-[10px] text-slate-500">По дату<input className="input mt-1 block w-[132px]" type="date" value={toDate} onChange={e => setToDate(e.target.value)} /></label>
-        {detailKind === 'finance' && <select className="input w-[125px] shrink-0" value={eventType} onChange={e => setEventType(e.target.value)}>
+        {detailKind === 'charges' && <select className="input w-[125px] shrink-0" value={eventType} onChange={e => setEventType(e.target.value)}>
           <option value="">Все типы</option><option value="network">Сеть</option><option value="periodical">Периодические</option>
           <option value="one_time">Разовые</option><option value="income">Пополнения</option><option value="outcome">Списания</option>
         </select>}
-        {detailKind === 'finance' && <select className="input w-[120px] shrink-0" value={networkEvent} onChange={e => setNetworkEvent(e.target.value)}>
+        {detailKind === 'charges' && <select className="input w-[120px] shrink-0" value={networkEvent} onChange={e => setNetworkEvent(e.target.value)}>
           <option value="">Все услуги</option><option value="call">Звонки</option><option value="sms">SMS</option><option value="data">Интернет</option>
         </select>}
         {detailKind === 'calls' && <select className="input w-[125px] shrink-0" value={direction} onChange={e => setDirection(e.target.value)}>
@@ -163,40 +191,56 @@ export default function MtsUsageDetails({ token, canManage }: Props) {
           </div>
         ))}
       </div>
-      <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-700">
+      {detailKind === 'overview' && <div className="grid gap-3 lg:grid-cols-3">
+        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-xs text-emerald-800">
+          <div className="font-black">Подтверждённые операции</div>
+          <p className="mt-2">Звонки, для которых PBXPuls нашёл соответствующую запись CDR с высокой уверенностью.</p>
+        </div>
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-700">
+          <div className="font-black">Ожидаемые списания</div>
+          <p className="mt-2">Абонентская плата и сетевые услуги. Их наличие ожидаемо, но тариф и сумму следует сверять с договором.</p>
+        </div>
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-800">
+          <div className="font-black">Требуют проверки</div>
+          <p className="mt-2">Звонки без пары в CDR и разовые операции. Это не означает ошибку оператора, но требует ручной проверки.</p>
+        </div>
+      </div>}
+      {detailKind !== 'overview' && <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-700">
         <table className={`w-full text-left text-xs ${detailKind === 'calls' ? 'min-w-[1350px]' : 'min-w-[1200px]'}`}>
           <thead className="sticky top-0 bg-slate-50 dark:bg-slate-800"><tr>
             {(detailKind === 'calls'
-              ? ['Дата события','Дата тарификации','Направление','Кто звонил','Куда звонил','Факт','Тарификация','Стоимость','Из пакета','Сверка CDR']
-              : ['Дата операции','Дата тарификации','Тип','Услуга','Стоимость','Скидка','Налог','Баланс после','Категория','Описание']
+              ? ['Результат','Дата события','Дата тарификации','Направление','Кто звонил','Куда звонил','Факт','Тарификация','Стоимость','Из пакета']
+              : ['Результат','Дата операции','Дата тарификации','Тип','Услуга','Сумма','Скидка','Налог','Баланс после','Описание']
             ).map(label =>
               <th key={label} className="p-3 text-[10px] uppercase text-slate-500">{label}</th>)}
           </tr></thead>
           <tbody>{rows.map(row => {
             const packaged = row.amount === 0 && (row.packageCounterUsed ?? 0) > 0;
+            const audit = auditPresentation[row.auditStatus] || auditPresentation.review;
             return <tr key={row.id} className="border-t border-slate-100 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800/60">
+              <td className="p-3"><span className={`inline-flex rounded-lg px-2 py-1 text-[10px] font-bold ${audit[1]}`} title={row.auditReason}>{audit[0]}</span>
+                <div className="mt-1 max-w-[220px] text-[10px] text-slate-500">{row.auditReason}</div></td>
               <td className="p-3">{time(row.occurredAt)}</td><td className="p-3">{time(row.ratedAt)}</td>
               {detailKind === 'calls' ? <>
-                <td className="p-3">{row.direction || 'Нет данных'}</td>
+                <td className="p-3">{directionLabel(row.direction)}</td>
                 <td className="p-3 font-mono">{row.callerNumber || 'Нет данных'}</td>
                 <td className="p-3 font-mono">{row.calleeNumber || 'Нет данных'}</td>
                 <td className="p-3">{number(row.actualUnits, row.actualUnitCode ? ` ${row.actualUnitCode}` : '')}</td>
                 <td className="p-3">{number(row.billedUnits, row.billedUnitCode ? ` ${row.billedUnitCode}` : '')}</td>
                 <td className="p-3 font-mono">{money(row.amount)}</td>
                 <td className="p-3">{packaged ? 'Да' : 'Нет'}</td>
-                <td className="p-3">{row.reconciliationStatus}</td>
               </> : <>
-                <td className="p-3">{row.eventType}</td><td className="p-3">{row.networkEvent || 'Нет данных'}</td>
+                <td className="p-3">{eventLabel(row.eventType)}</td><td className="p-3">{eventLabel(row.networkEvent)}</td>
                 <td className="p-3 font-mono">{money(row.amount)}</td>
                 <td className="p-3">{money(row.discount)}</td><td className="p-3">{money(row.tax)}</td>
-                <td className="p-3">{money(row.balanceAfter)}</td><td className="p-3">{row.categoryId || 'Нет данных'}</td>
+                <td className="p-3">{money(row.balanceAfter)}</td>
                 <td className="max-w-xs p-3">{row.label || 'Нет данных'}</td>
               </>}
             </tr>;
           })}</tbody>
         </table>
         {!loading && rows.length === 0 && <div className="p-8 text-center text-sm text-slate-500">За выбранный период событий нет</div>}
-      </div>
+      </div>}
     </div>
   );
 }
