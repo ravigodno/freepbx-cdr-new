@@ -1496,10 +1496,10 @@ const MIGRATIONS: Migration[] = [
         KEY idx_directory_import_status(status,updated_at),KEY idx_directory_import_source(source_hash)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
       `CREATE TABLE IF NOT EXISTS directory_import_job_rows(
-        id BIGINT AUTO_INCREMENT PRIMARY KEY,job_id VARCHAR(64) NOT NULL,row_number INT NOT NULL,row_fingerprint CHAR(64) NOT NULL,
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,job_id VARCHAR(64) NOT NULL,\`row_number\` INT NOT NULL,row_fingerprint CHAR(64) NOT NULL,
         contact_id VARCHAR(64) NULL,status VARCHAR(32) NOT NULL,error_code VARCHAR(64) NULL,error_message VARCHAR(500) NULL,
         created_at DATETIME NOT NULL,updated_at DATETIME NOT NULL,
-        UNIQUE KEY uniq_directory_import_job_row(job_id,row_number),
+        UNIQUE KEY uniq_directory_import_job_row(job_id,\`row_number\`),
         UNIQUE KEY uniq_directory_import_job_fingerprint(job_id,row_fingerprint),
         KEY idx_directory_import_job_row_status(job_id,status),
         CONSTRAINT fk_directory_import_job_rows_job FOREIGN KEY(job_id) REFERENCES directory_import_jobs(id) ON DELETE CASCADE

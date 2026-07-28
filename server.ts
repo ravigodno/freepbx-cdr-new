@@ -19438,7 +19438,7 @@ app.get('/api/db-explorer/tables', requireAuth(), requirePermission('view_db_exp
 
     for (const databaseName of DB_EXPLORER_ALLOWED_DATABASES) {
       const rows = databaseName === 'pbxpuls'
-        ? await queryPBXPulsDb('SELECT TABLE_NAME AS name, TABLE_ROWS AS rows FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() ORDER BY TABLE_NAME')
+        ? await queryPBXPulsDb('SELECT TABLE_NAME AS name, TABLE_ROWS AS row_count FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() ORDER BY TABLE_NAME')
         : await queryFreePBXCDR(
           getDbExplorerSettings(),
           false,

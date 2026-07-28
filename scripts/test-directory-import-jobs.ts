@@ -22,4 +22,10 @@ const source = fs.readFileSync(new URL('../server/directoryImportJobs.ts', impor
 for (const required of ['cancel_requested', 'rollback_on_error', 'completed_with_errors', 'idempotency_key', 'batch_size']) {
   assert.ok(source.includes(required), `missing import lifecycle marker: ${required}`);
 }
+const migrations = fs.readFileSync(new URL('../server/pbxpulsMigrations.ts', import.meta.url), 'utf8');
+const server = fs.readFileSync(new URL('../server.ts', import.meta.url), 'utf8');
+assert.ok(migrations.includes('job_id VARCHAR(64) NOT NULL,\\`row_number\\` INT NOT NULL'), 'MariaDB reserved row_number column must be quoted');
+assert.ok(source.includes('job_id,\\`row_number\\`,row_fingerprint'), 'directory import insert must quote row_number');
+assert.ok(source.includes('ORDER BY \\`row_number\\`'), 'directory import error query must quote row_number');
+assert.doesNotMatch(server, /TABLE_ROWS AS rows\b/, 'MariaDB reserved rows alias must not be used');
 console.log(JSON.stringify({ validRows: parsed.rows.length, validationErrors: parsed.errors.length, batch500: 200, batch1000: 100, elapsedMs }));

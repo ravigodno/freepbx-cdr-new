@@ -357,7 +357,7 @@ const insertJobRows = async (connection: Connection, jobId: string, rows: Array<
   const timestamp = nowSql();
   const values = rows.flatMap(row => [jobId, row.rowNumber, row.fingerprint, row.contactId, row.status, row.errorCode || null, safeText(row.errorMessage, 500) || null, timestamp, timestamp]);
   await connection.execute(
-    `INSERT INTO directory_import_job_rows(job_id,row_number,row_fingerprint,contact_id,status,error_code,error_message,created_at,updated_at)
+    `INSERT INTO directory_import_job_rows(job_id,\`row_number\`,row_fingerprint,contact_id,status,error_code,error_message,created_at,updated_at)
      VALUES ${placeholders}
      ON DUPLICATE KEY UPDATE contact_id=VALUES(contact_id),status=VALUES(status),error_code=VALUES(error_code),error_message=VALUES(error_message),updated_at=VALUES(updated_at)`,
     values
@@ -818,7 +818,7 @@ export function registerDirectoryImportJobRoutes(app: Express, deps: RegisterDep
     const connection = await getConnection();
     try {
       const [rows] = await connection.execute<any[]>(
-        `SELECT row_number,error_code,error_message,updated_at FROM directory_import_job_rows WHERE job_id=? AND status='failed' ORDER BY row_number LIMIT 10000`,
+        `SELECT \`row_number\`,error_code,error_message,updated_at FROM directory_import_job_rows WHERE job_id=? AND status='failed' ORDER BY \`row_number\` LIMIT 10000`,
         [safeText(req.params.id, 64)]
       );
       res.json({ errors: rows.map(row => ({ rowNumber: row.row_number, errorCode: row.error_code, message: row.error_message, at: row.updated_at })) });
