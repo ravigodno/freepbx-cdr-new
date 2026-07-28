@@ -1564,6 +1564,77 @@ const MIGRATIONS: Migration[] = [
         (id,provider,display_name,enabled,config_json,sync_interval_minutes,status)
        VALUES ('mts_business','mts_business','МТС Бизнес',0,'{}',30,'disabled')`
     ]
+  },
+  {
+    key:'20260728_064_mts_business_usage_details',
+    description:'Add MTS usage events, incremental cursor and read-only CDR reconciliation',
+    statements:[
+      `ALTER TABLE balance_sources
+        ADD COLUMN source_pk BIGINT NOT NULL AUTO_INCREMENT UNIQUE,
+        ADD COLUMN usage_last_event_at DATETIME NULL,
+        ADD COLUMN usage_last_rating_at DATETIME NULL,
+        ADD COLUMN usage_last_sync_at DATETIME NULL,
+        ADD COLUMN usage_last_error_code VARCHAR(64) NULL`,
+      `CREATE TABLE IF NOT EXISTS balance_usage_events(
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        source_id BIGINT NOT NULL,
+        provider_event_key CHAR(64) NOT NULL,
+        msisdn_masked VARCHAR(32) NULL,
+        msisdn_hash CHAR(64) NULL,
+        occurred_at DATETIME NOT NULL,
+        rated_at DATETIME NULL,
+        event_type VARCHAR(32) NOT NULL,
+        network_event VARCHAR(32) NULL,
+        direction VARCHAR(8) NULL,
+        counterparty_masked VARCHAR(32) NULL,
+        counterparty_hash CHAR(64) NULL,
+        amount DECIMAL(20,6) NULL,
+        discount_amount DECIMAL(20,6) NULL,
+        tax_amount DECIMAL(20,6) NULL,
+        balance_after DECIMAL(20,6) NULL,
+        billed_units DECIMAL(20,6) NULL,
+        billed_unit_code VARCHAR(32) NULL,
+        actual_units DECIMAL(20,6) NULL,
+        actual_unit_code VARCHAR(32) NULL,
+        category_id VARCHAR(100) NULL,
+        product_id VARCHAR(100) NULL,
+        network_service_id VARCHAR(100) NULL,
+        label VARCHAR(500) NULL,
+        package_counter_before DECIMAL(20,6) NULL,
+        package_counter_after DECIMAL(20,6) NULL,
+        package_counter_used DECIMAL(20,6) NULL,
+        charge_period_start DATETIME NULL,
+        charge_period_end DATETIME NULL,
+        raw_hash CHAR(64) NULL,
+        metadata_json LONGTEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_balance_usage_event(source_id,provider_event_key),
+        KEY idx_balance_usage_source_time(source_id,occurred_at),
+        KEY idx_balance_usage_type_time(event_type,occurred_at),
+        KEY idx_balance_usage_network_time(network_event,occurred_at),
+        KEY idx_balance_usage_counterparty(counterparty_hash),
+        CONSTRAINT fk_balance_usage_source FOREIGN KEY(source_id) REFERENCES balance_sources(source_pk) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS balance_usage_cdr_matches(
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        usage_event_id BIGINT NOT NULL,
+        cdr_uniqueid VARCHAR(191) NULL,
+        cdr_linkedid VARCHAR(191) NULL,
+        confidence VARCHAR(16) NOT NULL,
+        matched_by_json LONGTEXT NOT NULL,
+        time_difference_seconds INT NULL,
+        duration_difference_seconds INT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_balance_usage_cdr_event(usage_event_id),
+        KEY idx_balance_usage_cdr_confidence(confidence,created_at),
+        CONSTRAINT fk_balance_usage_cdr_event FOREIGN KEY(usage_event_id) REFERENCES balance_usage_events(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `INSERT IGNORE INTO permissions(permission_key,name,description,category)
+       VALUES ('view_balance_analytics','View balance analytics','View provider usage details and summaries','balance')`,
+      `INSERT IGNORE INTO role_permissions(role_id,permission_id)
+       SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key='view_balance_analytics'
+       WHERE r.role_key IN('su','admin')`
+    ]
   }
 ];
 

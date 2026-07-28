@@ -22884,7 +22884,12 @@ registerUniqueNumberExportRoutes(app, {
 });
 const balanceRuntime = registerBalanceRoutes(app, {
   requireAuth,
-  checkPermission: checkUserPermission
+  checkPermission: checkUserPermission,
+  hashSecret: JWT_SECRET,
+  queryCdr: async (sql: string, params: any[]) => {
+    const localDb = await readLocalDb();
+    return queryFreePBXCDR(localDb.settings, isDemoMode(localDb.settings), sql, params);
+  }
 });
 
 // API fallback must stay before Vite/static SPA fallback so missing API routes return JSON, not index.html.

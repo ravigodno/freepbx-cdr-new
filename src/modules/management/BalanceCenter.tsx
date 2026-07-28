@@ -13,6 +13,7 @@ import {
   Tooltip, Legend, BarChart, Bar, Cell 
 } from 'recharts';
 import { getServerNow } from '../../utils/serverClock';
+import MtsUsageDetails from './MtsUsageDetails';
 
 interface BalanceCenterProps {
   session: any;
@@ -211,7 +212,7 @@ const HISTORIC_DATA = {
 
 export default function BalanceCenter({ session, hasPermission }: BalanceCenterProps) {
   // Tabs
-  type TabType = 'overview' | 'operators' | 'history' | 'spend' | 'extensions' | 'anomalies' | 'expensive' | 'reconciliation' | 'tariffs' | 'settings';
+  type TabType = 'overview' | 'operators' | 'usage' | 'history' | 'spend' | 'extensions' | 'anomalies' | 'expensive' | 'reconciliation' | 'tariffs' | 'settings';
   const [activeTab, setActiveTab] = useState<TabType>('overview');
 
   // Tariff Analyzer states
@@ -963,6 +964,7 @@ export default function BalanceCenter({ session, hasPermission }: BalanceCenterP
         {[
           { id: 'overview', label: 'Обзор', icon: Wallet },
           { id: 'operators', label: 'Балансы операторов', icon: Building2 },
+          { id: 'usage', label: 'Детализация', icon: FileText },
           { id: 'history', label: 'История и прогнозы', icon: TrendingUp },
           { id: 'spend', label: 'Аналитика расходов', icon: Activity },
           { id: 'extensions', label: 'Рейтинг Ext-номеров', icon: ListOrdered },
@@ -1001,6 +1003,7 @@ export default function BalanceCenter({ session, hasPermission }: BalanceCenterP
       <div className="bg-white dark:bg-[#1e293b] border border-slate-200 dark:border-[#334155] rounded-3xl shadow-sm p-6">
         {activeTab === 'overview' && renderOverviewTab()}
         {activeTab === 'operators' && renderOperatorsTab()}
+        {activeTab === 'usage' && <MtsUsageDetails token={session?.token || ''} canManage={canManageSources} />}
         {activeTab === 'history' && renderHistoryTab()}
         {activeTab === 'spend' && renderSpendTab()}
         {activeTab === 'extensions' && renderExtensionsTab()}

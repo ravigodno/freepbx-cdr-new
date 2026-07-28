@@ -25,7 +25,10 @@ function lookupType(value: unknown): MtsBusinessLookupType {
   return String(value || '').trim().toLowerCase() === 'account' ? 'account' : 'msisdn';
 }
 
-export function readMtsBusinessConfig(env: NodeJS.ProcessEnv = process.env): MtsBusinessProviderConfig & { syncIntervalMinutes: number } {
+export function readMtsBusinessConfig(env: NodeJS.ProcessEnv = process.env): MtsBusinessProviderConfig & {
+  syncIntervalMinutes: number;
+  usageOverlapHours: number;
+} {
   return {
     enabled: envBoolean(env.BALANCE_MTS_BUSINESS_ENABLED, false),
     apiBase: String(env.BALANCE_MTS_BUSINESS_API_BASE || 'https://api.mts.ru').trim(),
@@ -35,7 +38,8 @@ export function readMtsBusinessConfig(env: NodeJS.ProcessEnv = process.env): Mts
     msisdn: String(env.BALANCE_MTS_BUSINESS_MSISDN || ''),
     accountNo: String(env.BALANCE_MTS_BUSINESS_ACCOUNT_NO || ''),
     timeoutMs: boundedInteger(env.BALANCE_MTS_BUSINESS_TIMEOUT_MS, 15000, 1000, 60000),
-    syncIntervalMinutes: boundedInteger(env.BALANCE_MTS_BUSINESS_SYNC_INTERVAL_MINUTES, 30, 1, 1440)
+    syncIntervalMinutes: boundedInteger(env.BALANCE_MTS_BUSINESS_SYNC_INTERVAL_MINUTES, 30, 1, 1440),
+    usageOverlapHours: boundedInteger(env.BALANCE_MTS_BUSINESS_USAGE_OVERLAP_HOURS, 24, 1, 168)
   };
 }
 
@@ -48,6 +52,9 @@ export function safeMtsBusinessError(error: unknown): { safeErrorCode: string; s
     authentication_failed: 'МТС отклонил серверные учётные данные',
     authentication_expired: 'МТС повторно отклонил обновлённый токен',
     invalid_msisdn: 'Номер для проверки задан неверно',
+    invalid_usage_date_format: 'Период детализации должен быть задан в UTC с точностью до секунды',
+    invalid_usage_period: 'Период детализации задан неверно',
+    invalid_usage_period_order: 'Начало периода должно быть раньше окончания',
     invalid_account_number: 'Лицевой счёт задан неверно',
     invalid_api_base: 'Адрес MTS Business API задан неверно',
     api_host_not_allowed: 'Хост API не разрешён политикой безопасности',
@@ -61,7 +68,7 @@ export function safeMtsBusinessError(error: unknown): { safeErrorCode: string; s
   };
   return {
     safeErrorCode: code.slice(0, 64),
-    safeMessage: messages[code] || (code.startsWith('token_http_') || code.startsWith('balance_http_')
+    safeMessage: messages[code] || (code.startsWith('token_http_') || code.startsWith('balance_http_') || code.startsWith('usage_http_')
       ? 'MTS Business API вернул ошибку'
       : 'Проверка MTS Business API не выполнена')
   };
@@ -109,6 +116,10 @@ export class MtsBusinessBalanceService {
       this.configFingerprint = fingerprint;
     }
     return { provider: this.provider, config };
+  }
+
+  getUsageProvider(): { provider: MtsBusinessProvider; config: ReturnType<typeof readMtsBusinessConfig> } {
+    return this.getProvider();
   }
 
   async diagnose(): Promise<MtsBusinessDiagnosticResult> {
