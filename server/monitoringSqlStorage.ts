@@ -93,7 +93,7 @@ export async function readQualityHistoryFromSql(period = '24h', ext = 'all'): Pr
 }
 
 export async function appendRealQualityHistoryToSql(items: any[]): Promise<void> {
-  const availabilitySampledAt = dateValue(new Date());
+  const availabilitySampledAt = dateValue(new Date(Math.floor(Date.now() / 60000) * 60000));
   for (const item of items) {
     if (availabilitySampledAt) {
       await timedQuery(`INSERT INTO quality_history

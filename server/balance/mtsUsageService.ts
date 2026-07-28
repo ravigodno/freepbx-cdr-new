@@ -5,7 +5,7 @@ import { reconcileMtsOutgoingCall } from './reconciliation/mtsCdrReconciliation.
 
 type ProviderContext = {
   provider: MtsBusinessProvider;
-  config: { msisdn: string; usageOverlapHours: number };
+  config: { lookupType: 'msisdn' | 'account'; msisdn: string; accountNo: string; usageOverlapHours: number };
 };
 
 type QueryCdr = (sql: string, params: any[]) => Promise<any[]>;
@@ -36,10 +36,23 @@ export function hmacPhone(value: unknown, secret: string): string | null {
 
 export function buildProviderEventKey(sourceId: number, msisdn: string, event: NormalizedUsageEvent): string {
   return crypto.createHash('sha256').update(JSON.stringify([
-    sourceId, msisdn, event.occurredAt, event.ratedAt, event.eventType, event.productId,
+    sourceId, msisdn, event.msisdn, event.occurredAt, event.ratedAt, event.eventType, event.productId,
     event.networkEvent, event.direction, normalizedPhone(event.counterparty), event.amount,
     event.actualUnits, event.actualUnitCode
   ])).digest('hex');
+}
+
+export function splitUsageRange(from: string, to: string, chunkHours = 24): Array<{ startDateTime: string; endDateTime: string }> {
+  const result: Array<{ startDateTime: string; endDateTime: string }> = [];
+  const endMs = Date.parse(to);
+  const stepMs = chunkHours * 3600_000;
+  for (let startMs = Date.parse(from); startMs < endMs; startMs += stepMs) {
+    result.push({
+      startDateTime: new Date(startMs).toISOString().slice(0, 19) + 'Z',
+      endDateTime: new Date(Math.min(endMs, startMs + stepMs)).toISOString().slice(0, 19) + 'Z'
+    });
+  }
+  return result;
 }
 
 function safeMetadata(event: NormalizedUsageEvent): string {
@@ -47,11 +60,17 @@ function safeMetadata(event: NormalizedUsageEvent): string {
 }
 
 export class MtsUsageService {
+  private readonly activeSyncSources = new Set<string>();
+
   constructor(
     private readonly getProviderContext: () => ProviderContext,
     private readonly hashSecret: string,
     private readonly queryCdr: QueryCdr
   ) {}
+
+  isSyncing(sourceKey: string): boolean {
+    return this.activeSyncSources.has(sourceKey);
+  }
 
   private async sourcePk(sourceKey: string): Promise<number> {
     const rows = await queryPBXPulsDb('SELECT source_pk FROM balance_sources WHERE id=? LIMIT 1', [sourceKey]);
@@ -61,8 +80,21 @@ export class MtsUsageService {
   }
 
   async sync(sourceKey: string, input: { from?: string; to?: string }): Promise<{ received: number; stored: number; from: string; to: string }> {
+    if (this.isSyncing(sourceKey)) throw new Error('usage_sync_in_progress');
+    this.activeSyncSources.add(sourceKey);
+    try {
+      return await this.performSync(sourceKey, input);
+    } finally {
+      this.activeSyncSources.delete(sourceKey);
+    }
+  }
+
+  private async performSync(sourceKey: string, input: { from?: string; to?: string }): Promise<{ received: number; stored: number; from: string; to: string }> {
     const { provider, config } = this.getProviderContext();
-    const msisdn = normalizeMtsMsisdn(config.msisdn);
+    const msisdn = config.lookupType === 'msisdn' ? normalizeMtsMsisdn(config.msisdn) : null;
+    const accountNo = String(config.accountNo || '').trim();
+    if (config.lookupType === 'account' && !accountNo) throw new Error('invalid_account_number');
+    const sourceIdentity = msisdn || `account:${accountNo}`;
     const sourceId = await this.sourcePk(sourceKey);
     const cursorRows = await queryPBXPulsDb(
       'SELECT usage_last_event_at FROM balance_sources WHERE source_pk=? LIMIT 1',
@@ -77,29 +109,49 @@ export class MtsUsageService {
       : new Date(cursorMs).toISOString().slice(0, 19) + 'Z';
     if (Date.parse(from) >= Date.parse(to)) throw new Error('invalid_usage_period_order');
     try {
-      const result = await provider.fetchUsageDetails({ msisdn, startDateTime: from, endDateTime: to });
+      const events: NormalizedUsageEvent[] = [];
+      for (const { startDateTime, endDateTime } of splitUsageRange(from, to)) {
+        const chunk = config.lookupType === 'account'
+          ? await provider.fetchUsageDetailsByAccount({ accountNo, startDateTime, endDateTime })
+          : await provider.fetchUsageDetails({ msisdn: msisdn!, startDateTime, endDateTime });
+        events.push(...chunk.events);
+      }
       let stored = 0;
       let lastEventAt: string | null = null;
       let lastRatingAt: string | null = null;
-      const callsToReconcile: Array<{ id: number; occurredAt: string; counterparty: string | null; actualUnits: number | null }> = [];
-      for (const event of result.events) {
-        const key = buildProviderEventKey(sourceId, msisdn, event);
+      const callsToReconcile: Array<{
+        id: number; occurredAt: string; direction: 'incoming' | 'outgoing';
+        caller: string | null; callee: string | null; actualUnits: number | null;
+      }> = [];
+      for (const event of events) {
+        const key = buildProviderEventKey(sourceId, sourceIdentity, event);
+        const ownNumber = normalizedPhone(event.msisdn || msisdn);
+        const interactionNumber = normalizedPhone(event.counterparty);
+        const caller = event.direction === 'outgoing'
+          ? ownNumber
+          : event.direction === 'incoming' && interactionNumber !== ownNumber ? interactionNumber : null;
+        const callee = event.direction === 'outgoing'
+          ? interactionNumber
+          : event.direction === 'incoming' ? ownNumber : null;
         await queryPBXPulsDb(
           `INSERT INTO balance_usage_events
            (source_id,provider_event_key,msisdn_masked,msisdn_hash,occurred_at,rated_at,event_type,network_event,direction,
-            counterparty_masked,counterparty_hash,amount,discount_amount,tax_amount,balance_after,billed_units,billed_unit_code,
+            counterparty_masked,counterparty_hash,counterparty_number,caller_number,callee_number,
+            amount,discount_amount,tax_amount,balance_after,billed_units,billed_unit_code,
             actual_units,actual_unit_code,category_id,product_id,network_service_id,label,package_counter_before,
             package_counter_after,package_counter_used,charge_period_start,charge_period_end,raw_hash,metadata_json)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
            ON DUPLICATE KEY UPDATE rated_at=VALUES(rated_at),amount=VALUES(amount),discount_amount=VALUES(discount_amount),
             tax_amount=VALUES(tax_amount),balance_after=VALUES(balance_after),billed_units=VALUES(billed_units),
             actual_units=VALUES(actual_units),package_counter_before=VALUES(package_counter_before),
             package_counter_after=VALUES(package_counter_after),package_counter_used=VALUES(package_counter_used),
-            raw_hash=VALUES(raw_hash),metadata_json=VALUES(metadata_json)`,
+            counterparty_number=VALUES(counterparty_number),caller_number=VALUES(caller_number),
+            callee_number=VALUES(callee_number),raw_hash=VALUES(raw_hash),metadata_json=VALUES(metadata_json)`,
           [
-            sourceId, key, maskMtsIdentifier(msisdn), hmacPhone(msisdn, this.hashSecret), sqlDate(event.occurredAt),
+            sourceId, key, maskMtsIdentifier(event.msisdn || msisdn), hmacPhone(event.msisdn || msisdn, this.hashSecret), sqlDate(event.occurredAt),
             sqlDate(event.ratedAt), event.eventType, event.networkEvent, event.direction,
-            maskMtsIdentifier(event.counterparty), hmacPhone(event.counterparty, this.hashSecret), event.amount, event.discount,
+            maskMtsIdentifier(event.counterparty), hmacPhone(event.counterparty, this.hashSecret), interactionNumber,
+            caller, callee, event.amount, event.discount,
             event.tax, event.balanceAfter, event.billedUnits, event.billedUnitCode, event.actualUnits, event.actualUnitCode,
             event.categoryId, event.productId, event.networkServiceId, event.label, event.packageCounterBefore,
             event.packageCounterAfter, event.packageCounterUsed, sqlDate(event.chargePeriodStart), sqlDate(event.chargePeriodEnd),
@@ -109,14 +161,14 @@ export class MtsUsageService {
         stored += 1;
         if (!lastEventAt || event.occurredAt > lastEventAt) lastEventAt = event.occurredAt;
         if (event.ratedAt && (!lastRatingAt || event.ratedAt > lastRatingAt)) lastRatingAt = event.ratedAt;
-        if (event.eventType === 'network' && event.networkEvent === 'call' && event.direction === 'outgoing') {
+        if (event.eventType === 'network' && event.networkEvent === 'call' && event.direction) {
           const rows = await queryPBXPulsDb(
             'SELECT id FROM balance_usage_events WHERE source_id=? AND provider_event_key=? LIMIT 1',
             [sourceId, key]
           );
           if (rows[0]?.id) callsToReconcile.push({
             id: Number(rows[0].id), occurredAt: event.occurredAt,
-            counterparty: event.counterparty, actualUnits: event.actualUnits
+            direction: event.direction, caller, callee, actualUnits: event.actualUnits
           });
         }
       }
@@ -124,12 +176,15 @@ export class MtsUsageService {
         const match = await reconcileMtsOutgoingCall(call, this.queryCdr);
         await queryPBXPulsDb(
           `INSERT INTO balance_usage_cdr_matches
-           (usage_event_id,cdr_uniqueid,cdr_linkedid,confidence,matched_by_json,time_difference_seconds,duration_difference_seconds)
-           VALUES (?,?,?,?,?,?,?)
+           (usage_event_id,cdr_uniqueid,cdr_linkedid,confidence,matched_by_json,time_difference_seconds,
+            duration_difference_seconds,caller_number,callee_number)
+           VALUES (?,?,?,?,?,?,?,?,?)
            ON DUPLICATE KEY UPDATE cdr_uniqueid=VALUES(cdr_uniqueid),cdr_linkedid=VALUES(cdr_linkedid),
             confidence=VALUES(confidence),matched_by_json=VALUES(matched_by_json),
-            time_difference_seconds=VALUES(time_difference_seconds),duration_difference_seconds=VALUES(duration_difference_seconds)`,
-          [match.usageEventId, match.cdrUniqueid, match.cdrLinkedid, match.confidence, JSON.stringify(match.matchedBy), match.timeDifferenceSeconds, match.durationDifferenceSeconds]
+            time_difference_seconds=VALUES(time_difference_seconds),duration_difference_seconds=VALUES(duration_difference_seconds),
+            caller_number=VALUES(caller_number),callee_number=VALUES(callee_number)`,
+          [match.usageEventId, match.cdrUniqueid, match.cdrLinkedid, match.confidence, JSON.stringify(match.matchedBy),
+            match.timeDifferenceSeconds, match.durationDifferenceSeconds, match.caller, match.callee]
         );
       }
       await queryPBXPulsDb(
@@ -137,7 +192,7 @@ export class MtsUsageService {
          usage_last_rating_at=COALESCE(?,usage_last_rating_at),usage_last_sync_at=NOW(),usage_last_error_code=NULL WHERE source_pk=?`,
         [sqlDate(lastEventAt), sqlDate(lastRatingAt), sourceId]
       );
-      return { received: result.events.length, stored, from, to };
+      return { received: events.length, stored, from, to };
     } catch (error: any) {
       await queryPBXPulsDb(
         'UPDATE balance_sources SET usage_last_sync_at=NOW(),usage_last_error_code=? WHERE source_pk=?',
@@ -155,6 +210,19 @@ export class MtsUsageService {
     const pageSize = Math.max(10, Math.min(200, Number(query.pageSize) || 50));
     const conditions = ['e.source_id=?', 'e.occurred_at>=?', 'e.occurred_at<?'];
     const params: any[] = [sourceId, sqlDate(from), sqlDate(to)];
+    const detailKind = String(query.detailKind || '');
+    if (detailKind === 'calls') conditions.push("e.event_type='network' AND e.network_event='call'");
+    if (detailKind === 'finance') conditions.push("NOT(e.event_type='network' AND e.network_event='call')");
+    const msisdnHash = String(query.msisdnHash || '');
+    if (/^[a-f0-9]{64}$/.test(msisdnHash)) {
+      conditions.push('e.msisdn_hash=?');
+      params.push(msisdnHash);
+    }
+    const accountHash = String(query.accountHash || '');
+    if (/^[a-f0-9]{64}$/.test(accountHash)) {
+      const configuredAccount = String(this.getProviderContext().config.accountNo || '').trim();
+      conditions.push(hmacPhone(configuredAccount, this.hashSecret) === accountHash ? '1=1' : '1=0');
+    }
     for (const [field, column, allowed] of [
       ['eventType', 'e.event_type', ['network', 'periodical', 'one_time', 'income', 'outcome', 'unknown']],
       ['networkEvent', 'e.network_event', ['call', 'sms', 'data']],
@@ -169,7 +237,9 @@ export class MtsUsageService {
     const count = await queryPBXPulsDb(`SELECT COUNT(*) total FROM balance_usage_events e WHERE ${conditions.join(' AND ')}`, params);
     const rows = await queryPBXPulsDb(
       `SELECT e.id,e.occurred_at occurredAt,e.rated_at ratedAt,e.event_type eventType,e.network_event networkEvent,
-       e.direction,e.counterparty_masked counterpartyMasked,e.amount,e.discount_amount discount,e.tax_amount tax,
+       e.direction,e.counterparty_masked counterpartyMasked,e.counterparty_number counterparty,
+       COALESCE(m.caller_number,e.caller_number) callerNumber,COALESCE(m.callee_number,e.callee_number) calleeNumber,
+       e.amount,e.discount_amount discount,e.tax_amount tax,
        e.balance_after balanceAfter,e.billed_units billedUnits,e.billed_unit_code billedUnitCode,e.actual_units actualUnits,
        e.actual_unit_code actualUnitCode,e.category_id categoryId,e.label,e.package_counter_before packageCounterBefore,
        e.package_counter_after packageCounterAfter,e.package_counter_used packageCounterUsed,
@@ -194,6 +264,21 @@ export class MtsUsageService {
     const sourceId = await this.sourcePk(sourceKey);
     const from = utcSecond(query.from, 'invalid_usage_from');
     const to = utcSecond(query.to, 'invalid_usage_to');
+    const conditions = ['source_id=?', 'occurred_at>=?', 'occurred_at<?'];
+    const params: any[] = [sourceId, sqlDate(from), sqlDate(to)];
+    const detailKind = String(query.detailKind || '');
+    if (detailKind === 'calls') conditions.push("event_type='network' AND network_event='call'");
+    if (detailKind === 'finance') conditions.push("NOT(event_type='network' AND network_event='call')");
+    const msisdnHash = String(query.msisdnHash || '');
+    if (/^[a-f0-9]{64}$/.test(msisdnHash)) {
+      conditions.push('msisdn_hash=?');
+      params.push(msisdnHash);
+    }
+    const accountHash = String(query.accountHash || '');
+    if (/^[a-f0-9]{64}$/.test(accountHash)) {
+      const configuredAccount = String(this.getProviderContext().config.accountNo || '').trim();
+      conditions.push(hmacPhone(configuredAccount, this.hashSecret) === accountHash ? '1=1' : '1=0');
+    }
     const rows = await queryPBXPulsDb(
       `SELECT
        SUM(CASE WHEN event_type<>'income' THEN amount ELSE 0 END) totalCharges,
@@ -212,8 +297,8 @@ export class MtsUsageService {
        SUM(CASE WHEN event_type='network' AND network_event='call' AND amount=0 AND package_counter_used>0 THEN actual_units ELSE 0 END) packageCallSeconds,
        SUM(CASE WHEN event_type='network' AND network_event='call' AND amount<>0 THEN actual_units ELSE 0 END) paidCallSeconds,
        MIN(occurred_at) firstEventAt,MAX(occurred_at) lastEventAt
-       FROM balance_usage_events WHERE source_id=? AND occurred_at>=? AND occurred_at<?`,
-      [sourceId, sqlDate(from), sqlDate(to)]
+       FROM balance_usage_events WHERE ${conditions.join(' AND ')}`,
+      params
     );
     const row = rows[0] || {};
     return Object.fromEntries(Object.entries(row).map(([key, value]) =>

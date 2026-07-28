@@ -9,7 +9,7 @@ import {
   type MtsBusinessProviderConfig
 } from '../server/balance/providers/mtsBusiness.js';
 import { safeMtsBusinessError } from '../server/balance/mtsBusinessService.js';
-import { buildProviderEventKey } from '../server/balance/mtsUsageService.js';
+import { buildProviderEventKey, splitUsageRange } from '../server/balance/mtsUsageService.js';
 import { reconcileMtsOutgoingCall } from '../server/balance/reconciliation/mtsCdrReconciliation.js';
 
 const baseConfig: MtsBusinessProviderConfig = {
@@ -136,6 +136,7 @@ function tokenResponse(token: string) {
     provider.fetchBalance(),
     (error: any) => error instanceof MtsBusinessProviderError && error.safeCode === 'redirect_blocked'
   );
+
 }
 
 {
@@ -178,6 +179,23 @@ function tokenResponse(token: string) {
     provider.fetchUsageDetails({ msisdn: '79781234567', startDateTime: '2026-07-01', endDateTime: '2026-07-02T00:00:00Z' }),
     (error: any) => error.safeCode === 'invalid_usage_date_format'
   );
+  calls.length = 0;
+  await provider.fetchUsageDetailsByAccount({
+    accountNo: '123456789012',
+    startDateTime: '2026-07-01T00:00:00Z',
+    endDateTime: '2026-07-01T23:59:59Z'
+  });
+  const accountRequest = new URL(calls.find(url => url.includes('BillingStatementByAccount'))!);
+  assert.equal(accountRequest.pathname, '/b2b/v1/Bills/BillingStatementByAccount');
+  assert.equal(accountRequest.searchParams.get('account'), '123456789012');
+  assert.equal(accountRequest.searchParams.get('startDateTime'), '2026-07-01T00:00:00Z');
+  assert.equal(accountRequest.searchParams.get('endDateTime'), '2026-07-01T23:59:59Z');
+  const monthChunks = splitUsageRange('2026-07-01T00:00:00Z', '2026-08-01T00:00:00Z');
+  assert.equal(monthChunks.length, 31, 'monthly account usage must be split into daily requests');
+  assert.deepEqual(monthChunks[0], {
+    startDateTime: '2026-07-01T00:00:00Z',
+    endDateTime: '2026-07-02T00:00:00Z'
+  });
 }
 
 {
@@ -213,6 +231,22 @@ function tokenResponse(token: string) {
   assert.equal(call.packageCounterAfter, 948);
   assert.equal(call.packageCounterUsed, 52);
   assert.equal(call.balanceAfter, 120, 'account balance is parsed separately');
+  const [accountCall] = parseMtsBusinessUsagePayload({
+    Usages: [{
+      ...baseEvent,
+      msisdn: '79781234567',
+      ServiceCounters: undefined,
+      Characteristics: {
+        ...baseEvent.Characteristics,
+        factUnitsCode: undefined,
+        factUnitCode: 'SECOND',
+        ServiceCounters: [{ value: 1000, validFor: '2026-07-01T00:00:00Z' }, { value: 948 }]
+      }
+    }]
+  }, '{}');
+  assert.equal(accountCall.msisdn, '79781234567');
+  assert.equal(accountCall.actualUnitCode, 'SECOND');
+  assert.equal(accountCall.packageCounterUsed, 52);
 
   const variants = [
     ['sms', { ...baseEvent, Characteristics: { ...baseEvent.Characteristics, networkEvent: 'sms', direction: 'I' } }],
@@ -249,7 +283,8 @@ function tokenResponse(token: string) {
 {
   let cdrQueries = 0;
   const match = await reconcileMtsOutgoingCall({
-    id: 7, occurredAt: '2026-07-01T10:00:00Z', counterparty: '79780000001', actualUnits: 52
+    id: 7, occurredAt: '2026-07-01T10:00:00Z', direction: 'outgoing',
+    caller: '79781234567', callee: '79780000001', actualUnits: 52
   }, async () => {
     cdrQueries += 1;
     return [{ uniqueid: 'u1', linkedid: 'l1', calldate: '2026-07-01 10:00:02', dst: '79780000001', billsec: 52 }];
@@ -285,6 +320,11 @@ function tokenResponse(token: string) {
   assert(!/SUM\([^\n]*balance_after/i.test(usageService), 'accountBalance must not be treated as expense');
   assert(usageService.includes('ON DUPLICATE KEY UPDATE'), 'repeat sync must use idempotent upsert');
   assert(!usageService.includes('access_token'));
+  const settingsStore = fs.readFileSync('server/balance/mtsBusinessSettings.ts', 'utf8');
+  assert(settingsStore.includes('aes-256-gcm'), 'managed credentials must be encrypted');
+  assert(settingsStore.includes('consumerKeyConfigured'));
+  assert(settingsStore.includes('consumerSecretConfigured'));
+  assert(!/config_json[^\\n]*(consumerKey|consumerSecret)/.test(settingsStore), 'credentials must not be stored in config_json');
 }
 
 console.log('MTS Business balance provider foundation tests: OK');

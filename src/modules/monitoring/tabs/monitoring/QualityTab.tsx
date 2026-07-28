@@ -1007,12 +1007,6 @@ export default function QualityTab({ token }: Props) {
         </div>
       )}
 
-      <div className="flex flex-wrap gap-x-5 gap-y-1 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-[11px] font-semibold text-slate-600 dark:border-slate-700 dark:bg-slate-900/30 dark:text-slate-300">
-        <span>Источник данных: {storageInfo.source === 'sql' ? 'SQL / Dual write' : storageInfo.source === 'legacy-fallback' ? 'Legacy fallback' : storageInfo.source}</span>
-        <span>Точек истории: {storageInfo.count}</span>
-        <span>Последняя точка: {storageInfo.last ? new Date(storageInfo.last).toLocaleString('ru-RU') : '—'}</span>
-      </div>
-
       {(isLoading && !devices.length || isRefreshing) && (
         <div className="flex flex-wrap items-center justify-end gap-3 text-[11px] font-bold text-slate-500">
           {isLoading && !devices.length && <span className="inline-flex items-center gap-1.5"><RefreshCw className="h-3.5 w-3.5 animate-spin" />Загрузка сохранённого среза…</span>}
@@ -1094,52 +1088,55 @@ export default function QualityTab({ token }: Props) {
         {/* LEFT COLUMN: DEVICES LIST TABLE (Take up 2 shares on XL wide layouts) */}
         <div className="space-y-6">
           <div className="bg-white dark:bg-[#1e293b] border border-slate-200 dark:border-[#334155] rounded-xl shadow-xs overflow-hidden">
-            <div className="p-4 border-b border-slate-200 dark:border-[#334155] flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-              <div>
-                <h3 className="text-sm font-black text-slate-900 dark:text-white flex items-center gap-1.5">
+            <div className="overflow-x-auto border-b border-slate-200 p-4 dark:border-[#334155]">
+              <div className="flex w-max min-w-full items-center gap-2">
+                <h3 className="flex h-8 shrink-0 items-center gap-1.5 text-sm font-black leading-none text-slate-900 dark:text-white">
                   <Sliders className="h-4 w-4 text-blue-500" />
                   Мониторинг качества связи
                 </h3>
-              </div>
-              
-              <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                <span className="relative top-[1.5px] flex h-8 shrink-0 items-center whitespace-nowrap text-[10px] font-semibold leading-none text-slate-500 dark:text-slate-400">
+                  Источник: {storageInfo.source === 'sql' ? 'SQL / Dual write' : storageInfo.source === 'legacy-fallback' ? 'Legacy fallback' : storageInfo.source}
+                  {' · '}Точек: {storageInfo.count} ·
+                </span>
                 {lastUpdated && (
-                  <span className="inline-flex whitespace-nowrap items-center gap-1.5 text-[10px] font-bold text-slate-500 dark:text-slate-400">
+                  <span className="relative top-[1.5px] inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap text-[10px] font-bold leading-none text-slate-500 dark:text-slate-400">
                     <Clock className="h-3.5 w-3.5 text-blue-500" />
                     {new Date(lastUpdated).toLocaleString('ru-RU')}
                   </span>
                 )}
-                <button
-                  type="button"
-                  onClick={() => setIsDiagnosticsOpen(true)}
-                  className="inline-flex whitespace-nowrap items-center justify-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-[11px] font-bold text-blue-700 transition hover:bg-blue-100 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-300"
-                >
-                  <Terminal className="h-3.5 w-3.5" /> Диагностика
-                </button>
-                <select
-                  value={qualityStatusFilter}
-                  onChange={(e) => setQualityStatusFilter(e.target.value as QualityStatusFilter)}
-                  className="w-full sm:w-48 px-3 py-1.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-[#334155] text-xs font-bold rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 dark:text-white"
-                  title="Фильтр по статусу устройства"
-                >
-                  <option value="ALL">Все статусы</option>
-                  <option value="online">Online</option>
-                  <option value="offline">Offline</option>
-                  <option value="good">Качество: хорошо</option>
-                  <option value="warning">Качество: предупреждение</option>
-                  <option value="critical">Проблемы качества</option>
-                  <option value="insufficient_data">Нет RTCP</option>
-                </select>
+                <div className="ml-auto flex shrink-0 items-center gap-2 pl-4">
+                  <button
+                    type="button"
+                    onClick={() => setIsDiagnosticsOpen(true)}
+                    className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-blue-200 bg-blue-50 px-3 text-[11px] font-bold leading-none text-blue-700 transition hover:bg-blue-100 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-300"
+                  >
+                    <Terminal className="h-3.5 w-3.5" /> Диагностика
+                  </button>
+                  <select
+                    value={qualityStatusFilter}
+                    onChange={(e) => setQualityStatusFilter(e.target.value as QualityStatusFilter)}
+                    className="h-8 w-48 shrink-0 rounded-lg border border-slate-200 bg-slate-50 px-3 text-xs font-bold focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-[#334155] dark:bg-slate-900 dark:text-white"
+                    title="Фильтр по статусу устройства"
+                  >
+                    <option value="ALL">Все статусы</option>
+                    <option value="online">Online</option>
+                    <option value="offline">Offline</option>
+                    <option value="good">Качество: хорошо</option>
+                    <option value="warning">Качество: предупреждение</option>
+                    <option value="critical">Проблемы качества</option>
+                    <option value="insufficient_data">Нет RTCP</option>
+                  </select>
 
-                <div className="relative">
-                  <input
-                    type="text"
-                    placeholder="Поиск по EXT, IP, Имени..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full md:w-64 pl-8 pr-3 py-1.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-[#334155] text-xs font-semibold rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 dark:text-white"
-                  />
-                  <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-slate-400" />
+                  <div className="relative shrink-0">
+                    <input
+                      type="text"
+                      placeholder="Поиск по EXT, IP, Имени..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="h-8 w-64 rounded-lg border border-slate-200 bg-slate-50 pl-8 pr-3 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-[#334155] dark:bg-slate-900 dark:text-white"
+                    />
+                    <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                  </div>
                 </div>
               </div>
             </div>

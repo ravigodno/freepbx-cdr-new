@@ -19892,6 +19892,41 @@ async function getRealVoIPQualityDevices(settings: AppSettings, warnings?: strin
   });
 }
 
+const QUALITY_BACKGROUND_COLLECTION_INTERVAL_MS = 60 * 1000;
+const QUALITY_BACKGROUND_COLLECTION_START_DELAY_MS = 10 * 1000;
+let qualityBackgroundCollectionInProgress = false;
+
+async function collectRealQualityHistoryInBackground(): Promise<void> {
+  if (qualityBackgroundCollectionInProgress) return;
+  qualityBackgroundCollectionInProgress = true;
+  try {
+    const localDb = await readLocalDb();
+    if (isDemoMode(localDb.settings)) return;
+    const devices = await getRealVoIPQualityDevices(localDb.settings);
+    await saveQualityCurrentToPBXPulsDb(devices);
+    await appendRealQualityHistoryToSql(devices);
+  } catch (error: any) {
+    console.warn('[VOIP QUALITY] background collection failed:', sanitizePBXPulsDbError(error));
+  } finally {
+    qualityBackgroundCollectionInProgress = false;
+  }
+}
+
+function startRealQualityBackgroundCollector(): void {
+  const startupTimer = setTimeout(
+    () => void collectRealQualityHistoryInBackground(),
+    QUALITY_BACKGROUND_COLLECTION_START_DELAY_MS
+  );
+  const interval = setInterval(
+    () => void collectRealQualityHistoryInBackground(),
+    QUALITY_BACKGROUND_COLLECTION_INTERVAL_MS
+  );
+  startupTimer.unref?.();
+  interval.unref?.();
+}
+
+startRealQualityBackgroundCollector();
+
 // In-Memory state of device metrics
 const devicesMetrics: { [ext: string]: { latency: number; jitter: number; rtpLoss: number; mos: number; status: string } } = {};
 for (const dev of INITIAL_DEVICES) {

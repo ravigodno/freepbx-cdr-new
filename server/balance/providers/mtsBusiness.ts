@@ -3,7 +3,7 @@ import fetch, { type RequestInit, type Response } from 'node-fetch';
 
 const ALLOWED_HOSTNAME = 'api.mts.ru';
 const DEFAULT_MAX_RESPONSE_BYTES = 1024 * 1024;
-const USER_AGENT = 'PBXPuls-Balance/5.6.38';
+const USER_AGENT = 'PBXPuls-Balance/5.6.39';
 const TRANSIENT_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
 
 export type MtsBusinessLookupType = 'msisdn' | 'account';
@@ -37,6 +37,7 @@ export type MtsUsageEventType = 'network' | 'periodical' | 'one_time' | 'income'
 export type MtsUsageDirection = 'incoming' | 'outgoing' | null;
 
 export interface NormalizedUsageEvent {
+  msisdn: string | null;
   occurredAt: string;
   ratedAt: string | null;
   eventType: MtsUsageEventType;
@@ -67,7 +68,8 @@ export interface NormalizedUsageEvent {
 export interface NormalizedUsageResult {
   provider: 'mts_business';
   status: 'success';
-  msisdn: string;
+  msisdn: string | null;
+  accountNumber: string | null;
   startDateTime: string;
   endDateTime: string;
   events: NormalizedUsageEvent[];
@@ -191,15 +193,17 @@ function counterValue(counter: any): number | null {
   return finiteNumber(counter?.value ?? counter?.amount ?? counter?.numberOfUnits ?? counter?.remainingValue);
 }
 
-function normalizeServiceCounters(event: any): {
+function normalizeServiceCounters(event: any, characteristics: Record<string, unknown>): {
   before: number | null;
   after: number | null;
   used: number | null;
   warnings: string[];
 } {
+  const characteristicCounters = (characteristics as any)?.ServiceCounters ?? (characteristics as any)?.serviceCounters;
   const counters = Array.isArray(event?.ServiceCounters)
     ? event.ServiceCounters
-    : Array.isArray(event?.serviceCounters) ? event.serviceCounters : [];
+    : Array.isArray(event?.serviceCounters) ? event.serviceCounters
+      : Array.isArray(characteristicCounters) ? characteristicCounters : [];
   const before = counterValue(counters.find((item: any) => item?.validFor));
   const after = counterValue(counters.find((item: any) => !item?.validFor));
   if (before === null || after === null) return { before, after, used: null, warnings: [] };
@@ -211,7 +215,7 @@ function normalizeServiceCounters(event: any): {
 
 function usageEventArray(payload: any): any[] {
   if (Array.isArray(payload)) return payload;
-  for (const key of ['billingStatement', 'events', 'items', 'usageEvents']) {
+  for (const key of ['Usages', 'usages', 'billingStatement', 'events', 'items', 'usageEvents']) {
     if (Array.isArray(payload?.[key])) return payload[key];
   }
   return payload && typeof payload === 'object' && payload.date ? [payload] : [];
@@ -222,10 +226,21 @@ export function parseMtsBusinessUsagePayload(payload: unknown, rawText: string):
     const occurredAt = isoOrNull(event?.date);
     if (!occurredAt) return [];
     const characteristics = characteristicMap(event);
-    const counters = normalizeServiceCounters(event);
+    const counters = normalizeServiceCounters(event, characteristics);
     const directionCode = String(characteristics.direction || '').trim().toUpperCase();
+    const billedUnitCode = nullableText(characteristics.unitOfMeasureCode, 32);
+    const actualUnitCode = nullableText(characteristics.factUnitsCode ?? characteristics.factUnitCode, 32);
+    const rawNetworkEvent = nullableText(characteristics.networkEvent, 32)?.toLowerCase() || null;
+    const networkEvent = rawNetworkEvent && rawNetworkEvent !== 'other'
+      ? rawNetworkEvent
+      : directionCode && [billedUnitCode, actualUnitCode].some(code => code === 'SECOND' || code === 'MINUTE')
+        ? 'call'
+        : rawNetworkEvent;
     const rawEvent = JSON.stringify(event);
     return [{
+      msisdn: (() => {
+        try { return event?.msisdn ? normalizeMtsMsisdn(event.msisdn) : null; } catch { return null; }
+      })(),
       occurredAt,
       ratedAt: isoOrNull(event?.ratingDate),
       eventType: normalizeUsageType(event?.type),
@@ -235,13 +250,13 @@ export function parseMtsBusinessUsagePayload(payload: unknown, rawText: string):
       productId: nullableText(event?.productId, 100),
       balanceAfter: finiteNumber(characteristics.accountBalance),
       billedUnits: finiteNumber(characteristics.numberOfUnits),
-      billedUnitCode: nullableText(characteristics.unitOfMeasureCode, 32),
+      billedUnitCode,
       actualUnits: finiteNumber(characteristics.factUnits),
-      actualUnitCode: nullableText(characteristics.factUnitsCode, 32),
+      actualUnitCode,
       direction: directionCode === 'I' ? 'incoming' : directionCode === 'O' ? 'outgoing' : null,
       counterparty: nullableText(characteristics.calledMsisdn, 64),
       networkServiceId: nullableText(characteristics.networkServiceId, 100),
-      networkEvent: nullableText(characteristics.networkEvent, 32)?.toLowerCase() || null,
+      networkEvent,
       categoryId: nullableText(characteristics.categoryId, 100),
       label: nullableText(characteristics.label, 500),
       chargePeriodStart: isoOrNull(characteristics.chargePeriodStart),
@@ -304,6 +319,23 @@ export function parseMtsBusinessBalancePayload(payload: unknown, rawText: string
     measuredAt,
     rawHash: crypto.createHash('sha256').update(rawText).digest('hex')
   };
+}
+
+export function parseMtsHierarchyNumbers(payload: unknown): Array<{ msisdn: string; accountNumber: string | null }> {
+  const found = new Map<string, { msisdn: string; accountNumber: string | null }>();
+  const visit = (value: any, accountNumber: string | null = null): void => {
+    if (!value || typeof value !== 'object') return;
+    const currentAccount = String(value.accountNo || '').trim() || accountNumber;
+    if (value.productSerialNumber) {
+      try {
+        const msisdn = normalizeMtsMsisdn(value.productSerialNumber);
+        found.set(`${currentAccount || ''}:${msisdn}`, { msisdn, accountNumber: currentAccount });
+      } catch {}
+    }
+    for (const child of Array.isArray(value) ? value : Object.values(value)) visit(child, currentAccount);
+  };
+  visit(payload);
+  return [...found.values()];
 }
 
 async function readLimitedJson(response: Response, maxBytes: number): Promise<{ payload: unknown; rawText: string }> {
@@ -476,6 +508,39 @@ export class MtsBusinessProvider {
     throw new MtsBusinessProviderError('request_failed');
   }
 
+  async fetchHierarchyNumbers(accountNo: string): Promise<Array<{ msisdn: string; accountNumber: string | null }>> {
+    if (!this.enabled) throw new MtsBusinessProviderError('provider_disabled');
+    if (!this.config.consumerKey || !this.config.consumerSecret) throw new MtsBusinessProviderError('provider_not_configured');
+    const accountNumber = normalizeAccountNumber(accountNo);
+    const found = new Map<string, { msisdn: string; accountNumber: string | null }>();
+    for (let pageNum = 1; pageNum <= 100; pageNum += 1) {
+      const url = new URL('/b2b/v1/Service/HierarchyStructure', `${this.apiBase}/`);
+      url.searchParams.set('account', accountNumber);
+      url.searchParams.set('pageNum', String(pageNum));
+      url.searchParams.set('pageSize', '1000');
+      let page: unknown = null;
+      let rawText = '';
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const token = await this.getAccessToken(attempt > 0);
+        const response = await this.request(url.toString(), {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+        });
+        if (response.status === 401 && attempt === 0) {
+          this.clearTokenCache();
+          continue;
+        }
+        if (!response.ok) throw new MtsBusinessProviderError(`hierarchy_http_${response.status}`, TRANSIENT_STATUSES.has(response.status));
+        ({ payload: page, rawText } = await readLimitedJson(response, this.maxResponseBytes));
+        break;
+      }
+      if (page === null) throw new MtsBusinessProviderError('authentication_expired');
+      for (const item of parseMtsHierarchyNumbers(page)) found.set(`${item.accountNumber || accountNumber}:${item.msisdn}`, item);
+      if (!rawText.includes('hasMore')) break;
+    }
+    return [...found.values()];
+  }
+
   async fetchUsageDetails(input: {
     msisdn: string;
     startDateTime: string;
@@ -516,6 +581,7 @@ export class MtsBusinessProvider {
           provider: 'mts_business',
           status: 'success',
           msisdn,
+          accountNumber: null,
           ...period,
           events: parseMtsBusinessUsagePayload(payload, rawText),
           rawHash: crypto.createHash('sha256').update(rawText).digest('hex'),
@@ -525,6 +591,58 @@ export class MtsBusinessProvider {
         const normalized = error instanceof MtsBusinessProviderError
           ? error
           : new MtsBusinessProviderError('request_failed');
+        if (attempt === 0 && normalized.transient) continue;
+        throw normalized;
+      }
+    }
+    throw new MtsBusinessProviderError('request_failed');
+  }
+
+  async fetchUsageDetailsByAccount(input: {
+    accountNo: string;
+    startDateTime: string;
+    endDateTime: string;
+  }): Promise<NormalizedUsageResult> {
+    if (!this.enabled) throw new MtsBusinessProviderError('provider_disabled');
+    if (!this.config.consumerKey || !this.config.consumerSecret) throw new MtsBusinessProviderError('provider_not_configured');
+    const accountNumber = normalizeAccountNumber(input.accountNo);
+    const period = normalizeUsagePeriod(input.startDateTime, input.endDateTime);
+    const url = new URL('/b2b/v1/Bills/BillingStatementByAccount', `${this.apiBase}/`);
+    url.searchParams.set('account', accountNumber);
+    url.searchParams.set('startDateTime', period.startDateTime);
+    url.searchParams.set('endDateTime', period.endDateTime);
+    let forceTokenRefresh = false;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const token = await this.getAccessToken(forceTokenRefresh);
+        const response = await this.request(url.toString(), {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+        });
+        if (response.status === 401) {
+          this.clearTokenCache();
+          if (attempt === 0) {
+            forceTokenRefresh = true;
+            continue;
+          }
+          throw new MtsBusinessProviderError('authentication_expired');
+        }
+        if (!response.ok) {
+          throw new MtsBusinessProviderError(`usage_http_${response.status}`, TRANSIENT_STATUSES.has(response.status));
+        }
+        const { payload, rawText } = await readLimitedJson(response, this.maxResponseBytes);
+        return {
+          provider: 'mts_business',
+          status: 'success',
+          msisdn: null,
+          accountNumber,
+          ...period,
+          events: parseMtsBusinessUsagePayload(payload, rawText),
+          rawHash: crypto.createHash('sha256').update(rawText).digest('hex'),
+          fetchedAt: new Date().toISOString()
+        };
+      } catch (error: any) {
+        const normalized = error instanceof MtsBusinessProviderError ? error : new MtsBusinessProviderError('request_failed');
         if (attempt === 0 && normalized.transient) continue;
         throw normalized;
       }

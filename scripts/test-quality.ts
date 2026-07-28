@@ -63,10 +63,12 @@ assert(compareNullableMetrics(10,2,'desc')<0);
 
 const server=fs.readFileSync('server.ts','utf8');
 const ui=fs.readFileSync('src/modules/monitoring/tabs/monitoring/QualityTab.tsx','utf8');
+const retention=fs.readFileSync('server/monitoringRetention.ts','utf8');
 for(const field of ['registrationStatus','isRegistered','availabilityStatus','qualityStatus','sipRttMs','jitterMs','rtpLossPercent','rtcpAvailable','metricsAvailable','metricsSource','statusReason','lastSeenAt']) assert(server.includes(field)||fs.readFileSync('server/qualityMetrics.ts','utf8').includes(field),`DTO field missing: ${field}`);
 assert(fs.readFileSync('server/monitoringSqlStorage.ts','utf8').includes('appendRealQualityHistoryToSql'),'measured RTCP history must be persisted');
 assert(fs.readFileSync('server/monitoringSqlStorage.ts','utf8').includes("quality_status === 'sip_rtt'"),'SIP availability history must have explicit provenance');
 assert(fs.readFileSync('server/monitoringSqlStorage.ts','utf8').includes("'quality_history_and_rtcp'"),'SIP snapshots and measured RTCP must share one write lifecycle');
+assert(fs.readFileSync('server/monitoringSqlStorage.ts','utf8').includes('Math.floor(Date.now() / 60000) * 60000'),'SIP availability history must deduplicate concurrent collectors by minute');
 assert(fs.readFileSync('server/monitoringSqlStorage.ts','utf8').includes('readLatestRealQualityMetricsFromSql'),'latest measured RTCP history must survive process restart');
 assert(server.includes("metricsFreshness = liveRtcp ? 'live' : historicalRtcp ? 'historical'"),'live metrics must take priority over persisted RTCP metrics');
 assert(ui.includes("dev.metricsFreshness === 'historical'"),'historical measured RTCP values must be labelled in the UI');
@@ -80,5 +82,8 @@ assert(ui.includes('За выбранный период реальных RTCP-�
 assert(ui.includes('useCallback(async (signal?: AbortSignal)'), 'quality cache loader must keep the selected period in a stable callback');
 assert(ui.includes('}, [refreshLiveData]);'), 'live refresh interval must not retain the initial period');
 assert(!server.includes('calculatedMos = 4.41')||server.includes('if (!isDemo) return'),'production MOS must not be calculated from SIP RTT');
+assert(server.includes('startRealQualityBackgroundCollector();'),'real quality history must be collected independently of the browser');
+assert(server.includes('qualityBackgroundCollectionInProgress'),'background quality collection must not overlap');
+assert(retention.includes("{ table: 'quality_rtcp_history', timestampColumn: 'sampled_at' }"),'measured RTCP history must use the shared 30-day retention');
 
 console.log('Quality DTO and presentation tests: OK');

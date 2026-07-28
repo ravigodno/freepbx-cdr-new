@@ -14,6 +14,7 @@ import {
 } from 'recharts';
 import { getServerNow } from '../../utils/serverClock';
 import MtsUsageDetails from './MtsUsageDetails';
+import MtsBusinessSettingsForm from './MtsBusinessSettingsForm';
 
 interface BalanceCenterProps {
   session: any;
@@ -213,7 +214,10 @@ const HISTORIC_DATA = {
 export default function BalanceCenter({ session, hasPermission }: BalanceCenterProps) {
   // Tabs
   type TabType = 'overview' | 'operators' | 'usage' | 'history' | 'spend' | 'extensions' | 'anomalies' | 'expensive' | 'reconciliation' | 'tariffs' | 'settings';
-  const [activeTab, setActiveTab] = useState<TabType>('overview');
+  const [activeTab, setActiveTab] = useState<TabType>(() => {
+    const saved = localStorage.getItem('pbxpuls_balance_tab');
+    return saved === 'usage' || saved === 'settings' ? saved : 'operators';
+  });
 
   // Tariff Analyzer states
   const [tariffs, setTariffs] = useState([
@@ -305,12 +309,12 @@ export default function BalanceCenter({ session, hasPermission }: BalanceCenterP
   const canViewAlerts = hasPermission('view_balance_alerts');
 
   // Interactive core state
-  const [operators, setOperators] = useState(INITIAL_OPERATORS);
+  const [operators, setOperators] = useState<typeof INITIAL_OPERATORS>([]);
   const [mtsBusinessSource, setMtsBusinessSource] = useState<MtsBusinessSource | null>(null);
   const [mtsBusinessLoading, setMtsBusinessLoading] = useState(false);
   const [mtsBusinessAction, setMtsBusinessAction] = useState<'test' | 'sync' | null>(null);
-  const [anomalies, setAnomalies] = useState(INITIAL_ANOMALIES);
-  const [extRatings, setExtRatings] = useState(INITIAL_EXT_RATINGS);
+  const [anomalies, setAnomalies] = useState<typeof INITIAL_ANOMALIES>([]);
+  const [extRatings, setExtRatings] = useState<typeof INITIAL_EXT_RATINGS>([]);
   const [selectedExt, setSelectedExt] = useState<string | null>(null);
   const [timePeriod, setTimePeriod] = useState<'Today' | 'Week' | 'Month' | 'Quarter'>('Week');
   
@@ -323,7 +327,7 @@ export default function BalanceCenter({ session, hasPermission }: BalanceCenterP
   const [expensivePeriod, setExpensivePeriod] = useState<'today' | 'week' | 'month'>('week');
 
   // Reconciliation data state
-  const [reconciliation, setReconciliation] = useState(INITIAL_RECONCILIATION);
+  const [reconciliation, setReconciliation] = useState<typeof INITIAL_RECONCILIATION>([]);
   const [reconcileDiffThreshold, setReconcileDiffThreshold] = useState<number>(50);
 
   // Notifications
@@ -576,24 +580,24 @@ export default function BalanceCenter({ session, hasPermission }: BalanceCenterP
 
   // Dynamic calculated aggregate cards values
   const totalBalance = useMemo(() => {
-    return operators.reduce((acc, op) => acc + op.balance, 0);
-  }, [operators]);
+    return mtsBusinessSource?.balance ?? 0;
+  }, [mtsBusinessSource?.balance]);
 
   const activeTrunksCount = useMemo(() => {
-    return operators.length;
-  }, [operators]);
+    return mtsBusinessSource?.configured ? 1 : 0;
+  }, [mtsBusinessSource?.configured]);
 
   const totalSpendToday = useMemo(() => {
-    return operators.reduce((acc, op) => acc + Math.abs(op.dailyChange), 0);
-  }, [operators]);
+    return 0;
+  }, []);
 
   const totalSpendMonth = useMemo(() => {
     return totalSpendToday * 28.5; // extrapolation or month accum
   }, [totalSpendToday]);
 
   const avgSpendDay = useMemo(() => {
-    return operators.reduce((acc, op) => acc + op.avgSpend, 0);
-  }, [operators]);
+    return 0;
+  }, []);
 
   // Days until run out
   const daysUntilDry = useMemo(() => {
@@ -962,16 +966,8 @@ export default function BalanceCenter({ session, hasPermission }: BalanceCenterP
       {/* CORE NAVIGATION TABS */}
       <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-100 dark:bg-[#1e293b] rounded-2xl w-fit">
         {[
-          { id: 'overview', label: 'Обзор', icon: Wallet },
           { id: 'operators', label: 'Балансы операторов', icon: Building2 },
           { id: 'usage', label: 'Детализация', icon: FileText },
-          { id: 'history', label: 'История и прогнозы', icon: TrendingUp },
-          { id: 'spend', label: 'Аналитика расходов', icon: Activity },
-          { id: 'extensions', label: 'Рейтинг Ext-номеров', icon: ListOrdered },
-          { id: 'anomalies', label: 'Детектор аномалий', icon: ShieldAlert, badge: activeAlertsCount },
-          { id: 'expensive', label: 'Дорогие вызовы', icon: PhoneCall },
-          { id: 'reconciliation', label: 'Сверка (Asterisk CDR)', icon: Sparkles },
-          { id: 'tariffs', label: 'Анализатор тарифов', icon: Percent },
           { id: 'settings', label: 'Лимиты и Каналы', icon: Settings }
         ].map(tab => {
           const Icon = tab.icon;
@@ -980,7 +976,11 @@ export default function BalanceCenter({ session, hasPermission }: BalanceCenterP
             <button
               key={tab.id}
               type="button"
-              onClick={() => setActiveTab(tab.id as TabType)}
+              onClick={() => {
+                const nextTab = tab.id as TabType;
+                localStorage.setItem('pbxpuls_balance_tab', nextTab);
+                setActiveTab(nextTab);
+              }}
               className={`flex items-center gap-1.5 px-3 py-2 text-xs font-bold rounded-xl transition-all cursor-pointer ${
                 isActive 
                   ? 'bg-white dark:bg-[#2e3e56] text-blue-600 dark:text-blue-400 shadow-xs' 
@@ -989,11 +989,6 @@ export default function BalanceCenter({ session, hasPermission }: BalanceCenterP
             >
               <Icon className="h-3.5 w-3.5" />
               <span>{tab.label}</span>
-              {tab.badge ? (
-                <span className="ml-1 bg-red-500 text-white text-[10px] px-1.5 py-0.5 rounded-full font-mono animate-pulse">
-                  {tab.badge}
-                </span>
-              ) : null}
             </button>
           );
         })}
@@ -1001,16 +996,8 @@ export default function BalanceCenter({ session, hasPermission }: BalanceCenterP
 
       {/* RENDER ACTIVE TAB */}
       <div className="bg-white dark:bg-[#1e293b] border border-slate-200 dark:border-[#334155] rounded-3xl shadow-sm p-6">
-        {activeTab === 'overview' && renderOverviewTab()}
         {activeTab === 'operators' && renderOperatorsTab()}
         {activeTab === 'usage' && <MtsUsageDetails token={session?.token || ''} canManage={canManageSources} />}
-        {activeTab === 'history' && renderHistoryTab()}
-        {activeTab === 'spend' && renderSpendTab()}
-        {activeTab === 'extensions' && renderExtensionsTab()}
-        {activeTab === 'anomalies' && renderAnomaliesTab()}
-        {activeTab === 'expensive' && renderExpensiveTab()}
-        {activeTab === 'reconciliation' && renderReconciliationTab()}
-        {activeTab === 'tariffs' && renderTariffsTab()}
         {activeTab === 'settings' && renderSettingsTab()}
       </div>
 
@@ -2759,6 +2746,11 @@ export default function BalanceCenter({ session, hasPermission }: BalanceCenterP
   function renderSettingsTab() {
     return (
       <div className="space-y-6">
+        <MtsBusinessSettingsForm
+          token={session?.token || ''}
+          canManage={canManageSources}
+          onSaved={() => void loadMtsBusinessSource()}
+        />
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           
           {/* Create custom operator manually form */}

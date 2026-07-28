@@ -12,6 +12,7 @@ const BACKGROUND_START_DELAY_MS = 60 * 1000;
 
 const RETENTION_TABLES = [
   { table: 'quality_history', timestampColumn: 'sampled_at' },
+  { table: 'quality_rtcp_history', timestampColumn: 'sampled_at' },
   { table: 'monitoring_health_history', timestampColumn: 'sampled_at' },
   { table: 'monitoring_quality_alerts', timestampColumn: 'alert_time' },
   { table: 'monitoring_devices_history', timestampColumn: 'sampled_at' },

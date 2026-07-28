@@ -1633,7 +1633,60 @@ const MIGRATIONS: Migration[] = [
        VALUES ('view_balance_analytics','View balance analytics','View provider usage details and summaries','balance')`,
       `INSERT IGNORE INTO role_permissions(role_id,permission_id)
        SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key='view_balance_analytics'
-       WHERE r.role_key IN('su','admin')`
+      WHERE r.role_key IN('su','admin')`
+    ]
+  },
+  {
+    key:'20260728_065_mts_business_managed_settings',
+    description:'Add encrypted PBXPuls-managed credentials for MTS Business',
+    statements:[
+      `CREATE TABLE IF NOT EXISTS balance_source_credentials(
+        source_id VARCHAR(64) PRIMARY KEY,
+        consumer_key_encrypted LONGTEXT NULL,
+        consumer_secret_encrypted LONGTEXT NULL,
+        key_version VARCHAR(32) NOT NULL DEFAULT 'v1',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NULL,
+        CONSTRAINT fk_balance_source_credentials_source FOREIGN KEY(source_id) REFERENCES balance_sources(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+    ]
+  },
+  {
+    key:'20260728_066_mts_business_subscriber_numbers',
+    description:'Store masked MTS subscriber numbers for balance filters',
+    statements:[
+      `CREATE TABLE IF NOT EXISTS balance_source_numbers(
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        source_id VARCHAR(64) NOT NULL,
+        msisdn_number VARCHAR(32) NOT NULL,
+        msisdn_masked VARCHAR(32) NOT NULL,
+        msisdn_hash CHAR(64) NOT NULL,
+        account_number VARCHAR(32) NULL,
+        account_number_masked VARCHAR(32) NULL,
+        account_number_hash CHAR(64) NULL,
+        last_seen_at DATETIME NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_balance_source_number(source_id,msisdn_hash),
+        KEY idx_balance_source_number_account(source_id,account_number_hash),
+        CONSTRAINT fk_balance_source_numbers_source FOREIGN KEY(source_id) REFERENCES balance_sources(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+    ]
+  },
+  {
+    key:'20260728_067_balance_usage_full_numbers',
+    description:'Store destination numbers for MTS usage details',
+    statements:[
+      `ALTER TABLE balance_usage_events ADD COLUMN counterparty_number VARCHAR(64) NULL AFTER counterparty_hash`
+    ]
+  },
+  {
+    key:'20260728_068_balance_usage_call_parties',
+    description:'Add caller and callee fields for MTS CDR reconciliation',
+    statements:[
+      `ALTER TABLE balance_usage_events ADD COLUMN caller_number VARCHAR(64) NULL AFTER counterparty_number`,
+      `ALTER TABLE balance_usage_events ADD COLUMN callee_number VARCHAR(64) NULL AFTER caller_number`,
+      `ALTER TABLE balance_usage_cdr_matches ADD COLUMN caller_number VARCHAR(64) NULL AFTER duration_difference_seconds`,
+      `ALTER TABLE balance_usage_cdr_matches ADD COLUMN callee_number VARCHAR(64) NULL AFTER caller_number`
     ]
   }
 ];

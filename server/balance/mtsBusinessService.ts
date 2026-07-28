@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { queryPBXPulsDb, sanitizePBXPulsDbError } from '../pbxpulsDb.js';
 import {
   MTS_BUSINESS_CAPABILITIES,
@@ -8,6 +9,7 @@ import {
   type MtsBusinessLookupType,
   type MtsBusinessProviderConfig
 } from './providers/mtsBusiness.js';
+import { MtsBusinessSettingsStore, type MtsBusinessManagedSettings } from './mtsBusinessSettings.js';
 
 export const MTS_BUSINESS_SOURCE_ID = 'mts_business';
 
@@ -98,9 +100,16 @@ export class MtsBusinessBalanceService {
   private configFingerprint = '';
   private syncInProgress = false;
   private timer: ReturnType<typeof setInterval> | null = null;
+  private managedConfig: ReturnType<typeof readMtsBusinessConfig> | null = null;
+  private settingsSource: 'pbxpuls' | 'environment' = 'environment';
+  private readonly settingsStore: MtsBusinessSettingsStore;
+
+  constructor(private readonly hashSecret: string) {
+    this.settingsStore = new MtsBusinessSettingsStore(hashSecret);
+  }
 
   private getProvider(): { provider: MtsBusinessProvider; config: ReturnType<typeof readMtsBusinessConfig> } {
-    const config = readMtsBusinessConfig();
+    const config = this.managedConfig || readMtsBusinessConfig();
     const fingerprint = JSON.stringify({
       enabled: config.enabled,
       apiBase: config.apiBase,
@@ -122,7 +131,64 @@ export class MtsBusinessBalanceService {
     return this.getProvider();
   }
 
+  async refreshSettings(): Promise<void> {
+    const fallback = readMtsBusinessConfig();
+    const loaded = await this.settingsStore.load(fallback);
+    this.managedConfig = loaded.settings;
+    this.settingsSource = loaded.source;
+  }
+
+  async getManagedSettings() {
+    await this.refreshSettings();
+    return this.settingsStore.safe(this.managedConfig!, this.settingsSource);
+  }
+
+  async saveManagedSettings(input: unknown) {
+    await this.refreshSettings();
+    await this.settingsStore.save(input, this.managedConfig as MtsBusinessManagedSettings);
+    this.provider = null;
+    this.configFingerprint = '';
+    await this.refreshSettings();
+    this.restartTimer();
+    return this.settingsStore.safe(this.managedConfig!, this.settingsSource);
+  }
+
+  async syncSubscriberNumbers(): Promise<number> {
+    await this.refreshSettings();
+    const { provider, config } = this.getProvider();
+    const accountNo = String(config.accountNo || '').trim();
+    if (!accountNo) return 0;
+    const numbers = await provider.fetchHierarchyNumbers(accountNo);
+    await queryPBXPulsDb('DELETE FROM balance_source_numbers WHERE source_id=?', [MTS_BUSINESS_SOURCE_ID]);
+    for (const number of numbers) {
+      const msisdnHash = crypto.createHmac('sha256', this.hashSecret).update(number.msisdn).digest('hex');
+      const effectiveAccount = number.accountNumber || accountNo;
+      const accountHash = crypto.createHmac('sha256', this.hashSecret).update(effectiveAccount).digest('hex');
+      await queryPBXPulsDb(
+        `INSERT INTO balance_source_numbers
+         (source_id,msisdn_number,msisdn_masked,msisdn_hash,account_number,account_number_masked,account_number_hash,last_seen_at)
+         VALUES (?,?,?,?,?,?,?,NOW())
+         ON DUPLICATE KEY UPDATE msisdn_number=VALUES(msisdn_number),msisdn_masked=VALUES(msisdn_masked),
+          account_number=VALUES(account_number),account_number_masked=VALUES(account_number_masked),
+          account_number_hash=VALUES(account_number_hash),last_seen_at=NOW()`,
+        [MTS_BUSINESS_SOURCE_ID, number.msisdn, maskMtsIdentifier(number.msisdn), msisdnHash,
+          effectiveAccount, maskMtsIdentifier(effectiveAccount), accountHash]
+      );
+    }
+    return numbers.length;
+  }
+
+  async listSubscriberNumbers() {
+    return queryPBXPulsDb(
+      `SELECT msisdn_hash id,msisdn_number label,account_number_hash accountId,
+              account_number accountLabel
+       FROM balance_source_numbers WHERE source_id=? ORDER BY msisdn_masked`,
+      [MTS_BUSINESS_SOURCE_ID]
+    );
+  }
+
   async diagnose(): Promise<MtsBusinessDiagnosticResult> {
+    await this.refreshSettings();
     const { provider, config } = this.getProvider();
     const base: MtsBusinessDiagnosticResult = {
       enabled: provider.enabled,
@@ -159,12 +225,13 @@ export class MtsBusinessBalanceService {
   }
 
   private async persistSnapshot(result: MtsBusinessBalanceResult): Promise<void> {
+    const { config } = this.getProvider();
     const accountMasked = maskMtsIdentifier(result.accountNumber);
     const msisdnMasked = maskMtsIdentifier(result.msisdn);
     const metadata = {
       provider: result.provider,
       capabilities: MTS_BUSINESS_CAPABILITIES,
-      lookupType: readMtsBusinessConfig().lookupType,
+      lookupType: config.lookupType,
       validUntil: result.validUntil
     };
     await queryPBXPulsDb(
@@ -191,9 +258,9 @@ export class MtsBusinessBalanceService {
            sync_interval_minutes=?,updated_at=NOW()
        WHERE id=?`,
       [
-        readMtsBusinessConfig().enabled ? 1 : 0,
+        config.enabled ? 1 : 0,
         sqlDate(result.measuredAt),
-        readMtsBusinessConfig().syncIntervalMinutes,
+        config.syncIntervalMinutes,
         MTS_BUSINESS_SOURCE_ID
       ]
     );
@@ -203,9 +270,13 @@ export class MtsBusinessBalanceService {
     if (this.syncInProgress) throw new MtsBusinessProviderError('sync_in_progress');
     this.syncInProgress = true;
     try {
+      await this.refreshSettings();
       const { provider } = this.getProvider();
       const result = await provider.fetchBalance();
       await this.persistSnapshot(result);
+      if (this.managedConfig?.lookupType === 'account' && this.managedConfig.accountNo) {
+        await this.syncSubscriberNumbers().catch(() => undefined);
+      }
       return result;
     } catch (error) {
       const safe = safeMtsBusinessError(error);
@@ -214,7 +285,7 @@ export class MtsBusinessBalanceService {
           `UPDATE balance_sources
            SET enabled=?,status='error',safe_error_code=?,last_attempt_at=NOW(),updated_at=NOW()
            WHERE id=?`,
-          [readMtsBusinessConfig().enabled ? 1 : 0, safe.safeErrorCode, MTS_BUSINESS_SOURCE_ID]
+          [(this.managedConfig || readMtsBusinessConfig()).enabled ? 1 : 0, safe.safeErrorCode, MTS_BUSINESS_SOURCE_ID]
         );
       } catch {}
       throw error;
@@ -224,7 +295,8 @@ export class MtsBusinessBalanceService {
   }
 
   async listSources(): Promise<any[]> {
-    const config = readMtsBusinessConfig();
+    await this.refreshSettings();
+    const config = this.managedConfig!;
     const rows = await queryPBXPulsDb(
       `SELECT s.id,s.provider,s.display_name,s.status,s.safe_error_code,s.last_attempt_at,s.last_success_at,
               s.sync_interval_minutes,
@@ -266,16 +338,19 @@ export class MtsBusinessBalanceService {
 
   start(): void {
     if (this.timer) return;
-    const config = readMtsBusinessConfig();
-    if (!config.enabled) return;
     const run = () => void this.sync().catch(error => {
       const safe = safeMtsBusinessError(error);
-      console.warn('[BALANCE_MTS_BUSINESS] sync failed:', safe.safeErrorCode);
+      if (safe.safeErrorCode !== 'provider_disabled') console.warn('[BALANCE_MTS_BUSINESS] sync failed:', safe.safeErrorCode);
     });
     const startupTimer = setTimeout(run, 15_000);
     startupTimer.unref?.();
-    this.timer = setInterval(run, config.syncIntervalMinutes * 60_000);
+    this.timer = setInterval(run, 30 * 60_000);
     this.timer.unref?.();
+  }
+
+  private restartTimer(): void {
+    this.stop();
+    this.start();
   }
 
   stop(): void {

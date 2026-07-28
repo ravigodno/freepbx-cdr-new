@@ -10,7 +10,7 @@ type Dependencies = {
 };
 
 export function registerBalanceRoutes(app: Express, deps: Dependencies): MtsBusinessBalanceService {
-  const service = new MtsBusinessBalanceService();
+  const service = new MtsBusinessBalanceService(deps.hashSecret);
   const usage = new MtsUsageService(() => service.getUsageProvider(), deps.hashSecret, deps.queryCdr);
 
   app.get('/api/balance/sources', deps.requireAuth(), async (req: Request, res: Response) => {
@@ -29,6 +29,51 @@ export function registerBalanceRoutes(app: Express, deps: Dependencies): MtsBusi
       return res.status(403).json({ error: 'Access denied: manage_balance_sources permission required' });
     }
     return res.json(await service.diagnose());
+  });
+
+  app.get('/api/balance/sources/mts-business/settings', deps.requireAuth(), async (req: Request, res: Response) => {
+    if (!(await deps.checkPermission(req, 'manage_balance_sources'))) {
+      return res.status(403).json({ error: 'Access denied: manage_balance_sources permission required' });
+    }
+    try {
+      return res.json({ success: true, settings: await service.getManagedSettings() });
+    } catch {
+      return res.status(503).json({ success: false, safeErrorCode: 'balance_settings_unavailable' });
+    }
+  });
+
+  app.put('/api/balance/sources/mts-business/settings', deps.requireAuth(), async (req: Request, res: Response) => {
+    if (!(await deps.checkPermission(req, 'manage_balance_sources'))) {
+      return res.status(403).json({ error: 'Access denied: manage_balance_sources permission required' });
+    }
+    try {
+      const settings = await service.saveManagedSettings(req.body || {});
+      let subscriberNumbersSynced = 0;
+      let subscriberNumbersWarning: string | null = null;
+      if (settings.enabled && settings.lookupType === 'account' && settings.accountNo) {
+        try {
+          subscriberNumbersSynced = await service.syncSubscriberNumbers();
+        } catch (error) {
+          subscriberNumbersWarning = safeMtsBusinessError(error).safeErrorCode;
+        }
+      }
+      return res.json({ success: true, settings, subscriberNumbersSynced, subscriberNumbersWarning });
+    } catch (error: any) {
+      const code = ['invalid_msisdn', 'invalid_account_number'].includes(String(error?.message))
+        ? String(error.message) : 'balance_settings_save_failed';
+      return res.status(400).json({ success: false, safeErrorCode: code });
+    }
+  });
+
+  app.get('/api/balance/sources/mts-business/numbers', deps.requireAuth(), async (req: Request, res: Response) => {
+    if (!(await deps.checkPermission(req, 'view_balance_analytics'))) {
+      return res.status(403).json({ error: 'Access denied: view_balance_analytics permission required' });
+    }
+    try {
+      return res.json({ success: true, numbers: await service.listSubscriberNumbers() });
+    } catch {
+      return res.status(503).json({ success: false, safeErrorCode: 'subscriber_numbers_unavailable' });
+    }
   });
 
   app.post('/api/balance/sources/:id/sync', deps.requireAuth(), async (req: Request, res: Response) => {
@@ -84,6 +129,16 @@ export function registerBalanceRoutes(app: Express, deps: Dependencies): MtsBusi
     }
   });
 
+  app.get('/api/balance/sources/:id/usage/sync/status', deps.requireAuth(), async (req: Request, res: Response) => {
+    if (!(await deps.checkPermission(req, 'view_balance_analytics'))) {
+      return res.status(403).json({ error: 'Access denied: view_balance_analytics permission required' });
+    }
+    if (String(req.params.id) !== MTS_BUSINESS_SOURCE_ID) {
+      return res.status(404).json({ success: false, safeErrorCode: 'balance_source_not_found' });
+    }
+    return res.json({ success: true, syncing: usage.isSyncing(MTS_BUSINESS_SOURCE_ID) });
+  });
+
   app.post('/api/balance/sources/:id/usage/sync', deps.requireAuth(), async (req: Request, res: Response) => {
     if (!(await deps.checkPermission(req, 'manage_balance_sources'))) {
       return res.status(403).json({ error: 'Access denied: manage_balance_sources permission required' });
@@ -92,8 +147,17 @@ export function registerBalanceRoutes(app: Express, deps: Dependencies): MtsBusi
       return res.status(404).json({ success: false, safeErrorCode: 'balance_source_not_found' });
     }
     try {
+      await service.refreshSettings();
       return res.json({ success: true, ...(await usage.sync(MTS_BUSINESS_SOURCE_ID, req.body || {})) });
     } catch (error) {
+      if (error instanceof Error && error.message === 'usage_sync_in_progress') {
+        return res.status(409).json({
+          success: false,
+          syncing: true,
+          safeErrorCode: 'usage_sync_in_progress',
+          safeMessage: 'Синхронизация детализации уже выполняется'
+        });
+      }
       const safe = safeMtsBusinessError(error);
       return res.status(503).json({ success: false, ...safe });
     }
