@@ -2353,6 +2353,8 @@ export default function App() {
   const [myExt, setMyExt] = useState(() => {
     return localStorage.getItem('operator_asterisk_ext') || '101';
   });
+  const isOwnCallsForced = session?.role === 'operator' || session?.permissions?.own_calls_only === true;
+  const effectiveOnlyMyCalls = isOwnCallsForced || onlyMyCalls;
   const effectiveMySip = String(session?.extension || myExt).trim();
   const [liveCallBanner, setLiveCallBanner] = useState<LiveCallBanner | null>(null);
   const [isLiveTransferLoading, setIsLiveTransferLoading] = useState(false);
@@ -3210,7 +3212,7 @@ export default function App() {
         searchQuery,
         numberFilter,
         myExt,
-        onlyMyCalls
+        onlyMyCalls: effectiveOnlyMyCalls
       });
       const data = await fetchCdrStats(qParams, session.token);
 
@@ -3250,7 +3252,7 @@ export default function App() {
         searchQuery,
         numberFilter,
         myExt,
-        onlyMyCalls,
+        onlyMyCalls: effectiveOnlyMyCalls,
         relatedMissedCallId: targetRelatedMissedCallId
       });
 
@@ -4158,7 +4160,7 @@ export default function App() {
         startTime={startTime}
         endTime={endTime}
         operatorExt={myExt}
-        onlyMyCalls={onlyMyCalls}
+        onlyMyCalls={effectiveOnlyMyCalls}
         accessUsers={accessUsers}
         directory={directoryLookup.length ? directoryLookup : directory}
         settings={settings}
@@ -6164,8 +6166,8 @@ export default function App() {
               <label className="flex items-center gap-1.5 cursor-pointer select-none">
                 <input
                   type="checkbox"
-                  checked={(session.role === 'operator' || session.permissions?.own_calls_only === true) ? true : onlyMyCalls}
-                  disabled={session.role === 'operator'}
+                  checked={effectiveOnlyMyCalls}
+                  disabled={isOwnCallsForced}
                   onChange={(e) => {
                     setOnlyMyCalls(e.target.checked);
                     setPage(1);
@@ -6669,8 +6671,8 @@ export default function App() {
                 <label className="flex items-center gap-1.5 cursor-pointer">
                   <input
                     type="checkbox"
-                    checked={(session.role === 'operator' || session.permissions?.own_calls_only === true) ? true : onlyMyCalls}
-                    disabled={session.role === 'operator'}
+                    checked={effectiveOnlyMyCalls}
+                    disabled={isOwnCallsForced}
                     onChange={(e) => {
                       setOnlyMyCalls(e.target.checked);
                       setPage(1);

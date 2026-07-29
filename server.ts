@@ -5493,7 +5493,13 @@ function getEffectiveOperatorExt(localDb: any, req: Request, requestedExt: strin
 
 function isOperatorForcedOwnCalls(localDb: any, req: Request): boolean {
   const dbUser = getAuthenticatedDbUser(localDb, req);
-  return dbUser?.role === 'operator';
+  if (!dbUser) return false;
+  const roleConfig = (localDb.roles || getDefaultAccessRoles()).find((item: any) => item.id === dbUser.role);
+  const permissions = {
+    ...(roleConfig?.permissions || {}),
+    ...(dbUser.permissions || {})
+  };
+  return dbUser.role === 'operator' || permissions.own_calls_only === true;
 }
 
 const CALLTRACKING_ALLOWED_EVENT_TYPES = new Set([
