@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom';
 type Props = {
   text: string;
   className?: string;
+  tabIndex?: number;
 };
 
 type TooltipPosition = {
@@ -12,7 +13,7 @@ type TooltipPosition = {
   placement: 'above' | 'below';
 };
 
-export function DirectoryTextTooltip({ text, className = '' }: Props) {
+export function DirectoryTextTooltip({ text, className = '', tabIndex = 0 }: Props) {
   const id = useId();
   const textRef = useRef<HTMLSpanElement>(null);
   const [position, setPosition] = useState<TooltipPosition | null>(null);
@@ -42,7 +43,7 @@ export function DirectoryTextTooltip({ text, className = '' }: Props) {
     <>
       <span
         ref={textRef}
-        tabIndex={0}
+        tabIndex={tabIndex}
         aria-describedby={position ? id : undefined}
         className={`block min-w-0 truncate whitespace-nowrap outline-none focus-visible:ring-2 focus-visible:ring-blue-400/60 ${className}`}
         onMouseEnter={showTooltip}

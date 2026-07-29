@@ -25,6 +25,7 @@ import crypto from 'crypto';
 import { createDirectoryContactId, createUniqueDirectoryContactId } from './server/directoryContactIds.js';
 import { parseDirectoryImportRows, registerDirectoryImportJobRoutes } from './server/directoryImportJobs.js';
 import { registerDirectoryImportSourceRoutes } from './server/directoryImportSources.js';
+import { registerPhonebookGatewayRoutes } from './server/phonebookGateway.js';
 import http from 'http';
 import https from 'https';
 import { CallEntry, MissedCallStatus, AppSettings, DashboardStats, UserRole, WebUser } from './src/types.js';
@@ -8079,6 +8080,22 @@ registerDirectoryImportJobRoutes(app, {
     }));
   }
 });
+registerPhonebookGatewayRoutes(app, {
+  requireAuth: requireAuth(),
+  hasPermission: checkUserPermission,
+  listOwners: async (req) => {
+    const localDb = await readLocalDb();
+    return (localDb.users || [])
+      .filter((user: any) => !user.disabled)
+      .filter((user: any) => (req as any).user?.role === 'su' || user.role !== 'su')
+      .map((user: any) => ({
+        id: String(user.id || ''),
+        label: String(user.fullName || user.username || user.id || '').trim()
+      }))
+      .filter((user: any) => user.id && user.label)
+      .sort((left: any, right: any) => left.label.localeCompare(right.label, 'ru'));
+  }
+});
 
 app.get('/api/system/time', (_req, res) => {
   const now = new Date();
@@ -11902,6 +11919,7 @@ const directorySqlListResponse = async (req: Request, res: any) => {
     return [token, ids];
   }));
   const userJoinStarted = performance.now();
+  const favoriteContactIds = getDirectoryFavoriteContactIds(localDb, req);
   const result = await listDirectoryContactsSql({
     page: req.query.page,
     pageSize: req.query.pageSize,
@@ -11920,9 +11938,10 @@ const directorySqlListResponse = async (req: Request, res: any) => {
     ownerUserId: visibilityMode === 'my_private_only' ? getDirectoryUserId(dbUser, authUser) : undefined,
     sortBy: req.query.sortBy,
     sortDirection: req.query.sortDirection,
-    responsibleUserSearchIdsByToken
+    responsibleUserSearchIdsByToken,
+    favoriteContactIds
   }, getDirectorySqlAccessContext(localDb, req));
-  const favorites = new Set(getDirectoryFavoriteContactIds(localDb, req));
+  const favorites = new Set(favoriteContactIds);
   result.items = result.items.map((entry: any) => ({
     ...entry,
     responsibleUserLabel: getDirectoryResponsibleUserLabel(entry.responsibleUserId, localDb),

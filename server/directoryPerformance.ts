@@ -23,6 +23,7 @@ export type DirectoryListInput = {
   sortDirection?: unknown;
   responsibleUserSearchIdsByToken?: Record<string, string[]>;
   phoneSecondaryOnly?: boolean;
+  favoriteContactIds?: unknown;
 };
 
 type CompactContact = {
@@ -273,15 +274,15 @@ const buildFilters = (input: DirectoryListInput, access: DirectoryAccessContext)
   if (isSpam !== null) { where.push('c.is_spam = ?'); params.push(isSpam ? 1 : 0); }
   if (organization) { where.push('c.company = ?'); params.push(organization); }
   if (responsible) {
-    where.push(`EXISTS (SELECT 1 FROM directory_contact_metadata rm WHERE rm.contact_id=c.id AND rm.metadata_key='responsibleUserId' AND COALESCE(rm.metadata_value,rm.value,'')=?)`);
+    where.push(`EXISTS (SELECT 1 FROM directory_contact_metadata rm WHERE rm.contact_id=c.id AND rm.metadata_key='responsibleUserId' AND COALESCE(NULLIF(rm.metadata_value,''),NULLIF(rm.value,''),TRIM(BOTH '"' FROM rm.metadata_json),'')=?)`);
     params.push(responsible);
   }
   if (department) {
-    where.push(`EXISTS (SELECT 1 FROM directory_contact_metadata dm WHERE dm.contact_id=c.id AND dm.metadata_key='department' AND COALESCE(dm.metadata_value,dm.value,'')=?)`);
+    where.push(`EXISTS (SELECT 1 FROM directory_contact_metadata dm WHERE dm.contact_id=c.id AND dm.metadata_key='department' AND COALESCE(NULLIF(dm.metadata_value,''),NULLIF(dm.value,''),TRIM(BOTH '"' FROM dm.metadata_json),'')=?)`);
     params.push(department);
   }
   if (group) {
-    where.push(`EXISTS (SELECT 1 FROM directory_contact_metadata gm WHERE gm.contact_id=c.id AND gm.metadata_key='group' AND COALESCE(gm.metadata_value,gm.value,'')=?)`);
+    where.push(`EXISTS (SELECT 1 FROM directory_contact_metadata gm WHERE gm.contact_id=c.id AND gm.metadata_key='group' AND COALESCE(NULLIF(gm.metadata_value,''),NULLIF(gm.value,''),TRIM(BOTH '"' FROM gm.metadata_json),'')=?)`);
     params.push(group);
   }
   if (ownerUserId) {
@@ -372,24 +373,33 @@ const buildFilters = (input: DirectoryListInput, access: DirectoryAccessContext)
   return { whereSql: where.join(' AND '), params, search, tokens, searchTooShort };
 };
 
-const sortSql = (input: DirectoryListInput, search: string): { sql: string; params: any[] } => {
+export const buildDirectorySortSql = (input: DirectoryListInput, search: string): { sql: string; params: any[] } => {
+  const favoriteContactIds = Array.isArray(input.favoriteContactIds)
+    ? Array.from(new Set(input.favoriteContactIds.map(id => text(id, 64)).filter(Boolean))).slice(0, 500)
+    : [];
+  const prioritizeFavorites = (order: { sql: string; params: any[] }) => favoriteContactIds.length
+    ? {
+        sql: `CASE WHEN c.id IN (${favoriteContactIds.map(() => '?').join(',')}) THEN 0 ELSE 1 END,${order.sql}`,
+        params: [...favoriteContactIds, ...order.params]
+      }
+    : order;
   const field = text(input.sortBy, 32);
   const direction = text(input.sortDirection, 8).toLowerCase() === 'desc' ? 'DESC' : 'ASC';
   if (search) {
     const normalized = normalizeDirectorySearchText(search);
     const phone = buildDirectoryPhoneSearchPlan(search);
     if (phone?.mode === 'exact') {
-      return {
+      return prioritizeFavorites({
         sql: `CASE WHEN ${phone.sql} THEN 0 ELSE 8 END,c.name ASC,c.id ASC`,
         params: phone.params
-      };
+      });
     }
     if (phone) {
-      return { sql: 'c.phone_normalized ASC,c.id ASC', params: [] };
+      return prioritizeFavorites({ sql: 'c.phone_normalized ASC,c.id ASC', params: [] });
     }
     const exact = normalized;
     const prefix = `${escapeLike(normalized)}%`;
-    return {
+    return prioritizeFavorites({
       sql: `CASE
         WHEN c.email = ? THEN 1
         WHEN c.name = ? THEN 2
@@ -398,13 +408,13 @@ const sortSql = (input: DirectoryListInput, search: string): { sql: string; para
         WHEN ${likeClause('c.company')} THEN 5
         ELSE 8 END,c.name ASC,c.id ASC`,
       params: [exact, exact, prefix, exact, prefix]
-    };
+    });
   }
   const fields: Record<string, string> = {
     name: 'c.name', normalized_name: 'c.name', organization: 'c.company',
     createdAt: 'c.created_at', created_at: 'c.created_at', phone: 'c.phone_normalized', phone_normalized: 'c.phone_normalized'
   };
-  return { sql: `${fields[field] || 'c.name'} ${direction},c.id ${direction}`, params: [] };
+  return prioritizeFavorites({ sql: `${fields[field] || 'c.name'} ${direction},c.id ${direction}`, params: [] });
 };
 
 export async function listDirectoryContactsSql(input: DirectoryListInput, access: DirectoryAccessContext) {
@@ -413,7 +423,7 @@ export async function listDirectoryContactsSql(input: DirectoryListInput, access
   const page = Math.max(1, Math.min(1_000_000, Number(input.page) || 1));
   const offset = (page - 1) * pageSize;
   const filters = buildFilters(input, access);
-  const order = sortSql(input, filters.search);
+  const order = buildDirectorySortSql(input, filters.search);
   const cacheKey = JSON.stringify([countGeneration, access.privileged, access.userId, filters.whereSql, filters.params]);
   let totalCount = 0;
   let directoryCountMs = 0;

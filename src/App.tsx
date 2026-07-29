@@ -93,6 +93,7 @@ import DevicesMapTab from './modules/monitoring/tabs/monitoring/DevicesMapTab';
 import HealthReportTab from './modules/monitoring/tabs/monitoring/HealthReportTab';
 import { DirectoryStatusIcon } from './modules/directory/components/DirectoryStatusIcon';
 import { DirectoryTextTooltip } from './modules/directory/components/DirectoryTextTooltip';
+import { PhonebookProfilesPanel } from './modules/directory/components/PhonebookProfilesPanel';
 import { fetchDirectory, fetchDirectoryAll, fetchDirectoryContact, saveDirectoryEntry, deleteDirectoryEntry, toggleDirectoryBlacklist, toggleDirectorySpam, previewDirectoryImport, previewDirectoryImportOwnership, previewDirectoryBulkDelete, applyDirectoryBulkDelete, createDirectoryImportJob, prepareDirectoryImportSource, deleteDirectoryImportSource, getDirectoryImportJob, cancelDirectoryImportJob, resumeDirectoryImportJob, previewDirectoryImportRollback, getDirectoryImportJobErrors, fetchDirectoryColumnSettings, saveMyDirectoryColumnSettings, resetMyDirectoryColumnSettings, saveGlobalDirectoryColumnSettings, resetGlobalDirectoryColumnSettings, fetchDirectoryCustomFields, createDirectoryCustomField, setDirectoryFavorite, type DirectoryImportPreparedSource, type DirectoryCustomFieldDefinition } from './modules/directory/services/directoryApi';
 import { calculateDirectoryImportDigest, getDirectoryImportDigestCapability, DIRECTORY_IMPORT_MAX_BYTES, isSupportedDirectoryImportFile, summarizeDirectoryImportSource, type DirectoryImportDigestStatus, type DirectoryImportSourceKind, type DirectoryImportSourceSummary } from './modules/directory/utils/directoryImportSource';
 import { applyDirectoryOwnershipPreview, buildDirectoryEffectiveRows, directoryImportPipelineSteps, getDirectoryImportActiveStep, getDirectoryImportDisabledReason, normalizeDirectoryEntriesForOwnership } from './modules/directory/utils/directoryImportPipeline';
@@ -252,7 +253,7 @@ const optionalDirectoryColumns: DirectoryColumnConfig[] = [
   { key: 'visibility', label: 'Видимость' },
   { key: 'isSpam', label: 'Спам' },
   { key: 'organization', label: 'Организация', widthClassName: 'w-px' },
-  { key: 'position', label: 'Должность', widthClassName: 'w-full' },
+  { key: 'position', label: 'Должность', widthClassName: 'w-[440px]' },
   { key: 'phone2', label: 'Доп. телефон', widthClassName: 'w-[144px]' },
   { key: 'email', label: 'Email', className: 'min-w-[160px] max-w-[220px]' },
   { key: 'website', label: 'Сайт', className: 'min-w-[150px] max-w-[200px]' },
@@ -261,7 +262,7 @@ const optionalDirectoryColumns: DirectoryColumnConfig[] = [
   { key: 'ogrn', label: 'ОГРН' },
   { key: 'address', label: 'Адрес', className: 'min-w-[180px] max-w-[260px]' },
   { key: 'comment', label: 'Комментарий', className: 'min-w-[180px] max-w-[260px]' },
-  { key: 'department', label: 'Отдел / группа' },
+  { key: 'department', label: 'Отдел / группа', widthClassName: 'w-full' },
   { key: 'group', label: 'Группа' },
   { key: 'tags', label: 'Теги', className: 'min-w-[160px]' },
   { key: 'internalExtension', label: 'Внутренний номер' },
@@ -4998,6 +4999,17 @@ export default function App() {
     return <DirectoryTextTooltip text={text} className={maxClass} />;
   };
 
+  const applyDirectoryQuickSearch = (value: unknown) => {
+    const query = formatDirectoryCellText(value);
+    if (query === '—') return;
+    setDirSearchQuery(query);
+    setDirTypeFilter('all');
+    setDirSpamMode('all');
+    setDirVisibilityMode('all');
+    setDirSearchTooShort(false);
+    setDirPage(1);
+  };
+
   const renderDirectoryPhone = (phone: string, entry: DirectoryEntry) => (
     <div className="flex min-w-0 items-center gap-1 whitespace-nowrap font-mono font-semibold tabular-nums text-slate-800">
       <span className="min-w-0 select-all truncate">{phone}</span>
@@ -5088,7 +5100,17 @@ export default function App() {
           </span>
         );
       case 'organization':
-        return renderDirectoryTextCell(entry.company, 'w-fit min-w-[96px] max-w-[clamp(160px,18vw,280px)] text-slate-600');
+        return formatDirectoryCellText(entry.company) === '—' ? renderDirectoryDash() : (
+          <button
+            type="button"
+            onClick={() => applyDirectoryQuickSearch(entry.company)}
+            className="block w-fit min-w-[96px] max-w-[clamp(160px,18vw,280px)] rounded-sm text-left text-slate-600 outline-none transition-colors hover:text-blue-700 hover:underline focus-visible:ring-2 focus-visible:ring-blue-500"
+            title={`Показать все контакты организации «${formatDirectoryCellText(entry.company)}»`}
+            aria-label={`Фильтровать справочник по организации ${formatDirectoryCellText(entry.company)}`}
+          >
+            <DirectoryTextTooltip text={formatDirectoryCellText(entry.company)} className="w-full" tabIndex={-1} />
+          </button>
+        );
       case 'position':
         return renderDirectoryTextCell(entry.position, 'w-full text-slate-600');
       case 'email':
@@ -5110,7 +5132,17 @@ export default function App() {
       case 'comment':
         return renderDirectoryTextCell(entry.comment, 'max-w-[240px]');
       case 'department':
-        return renderDirectoryTextCell(entry.department);
+        return formatDirectoryCellText(entry.department) === '—' ? renderDirectoryDash() : (
+          <button
+            type="button"
+            onClick={() => applyDirectoryQuickSearch(entry.department)}
+            className="block w-full min-w-0 rounded-sm text-left text-slate-600 outline-none transition-colors hover:text-blue-700 hover:underline focus-visible:ring-2 focus-visible:ring-blue-500"
+            title={`Показать все контакты отдела «${formatDirectoryCellText(entry.department)}»`}
+            aria-label={`Фильтровать справочник по отделу ${formatDirectoryCellText(entry.department)}`}
+          >
+            <DirectoryTextTooltip text={formatDirectoryCellText(entry.department)} className="w-full" tabIndex={-1} />
+          </button>
+        );
       case 'group':
         return renderDirectoryTextCell(entry.group);
       case 'tags':
@@ -7716,7 +7748,9 @@ export default function App() {
                             : column.key === 'organization'
                               ? 'w-px whitespace-nowrap px-2 text-slate-700'
                               : column.key === 'position'
-                                ? 'min-w-[240px] pl-2 pr-2.5 text-slate-700'
+                                ? 'w-[clamp(300px,28vw,520px)] min-w-[300px] max-w-[520px] pl-2 pr-2.5 text-slate-700'
+                                : column.key === 'department'
+                                  ? 'min-w-[220px] px-2.5 text-slate-700'
                                 : 'px-2.5 text-slate-700'
                         } py-2 align-middle`}>
                           {renderDirectoryCell(entry, column.key)}
@@ -8090,6 +8124,12 @@ export default function App() {
                         </div>
                         <DirectoryCsvColumnsHelp />
                       </div>
+
+                      {session?.token && (isAdminRole(session.role) || hasPermission('manage_phonebook_gateway')) && (
+                        <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                          <PhonebookProfilesPanel token={session.token} />
+                        </div>
+                      )}
                     </div>
                   )}
                   {settingsTab === 'access' && (

@@ -241,3 +241,19 @@ v5.1.0 — Operator Templates Foundation
 ```
 
 Trunk Lab v5.2.0 is read-only diagnostics work. Do not create or modify Trunks, apply Operator Templates, call FreePBX write APIs, call BMO write paths, run test calls, or run fwconsole reload in this release.
+# External SIP phonebooks
+
+Current implementation:
+
+- Grandstream and Yealink XML adapters;
+- protected per-profile URLs;
+- shared and owner-scoped combined directories;
+- profile filters, entry limits, activation and credential rotation;
+- administrator UI and adapter tests.
+
+Before production rollout:
+
+- verify XML against the exact deployed phone models and firmware;
+- validate reverse-proxy HTTPS and HTTP Basic forwarding;
+- perform a read-only download test, then a controlled single-device trial;
+- document model-specific refresh intervals and limits.

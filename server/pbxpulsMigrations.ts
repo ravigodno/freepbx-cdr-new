@@ -1688,6 +1688,37 @@ const MIGRATIONS: Migration[] = [
       `ALTER TABLE balance_usage_cdr_matches ADD COLUMN caller_number VARCHAR(64) NULL AFTER duration_difference_seconds`,
       `ALTER TABLE balance_usage_cdr_matches ADD COLUMN callee_number VARCHAR(64) NULL AFTER caller_number`
     ]
+  },
+  {
+    key:'20260729_069_phonebook_gateway_profiles',
+    description:'Add secure shared and owner-scoped remote phonebook profiles',
+    statements:[
+      `CREATE TABLE IF NOT EXISTS phonebook_profiles(
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(191) NOT NULL,
+        slug VARCHAR(64) NOT NULL,
+        format ENUM('grandstream','yealink') NOT NULL,
+        scope ENUM('shared','personal_combined') NOT NULL DEFAULT 'shared',
+        owner_user_id VARCHAR(64) NULL,
+        username VARCHAR(100) NOT NULL,
+        password_hash CHAR(64) NOT NULL,
+        filters_json LONGTEXT NOT NULL,
+        max_entries INT UNSIGNED NOT NULL DEFAULT 2000,
+        active TINYINT(1) NOT NULL DEFAULT 1,
+        created_by VARCHAR(100) NULL,
+        last_access_at DATETIME NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NULL,
+        UNIQUE KEY uniq_phonebook_profile_slug_format(slug,format),
+        INDEX idx_phonebook_profile_scope_owner(scope,owner_user_id),
+        INDEX idx_phonebook_profile_active(active)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `INSERT IGNORE INTO permissions(permission_key,name,description,category)
+       VALUES('manage_phonebook_gateway','Manage remote phonebooks','Create and rotate SIP phone remote phonebook profiles','directory')`,
+      `INSERT IGNORE INTO role_permissions(role_id,permission_id)
+       SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key='manage_phonebook_gateway'
+       WHERE r.role_key IN('su','admin')`
+    ]
   }
 ];
 
