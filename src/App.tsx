@@ -895,6 +895,11 @@ export default function App() {
   const [dirQueryTimeMs, setDirQueryTimeMs] = useState<number | null>(null);
   const directoryListAbortRef = useRef<AbortController | null>(null);
   const directoryListRequestSequenceRef = useRef(0);
+  const directoryTopScrollRef = useRef<HTMLDivElement | null>(null);
+  const directoryTableScrollRef = useRef<HTMLDivElement | null>(null);
+  const directoryTableRef = useRef<HTMLTableElement | null>(null);
+  const [directoryTableScrollWidth, setDirectoryTableScrollWidth] = useState(0);
+  const [directoryTableHasOverflow, setDirectoryTableHasOverflow] = useState(false);
   const [dirListError, setDirListError] = useState('');
   const [dirSearchTooShort, setDirSearchTooShort] = useState(false);
   const [isDirectoryBulkDeleteOpen, setIsDirectoryBulkDeleteOpen] = useState(false);
@@ -4822,6 +4827,31 @@ export default function App() {
     ...systemDirectoryColumnConfigs
   ];
 
+  useEffect(() => {
+    const scrollContainer = directoryTableScrollRef.current;
+    const table = directoryTableRef.current;
+    if (!scrollContainer || !table) return;
+
+    const updateScrollDimensions = () => {
+      setDirectoryTableScrollWidth(table.scrollWidth);
+      setDirectoryTableHasOverflow(table.scrollWidth > scrollContainer.clientWidth + 1);
+    };
+    updateScrollDimensions();
+
+    const resizeObserver = new ResizeObserver(updateScrollDimensions);
+    resizeObserver.observe(scrollContainer);
+    resizeObserver.observe(table);
+    return () => resizeObserver.disconnect();
+  }, [selectedDirectoryVisibleColumns, directoryCustomFields, directory.length]);
+
+  const syncDirectoryScroll = (source: 'top' | 'table') => {
+    const top = directoryTopScrollRef.current;
+    const table = directoryTableScrollRef.current;
+    if (!top || !table) return;
+    if (source === 'top') table.scrollLeft = top.scrollLeft;
+    else top.scrollLeft = table.scrollLeft;
+  };
+
   const draftDirectoryOrderConfigs: DirectoryColumnConfig[] = draftDirectoryVisibleColumns
     .map(columnKey => allDirectoryColumnConfigs.find(column => column.key === columnKey))
     .filter((column): column is DirectoryColumnConfig => Boolean(column));
@@ -7661,8 +7691,20 @@ export default function App() {
 
         {/* List Table of directory entries */}
         <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-          <div className="w-full max-w-full overflow-x-auto">
-            <table className="w-full min-w-[1120px] table-auto border-collapse text-left text-xs text-slate-500">
+          <div
+            ref={directoryTopScrollRef}
+            onScroll={() => syncDirectoryScroll('top')}
+            className={`${directoryTableHasOverflow ? 'h-4 border-b border-slate-200' : 'h-0'} w-full overflow-x-auto overflow-y-hidden bg-slate-50`}
+            aria-label="Горизонтальная прокрутка справочника"
+          >
+            <div style={{ width: directoryTableScrollWidth, height: 1 }} />
+          </div>
+          <div
+            ref={directoryTableScrollRef}
+            onScroll={() => syncDirectoryScroll('table')}
+            className="w-full max-w-full overflow-x-auto"
+          >
+            <table ref={directoryTableRef} className="w-full min-w-[1120px] table-auto border-collapse text-left text-xs text-slate-500">
               <colgroup>
                 <col className="w-8" />
                 {effectiveDirectoryColumnConfigs.map(column => (
@@ -7677,7 +7719,7 @@ export default function App() {
                   {effectiveDirectoryColumnConfigs.map(column => (
                     <th key={column.key} scope="col" className={`${
                       column.key === 'actions'
-                        ? 'px-1'
+                        ? 'sticky right-0 z-20 bg-slate-50 px-1 shadow-[-8px_0_12px_-12px_rgba(15,23,42,0.45)]'
                         : column.key === 'organization'
                           ? 'px-2'
                           : column.key === 'position'
@@ -7744,7 +7786,7 @@ export default function App() {
                       {effectiveDirectoryColumnConfigs.map(column => (
                         <td key={column.key} className={`${
                           column.key === 'actions'
-                            ? 'px-1 text-right'
+                            ? 'sticky right-0 z-10 bg-white px-1 text-right shadow-[-8px_0_12px_-12px_rgba(15,23,42,0.45)]'
                             : column.key === 'organization'
                               ? 'w-px whitespace-nowrap px-2 text-slate-700'
                               : column.key === 'position'

@@ -7,7 +7,9 @@ export function hasOwnDirectoryEditPermission(authUser: any): boolean {
 }
 
 export function isOwnDirectoryEditRestricted(authUser: any): boolean {
-  return authUser?.role !== 'su' && hasOwnDirectoryEditPermission(authUser);
+  return authUser?.role !== 'su'
+    && !hasFullDirectoryEditPermission(authUser)
+    && hasOwnDirectoryEditPermission(authUser);
 }
 
 export function restrictDirectoryContactInputToOwner(input: any, authUser: any, currentUserId: string): any {
