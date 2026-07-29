@@ -119,6 +119,7 @@ async function writeLine(res: Response, values: unknown[]) {
 export function registerUniqueNumberExportRoutes(app: Express, deps: Dependencies) {
   app.get('/api/reports/unique-numbers.csv', deps.requireAuth(), async (req: Request, res: Response) => {
     if (!(await deps.checkPermission(req, 'view_reports'))) return res.status(403).json({ error: 'Access denied: view_reports permission required' });
+    if (!(await deps.checkPermission(req, 'export_excel'))) return res.status(403).json({ error: 'Access denied: export_excel permission required' });
     const direction: Direction = req.query.direction === 'outgoing' ? 'outgoing' : 'incoming';
     let filters: ReturnType<typeof parseFilters>;
     try { filters = parseFilters(req.query as any); } catch (error: any) { return res.status(400).json({ error: error.message }); }

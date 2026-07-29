@@ -9541,13 +9541,13 @@ app.post('/api/calltracking/event', async (req, res) => {
   }
 });
 
-app.get('/api/calltracking/sites', requireAuth(), async (req, res) => {
+app.get('/api/calltracking/sites', requireAuth(), requirePermission('view_marketing'), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_marketing'))) return res.status(403).json({ error: 'Access denied: view_marketing permission required' });
   const localDb = await readLocalDb();
   res.json({ sites: Array.isArray(localDb.calltrackingSites) ? localDb.calltrackingSites : [] });
 });
 
-app.post('/api/calltracking/sites', requireAuth(), async (req, res) => {
+app.post('/api/calltracking/sites', requireAuth(), requirePermission('manage_calltracking'), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_marketing'))) return res.status(403).json({ error: 'Access denied: view_marketing permission required' });
   const payloadSize = Buffer.byteLength(JSON.stringify(req.body || {}), 'utf8');
   if (payloadSize > CALLTRACKING_MAX_PAYLOAD_BYTES) return res.status(413).json({ error: 'payload_too_large' });
@@ -9564,7 +9564,7 @@ app.post('/api/calltracking/sites', requireAuth(), async (req, res) => {
   res.json({ ok: true, site });
 });
 
-app.get('/api/calltracking/phone-numbers', requireAuth(), async (req, res) => {
+app.get('/api/calltracking/phone-numbers', requireAuth(), requirePermission('view_marketing'), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_marketing'))) return res.status(403).json({ error: 'Access denied: view_marketing permission required' });
   const localDb = await readLocalDb();
   const siteId = cleanMarketingString(req.query.siteId, 120);
@@ -9573,7 +9573,7 @@ app.get('/api/calltracking/phone-numbers', requireAuth(), async (req, res) => {
   res.json({ numbers });
 });
 
-app.post('/api/calltracking/phone-numbers', requireAuth(), async (req, res) => {
+app.post('/api/calltracking/phone-numbers', requireAuth(), requirePermission('manage_calltracking'), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_marketing'))) return res.status(403).json({ error: 'Access denied: view_marketing permission required' });
   const payloadSize = Buffer.byteLength(JSON.stringify(req.body || {}), 'utf8');
   if (payloadSize > CALLTRACKING_MAX_PAYLOAD_BYTES) return res.status(413).json({ error: 'payload_too_large' });
@@ -9589,7 +9589,7 @@ app.post('/api/calltracking/phone-numbers', requireAuth(), async (req, res) => {
   res.json({ ok: true, phone });
 });
 
-app.patch('/api/calltracking/phone-numbers/:id', requireAuth(), async (req, res) => {
+app.patch('/api/calltracking/phone-numbers/:id', requireAuth(), requirePermission('manage_calltracking'), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_marketing'))) return res.status(403).json({ error: 'Access denied: view_marketing permission required' });
   const localDb = await readLocalDb();
   if (!Array.isArray(localDb.calltrackingPhoneNumbers)) localDb.calltrackingPhoneNumbers = [];
@@ -9603,7 +9603,7 @@ app.patch('/api/calltracking/phone-numbers/:id', requireAuth(), async (req, res)
   res.json({ ok: true, phone: next });
 });
 
-app.get('/api/calltracking/replacement-rules', requireAuth(), async (req, res) => {
+app.get('/api/calltracking/replacement-rules', requireAuth(), requirePermission('view_marketing'), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_marketing'))) return res.status(403).json({ error: 'Access denied: view_marketing permission required' });
   const localDb = await readLocalDb();
   const siteId = cleanMarketingString(req.query.siteId, 120);
@@ -9613,7 +9613,7 @@ app.get('/api/calltracking/replacement-rules', requireAuth(), async (req, res) =
   res.json({ rules });
 });
 
-app.post('/api/calltracking/replacement-rules', requireAuth(), async (req, res) => {
+app.post('/api/calltracking/replacement-rules', requireAuth(), requirePermission('manage_calltracking'), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_marketing'))) return res.status(403).json({ error: 'Access denied: view_marketing permission required' });
   const payloadSize = Buffer.byteLength(JSON.stringify(req.body || {}), 'utf8');
   if (payloadSize > CALLTRACKING_MAX_PAYLOAD_BYTES) return res.status(413).json({ error: 'payload_too_large' });
@@ -9631,7 +9631,7 @@ app.post('/api/calltracking/replacement-rules', requireAuth(), async (req, res) 
   res.json({ ok: true, rule });
 });
 
-app.patch('/api/calltracking/replacement-rules/:id', requireAuth(), async (req, res) => {
+app.patch('/api/calltracking/replacement-rules/:id', requireAuth(), requirePermission('manage_calltracking'), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_marketing'))) return res.status(403).json({ error: 'Access denied: view_marketing permission required' });
   const localDb = await readLocalDb();
   if (!Array.isArray(localDb.calltrackingReplacementRules)) localDb.calltrackingReplacementRules = [];
@@ -9647,7 +9647,7 @@ app.patch('/api/calltracking/replacement-rules/:id', requireAuth(), async (req, 
   res.json({ ok: true, rule: next });
 });
 
-app.get('/api/calltracking/events', requireAuth(), async (req, res) => {
+app.get('/api/calltracking/events', requireAuth(), requirePermission('view_marketing'), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_marketing'))) return res.status(403).json({ error: 'Access denied: view_marketing permission required' });
   const localDb = await readLocalDb();
   const sites = calltrackingSiteMap(localDb.calltrackingSites || []);
@@ -9675,7 +9675,7 @@ app.get('/api/calltracking/events', requireAuth(), async (req, res) => {
   res.json({ events: page, total });
 });
 
-app.get('/api/calltracking/matches', requireAuth(), async (req, res) => {
+app.get('/api/calltracking/matches', requireAuth(), requirePermission('view_marketing'), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_marketing'))) return res.status(403).json({ error: 'Access denied: view_marketing permission required' });
   try {
     const localDb = await readLocalDb();
@@ -9704,7 +9704,7 @@ app.get('/api/calltracking/matches', requireAuth(), async (req, res) => {
 });
 
 
-app.post('/api/calltracking/match', requireAuth(), async (req, res) => {
+app.post('/api/calltracking/match', requireAuth(), requirePermission('manage_calltracking'), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_marketing'))) return res.status(403).json({ error: 'Access denied: view_marketing permission required' });
   try {
     const localDb = await readLocalDb();
@@ -9737,7 +9737,7 @@ app.post('/api/calltracking/match', requireAuth(), async (req, res) => {
   }
 });
 
-app.get('/api/calltracking/matched-calls', requireAuth(), async (req, res) => {
+app.get('/api/calltracking/matched-calls', requireAuth(), requirePermission('view_marketing'), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_marketing'))) return res.status(403).json({ error: 'Access denied: view_marketing permission required' });
   try {
     const localDb = await readLocalDb();
@@ -9764,7 +9764,7 @@ app.get('/api/calltracking/matched-calls', requireAuth(), async (req, res) => {
   }
 });
 
-app.get('/api/calltracking/summary', requireAuth(), async (req, res) => {
+app.get('/api/calltracking/summary', requireAuth(), requirePermission('view_marketing'), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_marketing'))) return res.status(403).json({ error: 'Access denied: view_marketing permission required' });
   const localDb = await readLocalDb();
   const siteId = cleanMarketingString(req.query.siteId, 120);
@@ -9823,7 +9823,7 @@ app.get('/api/calltracking/summary', requireAuth(), async (req, res) => {
   });
 });
 
-app.get('/api/calltracking/sources', requireAuth(), async (req, res) => {
+app.get('/api/calltracking/sources', requireAuth(), requirePermission('view_marketing'), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_marketing'))) return res.status(403).json({ error: 'Access denied: view_marketing permission required' });
   const localDb = await readLocalDb();
   const siteId = cleanMarketingString(req.query.siteId, 120);
@@ -9912,7 +9912,7 @@ app.get('/api/calltracking/sources', requireAuth(), async (req, res) => {
   res.json({ sources, usedSettings: dataset.usedSettings });
 });
 
-app.post('/api/marketing/aggregates/rebuild', requireAuth(), async (req, res) => {
+app.post('/api/marketing/aggregates/rebuild', requireAuth(), requirePermission('manage_marketing'), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_marketing'))) return res.status(403).json({ error: 'Access denied: view_marketing permission required' });
   const payloadSize = Buffer.byteLength(JSON.stringify(req.body || {}), 'utf8');
   if (payloadSize > CALLTRACKING_MAX_PAYLOAD_BYTES) return res.status(413).json({ error: 'payload_too_large' });
@@ -9939,7 +9939,7 @@ app.post('/api/marketing/aggregates/rebuild', requireAuth(), async (req, res) =>
   }
 });
 
-app.get('/api/marketing/aggregates', requireAuth(), async (req, res) => {
+app.get('/api/marketing/aggregates', requireAuth(), requirePermission('view_marketing'), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_marketing'))) return res.status(403).json({ error: 'Access denied: view_marketing permission required' });
   const localDb = await readLocalDb();
   const { startDate, endDate } = getYandexMetrikaDateRange(req.query);
@@ -9954,7 +9954,7 @@ app.get('/api/marketing/aggregates', requireAuth(), async (req, res) => {
   });
 });
 
-app.post('/api/marketing/direct/settings', requireAuth(), async (req, res) => {
+app.post('/api/marketing/direct/settings', requireAuth(), requirePermission('manage_yandex_direct'), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_marketing'))) return res.status(403).json({ error: 'Access denied: view_marketing permission required' });
   const payloadSize = Buffer.byteLength(JSON.stringify(req.body || {}), 'utf8');
   if (payloadSize > CALLTRACKING_MAX_PAYLOAD_BYTES) return res.status(413).json({ error: 'payload_too_large' });
@@ -9980,7 +9980,7 @@ app.post('/api/marketing/direct/settings', requireAuth(), async (req, res) => {
   res.json({ ok: true, integration: safeYandexMetrikaIntegration(integration) });
 });
 
-app.post('/api/marketing/direct/test', requireAuth(), async (req, res) => {
+app.post('/api/marketing/direct/test', requireAuth(), requirePermission('manage_yandex_direct'), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_marketing'))) return res.status(403).json({ error: 'Access denied: view_marketing permission required' });
   const integrationId = cleanMarketingString(req.body?.integrationId, 120);
   if (!integrationId) return res.status(400).json({ ok: false, status: 'error', error: 'integrationId_required' });
@@ -10007,7 +10007,7 @@ app.post('/api/marketing/direct/test', requireAuth(), async (req, res) => {
   }
 });
 
-app.get('/api/marketing/direct/summary', requireAuth(), async (req, res) => {
+app.get('/api/marketing/direct/summary', requireAuth(), requirePermission('view_marketing'), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_marketing'))) return res.status(403).json({ error: 'Access denied: view_marketing permission required' });
   const localDb = await readLocalDb();
   const siteId = cleanMarketingString(req.query.siteId, 120);
@@ -10051,7 +10051,7 @@ app.get('/api/marketing/direct/summary', requireAuth(), async (req, res) => {
   }
 });
 
-app.get('/api/marketing/direct/sources', requireAuth(), async (req, res) => {
+app.get('/api/marketing/direct/sources', requireAuth(), requirePermission('view_marketing'), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_marketing'))) return res.status(403).json({ error: 'Access denied: view_marketing permission required' });
   const localDb = await readLocalDb();
   const siteId = cleanMarketingString(req.query.siteId, 120);
@@ -10090,7 +10090,7 @@ app.get('/api/marketing/direct/sources', requireAuth(), async (req, res) => {
   }
 });
 
-app.get('/api/marketing/yandex/oauth/url', requireAuth(), async (req, res) => {
+app.get('/api/marketing/yandex/oauth/url', requireAuth(), requirePermission('manage_yandex_metrika'), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_marketing'))) return res.status(403).json({ error: 'Access denied: view_marketing permission required' });
   const clientId = cleanMarketingString(process.env.YANDEX_CLIENT_ID, 240);
   if (!clientId) return res.json({ configured: false, error: 'YANDEX_CLIENT_ID is not configured' });
@@ -10160,7 +10160,7 @@ app.get('/api/marketing/yandex/oauth/callback', async (req, res) => {
   }
 });
 
-app.get('/api/marketing/yandex/oauth/status', requireAuth(), async (req, res) => {
+app.get('/api/marketing/yandex/oauth/status', requireAuth(), requirePermission('view_marketing'), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_marketing'))) return res.status(403).json({ error: 'Access denied: view_marketing permission required' });
   const localDb = await readLocalDb();
   if (!Array.isArray((localDb as any).yandexOAuthStates)) (localDb as any).yandexOAuthStates = [];
@@ -10172,7 +10172,7 @@ app.get('/api/marketing/yandex/oauth/status', requireAuth(), async (req, res) =>
   res.json(safeYandexOAuthResult(latest));
 });
 
-app.post('/api/marketing/yandex/connect-counter', requireAuth(), async (req, res) => {
+app.post('/api/marketing/yandex/connect-counter', requireAuth(), requirePermission('manage_yandex_metrika'), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_marketing'))) return res.status(403).json({ error: 'Access denied: view_marketing permission required' });
   const counterId = cleanMarketingString(req.body?.counterId, 40);
   if (!counterId || !/^\d+$/.test(counterId)) return res.status(400).json({ ok: false, error: 'invalid_counterId' });
@@ -10258,7 +10258,7 @@ app.post('/api/marketing/yandex/connect-counter', requireAuth(), async (req, res
   res.json({ ok: true, integration: safeYandexMetrikaIntegration(integration) });
 });
 
-app.get('/api/marketing/metrika/integrations', requireAuth(), async (req, res) => {
+app.get('/api/marketing/metrika/integrations', requireAuth(), requirePermission('view_marketing'), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_marketing'))) return res.status(403).json({ error: 'Access denied: view_marketing permission required' });
   const localDb = await readLocalDb();
   const integrations = Array.isArray(localDb.yandexMetrikaIntegrations) ? localDb.yandexMetrikaIntegrations : [];
@@ -10269,7 +10269,7 @@ app.get('/api/marketing/metrika/integrations', requireAuth(), async (req, res) =
   res.json({ integrations: visibleIntegrations.map(safeYandexMetrikaIntegration).filter(Boolean) });
 });
 
-app.get('/api/marketing/metrika/integrations/:id/goals', requireAuth(), async (req, res) => {
+app.get('/api/marketing/metrika/integrations/:id/goals', requireAuth(), requirePermission('view_marketing'), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_marketing'))) return res.status(403).json({ error: 'Access denied: view_marketing permission required' });
   const localDb = await readLocalDb();
   const integration = (Array.isArray((localDb as any).yandexMetrikaIntegrations) ? (localDb as any).yandexMetrikaIntegrations : []).find((item: any) => item.id === req.params.id);
@@ -10293,7 +10293,7 @@ app.get('/api/marketing/metrika/integrations/:id/goals', requireAuth(), async (r
   }
 });
 
-app.patch('/api/marketing/metrika/integrations/:id/goals', requireAuth(), async (req, res) => {
+app.patch('/api/marketing/metrika/integrations/:id/goals', requireAuth(), requirePermission('manage_yandex_metrika'), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_marketing'))) return res.status(403).json({ error: 'Access denied: view_marketing permission required' });
   const localDb = await readLocalDb();
   const integration = (Array.isArray((localDb as any).yandexMetrikaIntegrations) ? (localDb as any).yandexMetrikaIntegrations : []).find((item: any) => item.id === req.params.id);
@@ -10308,7 +10308,7 @@ app.patch('/api/marketing/metrika/integrations/:id/goals', requireAuth(), async 
   res.json({ ok: true, integration: safeYandexMetrikaIntegration(integration) });
 });
 
-app.delete('/api/marketing/metrika/integrations/:id', requireAuth(), async (req, res) => {
+app.delete('/api/marketing/metrika/integrations/:id', requireAuth(), requirePermission('manage_yandex_metrika'), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_marketing'))) return res.status(403).json({ error: 'Access denied: view_marketing permission required' });
   const localDb = await readLocalDb();
   const integration = (Array.isArray((localDb as any).yandexMetrikaIntegrations) ? (localDb as any).yandexMetrikaIntegrations : []).find((item: any) => item.id === req.params.id);
@@ -10326,7 +10326,7 @@ app.delete('/api/marketing/metrika/integrations/:id', requireAuth(), async (req,
   res.json({ ok: true, integrationId: integration.id, status: 'disconnected' });
 });
 
-app.post('/api/marketing/metrika/counters', requireAuth(), async (req, res) => {
+app.post('/api/marketing/metrika/counters', requireAuth(), requirePermission('manage_yandex_metrika'), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_marketing'))) return res.status(403).json({ error: 'Access denied: view_marketing permission required' });
   const payloadSize = Buffer.byteLength(JSON.stringify(req.body || {}), 'utf8');
   if (payloadSize > CALLTRACKING_MAX_PAYLOAD_BYTES) return res.status(413).json({ ok: false, error: 'payload_too_large' });
@@ -10342,7 +10342,7 @@ app.post('/api/marketing/metrika/counters', requireAuth(), async (req, res) => {
   }
 });
 
-app.post('/api/marketing/metrika/integrations', requireAuth(), async (req, res) => {
+app.post('/api/marketing/metrika/integrations', requireAuth(), requirePermission('manage_yandex_metrika'), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_marketing'))) return res.status(403).json({ error: 'Access denied: view_marketing permission required' });
   const payloadSize = Buffer.byteLength(JSON.stringify(req.body || {}), 'utf8');
   if (payloadSize > CALLTRACKING_MAX_PAYLOAD_BYTES) return res.status(413).json({ error: 'payload_too_large' });
@@ -10403,7 +10403,7 @@ app.post('/api/marketing/metrika/integrations', requireAuth(), async (req, res) 
   res.json({ ok: true, integration: safeYandexMetrikaIntegration(integration) });
 });
 
-app.post('/api/marketing/metrika/integrations/:id/test', requireAuth(), async (req, res) => {
+app.post('/api/marketing/metrika/integrations/:id/test', requireAuth(), requirePermission('manage_yandex_metrika'), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_marketing'))) return res.status(403).json({ error: 'Access denied: view_marketing permission required' });
   const localDb = await readLocalDb();
   const integration = (Array.isArray(localDb.yandexMetrikaIntegrations) ? localDb.yandexMetrikaIntegrations : []).find((item: any) => item.id === req.params.id);
@@ -10423,7 +10423,7 @@ app.post('/api/marketing/metrika/integrations/:id/test', requireAuth(), async (r
   }
 });
 
-app.get('/api/marketing/metrika/goals/summary', requireAuth(), async (req, res) => {
+app.get('/api/marketing/metrika/goals/summary', requireAuth(), requirePermission('view_marketing'), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_marketing'))) return res.status(403).json({ error: 'Access denied: view_marketing permission required' });
   const localDb = await readLocalDb();
   try {
@@ -10434,7 +10434,7 @@ app.get('/api/marketing/metrika/goals/summary', requireAuth(), async (req, res) 
   }
 });
 
-app.get('/api/marketing/metrika/goals/events', requireAuth(), async (req, res) => {
+app.get('/api/marketing/metrika/goals/events', requireAuth(), requirePermission('view_marketing'), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_marketing'))) return res.status(403).json({ error: 'Access denied: view_marketing permission required' });
   const localDb = await readLocalDb();
   const { startDate, endDate } = getYandexMetrikaDateRange(req.query);
@@ -10476,7 +10476,7 @@ app.get('/api/marketing/metrika/goals/events', requireAuth(), async (req, res) =
   });
 });
 
-app.get('/api/marketing/metrika/summary', requireAuth(), async (req, res) => {
+app.get('/api/marketing/metrika/summary', requireAuth(), requirePermission('view_marketing'), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_marketing'))) return res.status(403).json({ error: 'Access denied: view_marketing permission required' });
   const localDb = await readLocalDb();
   const siteId = cleanMarketingString(req.query.siteId, 120);
@@ -10517,7 +10517,7 @@ app.get('/api/marketing/metrika/summary', requireAuth(), async (req, res) => {
   }
 });
 
-app.get('/api/marketing/metrika/sources', requireAuth(), async (req, res) => {
+app.get('/api/marketing/metrika/sources', requireAuth(), requirePermission('view_marketing'), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_marketing'))) return res.status(403).json({ error: 'Access denied: view_marketing permission required' });
   const localDb = await readLocalDb();
   const siteId = cleanMarketingString(req.query.siteId, 120);
@@ -10551,7 +10551,7 @@ app.get('/api/marketing/metrika/sources', requireAuth(), async (req, res) => {
   }
 });
 
-app.get('/api/marketing/metrika/pages', requireAuth(), async (req, res) => {
+app.get('/api/marketing/metrika/pages', requireAuth(), requirePermission('view_marketing'), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_marketing'))) return res.status(403).json({ error: 'Access denied: view_marketing permission required' });
   const localDb = await readLocalDb();
   const siteId = cleanMarketingString(req.query.siteId, 120);
@@ -22563,7 +22563,7 @@ app.get('/api/ai-assistants', requireAuth(), requirePermission('view_ai_pbx_admi
   }
 });
 
-app.post('/api/ai-assistants', requireAuth(), requirePermission('view_ai_pbx_admin'), async (req, res) => {
+app.post('/api/ai-assistants', requireAuth(), requirePermission('manage_ai_pbx_admin'), async (req, res) => {
   try {
     const db = await readLocalDb();
     const newAss = {
@@ -22596,7 +22596,7 @@ app.post('/api/ai-assistants', requireAuth(), requirePermission('view_ai_pbx_adm
   }
 });
 
-app.post('/api/ai-assistants/:id/start', requireAuth(), requirePermission('view_ai_pbx_admin'), async (req, res) => {
+app.post('/api/ai-assistants/:id/start', requireAuth(), requirePermission('manage_ai_pbx_admin'), async (req, res) => {
   try {
     const db = await readLocalDb();
     db.aiAssistants = db.aiAssistants || [];
@@ -22614,7 +22614,7 @@ app.post('/api/ai-assistants/:id/start', requireAuth(), requirePermission('view_
   }
 });
 
-app.post('/api/ai-assistants/:id/stop', requireAuth(), requirePermission('view_ai_pbx_admin'), async (req, res) => {
+app.post('/api/ai-assistants/:id/stop', requireAuth(), requirePermission('manage_ai_pbx_admin'), async (req, res) => {
   try {
     const db = await readLocalDb();
     db.aiAssistants = db.aiAssistants || [];
@@ -22632,7 +22632,7 @@ app.post('/api/ai-assistants/:id/stop', requireAuth(), requirePermission('view_a
   }
 });
 
-app.post('/api/ai-assistants/:id/duplicate', requireAuth(), requirePermission('view_ai_pbx_admin'), async (req, res) => {
+app.post('/api/ai-assistants/:id/duplicate', requireAuth(), requirePermission('manage_ai_pbx_admin'), async (req, res) => {
   try {
     const db = await readLocalDb();
     db.aiAssistants = db.aiAssistants || [];
@@ -22659,7 +22659,7 @@ app.post('/api/ai-assistants/:id/duplicate', requireAuth(), requirePermission('v
   }
 });
 
-app.delete('/api/ai-assistants/:id', requireAuth(), requirePermission('view_ai_pbx_admin'), async (req, res) => {
+app.delete('/api/ai-assistants/:id', requireAuth(), requirePermission('manage_ai_pbx_admin'), async (req, res) => {
   try {
     const db = await readLocalDb();
     db.aiAssistants = (db.aiAssistants || []).filter((a: any) => a.id !== req.params.id);
@@ -22680,7 +22680,7 @@ app.get('/api/ai-assistant-routes', requireAuth(), requirePermission('view_ai_pb
   }
 });
 
-app.post('/api/ai-assistant-routes', requireAuth(), requirePermission('view_ai_pbx_admin'), async (req, res) => {
+app.post('/api/ai-assistant-routes', requireAuth(), requirePermission('manage_ai_pbx_admin'), async (req, res) => {
   try {
     const db = await readLocalDb();
     const newRoute = {
@@ -22700,7 +22700,7 @@ app.post('/api/ai-assistant-routes', requireAuth(), requirePermission('view_ai_p
   }
 });
 
-app.delete('/api/ai-assistant-routes/:id', requireAuth(), requirePermission('view_ai_pbx_admin'), async (req, res) => {
+app.delete('/api/ai-assistant-routes/:id', requireAuth(), requirePermission('manage_ai_pbx_admin'), async (req, res) => {
   try {
     const db = await readLocalDb();
     db.aiAssistantRoutes = (db.aiAssistantRoutes || []).filter((r: any) => r.id !== req.params.id);
@@ -22722,7 +22722,7 @@ app.get('/api/ai-knowledge/:assistantId', requireAuth(), requirePermission('view
   }
 });
 
-app.post('/api/ai-knowledge/:assistantId', requireAuth(), requirePermission('view_ai_pbx_admin'), async (req, res) => {
+app.post('/api/ai-knowledge/:assistantId', requireAuth(), requirePermission('manage_ai_pbx_admin'), async (req, res) => {
   try {
     const db = await readLocalDb();
     const newSource = {
@@ -22743,7 +22743,7 @@ app.post('/api/ai-knowledge/:assistantId', requireAuth(), requirePermission('vie
   }
 });
 
-app.delete('/api/ai-knowledge/:sourceId', requireAuth(), requirePermission('view_ai_pbx_admin'), async (req, res) => {
+app.delete('/api/ai-knowledge/:sourceId', requireAuth(), requirePermission('manage_ai_pbx_admin'), async (req, res) => {
   try {
     const db = await readLocalDb();
     db.aiKnowledgeSources = (db.aiKnowledgeSources || []).filter((k: any) => k.id !== req.params.sourceId);
@@ -22754,7 +22754,7 @@ app.delete('/api/ai-knowledge/:sourceId', requireAuth(), requirePermission('view
   }
 });
 
-app.post('/api/ai-knowledge/:assistantId/test-question', requireAuth(), requirePermission('view_ai_pbx_admin'), async (req, res) => {
+app.post('/api/ai-knowledge/:assistantId/test-question', requireAuth(), requirePermission('manage_ai_pbx_admin'), async (req, res) => {
   try {
     const db = await readLocalDb();
     const question = (req.body.question || '').toLowerCase();
@@ -22788,7 +22788,7 @@ app.get('/api/ai-dialogs', requireAuth(), requirePermission('view_ai_pbx_admin')
   }
 });
 
-app.post('/api/ai-dialogs/:id/comment', requireAuth(), requirePermission('view_ai_pbx_admin'), async (req, res) => {
+app.post('/api/ai-dialogs/:id/comment', requireAuth(), requirePermission('manage_ai_pbx_admin'), async (req, res) => {
   try {
     const db = await readLocalDb();
     db.aiDialogs = db.aiDialogs || [];
@@ -22806,7 +22806,7 @@ app.post('/api/ai-dialogs/:id/comment', requireAuth(), requirePermission('view_a
 });
 
 // INTELLIGENT SIMULATOR CHAT RESPONDER
-app.post('/api/ai-assistants/:id/test', requireAuth(), requirePermission('view_ai_pbx_admin'), async (req, res) => {
+app.post('/api/ai-assistants/:id/test', requireAuth(), requirePermission('manage_ai_pbx_admin'), async (req, res) => {
   try {
     return res.status(501).json({ success: false, configured: false, error: 'Тест legacy AI Assistant не подключён к реальному провайдеру. Используйте раздел AI-админ.' });
     /* legacy demo responder retained only for data compatibility; it is never returned */
@@ -22833,7 +22833,7 @@ app.post('/api/ai-assistants/:id/test', requireAuth(), requirePermission('view_a
 });
 
 // TTS PREVIEW SYNTHESIZER
-app.post('/api/ai-providers/test-tts', requireAuth(), requirePermission('view_ai_pbx_admin'), async (req, res) => {
+app.post('/api/ai-providers/test-tts', requireAuth(), requirePermission('manage_ai_pbx_admin'), async (req, res) => {
   try {
     res.status(501).json({ success: false, configured: false, error: 'TTS-провайдер не настроен; тестовый звук не подменяется демонстрационной записью' });
   } catch (error: any) {
