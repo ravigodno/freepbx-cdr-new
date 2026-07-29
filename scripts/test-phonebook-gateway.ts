@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { buildPhonebookSlug, renderGrandstreamPhonebook, renderYealinkPhonebook, type PhonebookContact } from '../server/phonebookGateway.js';
+import { createPhonebookOnlyHandler, discoverPhonebookAllowedCidrs, isPhonebookClientAllowed } from '../server/phonebookListener.js';
 
 const contacts: PhonebookContact[] = [{
   id: 'dir-1',
@@ -37,5 +38,31 @@ assert.match(buildPhonebookSlug('Телефонная книга'.repeat(10)), /
 
 const gatewaySource = fs.readFileSync(new URL('../server/phonebookGateway.ts', import.meta.url), 'utf8');
 assert.match(gatewaySource, /:slug\.xml\/phonebook\.xml/, 'legacy GXP16xx appended phonebook.xml route is required');
+
+const cidrs = discoverPhonebookAllowedCidrs({
+  eth0: [{
+    address: '192.168.87.253',
+    netmask: '255.255.255.0',
+    family: 'IPv4',
+    mac: '00:00:00:00:00:00',
+    internal: false,
+    cidr: '192.168.87.253/24'
+  }]
+}, '10.20.0.0/16');
+assert.deepEqual(cidrs, ['127.0.0.0/8', '192.168.87.0/24', '10.20.0.0/16']);
+assert.equal(isPhonebookClientAllowed('192.168.87.3', cidrs), true);
+assert.equal(isPhonebookClientAllowed('::ffff:192.168.87.200', cidrs), true);
+assert.equal(isPhonebookClientAllowed('192.168.88.3', cidrs), false);
+
+const appCalls: string[] = [];
+const handler = createPhonebookOnlyHandler(((req: any, res: any) => {
+  appCalls.push(req.url);
+  res.end('ok');
+}) as any, ['192.168.87.0/24']);
+const response = () => ({ statusCode: 200, headers: {} as Record<string, string>, setHeader(key: string, value: string) { this.headers[key] = value; }, end() {} });
+handler({ url: '/api/phonebook/profiles', socket: { remoteAddress: '192.168.87.3' } } as any, response() as any);
+handler({ url: '/phonebook/yealink/shared.xml', socket: { remoteAddress: '192.168.88.3' } } as any, response() as any);
+handler({ url: '/phonebook/yealink/shared.xml', socket: { remoteAddress: '192.168.87.3' } } as any, response() as any);
+assert.deepEqual(appCalls, ['/phonebook/yealink/shared.xml']);
 
 console.log('phonebook gateway adapter tests: OK');

@@ -52,6 +52,10 @@ const initialDraft = (): Draft => ({
 });
 
 export function PhonebookProfilesPanel({ token }: { token: string }) {
+  const phonebookOrigin = location.protocol === 'https:'
+    ? location.origin
+    : `${location.protocol}//${location.hostname}:3001`;
+  const phonebookUrl = (url: string) => `${phonebookOrigin}${url}`;
   const [items, setItems] = useState<Profile[]>([]);
   const [owners, setOwners] = useState<Owner[]>([]);
   const [draft, setDraft] = useState<Draft>(initialDraft);
@@ -192,7 +196,7 @@ export function PhonebookProfilesPanel({ token }: { token: string }) {
 
   const copyCredentials = async () => {
     if (!credentials) return;
-    const value = `${location.origin}${credentials.url}\n${credentials.username}\n${credentials.password}`;
+    const value = `${phonebookUrl(credentials.url)}\n${credentials.username}\n${credentials.password}`;
     try {
       if (navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(value);
@@ -245,7 +249,7 @@ export function PhonebookProfilesPanel({ token }: { token: string }) {
       </div>
 
       {status && <div className="mt-3 rounded-lg border border-blue-100 bg-blue-50 p-3 text-xs font-bold text-blue-800">{status}</div>}
-      {credentials && <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-950"><div className="font-black"><KeyRound className="mr-1 inline h-4 w-4" />Учётные данные показываются один раз</div><div className="mt-2 break-all font-mono">URL: {location.origin}{credentials.url}<br />Логин: {credentials.username}<br />Пароль: {credentials.password}</div><button type="button" onClick={() => void copyCredentials()} className="mt-3 inline-flex items-center gap-1 rounded-lg border border-amber-300 bg-white px-3 py-1.5 font-bold"><Copy className="h-3.5 w-3.5" />Копировать</button></div>}
+      {credentials && <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-950"><div className="font-black"><KeyRound className="mr-1 inline h-4 w-4" />Учётные данные показываются один раз</div><div className="mt-2 break-all font-mono">URL: {phonebookUrl(credentials.url)}<br />Логин: {credentials.username}<br />Пароль: {credentials.password}</div><button type="button" onClick={() => void copyCredentials()} className="mt-3 inline-flex items-center gap-1 rounded-lg border border-amber-300 bg-white px-3 py-1.5 font-bold"><Copy className="h-3.5 w-3.5" />Копировать</button></div>}
 
       <div className="mt-4 space-y-2">
         {items.length === 0 && <div className="rounded-lg border border-dashed border-slate-300 p-5 text-center text-xs text-slate-500">Профили ещё не созданы.</div>}

@@ -250,6 +250,7 @@ Current implementation:
 - shared and owner-scoped combined directories;
 - profile filters, entry limits, activation and credential rotation;
 - administrator UI and adapter tests.
+- built-in LAN-only phonebook listener with automatic connected-subnet access.
 
 Before production rollout:
 

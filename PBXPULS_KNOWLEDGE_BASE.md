@@ -43,3 +43,8 @@ FREEPBX_API_REFERENCE_FULL.md.
   are not stored.
 - Production phonebook URLs require HTTPS because SIP phones use HTTP Basic
   authentication.
+- For controlled LAN deployments PBXPuls provides a phonebook-only listener on
+  port `3001`. It automatically allows directly connected IPv4 subnets and never
+  exposes the UI or `/api`.
+- If port `3001` is already occupied by an existing Apache/Nginx phonebook proxy,
+  PBXPuls keeps running and leaves that listener in place.

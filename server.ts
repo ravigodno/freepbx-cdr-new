@@ -26,6 +26,7 @@ import { createDirectoryContactId, createUniqueDirectoryContactId } from './serv
 import { parseDirectoryImportRows, registerDirectoryImportJobRoutes } from './server/directoryImportJobs.js';
 import { registerDirectoryImportSourceRoutes } from './server/directoryImportSources.js';
 import { registerPhonebookGatewayRoutes } from './server/phonebookGateway.js';
+import { startPhonebookListener, stopPhonebookListener } from './server/phonebookListener.js';
 import http from 'http';
 import https from 'https';
 import { CallEntry, MissedCallStatus, AppSettings, DashboardStats, UserRole, WebUser } from './src/types.js';
@@ -22988,10 +22989,12 @@ async function startServer() {
     console.log(`Environment context: ${NODE_ENV}`);
     console.log(`Simulated Asterisk Sandbox status: DISABLED`);
   });
+  phonebookListener = startPhonebookListener(app);
 }
 
 let aiPlatformShutdownStarted=false;
-for(const signal of ['SIGTERM','SIGINT'] as const)process.once(signal,()=>{if(aiPlatformShutdownStarted)return;aiPlatformShutdownStarted=true;balanceRuntime.stop();void aiPlatformRuntime.stop().finally(()=>process.exit(0))});
+let phonebookListener: import('node:http').Server | null = null;
+for(const signal of ['SIGTERM','SIGINT'] as const)process.once(signal,()=>{if(aiPlatformShutdownStarted)return;aiPlatformShutdownStarted=true;balanceRuntime.stop();void Promise.all([aiPlatformRuntime.stop(),stopPhonebookListener(phonebookListener)]).finally(()=>process.exit(0))});
 
 startServer().catch((err) => {
   console.error('Fatal initialization error:', err);

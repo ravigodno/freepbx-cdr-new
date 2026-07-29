@@ -451,6 +451,14 @@ Yealink phones.
 - profile administration requires `manage_phonebook_gateway`;
 - device URLs must be exposed through HTTPS.
 
+PBXPuls also starts an isolated HTTP listener on port `3001` for controlled LAN
+deployments. It exposes only `/phonebook/`, automatically permits loopback and
+directly connected IPv4 subnets, and rejects all UI and API paths. The listener
+can be configured with `PBXPULS_PHONEBOOK_PORT`, `PBXPULS_PHONEBOOK_HOST` and
+`PBXPULS_PHONEBOOK_ALLOWED_CIDRS`, or disabled with
+`PBXPULS_PHONEBOOK_LISTENER_DISABLED=true`. Public deployments must still use an
+HTTPS reverse proxy.
+
 Profile settings are stored in `phonebook_profiles`. FreePBX REST is not involved:
 the gateway reads the existing PBXPuls directory through the common SQL directory
 query layer.
