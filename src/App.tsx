@@ -92,6 +92,7 @@ import QualityTab from './modules/monitoring/tabs/monitoring/QualityTab';
 import DevicesMapTab from './modules/monitoring/tabs/monitoring/DevicesMapTab';
 import HealthReportTab from './modules/monitoring/tabs/monitoring/HealthReportTab';
 import { DirectoryStatusIcon } from './modules/directory/components/DirectoryStatusIcon';
+import { DirectoryTextTooltip } from './modules/directory/components/DirectoryTextTooltip';
 import { fetchDirectory, fetchDirectoryAll, fetchDirectoryContact, saveDirectoryEntry, deleteDirectoryEntry, toggleDirectoryBlacklist, toggleDirectorySpam, previewDirectoryImport, previewDirectoryImportOwnership, previewDirectoryBulkDelete, applyDirectoryBulkDelete, createDirectoryImportJob, prepareDirectoryImportSource, deleteDirectoryImportSource, getDirectoryImportJob, cancelDirectoryImportJob, resumeDirectoryImportJob, previewDirectoryImportRollback, getDirectoryImportJobErrors, fetchDirectoryColumnSettings, saveMyDirectoryColumnSettings, resetMyDirectoryColumnSettings, saveGlobalDirectoryColumnSettings, resetGlobalDirectoryColumnSettings, fetchDirectoryCustomFields, createDirectoryCustomField, setDirectoryFavorite, type DirectoryImportPreparedSource, type DirectoryCustomFieldDefinition } from './modules/directory/services/directoryApi';
 import { calculateDirectoryImportDigest, getDirectoryImportDigestCapability, DIRECTORY_IMPORT_MAX_BYTES, isSupportedDirectoryImportFile, summarizeDirectoryImportSource, type DirectoryImportDigestStatus, type DirectoryImportSourceKind, type DirectoryImportSourceSummary } from './modules/directory/utils/directoryImportSource';
 import { applyDirectoryOwnershipPreview, buildDirectoryEffectiveRows, directoryImportPipelineSteps, getDirectoryImportActiveStep, getDirectoryImportDisabledReason, normalizeDirectoryEntriesForOwnership } from './modules/directory/utils/directoryImportPipeline';
@@ -237,6 +238,7 @@ interface DirectoryColumnConfig {
   required?: boolean;
   system?: boolean;
   className?: string;
+  widthClassName?: string;
 }
 
 const DIRECTORY_PAGE_SIZE = 50;
@@ -249,9 +251,9 @@ const defaultDirectoryVisibleColumns: DirectoryVisibleColumnKey[] = ['type', 'fu
 const optionalDirectoryColumns: DirectoryColumnConfig[] = [
   { key: 'visibility', label: 'Видимость' },
   { key: 'isSpam', label: 'Спам' },
-  { key: 'organization', label: 'Организация', className: 'w-[230px] min-w-[190px] max-w-[230px]' },
-  { key: 'position', label: 'Должность' },
-  { key: 'phone2', label: 'Доп. телефон' },
+  { key: 'organization', label: 'Организация', widthClassName: 'w-px' },
+  { key: 'position', label: 'Должность', widthClassName: 'w-full' },
+  { key: 'phone2', label: 'Доп. телефон', widthClassName: 'w-[144px]' },
   { key: 'email', label: 'Email', className: 'min-w-[160px] max-w-[220px]' },
   { key: 'website', label: 'Сайт', className: 'min-w-[150px] max-w-[200px]' },
   { key: 'inn', label: 'ИНН' },
@@ -267,12 +269,12 @@ const optionalDirectoryColumns: DirectoryColumnConfig[] = [
   { key: 'responsibleUserId', label: 'Ответственный сотрудник' }
 ];
 const requiredDirectoryColumnConfigs: DirectoryColumnConfig[] = [
-  { key: 'type', label: 'Тип', required: true, className: 'w-[74px]' },
-  { key: 'fullName', label: 'ФИО', required: true, className: 'min-w-[150px]' },
-  { key: 'phone', label: 'Телефон', required: true, className: 'min-w-[160px]' }
+  { key: 'type', label: 'Тип', required: true, widthClassName: 'w-[48px]' },
+  { key: 'fullName', label: 'ФИО', required: true, widthClassName: 'w-[200px] xl:w-[20%] 2xl:w-[22%]' },
+  { key: 'phone', label: 'Телефон', required: true, widthClassName: 'w-[144px]' }
 ];
 const systemDirectoryColumnConfigs: DirectoryColumnConfig[] = [
-  { key: 'actions', label: 'Действия', system: true, className: 'min-w-[132px] text-right' }
+  { key: 'actions', label: 'Действия', system: true, className: 'text-right', widthClassName: 'w-[132px]' }
 ];
 const directoryColumnConfigs: DirectoryColumnConfig[] = [
   ...requiredDirectoryColumnConfigs,
@@ -4993,8 +4995,23 @@ export default function App() {
   const renderDirectoryTextCell = (value: unknown, maxClass = 'max-w-[220px]') => {
     const text = formatDirectoryCellText(value);
     if (text === '—') return renderDirectoryDash();
-    return <div className={`truncate break-words ${maxClass}`} title={text}>{text}</div>;
+    return <DirectoryTextTooltip text={text} className={maxClass} />;
   };
+
+  const renderDirectoryPhone = (phone: string, entry: DirectoryEntry) => (
+    <div className="flex min-w-0 items-center gap-1 whitespace-nowrap font-mono font-semibold tabular-nums text-slate-800">
+      <span className="min-w-0 select-all truncate">{phone}</span>
+      <button
+        type="button"
+        onClick={() => triggerClickToCall(phone, entry.name)}
+        className="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md border border-emerald-150 bg-emerald-50 text-emerald-700 shadow-xs transition-colors hover:bg-emerald-100 active:bg-emerald-200"
+        title={`Позвонить на ${phone} через SIP/AMI`}
+        aria-label={`Позвонить на ${phone}`}
+      >
+        <PhoneCall className="h-3 w-3" />
+      </button>
+    </div>
+  );
 
   const renderDirectoryCell = (entry: DirectoryEntry, columnKey: DirectoryColumnKey) => {
     const phones = getEntryPhones(entry);
@@ -5027,8 +5044,10 @@ export default function App() {
         );
       case 'fullName':
         return (
-          <div>
-            <span className="text-[15px] font-medium text-slate-900">{entry.name || renderDirectoryDash()}</span>
+          <div className="min-w-0">
+            {entry.name
+              ? <DirectoryTextTooltip text={entry.name} className="text-sm font-semibold text-slate-900" />
+              : renderDirectoryDash()}
             {dirSearchQuery.trim() && entry.matchedFields?.length ? (
               <div className="mt-1 flex max-w-[260px] flex-wrap gap-1" aria-label="Поля совпадения">
                 {entry.matchedFields.map(field => (
@@ -5047,32 +5066,12 @@ export default function App() {
           </div>
         );
       case 'phone':
-        return primaryPhone ? (
-          <div className="flex items-center gap-2 font-mono font-bold text-blue-800 dark:text-rose-200">
-            <span className="select-all">{primaryPhone}</span>
-            <button
-              onClick={() => triggerClickToCall(primaryPhone, entry.name)}
-              className="flex items-center rounded border border-emerald-150 bg-emerald-50 p-1 text-emerald-700 shadow-xs transition-all hover:scale-105 hover:bg-emerald-100 active:scale-95"
-              title={`Позвонить на ${primaryPhone} через SIP/AMI`}
-            >
-              <PhoneCall className="h-3 w-3" />
-            </button>
-          </div>
-        ) : renderDirectoryDash();
+        return primaryPhone ? renderDirectoryPhone(primaryPhone, entry) : renderDirectoryDash();
       case 'phone2':
         return extraPhones.length ? (
-          <div className="flex flex-col gap-1 font-mono font-bold text-blue-800 dark:text-rose-200">
+          <div className="flex min-w-0 flex-col gap-1">
             {extraPhones.map(phone => (
-              <div key={phone} className="flex items-center gap-2">
-                <span className="select-all">{phone}</span>
-                <button
-                  onClick={() => triggerClickToCall(phone, entry.name)}
-                  className="flex items-center rounded border border-emerald-150 bg-emerald-50 p-1 text-emerald-700 shadow-xs transition-all hover:scale-105 hover:bg-emerald-100 active:scale-95"
-                  title={`Позвонить на ${phone} через SIP/AMI`}
-                >
-                  <PhoneCall className="h-3 w-3" />
-                </button>
-              </div>
+              <React.Fragment key={phone}>{renderDirectoryPhone(phone, entry)}</React.Fragment>
             ))}
           </div>
         ) : renderDirectoryDash();
@@ -5089,9 +5088,9 @@ export default function App() {
           </span>
         );
       case 'organization':
-        return renderDirectoryTextCell(entry.company, 'max-w-[210px]');
+        return renderDirectoryTextCell(entry.company, 'w-fit min-w-[96px] max-w-[clamp(160px,18vw,280px)] text-slate-600');
       case 'position':
-        return renderDirectoryTextCell(entry.position);
+        return renderDirectoryTextCell(entry.position, 'w-full text-slate-600');
       case 'email':
         return entry.email ? (
           <a href={`mailto:${entry.email}`} className="block truncate text-blue-600 hover:text-blue-700 hover:underline" title={entry.email}>{entry.email}</a>
@@ -5130,11 +5129,11 @@ export default function App() {
         return renderDirectoryTextCell(entry.responsibleUserLabel || entry.responsibleUserId, 'max-w-[220px]');
       case 'actions':
         return (
-          <div className="flex items-center justify-end gap-1.5">
+          <div className="flex min-w-[124px] items-center justify-end gap-1">
             {(entry as any).canEdit === true && (
               <button
                 onClick={() => handleToggleSpam(entry, !entry.isSpam)}
-                className={`rounded-lg border p-1.5 transition-all cursor-pointer ${entry.isSpam ? 'text-amber-700 bg-amber-50 border-amber-200' : 'text-slate-500 hover:text-amber-700 hover:bg-amber-50 border-transparent hover:border-amber-200'}`}
+                className={`flex h-7 w-7 items-center justify-center rounded-lg border transition-all cursor-pointer ${entry.isSpam ? 'text-amber-700 bg-amber-50 border-amber-200' : 'text-slate-500 hover:text-amber-700 hover:bg-amber-50 border-transparent hover:border-amber-200'}`}
                 title={entry.isSpam ? 'Убрать из спама' : 'Пометить как спам'}
               >
                 <Ban className="h-3.5 w-3.5" />
@@ -5143,7 +5142,7 @@ export default function App() {
             {hasPermission('manage_blacklist') && (
               <button
                 onClick={() => handleToggleBlacklist(entry, !entry.isBlacklisted, true)}
-                className={`rounded-lg border p-1.5 transition-all cursor-pointer ${entry.isBlacklisted ? 'text-blue-700 bg-blue-50 border-blue-200' : 'text-slate-500 hover:text-blue-700 hover:bg-blue-50 border-transparent hover:border-blue-200'}`}
+                className={`flex h-7 w-7 items-center justify-center rounded-lg border transition-all cursor-pointer ${entry.isBlacklisted ? 'text-blue-700 bg-blue-50 border-blue-200' : 'text-slate-500 hover:text-blue-700 hover:bg-blue-50 border-transparent hover:border-blue-200'}`}
                 title={entry.isBlacklisted ? 'Убрать из черного списка' : 'Добавить в черный список АТС'}
               >
                 <AlertCircle className="h-3.5 w-3.5" />
@@ -5152,7 +5151,7 @@ export default function App() {
             {(entry as any).canEdit === true && (
               <button
                 onClick={() => openEditDirEntry(entry)}
-                className="rounded-lg border border-transparent p-1.5 text-slate-500 transition-all hover:border-slate-200 hover:bg-slate-100 hover:text-blue-700 cursor-pointer"
+                className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg border border-transparent text-slate-500 transition-all hover:border-slate-200 hover:bg-slate-100 hover:text-blue-700"
                 title="Редактировать контакт"
               >
                 <Edit2 className="h-3.5 w-3.5" />
@@ -5161,7 +5160,7 @@ export default function App() {
             {(entry as any).canEdit === true && (
               <button
                 onClick={() => handleDeleteDirEntry(entry.id)}
-                className="rounded-lg border border-transparent p-1.5 text-slate-500 transition-all hover:border-slate-200 hover:bg-slate-100 hover:text-blue-700 cursor-pointer"
+                className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg border border-transparent text-slate-500 transition-all hover:border-slate-200 hover:bg-slate-100 hover:text-blue-700"
                 title="Удалить контакт"
               >
                 <Trash2 className="h-3.5 w-3.5" />
@@ -7630,15 +7629,29 @@ export default function App() {
 
         {/* List Table of directory entries */}
         <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-          <div className="w-full overflow-x-auto">
-            <table className="w-full min-w-[980px] border-collapse text-left text-xs text-slate-500">
+          <div className="w-full max-w-full overflow-x-auto">
+            <table className="w-full min-w-[1120px] table-auto border-collapse text-left text-xs text-slate-500">
+              <colgroup>
+                <col className="w-8" />
+                {effectiveDirectoryColumnConfigs.map(column => (
+                  <col key={column.key} className={column.widthClassName || 'w-[160px]'} />
+                ))}
+              </colgroup>
               <thead className="border-b border-slate-200 bg-slate-50 text-[10px] font-bold uppercase tracking-wider text-slate-700">
                 <tr>
-                  <th scope="col" className="w-10 py-2 px-3">
+                  <th scope="col" className="px-1 py-2 text-center">
                     <Star className="h-3.5 w-3.5 text-slate-400" aria-label="Избранное" />
                   </th>
                   {effectiveDirectoryColumnConfigs.map(column => (
-                    <th key={column.key} scope="col" className={`py-2 px-3 ${column.className || ''}`}>
+                    <th key={column.key} scope="col" className={`${
+                      column.key === 'actions'
+                        ? 'px-1'
+                        : column.key === 'organization'
+                          ? 'px-2'
+                          : column.key === 'position'
+                            ? 'pl-2 pr-2.5'
+                            : 'px-2.5'
+                    } py-2 ${column.className || ''}`}>
                       {column.label}
                     </th>
                   ))}
@@ -7684,12 +7697,12 @@ export default function App() {
                   }
 
                   return list.map((entry) => (
-                    <tr key={entry.id} className="transition-colors hover:bg-slate-50/80">
-                      <td className="w-10 py-3.5 px-3 align-top">
+                    <tr key={entry.id} className="h-11 transition-colors hover:bg-slate-50/80">
+                      <td className="px-0.5 py-2 align-middle text-center">
                         <button
                           type="button"
                           onClick={() => handleToggleDirectoryFavorite(entry)}
-                          className={`rounded-md p-0.5 transition-colors ${entry.isFavorite ? 'text-amber-500 hover:text-amber-600' : 'text-slate-300 hover:text-amber-500'}`}
+                          className={`inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors ${entry.isFavorite ? 'text-amber-500 hover:text-amber-600' : 'text-slate-300 hover:text-amber-500'}`}
                           title={entry.isFavorite ? 'Убрать из избранного' : 'Добавить в избранное'}
                           aria-label={entry.isFavorite ? 'Убрать контакт из избранного' : 'Добавить контакт в избранное'}
                         >
@@ -7697,7 +7710,15 @@ export default function App() {
                         </button>
                       </td>
                       {effectiveDirectoryColumnConfigs.map(column => (
-                        <td key={column.key} className={`py-3.5 px-3 align-top ${column.key === 'actions' ? 'text-right' : 'text-slate-700'}`}>
+                        <td key={column.key} className={`${
+                          column.key === 'actions'
+                            ? 'px-1 text-right'
+                            : column.key === 'organization'
+                              ? 'w-px whitespace-nowrap px-2 text-slate-700'
+                              : column.key === 'position'
+                                ? 'min-w-[240px] pl-2 pr-2.5 text-slate-700'
+                                : 'px-2.5 text-slate-700'
+                        } py-2 align-middle`}>
                           {renderDirectoryCell(entry, column.key)}
                         </td>
                       ))}
