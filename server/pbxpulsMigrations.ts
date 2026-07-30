@@ -1719,6 +1719,72 @@ const MIGRATIONS: Migration[] = [
        SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key='manage_phonebook_gateway'
        WHERE r.role_key IN('su','admin')`
     ]
+  },
+  {
+    key:'20260729_070_mts_auto_secretary_source',
+    description:'Add disabled read-only MTS Auto Secretary call source',
+    statements:[
+      `INSERT IGNORE INTO balance_sources
+       (id,provider,display_name,enabled,config_json,sync_interval_minutes,status)
+       VALUES('mts_auto_secretary','mts_auto_secretary','МТС Автосекретарь',0,
+      '{"managedBy":"pbxpuls","enabled":false,"phone":"","timeoutMs":15000}',60,'disabled')`
+    ]
+  },
+  {
+    key:'20260730_071_mts_auto_secretary_branch_profiles',
+    description:'Add branch profiles for MTS Auto Secretary',
+    statements:[
+      `CREATE TABLE IF NOT EXISTS mts_auto_secretary_profiles(
+        profile_id VARCHAR(64) PRIMARY KEY,
+        branch_name VARCHAR(120) NOT NULL,
+        pbx_name VARCHAR(120) NULL,
+        phone VARCHAR(10) NOT NULL,
+        api_key_encrypted LONGTEXT NULL,
+        active TINYINT(1) NOT NULL DEFAULT 1,
+        sort_order INT NOT NULL DEFAULT 100,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NULL,
+        UNIQUE KEY uniq_mts_auto_secretary_profile_phone(phone),
+        INDEX idx_mts_auto_secretary_profile_active(active,sort_order)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `INSERT IGNORE INTO mts_auto_secretary_profiles
+       (profile_id,branch_name,pbx_name,phone,api_key_encrypted,active,sort_order,updated_at)
+       SELECT 'simferopol','Симферополь','vetoberegpbx',
+       SUBSTRING_INDEX(SUBSTRING_INDEX(s.config_json,'"phone":"',-1),'"',1),c.consumer_key_encrypted,
+       IF(s.enabled=1,1,0),10,NOW()
+       FROM balance_sources s
+       LEFT JOIN balance_source_credentials c ON c.source_id=s.id
+       WHERE s.id='mts_auto_secretary'
+      AND SUBSTRING_INDEX(SUBSTRING_INDEX(s.config_json,'"phone":"',-1),'"',1) REGEXP '^[0-9]{10}$'`
+    ]
+  },
+  {
+    key:'20260730_072_mts_auto_secretary_report_cache',
+    description:'Persist MTS Auto Secretary reports for hourly sync and 365 day retention',
+    statements:[
+      `CREATE TABLE IF NOT EXISTS mts_auto_secretary_reports(
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        report_from DATE NOT NULL,
+        report_to DATE NOT NULL,
+        payload_json LONGTEXT NOT NULL,
+        calls_count INT NOT NULL DEFAULT 0,
+        synced_at DATETIME NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NULL,
+        UNIQUE KEY uniq_mts_auto_secretary_report_range(report_from,report_to),
+        INDEX idx_mts_auto_secretary_report_retention(report_to),
+        INDEX idx_mts_auto_secretary_report_synced(synced_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+    ]
+  },
+  {
+    key:'20260730_073_mts_package_counter_identity',
+    description:'Preserve MTS package counter identity for exact per-package usage',
+    statements:[
+      `ALTER TABLE balance_usage_events
+        ADD COLUMN package_counter_id VARCHAR(100) NULL AFTER package_counter_used,
+        ADD KEY idx_balance_usage_package_counter(source_id,package_counter_id,occurred_at)`
+    ]
   }
 ];
 

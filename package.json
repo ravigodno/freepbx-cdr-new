@@ -1,7 +1,7 @@
 {
   "name": "freepbx-cdr-new",
   "private": true,
-  "version": "5.6.48",
+  "version": "5.6.49",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
@@ -23,6 +23,10 @@
     "test:quality-permission": "tsx scripts/test-quality-permission.ts",
     "test:quality": "tsx scripts/test-quality.ts",
     "test:balance-provider-foundation": "tsx scripts/test-balance-provider-foundation.ts",
+    "test:mts-auto-secretary": "tsx scripts/test-mts-auto-secretary.ts",
+    "test:mts-packages": "tsx scripts/test-mts-packages.ts",
+    "sync:mts-package-counters": "tsx scripts/sync-mts-package-counters.ts",
+    "backfill:mts-package-counters": "tsx scripts/backfill-mts-package-counters.ts",
     "test:call-intelligence": "tsx scripts/test-call-intelligence.ts",
     "test:call-diagnosis": "tsx scripts/test-call-diagnosis.ts",
     "test:call-insights": "tsx scripts/test-call-insights.ts",

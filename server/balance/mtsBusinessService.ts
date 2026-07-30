@@ -10,6 +10,7 @@ import {
   type MtsBusinessProviderConfig
 } from './providers/mtsBusiness.js';
 import { MtsBusinessSettingsStore, type MtsBusinessManagedSettings } from './mtsBusinessSettings.js';
+import { MtsPackagesService } from './mtsPackagesService.js';
 
 export const MTS_BUSINESS_SOURCE_ID = 'mts_business';
 
@@ -83,6 +84,14 @@ function sqlDate(value: string | null): string | null {
   return date.toISOString().slice(0, 19).replace('T', ' ');
 }
 
+function utcIsoFromSql(value: unknown): string | null {
+  const text = String(value || '').trim();
+  if (!text) return null;
+  const iso = text.includes('T') ? text : text.replace(' ', 'T');
+  const parsed = new Date(/[zZ]|[+-]\d{2}:\d{2}$/.test(iso) ? iso : `${iso}Z`);
+  return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : null;
+}
+
 export interface MtsBusinessDiagnosticResult {
   enabled: boolean;
   configured: boolean;
@@ -95,6 +104,28 @@ export interface MtsBusinessDiagnosticResult {
   safeMessage: string;
 }
 
+export interface MtsBusinessOverview {
+  provider: 'mts_business';
+  displayName: string;
+  balance: number | null;
+  currency: 'RUB' | null;
+  creditLimit: number | null;
+  accountNumber: string | null;
+  purchasedPackageMinutes: number | null;
+  remainingPackageMinutes: number | null;
+  remainingPackagePercent: number | null;
+  packageCalculationStatus: 'direct' | 'calculated' | 'unavailable';
+  packageLabels: string[];
+  linkedTrunks: string[];
+  measuredAt: string | null;
+  lastSuccessAt: string | null;
+  status: {
+    code: 'connected' | 'authorization_required' | 'api_error' | 'stale' | 'updating' | 'offline';
+    label: string;
+    reason: string | null;
+  };
+}
+
 export class MtsBusinessBalanceService {
   private provider: MtsBusinessProvider | null = null;
   private configFingerprint = '';
@@ -103,6 +134,7 @@ export class MtsBusinessBalanceService {
   private managedConfig: ReturnType<typeof readMtsBusinessConfig> | null = null;
   private settingsSource: 'pbxpuls' | 'environment' = 'environment';
   private readonly settingsStore: MtsBusinessSettingsStore;
+  private packageDiagnosticWritten = false;
 
   constructor(private readonly hashSecret: string) {
     this.settingsStore = new MtsBusinessSettingsStore(hashSecret);
@@ -334,6 +366,68 @@ export class MtsBusinessBalanceService {
       lastSuccessAt: row.last_success_at || null,
       rawHash: row.raw_hash || null
     }];
+  }
+
+  async getOverview(): Promise<MtsBusinessOverview> {
+    await this.refreshSettings();
+    const config = this.managedConfig!;
+    const snapshots = await queryPBXPulsDb(
+      `SELECT p.balance_amount,p.currency,p.credit_limit,p.measured_at,
+              s.status,s.safe_error_code,s.last_success_at
+       FROM balance_sources s
+       LEFT JOIN balance_snapshots p ON p.id=(
+         SELECT latest.id FROM balance_snapshots latest
+         WHERE latest.source_id=s.id ORDER BY latest.measured_at DESC,latest.id DESC LIMIT 1
+       )
+       WHERE s.id=? LIMIT 1`,
+      [MTS_BUSINESS_SOURCE_ID]
+    );
+    const packageView = await new MtsPackagesService(() => this.getUsageProvider()).get(MTS_BUSINESS_SOURCE_ID);
+    const purchasedPackageMinutes = packageView.summary.totalUnits;
+    const remainingPackageMinutes = packageView.summary.remainingUnits;
+    if (purchasedPackageMinutes !== null && !this.packageDiagnosticWritten) {
+      this.packageDiagnosticWritten = true;
+      console.info('[BALANCE_MTS_BUSINESS] package remainder unavailable: no identified MTS service counter');
+    }
+    const row = snapshots[0] || {};
+    const safeCode = String(row.safe_error_code || '');
+    const lastSuccessAt = utcIsoFromSql(row.last_success_at);
+    const lastSuccessMs = lastSuccessAt ? Date.parse(lastSuccessAt) : NaN;
+    const staleAfterMs = Math.max(config.syncIntervalMinutes * 2, 120) * 60_000;
+    const stale = Number.isFinite(lastSuccessMs) && Date.now() - lastSuccessMs > staleAfterMs;
+    let status: MtsBusinessOverview['status'];
+    if (this.syncInProgress) status = { code: 'updating', label: 'Обновление', reason: null };
+    else if (!config.enabled) status = { code: 'offline', label: 'Нет связи', reason: 'Источник отключён' };
+    else if (!config.consumerKey || !config.consumerSecret) {
+      status = { code: 'authorization_required', label: 'Требуется авторизация', reason: 'Не настроены учётные данные API' };
+    } else if (row.status === 'error') {
+      const authError = ['authentication_failed', 'authentication_expired', 'credentials_missing', 'token_missing'].includes(safeCode);
+      status = {
+        code: authError ? 'authorization_required' : safeCode === 'network_error' ? 'offline' : 'api_error',
+        label: authError ? 'Требуется авторизация' : safeCode === 'network_error' ? 'Нет связи' : 'Ошибка API',
+        reason: safeMtsBusinessError(new MtsBusinessProviderError(safeCode || 'provider_error')).safeMessage
+      };
+    } else if (stale || !row.last_success_at) {
+      status = { code: 'stale', label: 'Данные устарели', reason: 'Последнее успешное обновление выполнено давно' };
+    } else status = { code: 'connected', label: 'Подключено', reason: null };
+    return {
+      provider: 'mts_business',
+      displayName: 'МТС Бизнес',
+      balance: row.balance_amount == null ? null : Number(row.balance_amount),
+      currency: row.currency === 'RUB' ? 'RUB' : null,
+      creditLimit: row.credit_limit == null ? null : Number(row.credit_limit),
+      accountNumber: String(config.accountNo || '').trim() || null,
+      purchasedPackageMinutes,
+      remainingPackageMinutes,
+      remainingPackagePercent: purchasedPackageMinutes && remainingPackageMinutes !== null
+        ? remainingPackageMinutes / purchasedPackageMinutes * 100 : null,
+      packageCalculationStatus: remainingPackageMinutes === null ? 'unavailable' : 'direct',
+      packageLabels: packageView.activePackages.map(item => item.packageName),
+      linkedTrunks: [],
+      measuredAt: utcIsoFromSql(row.measured_at),
+      lastSuccessAt,
+      status
+    };
   }
 
   start(): void {

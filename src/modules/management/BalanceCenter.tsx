@@ -15,6 +15,8 @@ import {
 import { getServerNow } from '../../utils/serverClock';
 import MtsUsageDetails from './MtsUsageDetails';
 import MtsBusinessSettingsForm from './MtsBusinessSettingsForm';
+import MtsAutoSecretaryPanel, { type MtsAutoSecretaryPanelTab } from './MtsAutoSecretaryPanel';
+import MtsBalanceWorkspace from './MtsBalanceWorkspace';
 
 interface BalanceCenterProps {
   session: any;
@@ -213,10 +215,12 @@ const HISTORIC_DATA = {
 
 export default function BalanceCenter({ session, hasPermission }: BalanceCenterProps) {
   // Tabs
-  type TabType = 'overview' | 'operators' | 'usage' | 'history' | 'spend' | 'extensions' | 'anomalies' | 'expensive' | 'reconciliation' | 'tariffs' | 'settings';
+  type TabType = MtsAutoSecretaryPanelTab;
   const [activeTab, setActiveTab] = useState<TabType>(() => {
     const saved = localStorage.getItem('pbxpuls_balance_tab');
-    return saved === 'usage' || saved === 'settings' ? saved : 'operators';
+    return ['overview', 'calls', 'charges', 'packages', 'branches', 'settings'].includes(saved || '')
+      ? saved as TabType
+      : 'overview';
   });
 
   // Tariff Analyzer states
@@ -730,6 +734,18 @@ export default function BalanceCenter({ session, hasPermission }: BalanceCenterP
     );
   }
 
+  // The production Balance workspace uses only normalized API/database data.
+  // Keep the legacy implementation below intact until its unrelated tools are
+  // migrated, but do not expose its demonstration operators and forecasts.
+  return (
+    <MtsBalanceWorkspace
+      token={session?.token || ''}
+      canManage={canManageSources}
+      canViewAnalytics={canViewAnalytics}
+    />
+  );
+
+  /* c8 ignore start */
   return (
     <div className="space-y-6" id="balance-center-container">
       {/* HEADER SECTION */}
@@ -802,67 +818,6 @@ export default function BalanceCenter({ session, hasPermission }: BalanceCenterP
       </div>
 
       {notificationBlock()}
-
-      {/* 30-SECOND FINANCIAL LOOK SUMMARY (UX REQUIREMENT) */}
-      <div className="bg-gradient-to-br from-slate-900 via-[#1e293b] to-slate-950 text-white p-6 rounded-3xl border border-slate-800 shadow-xl relative overflow-hidden">
-        <div className="absolute -right-20 -top-20 w-64 h-64 bg-blue-500/10 rounded-full blur-3xl"></div>
-        <div className="absolute -left-20 -bottom-20 w-64 h-64 bg-emerald-500/10 rounded-full blur-3xl"></div>
-        
-        <div className="flex items-center justify-between mb-4 pb-3 border-b border-white/10 relative z-10">
-          <div className="flex items-center gap-2">
-            <Sparkles className="h-5 w-5 text-yellow-400 animate-pulse" />
-            <h2 className="text-sm font-extrabold tracking-wide uppercase text-slate-300">Состояние на 30 секунд: Оценка расходов и Хватит ли денег?</h2>
-          </div>
-          <span className="text-[10px] bg-white/10 px-2 py-0.5 rounded-full text-slate-300 font-mono">Система: PBX-Billing-v4</span>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-4 relative z-10">
-          {/* Status 1 */}
-          <div className="p-3 bg-white/5 rounded-2xl border border-white/5">
-            <div className="text-xs text-slate-400">Хватит ли денег?</div>
-            <div className="text-lg font-black mt-1 flex items-center gap-1.5 text-emerald-400">
-              <CheckCircle className="h-5 w-5" /> Да, в норме
-            </div>
-            <div className="text-[10px] text-slate-400 mt-1">Опасных просадок балансов нет</div>
-          </div>
-
-          {/* Status 2 */}
-          <div className={`p-3 bg-white/5 rounded-2xl border ${threatDaysColor.border}`}>
-            <div className="text-xs text-slate-400">Когда закончатся?</div>
-            <div className="text-lg font-black mt-1">
-              ~ {daysUntilDry} дн.
-            </div>
-            <div className="text-[10px] text-slate-400 mt-0.5">Ориентировочно: <span className="font-mono text-emerald-400">17.08.2026</span></div>
-          </div>
-
-          {/* Status 3 */}
-          <div className="p-3 bg-white/5 rounded-2xl border border-white/5">
-            <div className="text-xs text-slate-400">Лидер расходов</div>
-            <div className="text-lg font-black mt-1 text-sky-400 truncate">
-              MTT_OUT
-            </div>
-            <div className="text-[10px] text-slate-400 mt-1">Расход: 2,320 ₽ (вчера)</div>
-          </div>
-
-          {/* Status 4 */}
-          <div className="p-3 bg-white/5 rounded-2xl border border-white/5">
-            <div className="text-xs text-slate-400 font-bold flex items-center gap-1">Активные Аномалии</div>
-            <div className={`text-lg font-black mt-1 flex items-center gap-1.5 ${activeAlertsCount > 0 ? 'text-rose-400' : 'text-slate-400'}`}>
-              <ShieldAlert className="h-5 w-5" /> {activeAlertsCount} шт.
-            </div>
-            <div className="text-[10px] text-slate-400 mt-1">Рекомендуется проверить лог</div>
-          </div>
-
-          {/* Status 5 */}
-          <div className="p-3 bg-white/5 rounded-2xl border border-white/5">
-            <div className="text-xs text-slate-400">Требуют внимания</div>
-            <div className="text-lg font-black mt-1 text-yellow-400">
-              EXT 200
-            </div>
-            <div className="text-[10px] text-slate-400 mt-1">Международные звонки</div>
-          </div>
-        </div>
-      </div>
 
       {/* METRICS DASHBOARD CARDS */}
       <div className="grid grid-cols-2 lg:grid-cols-7 gap-4">
@@ -966,9 +921,12 @@ export default function BalanceCenter({ session, hasPermission }: BalanceCenterP
       {/* CORE NAVIGATION TABS */}
       <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-100 dark:bg-[#1e293b] rounded-2xl w-fit">
         {[
-          { id: 'operators', label: 'Балансы операторов', icon: Building2 },
-          { id: 'usage', label: 'Детализация', icon: FileText },
-          { id: 'settings', label: 'Лимиты и Каналы', icon: Settings }
+          { id: 'overview', label: 'Обзор', icon: Building2 },
+          { id: 'calls', label: 'Звонки', icon: PhoneCall },
+          { id: 'charges', label: 'МАВ и маркировка', icon: FileText },
+          { id: 'packages', label: 'Пакеты', icon: Layers },
+          { id: 'branches', label: 'Филиалы', icon: Globe },
+          { id: 'settings', label: 'Настройки', icon: Settings }
         ].map(tab => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.id;
@@ -996,9 +954,27 @@ export default function BalanceCenter({ session, hasPermission }: BalanceCenterP
 
       {/* RENDER ACTIVE TAB */}
       <div className="bg-white dark:bg-[#1e293b] border border-slate-200 dark:border-[#334155] rounded-3xl shadow-sm p-6">
-        {activeTab === 'operators' && renderOperatorsTab()}
-        {activeTab === 'usage' && <MtsUsageDetails token={session?.token || ''} canManage={canManageSources} />}
-        {activeTab === 'settings' && renderSettingsTab()}
+        {activeTab === 'overview' && (
+          <div className="mb-6 border-b border-slate-200 pb-6 dark:border-slate-800">
+            {renderOperatorsTab()}
+          </div>
+        )}
+        {activeTab === 'settings' && (
+          <div className="mb-5">
+            <MtsBusinessSettingsForm
+              token={session?.token || ''}
+              canManage={canManageSources}
+              onSaved={() => void loadMtsBusinessSource()}
+            />
+          </div>
+        )}
+        <MtsAutoSecretaryPanel
+          token={session?.token || ''}
+          canManage={canManageSources}
+          canViewAnalytics={canViewAnalytics}
+          activeTab={activeTab}
+          showNavigation={false}
+        />
       </div>
 
       {/* CORE MODALS SECTION */}
@@ -1029,6 +1005,7 @@ export default function BalanceCenter({ session, hasPermission }: BalanceCenterP
       </div>
     );
   }
+  /* c8 ignore stop */
 
   // TAB 1: OVERVIEW COMPACT DASHBOARD
   function renderOverviewTab() {

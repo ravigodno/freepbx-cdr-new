@@ -59,6 +59,21 @@ function safeMetadata(event: NormalizedUsageEvent): string {
   return JSON.stringify({ warnings: event.warnings });
 }
 
+function chargeCategory(row: any): {
+  code: 'mav' | 'marking' | 'subscription' | 'one_time' | 'sms' | 'internet' | 'payment' | 'other';
+  label: string;
+} {
+  const service = String(row.label || '');
+  if (/^ИСС\.\s*МАВ\./iu.test(service)) return { code: 'mav', label: 'Массовые вызовы' };
+  if (/^ИСС\.\s*Маркировка\./iu.test(service)) return { code: 'marking', label: 'Маркировка звонков' };
+  if (row.eventType === 'income') return { code: 'payment', label: 'Платёж' };
+  if (row.eventType === 'periodical') return { code: 'subscription', label: 'Абонентская плата' };
+  if (row.eventType === 'one_time') return { code: 'one_time', label: 'Разовая услуга' };
+  if (row.eventType === 'network' && row.networkEvent === 'sms') return { code: 'sms', label: 'SMS' };
+  if (row.eventType === 'network' && row.networkEvent === 'data') return { code: 'internet', label: 'Интернет' };
+  return { code: 'other', label: 'Прочее списание' };
+}
+
 export class MtsUsageService {
   private readonly activeSyncSources = new Set<string>();
 
@@ -139,12 +154,13 @@ export class MtsUsageService {
             counterparty_masked,counterparty_hash,counterparty_number,caller_number,callee_number,
             amount,discount_amount,tax_amount,balance_after,billed_units,billed_unit_code,
             actual_units,actual_unit_code,category_id,product_id,network_service_id,label,package_counter_before,
-            package_counter_after,package_counter_used,charge_period_start,charge_period_end,raw_hash,metadata_json)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            package_counter_after,package_counter_used,package_counter_id,charge_period_start,charge_period_end,raw_hash,metadata_json)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
            ON DUPLICATE KEY UPDATE rated_at=VALUES(rated_at),amount=VALUES(amount),discount_amount=VALUES(discount_amount),
             tax_amount=VALUES(tax_amount),balance_after=VALUES(balance_after),billed_units=VALUES(billed_units),
             actual_units=VALUES(actual_units),package_counter_before=VALUES(package_counter_before),
             package_counter_after=VALUES(package_counter_after),package_counter_used=VALUES(package_counter_used),
+            package_counter_id=VALUES(package_counter_id),
             counterparty_number=VALUES(counterparty_number),caller_number=VALUES(caller_number),
             callee_number=VALUES(callee_number),raw_hash=VALUES(raw_hash),metadata_json=VALUES(metadata_json)`,
           [
@@ -154,7 +170,8 @@ export class MtsUsageService {
             caller, callee, event.amount, event.discount,
             event.tax, event.balanceAfter, event.billedUnits, event.billedUnitCode, event.actualUnits, event.actualUnitCode,
             event.categoryId, event.productId, event.networkServiceId, event.label, event.packageCounterBefore,
-            event.packageCounterAfter, event.packageCounterUsed, sqlDate(event.chargePeriodStart), sqlDate(event.chargePeriodEnd),
+            event.packageCounterAfter, event.packageCounterUsed, event.packageCounterId,
+            sqlDate(event.chargePeriodStart), sqlDate(event.chargePeriodEnd),
             event.rawHash, safeMetadata(event)
           ]
         );
@@ -216,6 +233,8 @@ export class MtsUsageService {
       conditions.push("NOT(e.event_type='network' AND e.network_event='call')");
       if (detailKind === 'charges') conditions.push("e.event_type<>'income'");
       conditions.push('e.amount IS NOT NULL AND e.amount<>0');
+      if (String(query.chargeCategory || '') === 'mav') conditions.push("e.label LIKE 'ИСС. МАВ.%'");
+      if (String(query.chargeCategory || '') === 'marking') conditions.push("e.label LIKE 'ИСС. Маркировка.%'");
     }
     if (detailKind === 'payments') conditions.push("e.event_type='income' AND e.amount IS NOT NULL AND e.amount<>0");
     const msisdnHash = String(query.msisdnHash || '');
@@ -254,8 +273,10 @@ export class MtsUsageService {
       params
     );
     return {
-      rows: rows.map(row => ({
-        ...row,
+      rows: rows.map(row => {
+        const category = chargeCategory(row);
+        return {
+        ...row, chargeCategory: category.code, chargeCategoryLabel: category.label,
         auditStatus: row.eventType === 'network' && row.networkEvent === 'call'
           ? ['exact', 'high'].includes(row.reconciliationStatus) ? 'confirmed'
             : row.reconciliationStatus === 'medium' ? 'likely' : 'review'
@@ -274,7 +295,8 @@ export class MtsUsageService {
         balanceAfter: numberOrNull(row.balanceAfter), billedUnits: numberOrNull(row.billedUnits),
         actualUnits: numberOrNull(row.actualUnits), packageCounterBefore: numberOrNull(row.packageCounterBefore),
         packageCounterAfter: numberOrNull(row.packageCounterAfter), packageCounterUsed: numberOrNull(row.packageCounterUsed)
-      })),
+      };
+      }),
       total: Number(count[0]?.total || 0), page, pageSize
     };
   }

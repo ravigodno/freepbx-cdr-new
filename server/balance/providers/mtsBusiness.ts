@@ -61,6 +61,7 @@ export interface NormalizedUsageEvent {
   packageCounterBefore: number | null;
   packageCounterAfter: number | null;
   packageCounterUsed: number | null;
+  packageCounterId: string | null;
   rawHash: string;
   warnings: string[];
 }
@@ -75,6 +76,22 @@ export interface NormalizedUsageResult {
   events: NormalizedUsageEvent[];
   rawHash: string;
   fetchedAt: string;
+}
+
+export interface MtsValidityPackage {
+  msisdn: string;
+  serviceName: string;
+  counterName: string;
+  counterId: string;
+  externalServiceId: string | null;
+  unit: 'SECOND' | 'MINUTE';
+  currentValue: number;
+  periodInitialValue: number | null;
+  baseInitialValue: number | null;
+  autoExtensionValue: number | null;
+  periodStartedAt: string | null;
+  periodEndsAt: string | null;
+  status: string | null;
 }
 
 export const MTS_BUSINESS_CAPABILITIES = Object.freeze({
@@ -194,6 +211,7 @@ function counterValue(counter: any): number | null {
 }
 
 function normalizeServiceCounters(event: any, characteristics: Record<string, unknown>): {
+  id: string | null;
   before: number | null;
   after: number | null;
   used: number | null;
@@ -206,11 +224,13 @@ function normalizeServiceCounters(event: any, characteristics: Record<string, un
       : Array.isArray(characteristicCounters) ? characteristicCounters : [];
   const before = counterValue(counters.find((item: any) => item?.validFor));
   const after = counterValue(counters.find((item: any) => !item?.validFor));
-  if (before === null || after === null) return { before, after, used: null, warnings: [] };
+  const ids = [...new Set(counters.map((item: any) => nullableText(item?.id ?? item?.counterId, 100)).filter(Boolean))];
+  const id = ids.length === 1 ? ids[0] as string : null;
+  if (before === null || after === null) return { id, before, after, used: null, warnings: [] };
   const used = before - after;
   return used < 0
-    ? { before, after, used: null, warnings: ['package_counter_negative_delta'] }
-    : { before, after, used, warnings: [] };
+    ? { id, before, after, used: null, warnings: ['package_counter_negative_delta'] }
+    : { id, before, after, used, warnings: ids.length > 1 ? ['multiple_package_counter_ids'] : [] };
 }
 
 function usageEventArray(payload: any): any[] {
@@ -264,10 +284,60 @@ export function parseMtsBusinessUsagePayload(payload: unknown, rawText: string):
       packageCounterBefore: counters.before,
       packageCounterAfter: counters.after,
       packageCounterUsed: counters.used,
+      packageCounterId: counters.id,
       rawHash: crypto.createHash('sha256').update(rawEvent || rawText).digest('hex'),
       warnings: counters.warnings
     }];
   });
+}
+
+export function parseMtsValidityPackages(payload: unknown, msisdnValue: string): MtsValidityPackage[] {
+  const msisdn = normalizeMtsMsisdn(msisdnValue);
+  const sections = Array.isArray(payload) ? payload : [payload];
+  const result: MtsValidityPackage[] = [];
+  const characteristicValues = (product: any, valueType: string): number | null => {
+    for (const characteristic of product?.productSpecification?.productSpecCharacteristic || []) {
+      for (const value of characteristic?.prodSpecCharacteristicValue || []) {
+        if (String(value?.valueType || '').trim() !== valueType) continue;
+        const parsed = finiteNumber(value?.value);
+        if (parsed !== null) return parsed;
+      }
+    }
+    return null;
+  };
+  for (const section of sections) {
+    if (String(section?.name || '').toLowerCase() !== 'foriscounters') continue;
+    for (const account of section?.customerAccount || []) {
+      for (const relationship of account?.productRelationship || []) {
+        const product = relationship?.product || {};
+        const unit = String(product?.productPrice?.[0]?.unitOfMeasure || '').toUpperCase();
+        if (unit !== 'SECOND' && unit !== 'MINUTE') continue;
+        const specification = product?.productSpecification || {};
+        const serviceName = nullableText(product?.name, 500);
+        const counterName = nullableText(specification?.name, 500);
+        const counterId = nullableText(specification?.id, 100);
+        const currentValue = characteristicValues(product, 'CurrentValue');
+        if (!serviceName || !counterName || !counterId || currentValue === null) continue;
+        if (!/пакет|PBX|автосекрет/iu.test(`${serviceName} ${counterName}`) || currentValue < 0) continue;
+        result.push({
+          msisdn,
+          serviceName,
+          counterName,
+          counterId,
+          externalServiceId: nullableText(product?.externalID, 100),
+          unit,
+          currentValue,
+          periodInitialValue: characteristicValues(product, 'PeriodInitialValue'),
+          baseInitialValue: characteristicValues(product, 'BaseInitialValue'),
+          autoExtensionValue: characteristicValues(product, 'AutoExtensionValue'),
+          periodStartedAt: isoOrNull(product?.validFor?.startDateTime),
+          periodEndsAt: isoOrNull(product?.validFor?.endDateTime),
+          status: nullableText(product?.productStatus, 32)
+        });
+      }
+    }
+  }
+  return result;
 }
 
 function findBalanceContainer(payload: any): any | null {
@@ -539,6 +609,37 @@ export class MtsBusinessProvider {
       if (!rawText.includes('hasMore')) break;
     }
     return [...found.values()];
+  }
+
+  async fetchValidityPackages(msisdnValue: string): Promise<{ packages: MtsValidityPackage[]; fetchedAt: string; rawHash: string }> {
+    if (!this.enabled) throw new MtsBusinessProviderError('provider_disabled');
+    if (!this.config.consumerKey || !this.config.consumerSecret) throw new MtsBusinessProviderError('provider_not_configured');
+    const msisdn = normalizeMtsMsisdn(msisdnValue);
+    const url = new URL('/b2b/v1/Bills/ValidityInfo', `${this.apiBase}/`);
+    for (const field of ['MOAF', 'forisCounters', 'ReturnServices', 'ReturnAutoExtention']) {
+      url.searchParams.append('fields', field);
+    }
+    url.searchParams.set('customerAccount.accountNo', msisdn);
+    url.searchParams.set('customerAccount.productRelationship.product.productLine.name', 'Counters');
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const token = await this.getAccessToken(attempt > 0);
+      const response = await this.request(url.toString(), {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+      });
+      if (response.status === 401 && attempt === 0) {
+        this.clearTokenCache();
+        continue;
+      }
+      if (!response.ok) throw new MtsBusinessProviderError(`validity_http_${response.status}`, TRANSIENT_STATUSES.has(response.status));
+      const { payload, rawText } = await readLimitedJson(response, this.maxResponseBytes);
+      return {
+        packages: parseMtsValidityPackages(payload, msisdn),
+        fetchedAt: new Date().toISOString(),
+        rawHash: crypto.createHash('sha256').update(rawText).digest('hex')
+      };
+    }
+    throw new MtsBusinessProviderError('authentication_expired');
   }
 
   async fetchUsageDetails(input: {

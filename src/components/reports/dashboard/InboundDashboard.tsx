@@ -529,7 +529,7 @@ export function InboundDashboard({
         <StatsKpiCard loading={loading} label="Среднее ожидание" value={formatNullableDuration(slaSummary?.answeredAverageWaitSeconds)} hint={slaSummary?.waitCalculationSource === 'answer_time' ? 'До ответа' : 'Fallback duration − billsec'} icon={Clock} tone="orange" />
         <StatsKpiCard loading={loading} label="Медиана ожидания" value={formatNullableDuration(slaSummary?.answeredMedianWaitSeconds)} hint="Только отвеченные" icon={Clock} tone="orange" />
         <StatsKpiCard loading={loading} label="Средний разговор" value={formatNullableDuration(slaSummary?.averageTalkSeconds)} hint="По billsec" icon={PhoneIncoming} tone="blue" />
-        <StatsKpiCard loading={loading} label="Разговорное время" value={formatNullableDuration(slaSummary?.totalTalkSeconds)} hint="Сумма billsec" icon={PhoneIncoming} tone="purple" />
+        <StatsKpiCard loading={loading} label="Разговорное время" value="—" durationSeconds={slaSummary?.totalTalkSeconds} hint="Входящие, без внутренних" icon={PhoneIncoming} tone="purple" />
       </div>
 
       {/* THREE TELEMETRY CHARTS IN A ROW (AS IN IMAGE) */}

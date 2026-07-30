@@ -1,13 +1,20 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { RefreshCw, Search } from 'lucide-react';
 
-type Props = { token: string; canManage: boolean };
+export type MtsUsageDetailKind = 'overview' | 'calls' | 'charges' | 'payments';
+type Props = {
+  token: string;
+  canManage: boolean;
+  detailKind?: MtsUsageDetailKind;
+  showNavigation?: boolean;
+};
 type UsageRow = {
   id: number; occurredAt: string; ratedAt: string | null; eventType: string; networkEvent: string | null;
   direction: string | null; callerNumber: string | null; calleeNumber: string | null;
   counterparty: string | null; counterpartyMasked: string | null; actualUnits: number | null; billedUnits: number | null;
   billedUnitCode: string | null; actualUnitCode: string | null; amount: number | null; discount: number | null; tax: number | null;
   balanceAfter: number | null; categoryId: string | null; label: string | null; packageCounterUsed: number | null;
+  chargeCategory?: string; chargeCategoryLabel?: string;
   reconciliationStatus: string; auditStatus: 'confirmed' | 'likely' | 'expected' | 'review'; auditReason: string;
 };
 type SubscriberNumber = { id: string; label: string; accountId: string | null; accountLabel: string | null };
@@ -27,14 +34,21 @@ const auditPresentation = {
   review: ['Требует проверки', 'bg-amber-100 text-amber-800']
 } as const;
 
-export default function MtsUsageDetails({ token, canManage }: Props) {
+export default function MtsUsageDetails({
+  token,
+  canManage,
+  detailKind: controlledDetailKind,
+  showNavigation = true
+}: Props) {
   const today = useMemo(() => new Date(), []);
   const [fromDate, setFromDate] = useState(today.toISOString().slice(0, 10));
   const [toDate, setToDate] = useState(today.toISOString().slice(0, 10));
   const [eventType, setEventType] = useState('');
   const [networkEvent, setNetworkEvent] = useState('');
   const [direction, setDirection] = useState('');
-  const [detailKind, setDetailKind] = useState<'overview' | 'calls' | 'charges' | 'payments'>('overview');
+  const [internalDetailKind, setInternalDetailKind] = useState<MtsUsageDetailKind>('overview');
+  const detailKind = controlledDetailKind ?? internalDetailKind;
+  const [chargeCategory, setChargeCategory] = useState('');
   const [msisdnHash, setMsisdnHash] = useState('');
   const [accountHash, setAccountHash] = useState('');
   const [subscriberNumbers, setSubscriberNumbers] = useState<SubscriberNumber[]>([]);
@@ -56,6 +70,7 @@ export default function MtsUsageDetails({ token, canManage }: Props) {
       const query = new URLSearchParams({ ...range(), page: '1', pageSize: '100', detailKind });
       if (detailKind === 'charges' && eventType) query.set('eventType', eventType);
       if (detailKind === 'charges' && networkEvent) query.set('networkEvent', networkEvent);
+      if (detailKind === 'charges' && chargeCategory) query.set('chargeCategory', chargeCategory);
       if (detailKind === 'calls' && direction) query.set('direction', direction);
       if (msisdnHash) query.set('msisdnHash', msisdnHash);
       if (accountHash) query.set('accountHash', accountHash);
@@ -147,16 +162,16 @@ export default function MtsUsageDetails({ token, canManage }: Props) {
 
   return (
     <div className="space-y-5">
-      <div className="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1 dark:border-slate-700 dark:bg-slate-800">
+      {showNavigation && <div className="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1 dark:border-slate-700 dark:bg-slate-800">
         <button className={`rounded-lg px-4 py-2 text-xs font-bold ${detailKind === 'overview' ? 'bg-white text-blue-700 shadow-sm dark:bg-slate-700 dark:text-blue-300' : 'text-slate-500'}`}
-          onClick={() => setDetailKind('overview')}>Сводка проверки</button>
+          onClick={() => setInternalDetailKind('overview')}>Сводка проверки</button>
         <button className={`rounded-lg px-4 py-2 text-xs font-bold ${detailKind === 'calls' ? 'bg-white text-blue-700 shadow-sm dark:bg-slate-700 dark:text-blue-300' : 'text-slate-500'}`}
-          onClick={() => setDetailKind('calls')}>Звонки</button>
+          onClick={() => setInternalDetailKind('calls')}>Звонки</button>
         <button className={`rounded-lg px-4 py-2 text-xs font-bold ${detailKind === 'charges' ? 'bg-white text-blue-700 shadow-sm dark:bg-slate-700 dark:text-blue-300' : 'text-slate-500'}`}
-          onClick={() => setDetailKind('charges')}>Другие списания</button>
+          onClick={() => setInternalDetailKind('charges')}>Другие списания</button>
         <button className={`rounded-lg px-4 py-2 text-xs font-bold ${detailKind === 'payments' ? 'bg-white text-blue-700 shadow-sm dark:bg-slate-700 dark:text-blue-300' : 'text-slate-500'}`}
-          onClick={() => setDetailKind('payments')}>Платежи и баланс</button>
-      </div>
+          onClick={() => setInternalDetailKind('payments')}>Платежи и баланс</button>
+      </div>}
       <div className="flex flex-nowrap items-end gap-2 overflow-x-auto pb-1">
         <label className="shrink-0 text-[10px] text-slate-500">С даты<input className="input mt-1 block w-[132px]" type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} /></label>
         <label className="shrink-0 text-[10px] text-slate-500">По дату<input className="input mt-1 block w-[132px]" type="date" value={toDate} onChange={e => setToDate(e.target.value)} /></label>
@@ -166,6 +181,9 @@ export default function MtsUsageDetails({ token, canManage }: Props) {
         </select>}
         {detailKind === 'charges' && <select className="input w-[120px] shrink-0" value={networkEvent} onChange={e => setNetworkEvent(e.target.value)}>
           <option value="">Все услуги</option><option value="call">Звонки</option><option value="sms">SMS</option><option value="data">Интернет</option>
+        </select>}
+        {detailKind === 'charges' && <select className="input w-[170px] shrink-0" value={chargeCategory} onChange={e => setChargeCategory(e.target.value)}>
+          <option value="">Все категории</option><option value="mav">Массовые вызовы</option><option value="marking">Маркировка звонков</option>
         </select>}
         {detailKind === 'calls' && <select className="input w-[125px] shrink-0" value={direction} onChange={e => setDirection(e.target.value)}>
           <option value="">Все направления</option><option value="incoming">Входящие</option><option value="outgoing">Исходящие</option>
@@ -210,7 +228,7 @@ export default function MtsUsageDetails({ token, canManage }: Props) {
           <thead className="sticky top-0 bg-slate-50 dark:bg-slate-800"><tr>
             {(detailKind === 'calls'
               ? ['Результат','Дата события','Дата тарификации','Направление','Кто звонил','Куда звонил','Факт','Тарификация','Стоимость','Из пакета']
-              : ['Результат','Дата операции','Дата тарификации','Тип','Услуга','Сумма','Скидка','Налог','Баланс после','Описание']
+              : ['Результат','Дата операции','Дата тарификации','Категория','Название услуги','Сумма','Скидка','Налог','Баланс после','Описание']
             ).map(label =>
               <th key={label} className="p-3 text-[10px] uppercase text-slate-500">{label}</th>)}
           </tr></thead>
@@ -230,11 +248,12 @@ export default function MtsUsageDetails({ token, canManage }: Props) {
                 <td className="p-3 font-mono">{money(row.amount)}</td>
                 <td className="p-3">{packaged ? 'Да' : 'Нет'}</td>
               </> : <>
-                <td className="p-3">{eventLabel(row.eventType)}</td><td className="p-3">{eventLabel(row.networkEvent)}</td>
-                <td className="p-3 font-mono">{money(row.amount)}</td>
-                <td className="p-3">{money(row.discount)}</td><td className="p-3">{money(row.tax)}</td>
-                <td className="p-3">{money(row.balanceAfter)}</td>
-                <td className="max-w-xs p-3">{row.label || 'Нет данных'}</td>
+                <td className="p-3 font-bold">{row.chargeCategoryLabel || eventLabel(row.eventType)}</td>
+                <td className="max-w-xs p-3">{row.label || eventLabel(row.networkEvent)}</td>
+                <td className="p-3 text-right font-mono">{money(row.amount)}</td>
+                <td className="p-3 text-right">{money(row.discount)}</td><td className="p-3 text-right">{money(row.tax)}</td>
+                <td className="p-3 text-right">{money(row.balanceAfter)}</td>
+                <td className="max-w-xs p-3">{row.auditReason}</td>
               </>}
             </tr>;
           })}</tbody>

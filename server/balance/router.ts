@@ -1,6 +1,8 @@
 import type { Express, Request, Response } from 'express';
 import { MTS_BUSINESS_SOURCE_ID, MtsBusinessBalanceService, safeMtsBusinessError, sanitizeBalanceStorageError } from './mtsBusinessService.js';
 import { MtsUsageService } from './mtsUsageService.js';
+import { MtsAutoSecretaryService, safeMtsAutoSecretaryError } from './mtsAutoSecretaryService.js';
+import { MtsPackagesService } from './mtsPackagesService.js';
 
 type Dependencies = {
   requireAuth: any;
@@ -9,9 +11,11 @@ type Dependencies = {
   queryCdr: (sql: string, params: any[]) => Promise<any[]>;
 };
 
-export function registerBalanceRoutes(app: Express, deps: Dependencies): MtsBusinessBalanceService {
+export function registerBalanceRoutes(app: Express, deps: Dependencies): Pick<MtsBusinessBalanceService, 'start' | 'stop'> {
   const service = new MtsBusinessBalanceService(deps.hashSecret);
   const usage = new MtsUsageService(() => service.getUsageProvider(), deps.hashSecret, deps.queryCdr);
+  const packages = new MtsPackagesService(() => service.getUsageProvider());
+  const autoSecretary = new MtsAutoSecretaryService(deps.hashSecret);
 
   app.get('/api/balance/sources', deps.requireAuth(), async (req: Request, res: Response) => {
     if (!(await deps.checkPermission(req, 'view_balance'))) {
@@ -24,11 +28,128 @@ export function registerBalanceRoutes(app: Express, deps: Dependencies): MtsBusi
     }
   });
 
+  app.get('/api/balance/overview', deps.requireAuth(), async (req: Request, res: Response) => {
+    if (!(await deps.checkPermission(req, 'view_balance'))) {
+      return res.status(403).json({ error: 'Access denied: view_balance permission required' });
+    }
+    try {
+      return res.json({ success: true, provider: await service.getOverview() });
+    } catch (error) {
+      return res.status(503).json({
+        success: false,
+        safeErrorCode: sanitizeBalanceStorageError(error),
+        safeMessage: 'Сводка баланса временно недоступна'
+      });
+    }
+  });
+
+  app.post('/api/balance/overview/sync', deps.requireAuth(), async (req: Request, res: Response) => {
+    if (!(await deps.checkPermission(req, 'manage_balance_sources'))) {
+      return res.status(403).json({ error: 'Access denied: manage_balance_sources permission required' });
+    }
+    try {
+      await service.sync();
+      const to = new Date();
+      const from = new Date(to.getTime() - 48 * 60 * 60_000);
+      await usage.sync(MTS_BUSINESS_SOURCE_ID, {
+        from: from.toISOString().slice(0, 19) + 'Z',
+        to: to.toISOString().slice(0, 19) + 'Z'
+      }).catch(error => {
+        if (!(error instanceof Error && error.message === 'usage_sync_in_progress')) throw error;
+      });
+      return res.json({ success: true, provider: await service.getOverview() });
+    } catch (error) {
+      const safe = safeMtsBusinessError(error);
+      return res.status(503).json({ success: false, ...safe });
+    }
+  });
+
   app.post('/api/balance/sources/mts-business/test', deps.requireAuth(), async (req: Request, res: Response) => {
     if (!(await deps.checkPermission(req, 'manage_balance_sources'))) {
       return res.status(403).json({ error: 'Access denied: manage_balance_sources permission required' });
     }
     return res.json(await service.diagnose());
+  });
+
+  app.get('/api/balance/sources/mts-auto-secretary/settings', deps.requireAuth(), async (req: Request, res: Response) => {
+    if (!(await deps.checkPermission(req, 'manage_balance_sources'))) {
+      return res.status(403).json({ error: 'Access denied: manage_balance_sources permission required' });
+    }
+    try {
+      return res.json({ success: true, settings: await autoSecretary.getSettings() });
+    } catch {
+      return res.status(503).json({ success: false, safeErrorCode: 'balance_settings_unavailable' });
+    }
+  });
+
+  app.put('/api/balance/sources/mts-auto-secretary/settings', deps.requireAuth(), async (req: Request, res: Response) => {
+    if (!(await deps.checkPermission(req, 'manage_balance_sources'))) {
+      return res.status(403).json({ error: 'Access denied: manage_balance_sources permission required' });
+    }
+    try {
+      return res.json({ success: true, settings: await autoSecretary.saveSettings(req.body || {}) });
+    } catch (error) {
+      const safe = safeMtsAutoSecretaryError(error);
+      return res.status(400).json({ success: false, ...safe });
+    }
+  });
+
+  app.post('/api/balance/sources/mts-auto-secretary/test', deps.requireAuth(), async (req: Request, res: Response) => {
+    if (!(await deps.checkPermission(req, 'manage_balance_sources'))) {
+      return res.status(403).json({ error: 'Access denied: manage_balance_sources permission required' });
+    }
+    try {
+      return res.json({ success: true, ...(await autoSecretary.diagnose()) });
+    } catch (error) {
+      const safe = safeMtsAutoSecretaryError(error);
+      return res.status(503).json({ success: false, requestOk: false, ...safe });
+    }
+  });
+
+  app.get('/api/balance/sources/mts-auto-secretary/calls/preview', deps.requireAuth(), async (req: Request, res: Response) => {
+    if (!(await deps.checkPermission(req, 'view_balance_analytics'))) {
+      return res.status(403).json({ error: 'Access denied: view_balance_analytics permission required' });
+    }
+    try {
+      return res.json({
+        success: true,
+        ...(await autoSecretary.preview(req.query.from || req.query.date, req.query.direction, req.query.to))
+      });
+    } catch (error) {
+      const safe = safeMtsAutoSecretaryError(error);
+      return res.status(['invalid_preview_date', 'invalid_preview_period'].includes(safe.safeErrorCode) ? 400 : 503)
+        .json({ success: false, ...safe });
+    }
+  });
+
+  app.get('/api/balance/sources/mts-auto-secretary/reports/stored', deps.requireAuth(), async (req: Request, res: Response) => {
+    if (!(await deps.checkPermission(req, 'view_balance_analytics'))) {
+      return res.status(403).json({ error: 'Access denied: view_balance_analytics permission required' });
+    }
+    try {
+      return res.json({
+        success: true,
+        ...(await autoSecretary.storedReport(req.query.from || req.query.date, req.query.to))
+      });
+    } catch (error) {
+      const safe = safeMtsAutoSecretaryError(error);
+      return res.status(safe.safeErrorCode === 'invalid_preview_date' ? 400 : 503).json({ success: false, ...safe });
+    }
+  });
+
+  app.get('/api/balance/sources/mts-auto-secretary/matches/preview', deps.requireAuth(), async (req: Request, res: Response) => {
+    if (!(await deps.checkPermission(req, 'view_balance_analytics'))) {
+      return res.status(403).json({ error: 'Access denied: view_balance_analytics permission required' });
+    }
+    try {
+      const from = String(req.query.from || req.query.date || '');
+      const to = String(req.query.to || from);
+      return res.json({ success: true, ...(await autoSecretary.syncStoredRange(from, to)) });
+    } catch (error) {
+      const safe = safeMtsAutoSecretaryError(error);
+      return res.status(['invalid_preview_date', 'invalid_preview_period'].includes(safe.safeErrorCode) ? 400 : 503)
+        .json({ success: false, ...safe });
+    }
   });
 
   app.get('/api/balance/sources/mts-business/settings', deps.requireAuth(), async (req: Request, res: Response) => {
@@ -129,6 +250,25 @@ export function registerBalanceRoutes(app: Express, deps: Dependencies): MtsBusi
     }
   });
 
+  app.get('/api/balance/sources/:id/packages', deps.requireAuth(), async (req: Request, res: Response) => {
+    if (!(await deps.checkPermission(req, 'view_balance_analytics'))) {
+      return res.status(403).json({ error: 'Access denied: view_balance_analytics permission required' });
+    }
+    if (String(req.params.id) !== MTS_BUSINESS_SOURCE_ID) {
+      return res.status(404).json({ success: false, safeErrorCode: 'balance_source_not_found' });
+    }
+    try {
+      return res.json({ success: true, packages: await packages.get(MTS_BUSINESS_SOURCE_ID) });
+    } catch (error: any) {
+      console.info('[BALANCE_MTS_BUSINESS] package view unavailable:', String(error?.message || 'unknown').slice(0, 64));
+      return res.status(503).json({
+        success: false,
+        safeErrorCode: 'package_data_unavailable',
+        safeMessage: 'Данные пакетов временно недоступны'
+      });
+    }
+  });
+
   app.get('/api/balance/sources/:id/usage/sync/status', deps.requireAuth(), async (req: Request, res: Response) => {
     if (!(await deps.checkPermission(req, 'view_balance_analytics'))) {
       return res.status(403).json({ error: 'Access denied: view_balance_analytics permission required' });
@@ -163,5 +303,14 @@ export function registerBalanceRoutes(app: Express, deps: Dependencies): MtsBusi
     }
   });
 
-  return service;
+  return {
+    start() {
+      service.start();
+      autoSecretary.start((from, to) => usage.sync(MTS_BUSINESS_SOURCE_ID, { from, to }));
+    },
+    stop() {
+      autoSecretary.stop();
+      service.stop();
+    }
+  };
 }

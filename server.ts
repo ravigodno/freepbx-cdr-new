@@ -16866,6 +16866,7 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
           lostCalls: 0,
           totalDuration: 0,
           answeredDuration: 0,
+          externalTalkSeconds: 0,
           answeredCount: 0
         });
       });
@@ -16884,6 +16885,7 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
           lostCalls: 0,
           totalDuration: 0,
           answeredDuration: 0,
+          externalTalkSeconds: 0,
           answeredCount: 0
         });
       });
@@ -16907,6 +16909,7 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
             lostCalls: 0,
             totalDuration: 0,
             answeredDuration: 0,
+            externalTalkSeconds: 0,
             answeredCount: 0
           });
         }
@@ -16923,7 +16926,7 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
       }
       const { key, sortKey } = formatGroupKey(end.toISOString(), groupType);
       if (!bins.has(key)) {
-         bins.set(key, { label: key, sortKey, totalCalls:0, inboundCalls:0, outboundCalls:0, internalCalls:0, missedCalls:0, processedCalls:0, lostCalls:0, totalDuration:0, answeredDuration:0, answeredCount:0, extCalls: {} });
+         bins.set(key, { label: key, sortKey, totalCalls:0, inboundCalls:0, outboundCalls:0, internalCalls:0, missedCalls:0, processedCalls:0, lostCalls:0, totalDuration:0, answeredDuration:0, externalTalkSeconds:0, answeredCount:0, extCalls: {} });
       }
     }
 
@@ -17067,6 +17070,7 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
           lostCalls: 0,
           totalDuration: 0,
           answeredDuration: 0,
+          externalTalkSeconds: 0,
           answeredCount: 0,
           extCalls: {}
         };
@@ -17099,6 +17103,7 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
       bin.totalDuration += Number(c.duration || 0);
       if (disposition === 'ANSWERED') {
         bin.answeredDuration += Number(c.billsec || 0);
+        if (isIncomingCall || isOutgoingCall) bin.externalTalkSeconds += Number(c.billsec || 0);
         bin.answeredCount++;
       }
 

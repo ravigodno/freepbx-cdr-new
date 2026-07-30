@@ -45,6 +45,7 @@ interface DynamicDatapoint {
   lostCalls: number;
   totalDuration: number;
   answeredDuration: number;
+  externalTalkSeconds?: number;
   answeredCount: number;
   averageWaitSeconds?: number | null;
   slaPercent?: number;
@@ -424,7 +425,7 @@ export default function ReportsTab({
 
   const effectiveAnswerSlaSeconds = usedSettings?.answerSlaSeconds ?? settings?.answerSlaSeconds ?? slaSummary?.slaThresholdSeconds ?? 20;
   const slaPercentValue = slaSummary && Number.isFinite(Number(slaSummary.slaPercent)) ? Number(slaSummary.slaPercent) : summary.sla;
-  const averageWaitValue = slaSummary ? slaSummary.averageWaitSeconds : summary.avgWait;
+  const totalExternalTalkSeconds = visibleData.reduce((sum, item) => sum + safeNumber(item.externalTalkSeconds), 0);
   const callbackAfterMissedValue = lostCallSummary && Number.isFinite(Number(lostCallSummary.callbackAfterMissed)) ? Number(lostCallSummary.callbackAfterMissed) : summary.processed;
   const lostCallsValue = lostCallSummary && Number.isFinite(Number(lostCallSummary.lostCalls)) ? Number(lostCallSummary.lostCalls) : summary.lost;
 
@@ -533,7 +534,7 @@ export default function ReportsTab({
         <StatsKpiCard label="Пропущенные" value={summary.missed.toLocaleString('ru-RU')} hint="Требуют контроля" icon={PhoneMissed} tone="orange" />
         <StatsKpiCard label="Потерянные" value={lostCallsValue.toLocaleString('ru-RU')} hint="Без успешного перезвона" icon={XCircle} tone="red" />
         <StatsKpiCard label="SLA" value={slaPercentValue + '%'} hint={'Ответ до ' + effectiveAnswerSlaSeconds + ' сек'} icon={ShieldCheck} tone="purple" />
-        <StatsKpiCard label="Среднее ожидание" value={formatNullableDuration(averageWaitValue)} hint="По отвеченным" icon={Clock} tone="orange" />
+        <StatsKpiCard label="Разговорное время" value="—" durationSeconds={totalExternalTalkSeconds} hint="Входящие + исходящие, без внутренних" icon={Phone} tone="purple" />
         <StatsKpiCard label="Обработанные пропущенные" value={callbackAfterMissedValue.toLocaleString('ru-RU')} hint="Был успешный перезвон" icon={TrendingUp} tone="green" />
       </div>
 
