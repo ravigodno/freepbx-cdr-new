@@ -194,6 +194,7 @@ const rowToContact = (row: any, metadata: Record<string, any> = {}, includeDetai
     phones,
     phone2: text(row.phone2, 100),
     email: text(row.email),
+    comment: text(row.comment, 10_000),
     position: text(metadata.position),
     visibility: row.contact_type === 'personal' || row.visibility === 'private' ? 'private' : 'shared',
     type: text(row.type, 32) || 'client',
@@ -212,7 +213,6 @@ const rowToContact = (row: any, metadata: Record<string, any> = {}, includeDetai
   if (!includeDetails) return contact;
   return {
     ...contact,
-    comment: text(row.comment, 10_000),
     website: text(metadata.website),
     inn: text(metadata.inn, 64),
     kpp: text(metadata.kpp, 64),
