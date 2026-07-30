@@ -97,6 +97,7 @@ import { PhonebookProfilesPanel } from './modules/directory/components/Phonebook
 import { fetchDirectory, fetchDirectoryAll, fetchDirectoryContact, saveDirectoryEntry, deleteDirectoryEntry, toggleDirectoryBlacklist, toggleDirectorySpam, previewDirectoryImport, previewDirectoryImportOwnership, previewDirectoryBulkDelete, applyDirectoryBulkDelete, createDirectoryImportJob, prepareDirectoryImportSource, deleteDirectoryImportSource, getDirectoryImportJob, cancelDirectoryImportJob, resumeDirectoryImportJob, previewDirectoryImportRollback, getDirectoryImportJobErrors, fetchDirectoryColumnSettings, saveMyDirectoryColumnSettings, resetMyDirectoryColumnSettings, saveGlobalDirectoryColumnSettings, resetGlobalDirectoryColumnSettings, fetchDirectoryCustomFields, createDirectoryCustomField, setDirectoryFavorite, type DirectoryImportPreparedSource, type DirectoryCustomFieldDefinition } from './modules/directory/services/directoryApi';
 import { calculateDirectoryImportDigest, getDirectoryImportDigestCapability, DIRECTORY_IMPORT_MAX_BYTES, isSupportedDirectoryImportFile, summarizeDirectoryImportSource, type DirectoryImportDigestStatus, type DirectoryImportSourceKind, type DirectoryImportSourceSummary } from './modules/directory/utils/directoryImportSource';
 import { applyDirectoryOwnershipPreview, buildDirectoryEffectiveRows, directoryImportPipelineSteps, getDirectoryImportActiveStep, getDirectoryImportDisabledReason, normalizeDirectoryEntriesForOwnership } from './modules/directory/utils/directoryImportPipeline';
+import { downloadDirectoryCsv, downloadDirectoryExcel } from './modules/directory/utils/directoryExport';
 import CDRPage from './modules/cdr/pages/CDRPage';
 import LegacyCDRTable from './modules/cdr/components/LegacyCDRTable';
 import CDRProcessModal from './modules/cdr/components/CDRProcessModal';
@@ -1520,7 +1521,7 @@ export default function App() {
     }
   };
 
-  const handleExportCSV = async () => {
+  const handleExportDirectory = async (format: 'csv' | 'xlsx') => {
     if (!hasPermission('manage_directory_import')) {
       alert('Нет прав на экспорт справочника.');
       return;
@@ -1528,51 +1529,15 @@ export default function App() {
 
     try {
       const exportRows = await fetchDirectoryAll(session?.token || '', {
-        q: dirSearchQuery,
-        type: dirTypeFilter,
-        spamMode: dirSpamMode,
-        visibilityMode: dirVisibilityMode
+        spamMode: 'all',
+        visibilityMode: 'all'
       });
-      const BOM = "\uFEFF";
-      let csvContent = BOM + "type,visibility,isSpam,organization,fullName,position,phone,phone2,email,website,inn,kpp,ogrn,address,comment,department,group,tags,internalExtension,linkedExternalNumber,responsibleUserId\r\n";
-
-      exportRows.forEach(entry => {
-        const phones = getEntryPhones(entry);
-        const values = [
-          entry.type || 'client',
-          entry.visibility === 'private' ? 'private' : 'shared',
-          entry.isSpam ? 'true' : 'false',
-          entry.company || '',
-          entry.name || '',
-          entry.position || '',
-          phones[0] || '',
-          phones[1] || '',
-          entry.email || '',
-          entry.website || '',
-          entry.inn || '',
-          entry.kpp || '',
-          entry.ogrn || '',
-          entry.address || '',
-          entry.comment || '',
-          entry.department || '',
-          entry.group || '',
-          getDirectoryEntryTags(entry).join('; '),
-          entry.internalExtension || '',
-          entry.linkedExternalNumber || '',
-          entry.responsibleUserId || ''
-        ].map(v => '"' + String(v || '').replace(/"/g, '""') + '"');
-        csvContent += values.join(',') + "\r\n";
-      });
-
-      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.setAttribute("href", url);
-      link.setAttribute("download", `phone_directory_export_${getServerNow().toISOString().split('T')[0]}.csv`);
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
+      const date = getServerNow().toISOString().split('T')[0];
+      if (format === 'xlsx') {
+        await downloadDirectoryExcel(exportRows, directoryCustomFields, `phone_directory_export_${date}.xlsx`);
+      } else {
+        downloadDirectoryCsv(exportRows, directoryCustomFields, `phone_directory_export_${date}.csv`);
+      }
     } catch (e: any) {
       alert('Ошибка при экспорте: ' + e.message);
     }
@@ -7065,9 +7030,13 @@ export default function App() {
                   <Download className="h-5 w-5 text-blue-600" />
                   <span><span className="block text-sm font-black text-slate-900">Скачать шаблон</span><span className="mt-1 block text-[11px] text-slate-500">CSV Excel для корпоративного импорта</span></span>
                 </button>
-                <button type="button" onClick={handleExportCSV} className="flex min-h-24 flex-col items-start justify-between rounded-xl border border-slate-200 bg-slate-50 p-4 text-left transition hover:bg-slate-100">
+                <button type="button" onClick={() => void handleExportDirectory('csv')} className="flex min-h-24 flex-col items-start justify-between rounded-xl border border-slate-200 bg-slate-50 p-4 text-left transition hover:bg-slate-100">
                   <Download className="h-5 w-5 text-slate-600" />
-                  <span><span className="block text-sm font-black text-slate-900">Экспорт в CSV</span><span className="mt-1 block text-[11px] text-slate-500">Выгрузить справочник с текущими фильтрами</span></span>
+                  <span><span className="block text-sm font-black text-slate-900">Экспорт в CSV</span><span className="mt-1 block text-[11px] text-slate-500">Все доступные контакты и поля</span></span>
+                </button>
+                <button type="button" onClick={() => void handleExportDirectory('xlsx')} className="flex min-h-24 flex-col items-start justify-between rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-left transition hover:bg-emerald-100">
+                  <Download className="h-5 w-5 text-emerald-700" />
+                  <span><span className="block text-sm font-black text-slate-900">Экспорт в Excel</span><span className="mt-1 block text-[11px] text-slate-500">XLSX со всеми доступными данными</span></span>
                 </button>
                 <button type="button" onClick={handleNormalizeDirectoryDb} disabled={isNormalizingDb} className="flex min-h-24 flex-col items-start justify-between rounded-xl border border-amber-200 bg-amber-50 p-4 text-left transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50">
                   <RefreshCw className={`h-5 w-5 text-amber-700 ${isNormalizingDb ? 'animate-spin' : ''}`} />
@@ -8156,6 +8125,33 @@ export default function App() {
                           {canManageGlobalDirectoryColumns && <button type="button" onClick={saveGlobalDirectoryColumnSettingsForAll} className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700">Сохранить для всех</button>}
                         </div>
                       </div>
+
+                      {hasPermission('manage_directory_import') && (
+                        <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                          <div>
+                            <h4 className="flex items-center gap-2 text-sm font-black text-slate-900">
+                              <Download className="h-4 w-4 text-emerald-600" />Экспорт справочника
+                            </h4>
+                            <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+                              Выгрузка всех доступных контактов, телефонов, реквизитов, статусов и пользовательских полей.
+                            </p>
+                          </div>
+                          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                            <button type="button" onClick={() => void handleExportDirectory('csv')}
+                              className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 text-left transition hover:bg-slate-100">
+                              <Download className="h-5 w-5 shrink-0 text-slate-600" />
+                              <span><span className="block text-sm font-black text-slate-900">Скачать CSV</span>
+                                <span className="mt-1 block text-[11px] text-slate-500">Совместимый с Excel CSV в UTF-8</span></span>
+                            </button>
+                            <button type="button" onClick={() => void handleExportDirectory('xlsx')}
+                              className="flex items-center gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-left transition hover:bg-emerald-100">
+                              <Download className="h-5 w-5 shrink-0 text-emerald-700" />
+                              <span><span className="block text-sm font-black text-slate-900">Скачать Excel</span>
+                                <span className="mt-1 block text-[11px] text-slate-500">XLSX с фильтрами и шириной столбцов</span></span>
+                            </button>
+                          </div>
+                        </div>
+                      )}
 
                       <div className="rounded-2xl border border-slate-200 bg-white p-4">
                         <h4 className="mb-3 flex items-center gap-2 text-sm font-black text-slate-900"><Upload className="h-4 w-4 text-blue-600" />Настройки импорта</h4>

@@ -3,6 +3,9 @@ import {
   AlertCircle, Check, CircleDollarSign, Clock3, Copy,
   CreditCard, FileText, Gauge, Globe, Layers, PhoneCall, RefreshCw, Settings, Wallet
 } from 'lucide-react';
+import {
+  Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis
+} from 'recharts';
 import MtsAutoSecretaryPanel, { type MtsAutoSecretaryPanelTab } from './MtsAutoSecretaryPanel';
 import MtsBusinessSettingsForm from './MtsBusinessSettingsForm';
 import MtsPackagesPanel from './MtsPackagesPanel';
@@ -36,12 +39,18 @@ type ProviderOverview = {
 };
 
 type WorkspaceTab = MtsAutoSecretaryPanelTab;
+type OverviewHistory = {
+  balance: Array<{ date: string; balance: number }>;
+  minutes: Array<{ date: string; usedMinutes: number }>;
+  periodDays: number;
+};
 
 const money = (value: number | null) => value === null
   ? 'Нет данных'
   : `${value.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽`;
 const integer = (value: number | null) => value === null ? 'Не определён' : `${value.toLocaleString('ru-RU')} мин`;
 const timestamp = (value: string | null) => value ? new Date(value).toLocaleString('ru-RU') : 'Нет данных';
+const shortDate = (value: string) => new Date(`${value}T00:00:00Z`).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
 
 async function copyText(value: string): Promise<void> {
   if (navigator.clipboard?.writeText) {
@@ -75,11 +84,22 @@ export default function MtsBalanceWorkspace({ token, canManage, canViewAnalytics
       : 'overview';
   });
   const [provider, setProvider] = useState<ProviderOverview | null>(null);
+  const [history, setHistory] = useState<OverviewHistory | null>(null);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+
+  const loadHistory = async () => {
+    try {
+      const response = await fetch('/api/balance/overview/history?days=31', { headers });
+      const data = await response.json().catch(() => ({}));
+      if (response.ok && data.success) setHistory(data.history);
+    } catch {
+      // The provider summary remains usable when historical charts are unavailable.
+    }
+  };
 
   const load = async () => {
     setLoading(true);
@@ -89,6 +109,7 @@ export default function MtsBalanceWorkspace({ token, canManage, canViewAnalytics
       if (!response.ok || !data.success) throw new Error(data.safeMessage || 'Сводка баланса недоступна');
       setProvider(data.provider);
       setError('');
+      void loadHistory();
     } catch (reason: any) {
       setError(reason.message || 'Сводка баланса недоступна');
     } finally {
@@ -106,6 +127,7 @@ export default function MtsBalanceWorkspace({ token, canManage, canViewAnalytics
       if (!response.ok || !data.success) throw new Error(data.safeMessage || 'Данные не обновились');
       setProvider(data.provider);
       setNotice('Данные успешно обновлены');
+      void loadHistory();
     } catch (reason: any) {
       // Keep the last successful provider snapshot visible on refresh failure.
       setError(`Данные не обновились: ${reason.message || 'ошибка подключения'}`);
@@ -201,7 +223,7 @@ export default function MtsBalanceWorkspace({ token, canManage, canViewAnalytics
               {syncing ? 'Обновление' : provider.status.label}
             </span>}
           </div>
-          {provider && <div className="grid gap-4 px-4 py-3 lg:grid-cols-[1.1fr_1fr_1fr_auto] lg:items-center">
+          {provider && <div className="grid gap-4 px-4 py-3 sm:grid-cols-2 lg:grid-cols-[minmax(260px,1.4fr)_minmax(170px,1fr)_minmax(180px,0.8fr)_minmax(175px,auto)] lg:items-center">
             <div>
               <div className="text-[10px] uppercase text-slate-400">Оператор</div>
               <div className="mt-1 font-black">{provider.displayName}</div>
@@ -212,14 +234,58 @@ export default function MtsBalanceWorkspace({ token, canManage, canViewAnalytics
               </div>}
             </div>
             <div><div className="text-[10px] uppercase text-slate-400">Источник данных</div><div className="mt-1 text-xs font-bold">МТС Бизнес API</div></div>
-            <div><div className="text-[10px] uppercase text-slate-400">Текущий баланс</div><div className="mt-1 text-right font-mono text-lg font-black">{money(provider.balance)}</div></div>
-            <div className="text-right text-[10px] text-slate-500">Обновлено:<br /><span className="font-medium text-slate-700 dark:text-slate-300">{timestamp(provider.lastSuccessAt)}</span></div>
+            <div className="min-w-[180px]">
+              <div className="text-[10px] uppercase text-slate-400">Текущий баланс</div>
+              <div className="mt-1 whitespace-nowrap font-mono text-lg font-black">{money(provider.balance)}</div>
+            </div>
+            <div className="min-w-[175px] border-slate-200 text-[10px] text-slate-500 sm:text-right lg:border-l lg:pl-4 dark:border-slate-700">
+              Обновлено:<br /><span className="whitespace-nowrap font-medium text-slate-700 dark:text-slate-300">{timestamp(provider.lastSuccessAt)}</span>
+            </div>
             {provider.linkedTrunks.length > 0 && <div className="lg:col-span-4">
               <span className="text-[10px] uppercase text-slate-400">Связанные транки: </span>
               <span className="text-xs font-mono">{provider.linkedTrunks.join(', ')}</span>
             </div>}
             {provider.status.reason && <div className="text-[11px] text-slate-500 lg:col-span-4">{provider.status.reason}</div>}
           </div>}
+        </div>
+        <div className="grid gap-3 xl:grid-cols-2">
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+            <div className="flex items-start justify-between gap-2">
+              <div><h3 className="text-sm font-black">Динамика баланса</h3><p className="text-[10px] text-slate-500">Остаток на конец дня · последние 31 день</p></div>
+              <span className="whitespace-nowrap font-mono text-xs font-bold text-blue-600">{money(provider?.balance ?? null)}</span>
+            </div>
+            {history?.balance.length
+              ? <div className="mt-3 h-56"><ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={history.balance} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                    <defs><linearGradient id="balanceOverviewFill" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#2563eb" stopOpacity={0.28} /><stop offset="95%" stopColor="#2563eb" stopOpacity={0.02} /></linearGradient></defs>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#cbd5e1" opacity={0.45} />
+                    <XAxis dataKey="date" tickFormatter={shortDate} tick={{ fontSize: 9 }} tickLine={false} axisLine={false} />
+                    <YAxis width={58} tick={{ fontSize: 9 }} tickLine={false} axisLine={false} />
+                    <Tooltip labelFormatter={shortDate} />
+                    <Area type="monotone" dataKey="balance" name="Баланс, ₽" stroke="#2563eb" strokeWidth={2} fill="url(#balanceOverviewFill)" />
+                  </AreaChart>
+                </ResponsiveContainer></div>
+              : <div className="flex h-56 items-center justify-center text-xs text-slate-500">История баланса ещё не накоплена</div>}
+          </div>
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+            <div className="flex items-start justify-between gap-2">
+              <div><h3 className="text-sm font-black">Расход минут</h3><p className="text-[10px] text-slate-500">Подтверждённое списание из пакетов по дням</p></div>
+              <span className="whitespace-nowrap font-mono text-xs font-bold text-violet-600">
+                {history?.minutes.reduce((sum, item) => sum + item.usedMinutes, 0).toLocaleString('ru-RU', { maximumFractionDigits: 1 }) || '0'} мин
+              </span>
+            </div>
+            {history?.minutes.length
+              ? <div className="mt-3 h-56"><ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={history.minutes} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#cbd5e1" opacity={0.45} />
+                    <XAxis dataKey="date" tickFormatter={shortDate} tick={{ fontSize: 9 }} tickLine={false} axisLine={false} />
+                    <YAxis width={48} tick={{ fontSize: 9 }} tickLine={false} axisLine={false} />
+                    <Tooltip labelFormatter={shortDate} />
+                    <Bar dataKey="usedMinutes" name="Из пакета, мин" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer></div>
+              : <div className="flex h-56 items-center justify-center text-xs text-slate-500">Подтверждённые списания минут не найдены</div>}
+          </div>
         </div>
         <MtsAutoSecretaryPanel token={token} canManage={canManage} canViewAnalytics={canViewAnalytics}
           activeTab="overview" showNavigation={false} />

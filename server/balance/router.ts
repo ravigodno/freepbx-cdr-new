@@ -43,6 +43,21 @@ export function registerBalanceRoutes(app: Express, deps: Dependencies): Pick<Mt
     }
   });
 
+  app.get('/api/balance/overview/history', deps.requireAuth(), async (req: Request, res: Response) => {
+    if (!(await deps.checkPermission(req, 'view_balance'))) {
+      return res.status(403).json({ error: 'Access denied: view_balance permission required' });
+    }
+    try {
+      return res.json({ success: true, history: await service.getOverviewHistory(Number(req.query.days || 31)) });
+    } catch (error) {
+      return res.status(503).json({
+        success: false,
+        safeErrorCode: sanitizeBalanceStorageError(error),
+        safeMessage: 'История баланса временно недоступна'
+      });
+    }
+  });
+
   app.post('/api/balance/overview/sync', deps.requireAuth(), async (req: Request, res: Response) => {
     if (!(await deps.checkPermission(req, 'manage_balance_sources'))) {
       return res.status(403).json({ error: 'Access denied: manage_balance_sources permission required' });

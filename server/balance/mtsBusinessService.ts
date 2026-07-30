@@ -126,6 +126,12 @@ export interface MtsBusinessOverview {
   };
 }
 
+export interface MtsBusinessOverviewHistory {
+  balance: Array<{ date: string; balance: number }>;
+  minutes: Array<{ date: string; usedMinutes: number }>;
+  periodDays: number;
+}
+
 export class MtsBusinessBalanceService {
   private provider: MtsBusinessProvider | null = null;
   private configFingerprint = '';
@@ -427,6 +433,45 @@ export class MtsBusinessBalanceService {
       measuredAt: utcIsoFromSql(row.measured_at),
       lastSuccessAt,
       status
+    };
+  }
+
+  async getOverviewHistory(periodDays = 31): Promise<MtsBusinessOverviewHistory> {
+    const safePeriodDays = Math.max(7, Math.min(370, Math.trunc(periodDays) || 31));
+    const [snapshotRows, minuteRows] = await Promise.all([
+      queryPBXPulsDb(
+        `SELECT balance_amount balanceAmount,measured_at measuredAt
+         FROM balance_snapshots
+         WHERE source_id=? AND balance_amount IS NOT NULL
+           AND measured_at>=DATE_SUB(UTC_TIMESTAMP(),INTERVAL ? DAY)
+         ORDER BY measured_at,id`,
+        [MTS_BUSINESS_SOURCE_ID, safePeriodDays]
+      ),
+      queryPBXPulsDb(
+        `SELECT DATE(e.occurred_at) usageDate,SUM(e.package_counter_used)/60 usedMinutes
+         FROM balance_usage_events e
+         INNER JOIN balance_sources s ON s.source_pk=e.source_id
+         WHERE s.id=? AND e.package_counter_id IS NOT NULL
+           AND e.package_counter_used IS NOT NULL
+           AND e.occurred_at>=DATE_SUB(UTC_TIMESTAMP(),INTERVAL ? DAY)
+         GROUP BY DATE(e.occurred_at)
+         ORDER BY usageDate`,
+        [MTS_BUSINESS_SOURCE_ID, safePeriodDays]
+      )
+    ]);
+    const dailyBalance = new Map<string, number>();
+    for (const row of snapshotRows) {
+      const date = String(row.measuredAt || '').slice(0, 10);
+      const balance = Number(row.balanceAmount);
+      if (date && Number.isFinite(balance)) dailyBalance.set(date, balance);
+    }
+    return {
+      balance: [...dailyBalance.entries()].map(([date, balance]) => ({ date, balance })),
+      minutes: minuteRows.map(row => ({
+        date: String(row.usageDate || '').slice(0, 10),
+        usedMinutes: Number(row.usedMinutes || 0)
+      })).filter(row => row.date && Number.isFinite(row.usedMinutes)),
+      periodDays: safePeriodDays
     };
   }
 
