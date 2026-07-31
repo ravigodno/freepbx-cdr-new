@@ -100,11 +100,14 @@ case "$FREEPBX_VERSION" in
 esac
 
 if ! command_exists node || ! command_exists npm; then
-  fail "Node.js и npm не найдены. Для FreePBX 16/17 установите совместимый Node.js 16, 18 или 20 и повторите запуск."
+  fail "Node.js и npm не найдены. Для FreePBX 16/17 установите совместимый Node.js 18 или новее и повторите запуск."
 fi
 NODE_MAJOR="$(node -p 'Number(process.versions.node.split(".")[0])')"
-(( NODE_MAJOR >= 16 )) || fail "Требуется Node.js 16 или новее. Сейчас: $(node -v)."
+(( NODE_MAJOR >= 18 )) || fail "Требуется Node.js 18 или новее. Сейчас: $(node -v)."
 log "Используется $(node -v), npm $(npm -v)"
+if (( NODE_MAJOR < 20 )); then
+  log "Режим совместимости Node.js $(node -v): основные функции PBXPuls работают, Google GenAI требует Node.js 20+."
+fi
 
 if [[ -e "$APP_DIR" ]]; then
   fail "Каталог $APP_DIR уже существует. Установщик предназначен для чистой установки и не удаляет существующие данные."
