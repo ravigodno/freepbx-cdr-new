@@ -6,7 +6,7 @@ REPOSITORY="${PBXPULS_REPOSITORY:-https://github.com/ravigodno/freepbx-cdr-new.g
 REF="${PBXPULS_REF:-main}"
 PROCESS_NAME="${PBXPULS_PROCESS_NAME:-asterisk-cdr-panel}"
 SERVICE_USER="pbxpuls"
-PORT="${PBXPULS_PORT:-3000}"
+PORT="3000"
 CREDENTIALS_FILE="${PBXPULS_CREDENTIALS_FILE:-/root/pbxpuls-install-credentials.txt}"
 
 log() { printf '\n[PBXPuls installer] %s\n' "$*"; }
@@ -23,9 +23,11 @@ install_packages() {
     apt-get update
     apt-get install -y git curl ca-certificates build-essential mariadb-client netcat-openbsd openssl
   elif command_exists dnf; then
-    dnf install -y git curl ca-certificates gcc-c++ make mariadb nc openssl
+    dnf install -y git curl ca-certificates gcc-c++ make mariadb openssl
+    dnf install -y nmap-ncat || dnf install -y nc
   elif command_exists yum; then
-    yum install -y git curl ca-certificates gcc-c++ make mariadb nc openssl
+    yum install -y git curl ca-certificates gcc-c++ make mariadb openssl
+    yum install -y nmap-ncat || yum install -y nc
   else
     fail "Не найден поддерживаемый пакетный менеджер: apt, dnf или yum."
   fi
@@ -91,6 +93,8 @@ generate_secret() {
 }
 
 install_packages
+command_exists mysql || fail "Клиент MariaDB/MySQL не установлен."
+command_exists nc || fail "Утилита netcat (nc) не установлена."
 
 command_exists fwconsole || fail "fwconsole не найден. Сначала установите FreePBX 16 или FreePBX 17."
 FREEPBX_VERSION="$(fwconsole --version 2>/dev/null | head -n1 | tr -cd '0-9.\n' || true)"
@@ -127,7 +131,7 @@ JWT_SECRET="$(generate_secret 32)"
 cp -n .env.example .env 2>/dev/null || touch .env
 chmod 600 .env
 
-# Internal PBXPuls DB and read-only access to FreePBX databases.
+# Internal PBXpuls DB and read-only access to FreePBX databases.
 set_env PBXPULS_DB_HOST 127.0.0.1
 set_env PBXPULS_DB_PORT 3306
 set_env PBXPULS_DB_NAME pbxpuls
@@ -169,7 +173,7 @@ set_env OPERATOR_PASSWORD "$OPERATOR_PASSWORD"
 set_env OPERATOR_EXTENSION 101
 
 log "Установка зависимостей и сборка"
-npm ci
+npm_config_engine_strict=false npm ci
 npm run build
 
 # Create the complete legacy JSON schema before SQL migrations seed users/roles.
