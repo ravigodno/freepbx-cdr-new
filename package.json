@@ -1,13 +1,14 @@
 {
   "name": "freepbx-cdr-new",
   "private": true,
-  "version": "5.6.51",
+  "version": "5.6.52",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --log-override:empty-import-meta=silent --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",
     "lint": "tsc --noEmit",
+    "install:fresh:check": "bash -n install.sh && bash -n scripts/start-pbxpuls.sh",
     "pbxpuls:db:check": "tsx scripts/pbxpuls-db.ts --check",
     "pbxpuls:db:setup": "tsx scripts/pbxpuls-db.ts --setup",
     "ai-platform:prepare-receptionist-live": "tsx scripts/prepare-ai-receptionist-live-readiness.ts --apply",
