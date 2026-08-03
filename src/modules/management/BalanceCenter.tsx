@@ -742,6 +742,8 @@ export default function BalanceCenter({ session, hasPermission }: BalanceCenterP
       token={session?.token || ''}
       canManage={canManageSources}
       canViewAnalytics={canViewAnalytics}
+      canManageProviders={hasPermission('manage_balance_providers')}
+      canListenRecordings={hasPermission('listen_recordings')}
     />
   );
 
@@ -960,7 +962,7 @@ export default function BalanceCenter({ session, hasPermission }: BalanceCenterP
           </div>
         )}
         {activeTab === 'settings' && (
-          <div className="mb-5">
+          <div className="mb-5 space-y-5">
             <MtsBusinessSettingsForm
               token={session?.token || ''}
               canManage={canManageSources}

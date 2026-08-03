@@ -23,6 +23,7 @@
     "test:quality-permission": "tsx scripts/test-quality-permission.ts",
     "test:quality": "tsx scripts/test-quality.ts",
     "test:balance-provider-foundation": "tsx scripts/test-balance-provider-foundation.ts",
+    "test:novofon-balance": "tsx scripts/test-novofon-balance.ts",
     "test:mts-auto-secretary": "tsx scripts/test-mts-auto-secretary.ts",
     "test:mts-packages": "tsx scripts/test-mts-packages.ts",
     "sync:mts-package-counters": "tsx scripts/sync-mts-package-counters.ts",

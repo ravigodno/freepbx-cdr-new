@@ -1785,6 +1785,56 @@ const MIGRATIONS: Migration[] = [
         ADD COLUMN package_counter_id VARCHAR(100) NULL AFTER package_counter_used,
         ADD KEY idx_balance_usage_package_counter(source_id,package_counter_id,occurred_at)`
     ]
+  },
+  {
+    key:'20260803_074_novofon_balance_provider',
+    description:'Add Novofon to universal Balance storage with independent report cursors',
+    statements:[
+      `INSERT IGNORE INTO balance_sources(id,provider,display_name,enabled,config_json,sync_interval_minutes,status)
+       VALUES('novofon','novofon','Novofon',0,'{}',15,'disabled')`,
+      `ALTER TABLE balance_source_credentials
+        ADD COLUMN access_token_encrypted LONGTEXT NULL,
+        ADD COLUMN login_encrypted LONGTEXT NULL,
+        ADD COLUMN password_encrypted LONGTEXT NULL,
+        ADD COLUMN api_key_encrypted LONGTEXT NULL,
+        ADD COLUMN api_secret_encrypted LONGTEXT NULL`,
+      `ALTER TABLE balance_usage_events
+        ADD COLUMN provider_external_id VARCHAR(191) NULL,
+        ADD COLUMN provider_session_id VARCHAR(64) NULL,
+        ADD COLUMN provider_leg_id VARCHAR(64) NULL,
+        ADD COLUMN provider_event_type VARCHAR(32) NULL,
+        ADD COLUMN provider_source VARCHAR(100) NULL,
+        ADD COLUMN sync_batch_id CHAR(36) NULL,
+        ADD COLUMN sync_status VARCHAR(32) NULL,
+        ADD COLUMN currency VARCHAR(16) NULL,
+        ADD COLUMN actual_duration_seconds DECIMAL(20,6) NULL,
+        ADD COLUMN chargeable_duration_seconds DECIMAL(20,6) NULL,
+        ADD COLUMN cost_per_minute DECIMAL(20,6) NULL,
+        ADD COLUMN charged_amount DECIMAL(20,6) NULL,
+        ADD COLUMN bonus_amount DECIMAL(20,6) NULL,
+        ADD UNIQUE KEY uniq_balance_provider_leg(source_id,provider_session_id,provider_leg_id,provider_event_type),
+        ADD KEY idx_balance_provider_session(source_id,provider_session_id,provider_leg_id),
+        ADD KEY idx_balance_sync_status(source_id,sync_status,occurred_at)`,
+      `CREATE TABLE IF NOT EXISTS balance_sync_cursors(
+        source_id BIGINT NOT NULL,
+        report_type VARCHAR(32) NOT NULL,
+        cursor_at DATETIME NULL,
+        updated_at DATETIME NULL,
+        PRIMARY KEY(source_id,report_type),
+        CONSTRAINT fk_balance_sync_cursor_source FOREIGN KEY(source_id) REFERENCES balance_sources(source_pk) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS balance_sync_batches(
+        batch_id CHAR(36) PRIMARY KEY,
+        source_id BIGINT NOT NULL,
+        status VARCHAR(32) NOT NULL,
+        safe_error_code VARCHAR(64) NULL,
+        counters_json LONGTEXT NULL,
+        started_at DATETIME NOT NULL,
+        finished_at DATETIME NULL,
+        KEY idx_balance_sync_batch_source(source_id,started_at),
+        CONSTRAINT fk_balance_sync_batch_source FOREIGN KEY(source_id) REFERENCES balance_sources(source_pk) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+    ]
   }
 ];
 

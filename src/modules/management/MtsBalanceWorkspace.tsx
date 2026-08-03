@@ -9,11 +9,14 @@ import {
 import MtsAutoSecretaryPanel, { type MtsAutoSecretaryPanelTab } from './MtsAutoSecretaryPanel';
 import MtsBusinessSettingsForm from './MtsBusinessSettingsForm';
 import MtsPackagesPanel from './MtsPackagesPanel';
+import NovofonBalancePanel from './NovofonBalancePanel';
 
 type Props = {
   token: string;
   canManage: boolean;
   canViewAnalytics: boolean;
+  canManageProviders: boolean;
+  canListenRecordings: boolean;
 };
 
 type ProviderOverview = {
@@ -76,7 +79,7 @@ const statusTone: Record<ProviderOverview['status']['code'], string> = {
   offline: 'bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700'
 };
 
-export default function MtsBalanceWorkspace({ token, canManage, canViewAnalytics }: Props) {
+export default function MtsBalanceWorkspace({ token, canManage, canViewAnalytics, canManageProviders, canListenRecordings }: Props) {
   const [activeTab, setActiveTab] = useState<WorkspaceTab>(() => {
     const saved = localStorage.getItem('pbxpuls_balance_workspace_tab');
     return ['overview', 'calls', 'charges', 'packages', 'branches', 'settings'].includes(saved || '')
@@ -212,6 +215,7 @@ export default function MtsBalanceWorkspace({ token, canManage, canViewAnalytics
       </div>
 
       {activeTab === 'overview' && <div className="space-y-3">
+        <NovofonBalancePanel token={token} canManage={canManage} canViewAnalytics={canViewAnalytics} canListenRecordings={canListenRecordings} mode="summary" />
         <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3 dark:border-slate-700">
             <div>
@@ -298,10 +302,12 @@ export default function MtsBalanceWorkspace({ token, canManage, canViewAnalytics
           activeTab={activeTab} showNavigation={false} />
       )}
 
-      {activeTab === 'settings' && canManage && <div className="space-y-4">
-        <MtsBusinessSettingsForm token={token} canManage={canManage} onSaved={() => void load()} />
-        <MtsAutoSecretaryPanel token={token} canManage={canManage} canViewAnalytics={canViewAnalytics}
-          activeTab="settings" showNavigation={false} />
+      {activeTab === 'calls' && <NovofonBalancePanel token={token} canManage={canManage} canViewAnalytics={canViewAnalytics} canListenRecordings={canListenRecordings} mode="details" />}
+
+      {activeTab === 'settings' && (canManage || canManageProviders) && <div className="space-y-4">
+        {canManage && <><MtsBusinessSettingsForm token={token} canManage={canManage} onSaved={() => void load()} />
+          <MtsAutoSecretaryPanel token={token} canManage={canManage} canViewAnalytics={canViewAnalytics} activeTab="settings" showNavigation={false} /></>}
+        <NovofonBalancePanel token={token} canManage={canManageProviders} canViewAnalytics={canViewAnalytics} canListenRecordings={canListenRecordings} mode="settings" />
       </div>}
     </div>
   );

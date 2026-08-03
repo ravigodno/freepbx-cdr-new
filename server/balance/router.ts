@@ -3,6 +3,7 @@ import { MTS_BUSINESS_SOURCE_ID, MtsBusinessBalanceService, safeMtsBusinessError
 import { MtsUsageService } from './mtsUsageService.js';
 import { MtsAutoSecretaryService, safeMtsAutoSecretaryError } from './mtsAutoSecretaryService.js';
 import { MtsPackagesService } from './mtsPackagesService.js';
+import { NOVOFON_SOURCE_ID, NovofonService, safeNovofonError } from './novofonService.js';
 
 type Dependencies = {
   requireAuth: any;
@@ -16,13 +17,14 @@ export function registerBalanceRoutes(app: Express, deps: Dependencies): Pick<Mt
   const usage = new MtsUsageService(() => service.getUsageProvider(), deps.hashSecret, deps.queryCdr);
   const packages = new MtsPackagesService(() => service.getUsageProvider());
   const autoSecretary = new MtsAutoSecretaryService(deps.hashSecret);
+  const novofon = new NovofonService(deps.hashSecret, deps.queryCdr);
 
   app.get('/api/balance/sources', deps.requireAuth(), async (req: Request, res: Response) => {
     if (!(await deps.checkPermission(req, 'view_balance'))) {
       return res.status(403).json({ error: 'Access denied: view_balance permission required' });
     }
     try {
-      return res.json({ success: true, sources: await service.listSources() });
+      return res.json({ success: true, sources: [...await service.listSources(), await novofon.source()] });
     } catch (error) {
       return res.status(503).json({ success: false, error: 'Balance storage unavailable', safeErrorCode: sanitizeBalanceStorageError(error) });
     }
@@ -216,6 +218,10 @@ export function registerBalanceRoutes(app: Express, deps: Dependencies): Pick<Mt
     if (!(await deps.checkPermission(req, 'manage_balance_sources'))) {
       return res.status(403).json({ error: 'Access denied: manage_balance_sources permission required' });
     }
+    if (String(req.params.id) === NOVOFON_SOURCE_ID) {
+      try { return res.json({ success: true, ...(await novofon.syncBalance()) }); }
+      catch (error) { return res.status(503).json({ success: false, ...safeNovofonError(error) }); }
+    }
     if (String(req.params.id) !== MTS_BUSINESS_SOURCE_ID) {
       return res.status(404).json({ success: false, safeErrorCode: 'balance_source_not_found', safeMessage: 'Источник баланса не найден' });
     }
@@ -241,6 +247,10 @@ export function registerBalanceRoutes(app: Express, deps: Dependencies): Pick<Mt
     if (!(await deps.checkPermission(req, 'view_balance_analytics'))) {
       return res.status(403).json({ error: 'Access denied: view_balance_analytics permission required' });
     }
+    if (String(req.params.id) === NOVOFON_SOURCE_ID) {
+      try { return res.json({ success: true, ...(await novofon.usage(req.query, await deps.checkPermission(req, 'view_calls'))) }); }
+      catch (error) { return res.status(400).json({ success: false, ...safeNovofonError(error) }); }
+    }
     if (String(req.params.id) !== MTS_BUSINESS_SOURCE_ID) {
       return res.status(404).json({ success: false, safeErrorCode: 'balance_source_not_found' });
     }
@@ -254,6 +264,10 @@ export function registerBalanceRoutes(app: Express, deps: Dependencies): Pick<Mt
   app.get('/api/balance/sources/:id/usage/summary', deps.requireAuth(), async (req: Request, res: Response) => {
     if (!(await deps.checkPermission(req, 'view_balance_analytics'))) {
       return res.status(403).json({ error: 'Access denied: view_balance_analytics permission required' });
+    }
+    if (String(req.params.id) === NOVOFON_SOURCE_ID) {
+      try { return res.json({ success: true, summary: await novofon.summary() }); }
+      catch (error) { return res.status(503).json({ success: false, ...safeNovofonError(error) }); }
     }
     if (String(req.params.id) !== MTS_BUSINESS_SOURCE_ID) {
       return res.status(404).json({ success: false, safeErrorCode: 'balance_source_not_found' });
@@ -288,6 +302,7 @@ export function registerBalanceRoutes(app: Express, deps: Dependencies): Pick<Mt
     if (!(await deps.checkPermission(req, 'view_balance_analytics'))) {
       return res.status(403).json({ error: 'Access denied: view_balance_analytics permission required' });
     }
+    if (String(req.params.id) === NOVOFON_SOURCE_ID) return res.json({ success: true, syncing: novofon.isSyncing() });
     if (String(req.params.id) !== MTS_BUSINESS_SOURCE_ID) {
       return res.status(404).json({ success: false, safeErrorCode: 'balance_source_not_found' });
     }
@@ -297,6 +312,10 @@ export function registerBalanceRoutes(app: Express, deps: Dependencies): Pick<Mt
   app.post('/api/balance/sources/:id/usage/sync', deps.requireAuth(), async (req: Request, res: Response) => {
     if (!(await deps.checkPermission(req, 'manage_balance_sources'))) {
       return res.status(403).json({ error: 'Access denied: manage_balance_sources permission required' });
+    }
+    if (String(req.params.id) === NOVOFON_SOURCE_ID) {
+      try { return res.json({ success: true, ...(await novofon.syncUsage(req.body || {})) }); }
+      catch (error) { const safe = safeNovofonError(error); return res.status(safe.safeErrorCode === 'usage_sync_in_progress' ? 409 : 503).json({ success: false, ...safe }); }
     }
     if (String(req.params.id) !== MTS_BUSINESS_SOURCE_ID) {
       return res.status(404).json({ success: false, safeErrorCode: 'balance_source_not_found' });
@@ -318,13 +337,70 @@ export function registerBalanceRoutes(app: Express, deps: Dependencies): Pick<Mt
     }
   });
 
+  app.get('/api/balance/providers/novofon/settings', deps.requireAuth(), async (req: Request, res: Response) => {
+    if (!(await deps.checkPermission(req, 'manage_balance_providers'))) return res.status(403).json({ error: 'Access denied: manage_balance_providers permission required' });
+    try { return res.json({ success: true, settings: await novofon.getSettings() }); }
+    catch { return res.status(503).json({ success: false, safeErrorCode: 'balance_settings_unavailable' }); }
+  });
+
+  app.put('/api/balance/providers/novofon/settings', deps.requireAuth(), async (req: Request, res: Response) => {
+    if (!(await deps.checkPermission(req, 'manage_balance_providers'))) return res.status(403).json({ error: 'Access denied: manage_balance_providers permission required' });
+    try { return res.json({ success: true, settings: await novofon.saveSettings(req.body || {}) }); }
+    catch (error) { return res.status(400).json({ success: false, ...safeNovofonError(error) }); }
+  });
+
+  app.post('/api/balance/providers/novofon/diagnose', deps.requireAuth(), async (req: Request, res: Response) => {
+    if (!(await deps.checkPermission(req, 'manage_balance_providers'))) return res.status(403).json({ error: 'Access denied: manage_balance_providers permission required' });
+    try { return res.json({ success: true, ...(await novofon.diagnose()) }); }
+    catch (error) { return res.status(503).json({ success: false, ...safeNovofonError(error) }); }
+  });
+
+  app.post(['/api/balance/providers/novofon/sync', '/api/balance/sources/novofon/sync'], deps.requireAuth(), async (req: Request, res: Response) => {
+    if (!(await deps.checkPermission(req, 'manage_balance_sources'))) return res.status(403).json({ error: 'Access denied: manage_balance_sources permission required' });
+    try { return res.json({ success: true, ...(await novofon.syncBalance()) }); }
+    catch (error) { return res.status(503).json({ success: false, ...safeNovofonError(error) }); }
+  });
+
+  app.get(['/api/balance/providers/novofon/summary', '/api/balance/sources/novofon/summary'], deps.requireAuth(), async (req: Request, res: Response) => {
+    if (!(await deps.checkPermission(req, 'view_balance'))) return res.status(403).json({ error: 'Access denied: view_balance permission required' });
+    try { return res.json({ success: true, summary: await novofon.summary() }); }
+    catch (error) { return res.status(503).json({ success: false, ...safeNovofonError(error) }); }
+  });
+
+  app.get(['/api/balance/providers/novofon/usage', '/api/balance/sources/novofon/usage'], deps.requireAuth(), async (req: Request, res: Response) => {
+    if (!(await deps.checkPermission(req, 'view_balance_analytics'))) return res.status(403).json({ error: 'Access denied: view_balance_analytics permission required' });
+    try { return res.json({ success: true, ...(await novofon.usage(req.query, await deps.checkPermission(req, 'view_calls'))) }); }
+    catch (error) { return res.status(400).json({ success: false, ...safeNovofonError(error) }); }
+  });
+
+  app.post(['/api/balance/providers/novofon/usage/sync', '/api/balance/sources/novofon/usage/sync'], deps.requireAuth(), async (req: Request, res: Response) => {
+    if (!(await deps.checkPermission(req, 'manage_balance_sources'))) return res.status(403).json({ error: 'Access denied: manage_balance_sources permission required' });
+    try { return res.json({ success: true, ...(await novofon.syncUsage(req.body || {})) }); }
+    catch (error) { const safe = safeNovofonError(error); return res.status(safe.safeErrorCode === 'usage_sync_in_progress' ? 409 : 503).json({ success: false, ...safe }); }
+  });
+
+  app.get(['/api/balance/providers/novofon/sync-status', '/api/balance/sources/novofon/usage/sync/status'], deps.requireAuth(), async (req: Request, res: Response) => {
+    if (!(await deps.checkPermission(req, 'view_balance_analytics'))) return res.status(403).json({ error: 'Access denied: view_balance_analytics permission required' });
+    return res.json({ success: true, syncing: novofon.isSyncing() });
+  });
+
+  app.get('/api/balance/providers/novofon/recordings/:eventId', deps.requireAuth(), async (req: Request, res: Response) => {
+    if (!(await deps.checkPermission(req, 'view_balance_analytics')) || !(await deps.checkPermission(req, 'listen_recordings'))) {
+      return res.status(403).json({ error: 'Access denied: recording permissions required' });
+    }
+    try { const url = await novofon.recordingUrl(Number(req.params.eventId)); return req.query.json === '1' ? res.json({ success: true, url }) : res.redirect(302, url); }
+    catch (error) { return res.status(404).json({ success: false, ...safeNovofonError(error) }); }
+  });
+
   return {
     start() {
       service.start();
+      novofon.start();
       autoSecretary.start((from, to) => usage.sync(MTS_BUSINESS_SOURCE_ID, { from, to }));
     },
     stop() {
       autoSecretary.stop();
+      novofon.stop();
       service.stop();
     }
   };
