@@ -222,7 +222,7 @@ export default function MarketingTab() {
     return () => { active = false; };
   }, [refreshKey, reportEndDate, reportStartDate]);
 
-  const callbackSlaHours = usedSettings?.missedCallCallbackSlaHours ?? 24;
+  const callbackSlaMinutes = usedSettings?.missedCallCallbackSlaMinutes ?? 1440;
   const aggregateRowsAvailable = Boolean(aggregatesData && Number(aggregatesData.total || 0) > 0);
   const aggregateSummary = aggregateRowsAvailable ? aggregatesData?.summary : null;
   const useMetrikaVisits = metrikaStatus === 'connected' && Number(metrikaSummary?.visits || 0) > 0;
@@ -306,14 +306,14 @@ export default function MarketingTab() {
     { label: 'Звонки с сайта', value: formatMetric(summary.siteCalls), hint: summaryData ? 'Сопоставленные phone_click -> CDR' : 'Данные появятся после matching событий', icon: PhoneCall, tone: 'green' as const },
     { label: 'Конверсия клик → звонок', value: formatMetric(summary.clickToCallConversion, '%'), hint: 'Доля кликов, сопоставленных со звонками', icon: Target, tone: 'purple' as const },
     { label: 'Пропущенные звонки с сайта', value: formatMetric(summary.missedSiteCalls), hint: 'Сопоставленные звонки без успешного ответа', icon: PhoneMissed, tone: 'orange' as const },
-    { label: 'Потерянные лиды', value: formatMetric(summary.lostLeads), hint: 'С учетом успешных перезвонов в течение ' + callbackSlaHours + ' ч', icon: TrendingDown, tone: 'red' as const },
+    { label: 'Потерянные лиды', value: formatMetric(summary.lostLeads), hint: 'С учетом успешных перезвонов в течение ' + callbackSlaMinutes + ' мин', icon: TrendingDown, tone: 'red' as const },
     { label: 'Расходы', value: formatMoney(summary.adCost), hint: isDirectLimited ? directLimitedWarning : (isDirectConnected ? 'Расходы Яндекс Директа через Метрику' : 'Расходы Директа не подключены'), icon: CircleDollarSign, tone: 'blue' as const },
     { label: 'Клики', value: formatMetric(summary.adClicks), hint: isDirectLimited ? 'Визиты Директа из Метрики' : (isDirectConnected ? 'Клики Директа' : 'Расходы Директа не подключены'), icon: MousePointerClick, tone: 'purple' as const },
     { label: 'Средняя цена клика', value: formatMoney(summary.avgCpc), hint: isDirectLimited ? 'CPC недоступен без суммы расходов' : (isDirectConnected ? 'CPC по Direct costs' : 'Расходы Директа не подключены'), icon: Target, tone: 'blue' as const },
     { label: 'Цена звонка', value: formatMoney(summary.costPerCall), hint: 'Расход / звонки с сайта', icon: PhoneCall, tone: 'green' as const },
     { label: 'Цена отвеченного звонка', value: formatMoney(summary.costPerAnsweredCall), hint: 'Расход / отвеченные звонки', icon: CheckCircle2, tone: 'green' as const },
     { label: 'Потерянный бюджет', value: formatMoney(summary.lostBudgetEstimate), hint: isDirectLimited ? 'Недоступен без суммы расходов' : (isDirectConnected ? 'Оценка расхода на потерянные лиды' : 'Расходы Директа не подключены'), icon: Banknote, tone: 'red' as const }
-  ], [summary, summaryData, callbackSlaHours, directSummary, useMetrikaVisits, isDirectConnected, isDirectLimited, directLimitedWarning]);
+  ], [summary, summaryData, callbackSlaMinutes, directSummary, useMetrikaVisits, isDirectConnected, isDirectLimited, directLimitedWarning]);
 
   const renderTab = () => {
     if (activeTab === 'phone-clicks') return <PhoneClicksTable events={phoneClicks} metrikaGoalSummary={metrikaGoalSummary} metrikaGoalRows={metrikaGoalRows} metrikaGoalError={metrikaGoalWarning} />;

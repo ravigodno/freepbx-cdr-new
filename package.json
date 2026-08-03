@@ -1,7 +1,7 @@
 {
   "name": "freepbx-cdr-new",
   "private": true,
-  "version": "5.6.53",
+  "version": "5.6.54",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
@@ -17,6 +17,7 @@
     "pbxpuls:monitoring:retention": "tsx scripts/pbxpuls-monitoring-retention.ts",
     "test:inbound-caller": "tsx scripts/test-inbound-caller-resolver.ts",
     "test:click-to-call-context": "tsx scripts/test-click-to-call-context.ts",
+    "test:missed-call-callback-sla": "tsx scripts/test-missed-call-callback-sla.ts",
     "test:live-popup-route-summary": "tsx scripts/test-live-popup-route-summary.ts",
     "test:live-popup-priority": "tsx scripts/test-live-popup-priority.ts",
     "test:live-popup-parallel-internal": "tsx scripts/test-live-popup-parallel-internal.ts",

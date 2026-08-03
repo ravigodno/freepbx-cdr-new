@@ -152,6 +152,7 @@ export interface AppSettings {
   // Call quality and lead attribution settings
   answerSlaSeconds?: number;
   missedCallCallbackSlaHours?: number;
+  missedCallCallbackSlaMinutes?: number;
   calltrackingMatchWindowMinutes?: number;
 
   // FreePBX REST API Settings

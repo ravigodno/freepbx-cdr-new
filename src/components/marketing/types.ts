@@ -15,7 +15,7 @@ export interface MarketingOverviewSummary {
 
 export interface UsedCallQualitySettings {
   answerSlaSeconds: number;
-  missedCallCallbackSlaHours: number;
+  missedCallCallbackSlaMinutes: number;
   calltrackingMatchWindowMinutes: number;
 }
 

@@ -32,6 +32,7 @@ import https from 'https';
 import { CallEntry, MissedCallStatus, AppSettings, DashboardStats, UserRole, WebUser } from './src/types.js';
 import{validateDirectoryPhone as validateSharedDirectoryPhone}from'./shared/directoryImportValidation.js';
 import { resolveCdrCallerExtension } from './shared/cdrCallerExtension.js';
+import { resolveMissedCallCallbackSlaMinutes } from './shared/missedCallCallbackSla.js';
 import { resolveClickToCallContext } from './server/clickToCallContext.js';
 import os from 'os';
 import { registerManagementRoutes } from './server-management.js';
@@ -2430,7 +2431,7 @@ const normalizeSlaThresholdSeconds = (value: any): number => {
 
 type CallQualitySettings = {
   answerSlaSeconds: number;
-  missedCallCallbackSlaHours: number;
+  missedCallCallbackSlaMinutes: number;
   calltrackingMatchWindowMinutes: number;
 };
 
@@ -2444,7 +2445,7 @@ const getCallQualitySettings = (settingsOrDb: any): CallQualitySettings => {
   const settings = settingsOrDb?.settings ? settingsOrDb.settings : (settingsOrDb || {});
   return {
     answerSlaSeconds: clampCallQualityNumber(settings.answerSlaSeconds, 20, 5, 300),
-    missedCallCallbackSlaHours: clampCallQualityNumber(settings.missedCallCallbackSlaHours, 24, 1, 168),
+    missedCallCallbackSlaMinutes: resolveMissedCallCallbackSlaMinutes(settings),
     calltrackingMatchWindowMinutes: clampCallQualityNumber(settings.calltrackingMatchWindowMinutes, 5, 1, 240)
   };
 };
@@ -2453,16 +2454,16 @@ const applyCallQualitySettingsDefaults = (settings: any): boolean => {
   if (!settings) return false;
   const before = JSON.stringify({
     answerSlaSeconds: settings.answerSlaSeconds,
-    missedCallCallbackSlaHours: settings.missedCallCallbackSlaHours,
+    missedCallCallbackSlaMinutes: settings.missedCallCallbackSlaMinutes,
     calltrackingMatchWindowMinutes: settings.calltrackingMatchWindowMinutes
   });
   const normalized = getCallQualitySettings(settings);
   settings.answerSlaSeconds = normalized.answerSlaSeconds;
-  settings.missedCallCallbackSlaHours = normalized.missedCallCallbackSlaHours;
+  settings.missedCallCallbackSlaMinutes = normalized.missedCallCallbackSlaMinutes;
   settings.calltrackingMatchWindowMinutes = normalized.calltrackingMatchWindowMinutes;
   const after = JSON.stringify({
     answerSlaSeconds: settings.answerSlaSeconds,
-    missedCallCallbackSlaHours: settings.missedCallCallbackSlaHours,
+    missedCallCallbackSlaMinutes: settings.missedCallCallbackSlaMinutes,
     calltrackingMatchWindowMinutes: settings.calltrackingMatchWindowMinutes
   });
   return before !== after;
@@ -2981,7 +2982,7 @@ const buildLostCallAnalytics = (calls: any[], options: { startMs: number; endMs:
   };
 };
 
-const calculateCallBusinessCounters = (rows: any[], options: { callbackWindowHours?: number; lostAnalytics?: LostCallAnalytics; slaThresholdSeconds?: number } = {}): CallBusinessCounters => {
+const calculateCallBusinessCounters = (rows: any[], options: { lostAnalytics?: LostCallAnalytics; slaThresholdSeconds?: number } = {}): CallBusinessCounters => {
   const totalCalls = rows.length;
   let inboundCalls = 0;
   let outboundCalls = 0;
@@ -3194,7 +3195,7 @@ const buildClientAnalytics = (allCalls: any[], periodCalls: any[], options: { di
   const periodPhones = new Set(periodCalls.map(getClientNumberForCall).filter(Boolean));
   const lostClients = rows.filter(row => row.totalCalls > 0 && row.daysWithoutContact !== null && row.daysWithoutContact >= lostAfterDays && !periodPhones.has(row.normalizedPhone)).sort((a, b) => Number(b.daysWithoutContact || 0) - Number(a.daysWithoutContact || 0)).slice(0, 100);
   const lowInterestClients = rows.filter(row => row.outgoingCalls > 0 && row.interestIndex < lowInterestThreshold).sort((a, b) => a.interestIndex - b.interestIndex || b.outgoingCalls - a.outgoingCalls).slice(0, 100);
-  const missedWithoutCallback = buildLostCallAnalytics(allCalls, { startMs: options.startMs, endMs: options.endMs, callbackWindowHours: getCallQualitySettings(options.settings).missedCallCallbackSlaHours, directory: options.directory, ownerMap: options.ownerMap }).items.filter(item => item.callbackStatus === 'not_called_back').map(item => {
+  const missedWithoutCallback = buildLostCallAnalytics(allCalls, { startMs: options.startMs, endMs: options.endMs, callbackWindowMinutes: getCallQualitySettings(options.settings).missedCallCallbackSlaMinutes, directory: options.directory, ownerMap: options.ownerMap }).items.filter(item => item.callbackStatus === 'not_called_back').map(item => {
     const contact = directoryIndex.get(item.normalizedNumber || '');
     const missedMs = getCallDateMs(item.missedAt);
     return { client: contact?.name || 'Неизвестный клиент', company: contact?.company || null, phone: contact?.number || item.externalNumber || item.normalizedNumber, normalizedPhone: item.normalizedNumber, missedAt: item.missedAt, daysSinceMissed: Number.isFinite(missedMs) ? Math.max(0, Math.floor((nowMs - missedMs) / 86400000)) : null, did: item.did, responsible: item.responsibleName || item.responsibleExtension || null, department: item.department || contact?.department || null, status: 'Критично' };
@@ -4704,7 +4705,7 @@ function getDefaultLocalDb(): any {
       amiContext: process.env.AMI_CONTEXT || 'from-internal',
       callbackKpiMinutes: 60,
       answerSlaSeconds: 20,
-      missedCallCallbackSlaHours: 24,
+      missedCallCallbackSlaMinutes: 1440,
       calltrackingMatchWindowMinutes: 5,
       freepbxExtensionProvider: 'auto',
       normEnabled: true,
@@ -5786,13 +5787,13 @@ const isProblemSiteMatch = (match: any): boolean => {
 };
 const isLostSiteCall = (match: any): boolean => match?.leadStatus === 'lost';
 
-async function loadCalltrackingCdrRows(settings: AppSettings, phoneClicks: any[], matchWindowMinutes: number, callbackWindowHours: number, query: any): Promise<any[]> {
+async function loadCalltrackingCdrRows(settings: AppSettings, phoneClicks: any[], matchWindowMinutes: number, callbackWindowMinutes: number, query: any): Promise<any[]> {
   if (phoneClicks.length === 0) return [];
   const eventTimes = phoneClicks.map(event => parseCalltrackingMs(event.eventTime || event.createdAt)).filter(Number.isFinite) as number[];
   if (eventTimes.length === 0) return [];
   const startFromQuery = query.startDate ? new Date(String(query.startDate) + 'T00:00:00') : new Date(Math.min(...eventTimes));
   const endFromQuery = query.endDate ? new Date(String(query.endDate) + 'T23:59:59') : new Date(Math.max(...eventTimes));
-  const extraMinutes = Math.max(matchWindowMinutes, callbackWindowHours * 60);
+  const extraMinutes = Math.max(matchWindowMinutes, callbackWindowMinutes);
   const endWithWindow = new Date(endFromQuery.getTime() + extraMinutes * 60 * 1000);
   const sql = 'SELECT uniqueid, linkedid, calldate, clid, src, dst, dcontext, channel, dstchannel, lastapp, lastdata, duration, billsec, disposition, recordingfile, did, cnum, cnam, outbound_cnum FROM cdr WHERE calldate >= ? AND calldate <= ? ORDER BY calldate ASC LIMIT 20000';
   const rows = await queryFreePBXCDR(settings, isDemoMode(settings), sql, [formatCdrDateParam(startFromQuery), formatCdrDateParam(endWithWindow)]);
@@ -5900,11 +5901,11 @@ function calculateCalltrackingMatches(events: any[], cdrRows: any[], options: { 
   });
 }
 
-function findSuccessfulSiteCallback(match: any, cdrRows: any[], callbackWindowHours: number): any | null {
+function findSuccessfulSiteCallback(match: any, cdrRows: any[], callbackWindowMinutes: number): any | null {
   const externalNumber = normalizeCalltrackingPhoneNumber(match?.matchedExternalNumber);
   const missedMs = parseCalltrackingMs(match?.matchedCallDate);
   if (!externalNumber || !Number.isFinite(missedMs)) return null;
-  const maxMs = missedMs + Math.max(1, callbackWindowHours) * 60 * 60 * 1000;
+  const maxMs = missedMs + Math.max(1, callbackWindowMinutes) * 60 * 1000;
   return cdrRows
     .map(row => ({ row, ms: parseCalltrackingMs(row.calldate), numbers: extractCdrNumbers(row) }))
     .filter(item => Number.isFinite(item.ms) && item.ms > missedMs && item.ms <= maxMs)
@@ -5912,7 +5913,7 @@ function findSuccessfulSiteCallback(match: any, cdrRows: any[], callbackWindowHo
     .sort((a, b) => a.ms - b.ms)[0]?.row || null;
 }
 
-function applyCalltrackingCallbackAnalysis(matches: any[], cdrRows: any[], callbackWindowHours: number) {
+function applyCalltrackingCallbackAnalysis(matches: any[], cdrRows: any[], callbackWindowMinutes: number) {
   return matches.map(match => {
     if (match.matchStatus === 'unmatched') return { ...match, leadStatus: 'unmatched', callStatus: 'unknown', callbackStatus: 'unknown' };
     if (match.matchStatus === 'ambiguous') return { ...match, leadStatus: 'ambiguous', callbackStatus: 'unknown' };
@@ -5922,7 +5923,7 @@ function applyCalltrackingCallbackAnalysis(matches: any[], cdrRows: any[], callb
     if (!externalNumber || !Number.isFinite(missedMs)) {
       return { ...match, leadStatus: 'lost', callStatus: 'lost', callbackStatus: 'unknown' };
     }
-    const callback = findSuccessfulSiteCallback(match, cdrRows, callbackWindowHours);
+    const callback = findSuccessfulSiteCallback(match, cdrRows, callbackWindowMinutes);
     if (!callback) {
       return { ...match, leadStatus: 'lost', callStatus: 'lost', callbackStatus: 'not_called_back' };
     }
@@ -5983,12 +5984,15 @@ async function getCalltrackingMatchDataset(localDb: any, query: any) {
   const matchWindowMinutes = query.matchWindowMinutes !== undefined
     ? clampCallQualityNumber(query.matchWindowMinutes, qualitySettings.calltrackingMatchWindowMinutes, 1, 240)
     : qualitySettings.calltrackingMatchWindowMinutes;
-  const callbackWindowHours = query.callbackWindowHours !== undefined
-    ? clampCallQualityNumber(query.callbackWindowHours, qualitySettings.missedCallCallbackSlaHours, 1, 168)
-    : qualitySettings.missedCallCallbackSlaHours;
+  const legacyCallbackMinutes = query.callbackWindowHours !== undefined
+    ? clampCallQualityNumber(query.callbackWindowHours, qualitySettings.missedCallCallbackSlaMinutes / 60, 1, 168) * 60
+    : qualitySettings.missedCallCallbackSlaMinutes;
+  const callbackWindowMinutes = query.callbackWindowMinutes !== undefined
+    ? clampCallQualityNumber(query.callbackWindowMinutes, qualitySettings.missedCallCallbackSlaMinutes, 1, 10080)
+    : legacyCallbackMinutes;
   const usedSettings = {
     ...qualitySettings,
-    missedCallCallbackSlaHours: callbackWindowHours,
+    missedCallCallbackSlaMinutes: callbackWindowMinutes,
     calltrackingMatchWindowMinutes: matchWindowMinutes
   };
   const phoneClicks = (Array.isArray(localDb.calltrackingEvents) ? localDb.calltrackingEvents : [])
@@ -5998,10 +6002,10 @@ async function getCalltrackingMatchDataset(localDb: any, query: any) {
       return isWithinDateRange(event.eventTime || event.createdAt, query.startDate, query.endDate);
     })
     .sort((a: any, b: any) => parseCalltrackingMs(a.eventTime || a.createdAt) - parseCalltrackingMs(b.eventTime || b.createdAt));
-  const cdrRows = await loadCalltrackingCdrRows(settings, phoneClicks, matchWindowMinutes, callbackWindowHours, query);
+  const cdrRows = await loadCalltrackingCdrRows(settings, phoneClicks, matchWindowMinutes, callbackWindowMinutes, query);
   const initialMatches = calculateCalltrackingMatches(phoneClicks, cdrRows, { matchWindowMinutes, sites });
-  const matches = applyCalltrackingCallbackAnalysis(initialMatches, cdrRows, callbackWindowHours);
-  return { sites, phoneClicks, matches, summary: summarizeCalltrackingMatches(phoneClicks, matches), matchWindowMinutes, callbackWindowHours, usedSettings };
+  const matches = applyCalltrackingCallbackAnalysis(initialMatches, cdrRows, callbackWindowMinutes);
+  return { sites, phoneClicks, matches, summary: summarizeCalltrackingMatches(phoneClicks, matches), matchWindowMinutes, callbackWindowMinutes, usedSettings };
 }
 
 
@@ -9699,7 +9703,7 @@ app.get('/api/calltracking/matches', requireAuth(), requirePermission('view_mark
       total: sorted.length,
       summary: dataset.summary,
       matchWindowMinutes: dataset.matchWindowMinutes,
-      callbackWindowHours: dataset.callbackWindowHours,
+      callbackWindowMinutes: dataset.callbackWindowMinutes,
       usedSettings: dataset.usedSettings
     });
   } catch (error: any) {
@@ -9731,7 +9735,7 @@ app.post('/api/calltracking/match', requireAuth(), requirePermission('manage_cal
       total: nextMatches.length,
       syncedAt,
       matchWindowMinutes: dataset.matchWindowMinutes,
-      callbackWindowHours: dataset.callbackWindowHours,
+      callbackWindowMinutes: dataset.callbackWindowMinutes,
       usedSettings: dataset.usedSettings,
       summary: dataset.summary,
       matches: nextMatches.slice(0, 100)
@@ -9760,7 +9764,7 @@ app.get('/api/calltracking/matched-calls', requireAuth(), requirePermission('vie
       total: sorted.length,
       summary: dataset.summary,
       matchWindowMinutes: dataset.matchWindowMinutes,
-      callbackWindowHours: dataset.callbackWindowHours,
+      callbackWindowMinutes: dataset.callbackWindowMinutes,
       usedSettings: dataset.usedSettings
     });
   } catch (error: any) {
@@ -11357,11 +11361,15 @@ app.post('/api/settings', requireAuth(), async (req, res) => {
   }
 
   const localDb = await readLocalDb();
-  if ('answerSlaSeconds' in settingsUpdate || 'missedCallCallbackSlaHours' in settingsUpdate || 'calltrackingMatchWindowMinutes' in settingsUpdate) {
+  if ('missedCallCallbackSlaHours' in settingsUpdate && !('missedCallCallbackSlaMinutes' in settingsUpdate)) {
+    settingsUpdate.missedCallCallbackSlaMinutes = Number(settingsUpdate.missedCallCallbackSlaHours) * 60;
+  }
+  if ('answerSlaSeconds' in settingsUpdate || 'missedCallCallbackSlaMinutes' in settingsUpdate || 'missedCallCallbackSlaHours' in settingsUpdate || 'calltrackingMatchWindowMinutes' in settingsUpdate) {
     const normalizedQuality = getCallQualitySettings({ ...localDb.settings, ...settingsUpdate });
     settingsUpdate.answerSlaSeconds = normalizedQuality.answerSlaSeconds;
-    settingsUpdate.missedCallCallbackSlaHours = normalizedQuality.missedCallCallbackSlaHours;
+    settingsUpdate.missedCallCallbackSlaMinutes = normalizedQuality.missedCallCallbackSlaMinutes;
     settingsUpdate.calltrackingMatchWindowMinutes = normalizedQuality.calltrackingMatchWindowMinutes;
+    delete settingsUpdate.missedCallCallbackSlaHours;
   }
   
   localDb.settings = {
@@ -15728,7 +15736,7 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
     const onlyMyCalls = requestedOnlyMyCalls || isOperatorForcedOwnCalls(localDb, req);
     const operatorExt = getEffectiveOperatorExt(localDb, req, requestedOperatorExt);
     const qualitySettings = getCallQualitySettings(localDb.settings);
-    const callbackWindowHours = qualitySettings.missedCallCallbackSlaHours;
+    const callbackWindowMinutes = qualitySettings.missedCallCallbackSlaMinutes;
 
     let calls: CallEntry[] = [];
 
@@ -15746,9 +15754,9 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
         sqlParams.push(buildDateTimeFilter(startDate, startTime));
       }
       if (endDate) {
-        sql += ' AND calldate <= DATE_ADD(?, INTERVAL ? HOUR)';
+        sql += ' AND calldate <= DATE_ADD(?, INTERVAL ? MINUTE)';
         sqlParams.push(buildDateTimeFilter(endDate, endTime, true));
-        sqlParams.push(callbackWindowHours);
+        sqlParams.push(callbackWindowMinutes);
       }
 
       sql += ' ORDER BY calldate DESC';
@@ -16204,8 +16212,7 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
     const callsLostAnalytics = buildLostCallAnalytics(calls, {
       startMs: callsStartMs,
       endMs: callsEndMs,
-      callbackWindowHours,
-      callbackWindowMinutes: Number(settings.callbackKpiMinutes || 60),
+      callbackWindowMinutes,
       directory,
       ownerMap: callsOwnerMap
     });
@@ -16329,7 +16336,7 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
     const operatorExt = getEffectiveOperatorExt(localDb, req, requestedOperatorExt);
     const onlyMyCalls = requestedOnlyMyCalls || isOperatorForcedOwnCalls(localDb, req);
     const qualitySettings = getCallQualitySettings(localDb.settings);
-    const callbackWindowHours = qualitySettings.missedCallCallbackSlaHours;
+    const callbackWindowMinutes = qualitySettings.missedCallCallbackSlaMinutes;
     
     let calls: CallEntry[] = [];
     if (isDemo) {
@@ -16345,9 +16352,9 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
         sql += ' AND calldate >= DATE_SUB(NOW(), INTERVAL 7 DAY)';
       }
       if (endDate) {
-        sql += ' AND calldate <= DATE_ADD(?, INTERVAL ? HOUR)';
+        sql += ' AND calldate <= DATE_ADD(?, INTERVAL ? MINUTE)';
         sqlParams.push(buildDateTimeFilter(endDate, endTime, true));
-        sqlParams.push(callbackWindowHours);
+        sqlParams.push(callbackWindowMinutes);
       }
 
       sql += ' ORDER BY calldate DESC';
@@ -16553,8 +16560,7 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
     const lostCallAnalytics = buildLostCallAnalytics(calls, {
       startMs: statsStartMs,
       endMs: statsEndMs,
-      callbackWindowHours,
-      callbackWindowMinutes: Number(settings.callbackKpiMinutes || 60),
+      callbackWindowMinutes,
       directory,
       ownerMap
     });
@@ -16634,13 +16640,16 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
     const slaThresholdSeconds = req.query.slaThresholdSeconds !== undefined
       ? normalizeSlaThresholdSeconds(req.query.slaThresholdSeconds)
       : qualitySettings.answerSlaSeconds;
-    const callbackWindowHours = req.query.callbackWindowHours !== undefined
-      ? clampCallQualityNumber(req.query.callbackWindowHours, qualitySettings.missedCallCallbackSlaHours, 1, 168)
-      : qualitySettings.missedCallCallbackSlaHours;
+    const legacyCallbackMinutes = req.query.callbackWindowHours !== undefined
+      ? clampCallQualityNumber(req.query.callbackWindowHours, qualitySettings.missedCallCallbackSlaMinutes / 60, 1, 168) * 60
+      : qualitySettings.missedCallCallbackSlaMinutes;
+    const callbackWindowMinutes = req.query.callbackWindowMinutes !== undefined
+      ? clampCallQualityNumber(req.query.callbackWindowMinutes, qualitySettings.missedCallCallbackSlaMinutes, 1, 10080)
+      : legacyCallbackMinutes;
     const usedSettings = {
       ...qualitySettings,
       answerSlaSeconds: slaThresholdSeconds,
-      missedCallCallbackSlaHours: callbackWindowHours
+      missedCallCallbackSlaMinutes: callbackWindowMinutes
     };
 
     let calls: CallEntry[] = [];
@@ -16657,9 +16666,9 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
         sql += ' AND calldate >= DATE_SUB(NOW(), INTERVAL 30 DAY)'; // default of last 30 days for reports
       }
       if (endDate) {
-        sql += ' AND calldate <= DATE_ADD(?, INTERVAL ? HOUR)';
+        sql += ' AND calldate <= DATE_ADD(?, INTERVAL ? MINUTE)';
         sqlParams.push(buildDateTimeFilter(endDate, endTime, true));
-        sqlParams.push(callbackWindowHours);
+        sqlParams.push(callbackWindowMinutes);
       }
 
       sql += ' ORDER BY calldate DESC LIMIT 10000'; // Higher limit for wider analytical trend queries
@@ -17028,8 +17037,7 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
     const lostCallAnalytics = buildLostCallAnalytics(calls, {
       startMs: reportStartMs,
       endMs: reportEndMs,
-      callbackWindowHours,
-      callbackWindowMinutes: Number(settings.callbackKpiMinutes || 60),
+      callbackWindowMinutes,
       directory,
       ownerMap
     });
@@ -17394,7 +17402,7 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
         pendingCallback: businessCounters.pendingCallback,
         callbackRate: businessCounters.callbackRecoveryRate,
         notCalledBack: businessCounters.lostCalls,
-        callbackWindowHours
+        callbackWindowMinutes
       },
       businessCounters,
       lostCallDetails: reportLostItems.slice(0, 200),

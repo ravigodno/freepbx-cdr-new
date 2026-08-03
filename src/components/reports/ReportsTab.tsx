@@ -100,12 +100,12 @@ interface LostCallSummary {
   notCalledBack: number;
   pendingCallback?: number;
   callbackRecoveredWithinSla?: number;
-  callbackWindowHours: number;
+  callbackWindowMinutes: number;
 }
 
 interface UsedCallQualitySettings {
   answerSlaSeconds: number;
-  missedCallCallbackSlaHours: number;
+  missedCallCallbackSlaMinutes: number;
   calltrackingMatchWindowMinutes: number;
 }
 
