@@ -567,3 +567,17 @@ Examples:
 ## Long-term Goal
 
 PBXPuls should become a complete enterprise management platform for FreePBX that exceeds the capabilities of the native FreePBX interface while remaining modular, maintainable, safe, and production-ready.
+
+---
+
+## Notification Center
+
+- Producers never call Telegram. They submit normalized events to `NotificationEventService` with event type, category, severity, entity, stable dedupe key, active/resolved status, occurrence time and safe metadata.
+- `notification_event_state` owns problem/recovery transitions and consecutive-failure confirmation. `notification_events` is the immutable event journal.
+- The rule engine applies filters in deterministic order: global center, channel, category, event rule, minimum severity, cooldown and duplicate.
+- Every outcome creates a `notification_deliveries` row. Eligible rows are a DB outbox consumed by `NotificationDispatcher`; Telegram failures never propagate to CDR, balance or monitoring producers.
+- Telegram is the first channel, not part of the event model. Future internal, email and Web Push dispatchers can consume the same outbox contract.
+- Channel configuration is AES-256-GCM encrypted with an installation secret. APIs return only `hasToken`; token replacement and removal are explicit operations.
+- Preview never creates external side effects. Manual test delivery may run while the global center or Telegram event channel is disabled.
+- Access is split into `view_notification_center`, `manage_notification_center` and `view_notification_delivery_log`.
+- Active first-release producers are low balance/recovery, delayed missed-without-callback, confirmed trunk down/recovery, database outage/recovery and new critical `system_events`. Catalog-only types do not produce synthetic events.

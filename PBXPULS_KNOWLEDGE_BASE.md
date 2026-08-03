@@ -48,3 +48,14 @@ FREEPBX_API_REFERENCE_FULL.md.
   exposes the UI or `/api`.
 - If port `3001` is already occupied by an existing Apache/Nginx phonebook proxy,
   PBXPuls keeps running and leaves that listener in place.
+
+# Notification center
+
+- Modules emit channel-independent events; they must not call Telegram transports.
+- Rules, transition state, immutable events and delivery outbox are separate SQL entities. Filtered, cooldown and duplicate outcomes remain visible in the delivery journal.
+- Missed calls are evaluated only after the configured delay (15 minutes by default) and are suppressed when a later answered outbound CDR exists for the normalized external number. Producer cursors avoid restart duplicates and historical alert floods.
+- Trunk problems require consecutive failed observations; recovery is emitted once after a successful observation.
+- DB outage occurrence is retained in memory while SQL is unavailable and written after recovery, because an SQL outbox cannot be updated during the outage itself.
+- Bot tokens are encrypted with an environment-derived installation key. APIs expose `hasToken`, never token fragments or plaintext.
+- Telegram Chat ID is a signed integer and is not restricted to the `-100` group prefix.
+- Package minutes, generic Asterisk/AMI health, disk and security events remain catalog-only until a reliable producer is explicitly connected.

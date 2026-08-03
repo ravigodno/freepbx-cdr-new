@@ -1835,6 +1835,144 @@ const MIGRATIONS: Migration[] = [
         CONSTRAINT fk_balance_sync_batch_source FOREIGN KEY(source_id) REFERENCES balance_sources(source_pk) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
     ]
+  },
+  {
+    key:'20260803_075_notification_center',
+    description:'Add encrypted modular notification channels and delivery audit',
+    statements:[
+      `CREATE TABLE IF NOT EXISTS notification_channels(
+        channel VARCHAR(32) PRIMARY KEY,
+        enabled TINYINT(1) NOT NULL DEFAULT 0,
+        secret_encrypted LONGTEXT NULL,
+        destination VARCHAR(191) NULL,
+        cooldown_minutes INT NOT NULL DEFAULT 60,
+        minimum_balance DECIMAL(20,6) NOT NULL DEFAULT 1500,
+        rules_json LONGTEXT NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS notification_deliveries(
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        channel VARCHAR(32) NOT NULL,
+        event_key VARCHAR(191) NOT NULL,
+        status ENUM('delivered','failed','suppressed') NOT NULL,
+        safe_error_code VARCHAR(64) NULL,
+        payload_json LONGTEXT NOT NULL,
+        attempted_at DATETIME NOT NULL,
+        delivered_at DATETIME NULL,
+        KEY idx_notification_delivery_dedupe(channel,event_key,status,delivered_at),
+        KEY idx_notification_delivery_time(channel,attempted_at),
+        CONSTRAINT fk_notification_delivery_channel FOREIGN KEY(channel) REFERENCES notification_channels(channel) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `INSERT IGNORE INTO notification_channels(channel,enabled,secret_encrypted,destination,cooldown_minutes,minimum_balance,rules_json)
+       VALUES('telegram',0,NULL,NULL,60,1500,'{"balance":true,"missedCalls":false,"monitoring":false,"trunks":false,"monitoringMinimumSeverity":"error"}')`
+    ]
+  },
+  {
+    key:'20260803_076_notification_event_outbox',
+    description:'Normalize notification events, rules, state, channel health and delivery outbox',
+    statements:[
+      `ALTER TABLE notification_channels
+        ADD COLUMN type VARCHAR(32) NOT NULL DEFAULT 'telegram' AFTER channel,
+        ADD COLUMN encrypted_config LONGTEXT NULL AFTER enabled,
+        ADD COLUMN last_success_at DATETIME NULL,
+        ADD COLUMN last_error VARCHAR(100) NULL`,
+      `CREATE TABLE IF NOT EXISTS notification_settings(
+        id TINYINT PRIMARY KEY,
+        enabled TINYINT(1) NOT NULL DEFAULT 0,
+        object_name VARCHAR(191) NOT NULL DEFAULT 'PBXPuls',
+        minimum_severity ENUM('info','warning','error','critical') NOT NULL DEFAULT 'warning',
+        notify_on_recovery TINYINT(1) NOT NULL DEFAULT 1,
+        default_cooldown_seconds INT NOT NULL DEFAULT 3600,
+        categories_json LONGTEXT NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `INSERT IGNORE INTO notification_settings(id,categories_json) VALUES(1,'{"balance":true,"calls":true,"telephony":true,"monitoring":true,"system":true,"security":false}')`,
+      `CREATE TABLE IF NOT EXISTS notification_rules(
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        event_type VARCHAR(100) NOT NULL,
+        category VARCHAR(64) NOT NULL,
+        enabled TINYINT(1) NOT NULL DEFAULT 0,
+        severity ENUM('info','warning','error','critical') NOT NULL DEFAULT 'warning',
+        cooldown_seconds INT NOT NULL DEFAULT 3600,
+        notify_on_recovery TINYINT(1) NOT NULL DEFAULT 1,
+        parameters_json LONGTEXT NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NULL,
+        UNIQUE KEY uniq_notification_rule_event(event_type),
+        KEY idx_notification_rule_category(category,enabled)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS notification_event_state(
+        dedupe_key VARCHAR(191) PRIMARY KEY,
+        current_state ENUM('normal','problem','recovered') NOT NULL DEFAULT 'normal',
+        problem_started_at DATETIME NULL,
+        last_notified_at DATETIME NULL,
+        recovered_at DATETIME NULL,
+        consecutive_failures INT NOT NULL DEFAULT 0,
+        metadata_json LONGTEXT NOT NULL,
+        updated_at DATETIME NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS notification_producer_cursors(
+        producer_key VARCHAR(100) PRIMARY KEY,
+        cursor_at DATETIME NOT NULL,
+        cursor_value VARCHAR(191) NULL,
+        updated_at DATETIME NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS notification_events(
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        event_type VARCHAR(100) NOT NULL,
+        category VARCHAR(64) NOT NULL,
+        severity ENUM('info','warning','error','critical') NOT NULL,
+        title VARCHAR(191) NOT NULL,
+        message TEXT NOT NULL,
+        source VARCHAR(100) NOT NULL,
+        entity_type VARCHAR(100) NULL,
+        entity_id VARCHAR(191) NULL,
+        dedupe_key VARCHAR(191) NOT NULL,
+        status ENUM('active','resolved') NOT NULL,
+        metadata_json LONGTEXT NOT NULL,
+        occurred_at DATETIME NOT NULL,
+        resolved_at DATETIME NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        KEY idx_notification_event_time(occurred_at),
+        KEY idx_notification_event_type(event_type,status),
+        KEY idx_notification_event_dedupe(dedupe_key,status)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `ALTER TABLE notification_deliveries MODIFY COLUMN status VARCHAR(32) NOT NULL`,
+      `UPDATE notification_deliveries SET status=CASE status WHEN 'delivered' THEN 'sent' WHEN 'suppressed' THEN 'disabled' ELSE status END`,
+      `ALTER TABLE notification_deliveries
+        MODIFY COLUMN status ENUM('pending','sent','failed','retry_scheduled','disabled','filtered_by_severity','cooldown','duplicate') NOT NULL,
+        ADD COLUMN event_id BIGINT NULL AFTER id,
+        ADD COLUMN channel_id VARCHAR(32) NULL AFTER event_id,
+        ADD COLUMN attempt_count INT NOT NULL DEFAULT 0,
+        ADD COLUMN last_error VARCHAR(100) NULL,
+        ADD COLUMN next_attempt_at DATETIME NULL,
+        ADD COLUMN sent_at DATETIME NULL,
+        ADD COLUMN created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        ADD KEY idx_notification_outbox(status,next_attempt_at),
+        ADD KEY idx_notification_delivery_event(event_id)`,
+      `INSERT IGNORE INTO permissions(permission_key,name,description,category) VALUES
+        ('view_notification_center','View notification center','View notification channels and rules','notifications'),
+        ('manage_notification_center','Manage notification center','Change notification channels and rules','notifications'),
+        ('view_notification_delivery_log','View notification delivery log','View notification delivery attempts and filter reasons','notifications')`,
+      `INSERT IGNORE INTO role_permissions(role_id,permission_id)
+       SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key IN(
+         'view_notification_center','manage_notification_center','view_notification_delivery_log'
+       ) WHERE r.role_key IN('su','admin')`,
+      `INSERT IGNORE INTO notification_rules(event_type,category,enabled,severity,cooldown_seconds,notify_on_recovery,parameters_json) VALUES
+        ('balance.low','balance',1,'warning',3600,1,'{"threshold":1500}'),
+        ('calls.missed_unreturned','calls',0,'warning',86400,0,'{"delayMinutes":15}'),
+        ('trunk.down','telephony',0,'critical',3600,1,'{"failureSeconds":120,"consecutiveFailures":2}'),
+        ('monitor.failed','monitoring',0,'error',3600,1,'{"consecutiveFailures":3}'),
+        ('database.unavailable','system',0,'critical',3600,1,'{}'),
+        ('pbxpuls.critical_error','system',0,'critical',3600,0,'{}'),
+        ('balance.minutes_low','balance',0,'warning',3600,1,'{"registeredOnly":true}'),
+        ('provider.sync_failed','balance',0,'error',3600,1,'{"registeredOnly":true}'),
+        ('asterisk.unavailable','telephony',0,'critical',3600,1,'{"registeredOnly":true}'),
+        ('disk.space_critical','system',0,'critical',3600,1,'{"registeredOnly":true}'),
+        ('security.critical_event','security',0,'critical',3600,0,'{"registeredOnly":true}')`
+    ]
   }
 ];
 

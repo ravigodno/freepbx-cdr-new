@@ -422,15 +422,6 @@ export default function BalanceCenter({ session, hasPermission }: BalanceCenterP
   const [newOpBalance, setNewOpBalance] = useState('');
   const [newOpAvg, setNewOpAvg] = useState('');
 
-  // Alerts configuration state
-  const [tgNotificationEnabled, setTgNotificationEnabled] = useState(true);
-  const [tgBotToken, setTgBotToken] = useState('5923847234:AAElx93-kFz748X...');
-  const [tgChatId, setTgChatId] = useState('-1001859384723');
-  const [emailNotificationEnabled, setEmailNotificationEnabled] = useState(false);
-  const [emailAddress, setEmailAddress] = useState('admin@pbxpuls.ru');
-  const [webhookUrl, setWebhookUrl] = useState('https://app.pbxpuls.ru/incoming/balance-alerts');
-  const [minBalanceThreshold, setMinBalanceThreshold] = useState('1500');
-
   // Trigger simulated sync
   const [isSyncing, setIsSyncing] = useState(false);
 
@@ -569,17 +560,6 @@ export default function BalanceCenter({ session, hasPermission }: BalanceCenterP
     setNewOpTrunk('');
     setNewOpBalance('');
     setNewOpAvg('');
-  };
-
-  // Test Webhook / TG configuration
-  const handleTestNotification = (channel: 'tg' | 'webhook' | 'email') => {
-    if (channel === 'tg') {
-      showNoti('info', 'Тестовое уведомление отправлено в Telegram-чат ' + tgChatId);
-    } else if (channel === 'webhook') {
-      showNoti('info', 'Отправлен POST-запрос на Webhook: ' + webhookUrl + ' (HTTP 200 OK)');
-    } else {
-      showNoti('info', 'Тестовое письмо отправлено на ' + emailAddress);
-    }
   };
 
   // Dynamic calculated aggregate cards values
@@ -2011,7 +1991,7 @@ export default function BalanceCenter({ session, hasPermission }: BalanceCenterP
         dismissed: false
       };
       setAnomalies(prev => [newAnom, ...prev]);
-      showNoti('success', `Финансовая аномалия "${cause}" успешно зарегистрирована и отправлена в Telegram!`);
+      showNoti('success', `Финансовая аномалия "${cause}" зарегистрирована локально.`);
     };
 
     // Calculate billing projections based on current routing optimization state
@@ -2790,89 +2770,6 @@ export default function BalanceCenter({ session, hasPermission }: BalanceCenterP
             </form>
           </div>
 
-          {/* Alerts notification parameters (Telegram and Webhooks config) */}
-          <div className="space-y-4">
-            <h3 className="text-sm font-black text-slate-900 dark:text-white">Настройка каналов информирования и порогов тревог</h3>
-            
-            <div className="bg-slate-50 dark:bg-[#1a2332] p-4 rounded-3xl border border-slate-100 dark:border-[#334155]/80 text-xs space-y-4">
-              <div>
-                <label className="block text-[11px] text-slate-400 font-bold mb-1.5">Критический порог баланса всех транков (₽)</label>
-                <input
-                  type="number"
-                  value={minBalanceThreshold}
-                  onChange={(e) => setMinBalanceThreshold(e.target.value)}
-                  className="w-full bg-white dark:bg-[#1d2736] border border-slate-250 dark:border-[#384a63] rounded-xl px-3 py-2 text-slate-900 dark:text-white font-mono font-bold"
-                />
-              </div>
-
-              <div className="h-px bg-slate-200 dark:bg-slate-700"></div>
-
-              {/* Telegram bot channel */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="font-extrabold flex items-center gap-1.5">
-                    Telegram бот уведомлений
-                  </span>
-                  <input
-                    type="checkbox"
-                    checked={tgNotificationEnabled}
-                    onChange={(e) => setTgNotificationEnabled(e.target.checked)}
-                    className="rounded text-blue-600"
-                  />
-                </div>
-                {tgNotificationEnabled && (
-                  <div className="space-y-2">
-                    <input
-                      type="text"
-                      placeholder="Telegram Bot Token"
-                      value={tgBotToken}
-                      onChange={(e) => setTgBotToken(e.target.value)}
-                      className="w-full bg-white dark:bg-[#1d2736] border border-slate-200 dark:border-[#384a63] rounded-xl px-3 py-1.5 text-slate-900 dark:text-white font-mono text-[11px]"
-                    />
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        placeholder="Telegram Chat ID"
-                        value={tgChatId}
-                        onChange={(e) => setTgChatId(e.target.value)}
-                        className="flex-1 bg-white dark:bg-[#1d2736] border border-slate-200 dark:border-[#384a63] rounded-xl px-3 py-1.5 text-slate-900 dark:text-white font-mono text-[11px]"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => handleTestNotification('tg')}
-                        className="px-3 bg-slate-200 dark:bg-[#2d3b4f] text-slate-700 dark:text-slate-200 rounded-xl hover:bg-slate-300 font-bold"
-                      >
-                        Тест
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div className="h-px bg-slate-200 dark:bg-slate-700"></div>
-
-              {/* Webhook endpoint notifier */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="font-extrabold">Внешние Webhooks (JSON POST)</span>
-                  <button 
-                    type="button"
-                    onClick={() => handleTestNotification('webhook')}
-                    className="text-[10px] text-blue-500 font-bold hover:underline"
-                  >
-                    Тест Вебхука
-                  </button>
-                </div>
-                <input
-                  type="text"
-                  placeholder="https://yourserver.ru/balance/callback"
-                  value={webhookUrl}
-                  onChange={(e) => setWebhookUrl(e.target.value)}
-                  className="w-full bg-white dark:bg-[#1d2736] border border-slate-200 dark:border-[#384a63] rounded-xl px-3 py-1.5 text-slate-900 dark:text-white font-mono text-[11px]"
-                />
-              </div>
-            </div>
-          </div>
         </div>
       </div>
     );

@@ -39,7 +39,7 @@ import { registerManagementRoutes } from './server-management.js';
 import { generateAIResponse, registerAiPbxAdminRoutes } from './server/aiPbxAdmin.js';
 import { registerAiPlatformRoutes } from './server/ai-platform/api/router.js';
 import { registerStageOneProviders } from './server/ai-platform/providers/registerProviders.js';
-import { createPBXReadServices } from './server/services/pbxReadServices.js';
+import { createPBXReadServices, maskPhone } from './server/services/pbxReadServices.js';
 import { createPBXTransferService } from './server/services/pbxTransferService.js';
 import { resolveAsteriskCli, runAsteriskCliCommand } from './server/asteriskCli.js';
 import { createConferenceFromActiveCall, createNewPhoneMeeting, getConferenceBackendStatus, startPhoneMeetingRecording, validateConferenceParticipants } from './server/conferenceService.js';
@@ -180,6 +180,8 @@ import { startLogAnalysisCollector } from './server/logAnalysis/service.js';
 import { registerOutgoingReportRoutes } from './server/outgoingReports.js';
 import { registerUniqueNumberExportRoutes } from './server/reportUniqueNumbers.js';
 import { registerBalanceRoutes } from './server/balance/router.js';
+import { registerNotificationRoutes } from './server/notifications/router.js';
+import { findUnreturnedMissedCalls } from './server/notifications/missedCallDetector.js';
 import { calculateAnsweredIncomingMetrics } from './server/reportIncomingMetrics.js';
 import { writePBXPulsAuditLog } from './server/pbxpulsEvents.js';
 import { mergeDeviceNetworkIdentity, readIpNeighborMacs } from './server/deviceNetworkIdentity.js';
@@ -22987,6 +22989,31 @@ const balanceRuntime = registerBalanceRoutes(app, {
     return queryFreePBXCDR(localDb.settings, isDemoMode(localDb.settings), sql, params);
   }
 });
+const notificationRuntime = registerNotificationRoutes(app, {
+  requireAuth,
+  checkPermission: checkUserPermission,
+  hashSecret: process.env.NOTIFICATION_ENCRYPTION_KEY || process.env.JWT_SECRET || JWT_SECRET,
+  runtime: {
+    missedCallSlaMinutes: async () => {
+      const localDb = await readLocalDb();
+      return getCallQualitySettings(localDb.settings).missedCallCallbackSlaMinutes;
+    },
+    missedCalls: async (delayMinutes: number) => {
+      const localDb = await readLocalDb();
+      const from = new Date(Date.now() - (Math.max(1, Math.min(10080, delayMinutes)) + 120) * 60_000).toISOString().slice(0, 19).replace('T', ' ');
+      const rows = await queryFreePBXCDR(localDb.settings, isDemoMode(localDb.settings), `SELECT uniqueid,linkedid,calldate,src,dst,did,dcontext,channel,lastapp,lastdata,disposition,billsec
+        FROM cdr WHERE calldate>=? ORDER BY calldate`, [from]);
+      return findUnreturnedMissedCalls(rows, delayMinutes, Date.now(), {
+        isInbound: legs => legs.some(row => /from-trunk|from-pstn|ext-did|ext-queues|ext-group/i.test(String(row.dcontext || '')) || String(row.did || '').replace(/\D/g, '').length >= 7),
+        isOutgoing,
+        normalize: normalizePhoneNumberForAnalytics,
+        resolveCaller: legs => resolveInboundExternalCaller(legs).externalCallerNumber || String(legs[0]?.src || ''),
+        mask: maskPhone
+      }).map(row => ({ ...row, linkedidHash: crypto.createHash('sha256').update(row.linkedid).digest('hex').slice(0, 24), linkedid: undefined }));
+    },
+    trunksStatus: async () => (await aiPbxReadServices.trunksStatus({}, undefined, { tenantId: 0, actorId: 'notification-service', permissions: [] })).items || []
+  }
+});
 
 // API fallback must stay before Vite/static SPA fallback so missing API routes return JSON, not index.html.
 app.use('/api', (req, res) => {
@@ -23023,6 +23050,7 @@ async function startServer() {
   startSecurityCollector();
   startLogAnalysisCollector();
   balanceRuntime.start();
+  notificationRuntime.start();
   startDtmfAmiListener(startupDb.settings).catch((e: any) => console.error('[DTMF] listener start failed:', e.message));
 
   app.listen(parseInt(PORT, 10), '0.0.0.0', () => {
@@ -23035,7 +23063,7 @@ async function startServer() {
 
 let aiPlatformShutdownStarted=false;
 let phonebookListener: import('node:http').Server | null = null;
-for(const signal of ['SIGTERM','SIGINT'] as const)process.once(signal,()=>{if(aiPlatformShutdownStarted)return;aiPlatformShutdownStarted=true;balanceRuntime.stop();void Promise.all([aiPlatformRuntime.stop(),stopPhonebookListener(phonebookListener)]).finally(()=>process.exit(0))});
+for(const signal of ['SIGTERM','SIGINT'] as const)process.once(signal,()=>{if(aiPlatformShutdownStarted)return;aiPlatformShutdownStarted=true;notificationRuntime.stop();balanceRuntime.stop();void Promise.all([aiPlatformRuntime.stop(),stopPhonebookListener(phonebookListener)]).finally(()=>process.exit(0))});
 
 startServer().catch((err) => {
   console.error('Fatal initialization error:', err);

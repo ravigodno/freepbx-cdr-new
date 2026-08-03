@@ -77,6 +77,7 @@ import TcpdumpTab from './modules/monitoring/tabs/monitoring/TcpdumpTab';
 import ReportsTab from './components/reports/ReportsTab';
 import MarketingTab from './components/marketing/MarketingTab';
 import { AboutSystemTab } from './components/AboutSystemTab';
+import NotificationCenterSettings from './components/settings/NotificationCenterSettings';
 import { type LiveTransferResult, type LiveTransferSearchTarget } from './components/LiveTransferSearch';
 import { CallTargetSelector, type ConferenceBackendStatus, type ConsultTransferCapabilities } from './components/CallTargetSelector';
 import ActiveCallsTab from './modules/monitoring/tabs/monitoring/ActiveCallsTab';
@@ -694,7 +695,7 @@ export default function App() {
   const [isTestingFreePBXApi, setIsTestingFreePBXApi] = useState(false);
   const [freepbxApiTestResult, setFreePBXApiTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<'pbx' | 'directory' | 'access' | 'permissions' | 'design' | 'appearance'>('pbx');
+  const [settingsTab, setSettingsTab] = useState<'pbx' | 'directory' | 'access' | 'permissions' | 'notifications' | 'design' | 'appearance'>('pbx');
 
   // Load public settings for logo and copyright customization
   const [publicSettings, setPublicSettings] = useState<{ customLogoUrl?: string; customCopyright?: string } | null>(null);
@@ -7859,6 +7860,7 @@ export default function App() {
                     directory: 'Телефонный справочник',
                     access: 'Доступ и пользователи',
                     permissions: 'Права доступа',
+                    ...(hasPermission('view_notification_center') ? { notifications: 'Центр уведомлений' } : {}),
                   } : {}),
                   ...(session?.role === 'su' ? {
                     design: 'Дизайн',
@@ -8038,6 +8040,13 @@ export default function App() {
                         )}
                       </div>
                     </div>
+                  )}
+                  {settingsTab === 'notifications' && hasPermission('view_notification_center') && (
+                    <NotificationCenterSettings
+                      token={session.token}
+                      canManage={hasPermission('manage_notification_center')}
+                      canViewLog={hasPermission('view_notification_delivery_log')}
+                    />
                   )}
                   {settingsTab === 'directory' && draftSettings && (
                     <div className="space-y-5">
