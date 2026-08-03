@@ -90,6 +90,7 @@ export default function MtsBalanceWorkspace({ token, canManage, canViewAnalytics
   const [history, setHistory] = useState<OverviewHistory | null>(null);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [novofonRefreshKey, setNovofonRefreshKey] = useState(0);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
@@ -125,14 +126,27 @@ export default function MtsBalanceWorkspace({ token, canManage, canViewAnalytics
     setSyncing(true);
     setError('');
     try {
-      const response = await fetch('/api/balance/overview/sync', { method: 'POST', headers });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || !data.success) throw new Error(data.safeMessage || 'Данные не обновились');
-      setProvider(data.provider);
-      setNotice('Данные успешно обновлены');
-      void loadHistory();
+      const request = async (label: string, url: string) => {
+        const response = await fetch(url, { method: 'POST', headers });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.success) throw new Error(`${label}: ${data.safeMessage || 'ошибка подключения'}`);
+        return data;
+      };
+      const results = await Promise.allSettled([
+        request('МТС Бизнес', '/api/balance/sources/mts_business/sync'),
+        request('Баланс Novofon', '/api/balance/providers/novofon/sync'),
+        request('Детализация Novofon', '/api/balance/providers/novofon/usage/sync')
+      ]);
+      const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason?.message || 'Неизвестная ошибка'] : []);
+      setNovofonRefreshKey(value => value + 1);
+      await load();
+      if (failures.length) {
+        setError(`Часть данных не обновилась: ${failures.join(' · ')}`);
+        setNotice('Обновление завершено с предупреждениями');
+      } else {
+        setNotice('МТС Бизнес и Novofon успешно обновлены');
+      }
     } catch (reason: any) {
-      // Keep the last successful provider snapshot visible on refresh failure.
       setError(`Данные не обновились: ${reason.message || 'ошибка подключения'}`);
     } finally {
       setSyncing(false);
@@ -215,22 +229,18 @@ export default function MtsBalanceWorkspace({ token, canManage, canViewAnalytics
       </div>
 
       {activeTab === 'overview' && <div className="space-y-3">
-        <NovofonBalancePanel token={token} canManage={canManage} canViewAnalytics={canViewAnalytics} canListenRecordings={canListenRecordings} mode="summary" />
         <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3 dark:border-slate-700">
             <div>
               <h2 className="text-sm font-black">Контролируемые балансы и провайдеры IP-телефонии</h2>
               <p className="text-[10px] text-slate-500">Только реальные источники финансовых данных</p>
             </div>
-            {provider && <span className={`inline-flex items-center rounded-lg border px-2.5 py-1 text-[10px] font-bold ${statusTone[provider.status.code]}`}
-              title={provider.status.reason || provider.status.label}>
-              {syncing ? 'Обновление' : provider.status.label}
-            </span>}
           </div>
           {provider && <div className="grid gap-4 px-4 py-3 sm:grid-cols-2 lg:grid-cols-[minmax(260px,1.4fr)_minmax(170px,1fr)_minmax(180px,0.8fr)_minmax(175px,auto)] lg:items-center">
             <div>
               <div className="text-[10px] uppercase text-slate-400">Оператор</div>
               <div className="mt-1 font-black">{provider.displayName}</div>
+              <div className={`mt-1 inline-flex items-center rounded-lg border px-2 py-0.5 text-[10px] font-bold ${statusTone[provider.status.code]}`} title={provider.status.reason || provider.status.label}>{syncing ? 'Обновление' : provider.status.label}</div>
               {provider.accountNumber && <div className="mt-1 flex items-center gap-1 text-xs text-slate-600 dark:text-slate-300">
                 <span>Лицевой счёт:</span><span className="font-mono font-bold">{provider.accountNumber}</span>
                 <button type="button" title="Копировать лицевой счёт" onClick={() => void copyText(provider.accountNumber!).then(() => setNotice('Лицевой счёт скопирован'))}
@@ -251,6 +261,7 @@ export default function MtsBalanceWorkspace({ token, canManage, canViewAnalytics
             </div>}
             {provider.status.reason && <div className="text-[11px] text-slate-500 lg:col-span-4">{provider.status.reason}</div>}
           </div>}
+          <NovofonBalancePanel token={token} canManage={canManage} canViewAnalytics={canViewAnalytics} canListenRecordings={canListenRecordings} mode="summary" refreshKey={novofonRefreshKey} refreshing={syncing} />
         </div>
         <div className="grid gap-3 xl:grid-cols-2">
           <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">

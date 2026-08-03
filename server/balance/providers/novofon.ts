@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import fetch, { type RequestInit, type Response } from 'node-fetch';
 
 export type NovofonAuthMode = 'permanent_token' | 'login_password';
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
@@ -28,10 +29,14 @@ const TRANSIENT_HTTP = new Set([408, 425, 429, 500, 502, 503, 504]);
 const SECRET_PATTERN = /(access[_-]?token|password|api[_-]?(?:key|secret)|authorization|login)/i;
 
 export function novofonV1Signature(method: string, params: Record<string, string | number | boolean>, secret: string): string {
-  const pairs = Object.keys(params).sort().map(key => `${encodeURIComponent(key)}=${encodeURIComponent(String(params[key]))}`);
+  const encodeRfc1738 = (value: string) => encodeURIComponent(value)
+    .replace(/[!'()*~]/g, character => `%${character.charCodeAt(0).toString(16).toUpperCase()}`)
+    .replace(/%20/g, '+');
+  const pairs = Object.keys(params).sort().map(key => `${encodeRfc1738(key)}=${encodeRfc1738(String(params[key]))}`);
   const paramsString = pairs.join('&');
   const signingInput = `${method}${paramsString}${crypto.createHash('md5').update(paramsString).digest('hex')}`;
-  return crypto.createHmac('sha1', secret).update(signingInput).digest('base64');
+  const hexDigest = crypto.createHmac('sha1', secret).update(signingInput).digest('hex');
+  return Buffer.from(hexDigest, 'utf8').toString('base64');
 }
 
 export function safeNovofonMetadata(value: unknown): Record<string, unknown> {
@@ -140,11 +145,12 @@ export class NovofonBalanceApiClient {
   async getBalance(): Promise<{ balance: number | null; currency: string | null; rawHash: string }> {
     if (!this.config.apiV1Key || !this.config.apiV1Secret) throw new NovofonProviderError('balance_api_not_configured');
     const method = '/v1/info/balance/';
-    const signature = novofonV1Signature(method, {}, this.config.apiV1Secret);
+    const params = { format: 'json' };
+    const signature = novofonV1Signature(method, params, this.config.apiV1Secret);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), Math.max(1000, Math.min(60_000, this.config.timeoutMs || 15_000)));
     try {
-      const response = await this.fetchImpl(ensureAllowed(`${API_V1_URL}${method}`, 'api.novofon.com').toString(), {
+      const response = await this.fetchImpl(ensureAllowed(`${API_V1_URL}${method}?format=json`, 'api.novofon.com').toString(), {
         method: 'GET', redirect: 'manual', signal: controller.signal,
         headers: { Authorization: `${this.config.apiV1Key}:${signature}`, Accept: 'application/json' }
       });

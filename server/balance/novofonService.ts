@@ -48,6 +48,10 @@ function reportRows(result: any): any[] {
   return [];
 }
 function reportMetadata(result: any): any { return result?.metadata || result?.data?.metadata || {}; }
+export function novofonAccountData(result: any): any {
+  const data = result?.data;
+  return Array.isArray(data) ? data[0] || null : data || result;
+}
 
 export class NovofonService {
   private settings: NovofonManagedSettings | null = null;
@@ -84,7 +88,7 @@ export class NovofonService {
     const result: any = { dataApiConnected: false, balanceApiConnected: false, account: null, balance: null, diagnostics: [], lastSuccessfulSync: null };
     if (!settings.enabled) result.diagnostics.push({ code: 'provider_disabled', status: 'warning', message: 'Провайдер отключён' });
     try {
-      const accountResult = await data.getAccount(); const account = accountResult?.data || accountResult;
+      const accountResult = await data.getAccount(); const account = novofonAccountData(accountResult);
       result.dataApiConnected = true;
       result.account = { appId: account?.app_id ?? null, name: text(account?.name || account?.account_name), timezone: text(account?.timezone, 64) };
       result.diagnostics.push({ code: 'data_api_connected', status: 'success', message: 'Data API подключён' });
@@ -167,7 +171,7 @@ export class NovofonService {
     await queryPBXPulsDb(`INSERT INTO balance_usage_events(source_id,provider_event_key,occurred_at,event_type,network_event,direction,counterparty_masked,counterparty_hash,counterparty_number,
       caller_number,callee_number,amount,billed_units,billed_unit_code,actual_units,actual_unit_code,label,raw_hash,metadata_json,provider_external_id,provider_session_id,provider_leg_id,
       provider_event_type,provider_source,sync_batch_id,sync_status,currency,actual_duration_seconds,chargeable_duration_seconds,cost_per_minute,charged_amount,bonus_amount)
-      VALUES(?,?,?, 'network','call',?,?,?,?,?,?,?,?,?,'second',?,'second',?,?,?, ?,?,?,?,?,?,?, 'RUB',?,?,?,?,?)
+      VALUES(?,?,?, 'network','call',?,?,?,?,?,?,?,?,'second',?,'second',?,?,?, ?,?,?,?,?,?,?, 'RUB',?,?,?,?,?)
       ON DUPLICATE KEY UPDATE occurred_at=VALUES(occurred_at),direction=VALUES(direction),caller_number=VALUES(caller_number),callee_number=VALUES(callee_number),
       amount=VALUES(amount),billed_units=VALUES(billed_units),actual_units=VALUES(actual_units),raw_hash=VALUES(raw_hash),metadata_json=VALUES(metadata_json),provider_source=VALUES(provider_source),
       sync_batch_id=VALUES(sync_batch_id),sync_status=VALUES(sync_status),actual_duration_seconds=VALUES(actual_duration_seconds),chargeable_duration_seconds=VALUES(chargeable_duration_seconds),

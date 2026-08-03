@@ -1,13 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Activity, CheckCircle, KeyRound, Play, RefreshCw, Save, ShieldAlert } from 'lucide-react';
 
-type Props = { token: string; canManage: boolean; canViewAnalytics: boolean; canListenRecordings: boolean; mode: 'summary' | 'details' | 'settings' };
+type Props = { token: string; canManage: boolean; canViewAnalytics: boolean; canListenRecordings: boolean; mode: 'summary' | 'details' | 'settings'; refreshKey?: number; refreshing?: boolean };
 const initialSettings: any = { enabled: false, authMode: 'permanent_token', timeoutMs: 15000, syncIntervalMinutes: 15, initialLoadDays: 30, overlapHours: 24,
   configured: false, apiV1Configured: false, permanentTokenLast4: null, loginLast4: null, apiV1KeyLast4: null, packageSettings: null };
 const duration = (value: number | null) => value == null ? '—' : `${Math.floor(value / 60)}:${String(Math.round(value % 60)).padStart(2, '0')}`;
 const amount = (value: number | null, currency = 'RUB') => value == null ? '—' : `${value.toLocaleString('ru-RU', { maximumFractionDigits: 4 })}${currency === 'RUB' ? ' ₽' : ` ${currency}`}`;
 
-export default function NovofonBalancePanel({ token, canManage, canViewAnalytics, canListenRecordings, mode }: Props) {
+export default function NovofonBalancePanel({ token, canManage, canViewAnalytics, canListenRecordings, mode, refreshKey = 0, refreshing = false }: Props) {
   const headers = useMemo(() => ({ Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }), [token]);
   const [settings, setSettings] = useState<any>(initialSettings); const [secrets, setSecrets] = useState<any>({ permanentToken: '', login: '', password: '', apiV1Key: '', apiV1Secret: '' });
   const [summary, setSummary] = useState<any>(null); const [items, setItems] = useState<any[]>([]); const [total, setTotal] = useState(0);
@@ -20,7 +20,7 @@ export default function NovofonBalancePanel({ token, canManage, canViewAnalytics
   const loadSummary = async () => { const data = await request('/api/balance/providers/novofon/summary'); setSummary(data.summary); };
   const loadUsage = async () => { if (!canViewAnalytics) return; const query = new URLSearchParams({ limit: '100', ...Object.fromEntries(Object.entries(filters).filter(([, value]) => value).map(([key, value]) => [key, String(value)])) });
     const data = await request(`/api/balance/providers/novofon/usage?${query}`); setItems(data.items || []); setTotal(data.total || 0); };
-  useEffect(() => { if (!token) return; if (mode === 'settings') void loadSettings().catch(error => setMessage(error.message)); else void loadSummary().catch(error => setMessage(error.message)); }, [token, mode]);
+  useEffect(() => { if (!token) return; if (mode === 'settings') void loadSettings().catch(error => setMessage(error.message)); else void loadSummary().catch(error => setMessage(error.message)); }, [token, mode, refreshKey]);
   useEffect(() => { if (mode === 'details') void loadUsage().catch(error => setMessage(error.message)); }, [mode, filters]);
 
   const action = async (name: string, url: string, body?: any) => { setBusy(name); setMessage(''); try { const data = await request(url, { method: 'POST', body: body ? JSON.stringify(body) : undefined });
@@ -56,15 +56,21 @@ export default function NovofonBalancePanel({ token, canManage, canViewAnalytics
     {diagnostics.length > 0 && <div className="grid gap-2 md:grid-cols-2">{diagnostics.map(item => <div key={item.code} className="flex items-center gap-2 rounded-xl bg-white p-2 dark:bg-slate-900">{item.status === 'success' ? <CheckCircle className="h-4 w-4 text-emerald-500" /> : <ShieldAlert className="h-4 w-4 text-amber-500" />}<span>{item.message}</span></div>)}</div>}{message && <div className="rounded-xl bg-white p-3 dark:bg-slate-900">{message}</div>}
   </form> : null;
 
-  if (mode === 'summary') return <div className="mb-5 space-y-4 rounded-3xl border border-violet-200 bg-violet-50/30 p-5 dark:border-violet-900 dark:bg-violet-950/10">
-    <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-sm font-black">Novofon</h3><p className="text-[11px] text-slate-500">Data API 2.0 · {summary?.apiState?.status || 'нет данных'}</p></div>{canManage && <div className="flex gap-2"><button className="btn" disabled={!!busy} onClick={() => void action('balance', '/api/balance/providers/novofon/sync')}><RefreshCw className="h-4 w-4" />Обновить баланс</button><button className="btn bg-violet-600 text-white" disabled={!!busy} onClick={() => void action('usage', '/api/balance/providers/novofon/usage/sync', {})}><RefreshCw className="h-4 w-4" />Синхронизировать детализацию</button></div>}</div>
-    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">{[
-      ['Текущий баланс', summary?.balance == null ? summary?.balanceStatus || 'Нет данных' : amount(summary.balance, summary.currency)], ['Расходы сегодня / месяц', `${amount(summary?.spendToday || 0)} / ${amount(summary?.spendMonth || 0)}`],
-      ['Фактические минуты', `${(summary?.actualMinutesToday || 0).toFixed(1)} / ${(summary?.actualMinutesMonth || 0).toFixed(1)}`], ['Тарифицированные минуты', `${(summary?.chargeableMinutesToday || 0).toFixed(1)} / ${(summary?.chargeableMinutesMonth || 0).toFixed(1)}`],
-      ['Бонусы / средняя минута', `${amount(summary?.bonusesPaid || 0)} / ${amount(summary?.averageChargeableMinuteCost)}`], ['Несвязанные фин. плечи', String(summary?.orphanFinancialLegs ?? '—')], ['Последняя синхронизация', summary?.lastSyncAt ? new Date(summary.lastSyncAt).toLocaleString('ru-RU') : 'Нет данных']
-    ].map(([label, value]) => <div key={label} className="rounded-2xl bg-white p-3 dark:bg-slate-900"><div className="text-[10px] font-bold uppercase text-slate-400">{label}</div><div className="mt-1 text-xs font-black">{value}</div></div>)}</div>
-    {summary?.package && <div className="rounded-2xl border border-dashed border-violet-200 bg-white p-3 text-xs dark:bg-slate-900"><div className="font-black">{summary.package.name}</div><div className="mt-1">{summary.package.usageLabel}: {summary.package.usedMinutes.toFixed(1)} мин · {summary.package.remainingLabel}: {summary.package.remainingMinutes.toFixed(1)} мин</div><div className="mt-1 text-[10px] text-slate-500">{summary.package.disclaimer}</div></div>}{message && <div className="text-xs text-slate-500">{message}</div>}
+  if (mode === 'summary') {
+    const status = refreshing ? 'updating' : String(summary?.apiState?.status || 'unknown');
+    const statusLabels: Record<string, string> = { success: 'Подключён', connected: 'Подключён', error: 'Ошибка', disabled: 'Отключён', pending: 'Ожидание', updating: 'Обновление', unknown: 'Нет данных' };
+    const statusTone = ['success', 'connected'].includes(status) ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300'
+      : status === 'updating' ? 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-300'
+        : status === 'error' ? 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-300'
+          : 'border-slate-200 bg-slate-100 text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300';
+    return <div className="grid gap-4 border-t border-slate-200 px-4 py-3 sm:grid-cols-2 lg:grid-cols-[minmax(260px,1.4fr)_minmax(170px,1fr)_minmax(180px,0.8fr)_minmax(175px,auto)] lg:items-center dark:border-slate-700">
+    <div><div className="text-[10px] uppercase text-slate-400">Оператор</div><div className="mt-1 font-black">Novofon</div><div className={`mt-1 inline-flex items-center rounded-lg border px-2 py-0.5 text-[10px] font-bold ${statusTone}`}>{statusLabels[status] || 'Ошибка'}</div></div>
+    <div><div className="text-[10px] uppercase text-slate-400">Источник данных</div><div className="mt-1 text-xs font-bold">Novofon API v1 · Data API 2.0</div></div>
+    <div className="min-w-[180px]"><div className="text-[10px] uppercase text-slate-400">Текущий баланс</div><div className="mt-1 whitespace-nowrap font-mono text-lg font-black">{summary?.balance == null ? summary?.balanceStatus || 'Нет данных' : amount(summary.balance, summary.currency)}</div></div>
+    <div className="min-w-[175px] border-slate-200 text-[10px] text-slate-500 sm:text-right lg:border-l lg:pl-4 dark:border-slate-700">Обновлено:<br /><span className="whitespace-nowrap font-medium text-slate-700 dark:text-slate-300">{summary?.lastSyncAt ? new Date(summary.lastSyncAt).toLocaleString('ru-RU') : 'Нет данных'}</span></div>
+    {message && <div className="text-[11px] text-slate-500 lg:col-span-4">{message}</div>}
   </div>;
+  }
 
   return canViewAnalytics ? <div className="mb-5 space-y-4 rounded-3xl border border-violet-200 p-4 dark:border-violet-900"><div className="flex items-center justify-between"><div><h3 className="text-sm font-black">Детализация Novofon</h3><p className="text-[10px] text-slate-500">Финансовые плечи: {total}</p></div>{canManage && <button className="btn" onClick={() => void action('usage', '/api/balance/providers/novofon/usage/sync', { from: filters.from || undefined, to: filters.to || undefined })}><RefreshCw className="h-4 w-4" />Синхронизировать</button>}</div>
     <div className="grid gap-2 md:grid-cols-4 lg:grid-cols-8"><input className="input" type="datetime-local" value={filters.from} onChange={e => setFilters({ ...filters, from: e.target.value })} /><input className="input" type="datetime-local" value={filters.to} onChange={e => setFilters({ ...filters, to: e.target.value })} />

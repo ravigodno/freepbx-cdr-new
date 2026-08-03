@@ -1,14 +1,23 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { NovofonDataApiClient, NovofonProviderError, novofonV1Signature, safeNovofonMetadata } from '../server/balance/providers/novofon.js';
-import { maskNovofonPhone, safeNovofonError } from '../server/balance/novofonService.js';
+import { maskNovofonPhone, novofonAccountData, safeNovofonError } from '../server/balance/novofonService.js';
 import { reconcileNovofonLeg } from '../server/balance/reconciliation/novofonCdrReconciliation.js';
 
 type Call = { body: any; url: string; init: RequestInit };
 const response = (payload: any, status = 200) => ({ ok: status >= 200 && status < 300, status, headers: { get: () => 'application/json' }, json: async () => payload, text: async () => JSON.stringify(payload) }) as unknown as Response;
 const config = (overrides: any = {}) => ({ enabled: true, authMode: 'login_password' as const, permanentToken: '', login: 'user@example.test', password: 'top-secret', apiV1Key: '', apiV1Secret: '', timeoutMs: 5000, ...overrides });
 
-assert.equal(novofonV1Signature('/v1/info/balance/', { z: 9, alpha: 'a b' }, 'secret'), 'DePqjUobkj0iaaeW778Pc6NUSu0=', 'API v1 signature must be stable and sorted');
+assert.equal(novofonV1Signature('/v1/info/balance/', { z: 9, alpha: 'a b' }, 'secret'), 'ZDUxMjI2ODkwYzFlODgyMmY4Y2I1ODI1YTYwMTMyNTBjYWQ0NzliZg==', 'API v1 signature must match the official Novofon client');
+
+{
+  const calls: any[] = [];
+  const client = new (await import('../server/balance/providers/novofon.js')).NovofonBalanceApiClient(config({ apiV1Key: 'key', apiV1Secret: 'secret' }), { fetch: async (url, init = {}) => {
+    calls.push({ url, init }); return response({ status: 'success', balance: 10, currency: 'RUB' });
+  } });
+  await client.getBalance();
+  assert.match(calls[0].url, /\?format=json$/, 'API v1 request and signature must include format=json');
+}
 
 {
   const calls: Call[] = [];
@@ -53,6 +62,7 @@ for (const mnemonic of ['ip_not_whitelisted', 'forbidden', 'limit_exceeded']) {
 }
 
 assert.equal(maskNovofonPhone('+79781234567'), '+*******4567', 'phone numbers must be masked');
+assert.deepEqual(novofonAccountData({ data: [{ app_id: 298276, timezone: 'Europe/Moscow' }] }), { app_id: 298276, timezone: 'Europe/Moscow' }, 'get.account array response must be normalized');
 assert.deepEqual(safeNovofonMetadata({ access_token: 'secret', password: 'secret', total_items: 5, current_version_deprecated: false }), { total_items: 5, current_version_deprecated: false });
 
 {
@@ -70,10 +80,12 @@ const routerSource = fs.readFileSync(new URL('../server/balance/router.ts', impo
 const mtsSource = fs.readFileSync(new URL('../server/balance/mtsBusinessService.ts', import.meta.url), 'utf8');
 
 assert.match(serviceSource, /offset \+= rows\.length/); assert.match(serviceSource, /metadata\?\.total_items/); assert.match(serviceSource, /90 \* 86400_000/);
+assert.match(serviceSource, /VALUES\(\?,\?,\?, 'network','call',\?,\?,\?,\?,\?,\?,\?,\?,'second'/, 'usage upsert must keep column and value counts aligned');
 assert.match(serviceSource, /Math\.max\(24, settings\.overlapHours\)/); assert.match(serviceSource, /ON DUPLICATE KEY UPDATE/);
 assert.match(serviceSource, /provider_session_id=financial\.provider_session_id/); assert.match(serviceSource, /provider_leg_id=financial\.provider_leg_id/);
 assert.match(serviceSource, /orphan_financial_leg/); assert.match(serviceSource, /provider_event_type='cdr_leg'/);
 assert.match(providerSource, /redirect: 'manual'/); assert.match(providerSource, /ALLOWED_HOSTS/); assert.match(providerSource, /setTimeout\(\(\) => controller\.abort/);
+assert.match(providerSource, /from 'node-fetch'/, 'Node.js 16 runtime must use the shared fetch polyfill');
 assert.doesNotMatch(migrationSource.slice(migrationSource.indexOf('20260803_074_novofon')), /\b(rows|row|rank|groups|system|window)\s+(?:VARCHAR|INT|BIGINT|LONGTEXT|DECIMAL)/i);
 assert.match(migrationSource, /uniq_balance_provider_leg\(source_id,provider_session_id,provider_leg_id,provider_event_type\)/);
 assert.match(routerSource, /view_calls/); assert.match(routerSource, /listen_recordings/); assert.match(routerSource, /manage_balance_providers/);
