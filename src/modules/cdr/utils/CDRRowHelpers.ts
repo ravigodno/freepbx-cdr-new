@@ -84,6 +84,8 @@ export function getDirectoryPhones(entry: any): string[] {
   push(entry?.phoneNumbers);
   push(entry?.mobile);
   push(entry?.workPhone);
+  push(entry?.internalExtension);
+  push(entry?.extension);
 
   return Array.from(new Set(values));
 }

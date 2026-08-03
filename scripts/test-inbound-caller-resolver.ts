@@ -14,6 +14,7 @@ import {
 import { buildCallRouteView } from '../src/modules/cdr/utils/buildCallRouteView.js';
 import { buildCdrRowViewModel } from '../src/modules/cdr/utils/CDRRowHelpers.js';
 import { resolveCdrCallerExtension } from '../shared/cdrCallerExtension.js';
+import { groupCdrLegs } from '../server/calls/cdrLogicalGrouping.js';
 import {
   buildLiveCallBannerDisplay,
   getLiveCallPopupTitle,
@@ -116,6 +117,64 @@ const cleanInstallRow = buildCdrRowViewModel({
 }, []);
 assert.equal(cleanInstallRow.callerName, 'Внутренний 11');
 assert.equal(cleanInstallRow.displayedSrc, trunkCallerId);
+
+const directoryInternalRow = buildCdrRowViewModel({
+  src: externalCaller,
+  dst: '11',
+  dcontext: 'ext-local',
+  disposition: 'ANSWERED'
+}, [{ id: 'employee-11', name: 'Иван Иванов', type: 'internal', internalExtension: '11' }]);
+assert.equal(directoryInternalRow.calleeName, 'Иван Иванов');
+assert.equal(directoryInternalRow.isFoundDst, true);
+
+const legacyDirectoryInternalRow = buildCdrRowViewModel({
+  src: externalCaller,
+  dst: '12',
+  dstDirectoryContact: {
+    id: 'employee-12', name: 'Грунина Оксана', type: 'internal', number: '12', phones: ['12', '79787667708']
+  },
+  dcontext: 'ext-local',
+  disposition: 'ANSWERED'
+}, []);
+assert.equal(legacyDirectoryInternalRow.calleeName, 'Грунина Оксана');
+assert.equal(legacyDirectoryInternalRow.isFoundDst, true);
+
+const brokenLinkedidBranches = groupCdrLegs([
+  {
+    uniqueid: '1785768307.84', linkedid: '1785768307.84', calldate: '2026-08-03 17:45:07',
+    src: '79898588841', dst: '11', dcontext: 'ext-local', duration: 96, billsec: 86, disposition: 'ANSWERED'
+  },
+  {
+    uniqueid: '1785768307.86', linkedid: '1785768307.86', calldate: '2026-08-03 17:45:07',
+    src: '79898588841', dst: '12', dcontext: 'ext-local', duration: 10, billsec: 0, disposition: 'NO ANSWER'
+  }
+]);
+assert.equal(brokenLinkedidBranches.length, 1);
+assert.equal(brokenLinkedidBranches[0].length, 2);
+
+const simultaneousDifferentCalls = groupCdrLegs([
+  {
+    uniqueid: '1785768307.84', linkedid: '1785768307.84', calldate: '2026-08-03 17:45:07',
+    src: '79898588841', dst: '11', dcontext: 'ext-local', duration: 96, billsec: 86, disposition: 'ANSWERED'
+  },
+  {
+    uniqueid: '1785768307.86', linkedid: '1785768307.86', calldate: '2026-08-03 17:45:07',
+    src: '79990000000', dst: '12', dcontext: 'ext-local', duration: 10, billsec: 0, disposition: 'NO ANSWER'
+  }
+]);
+assert.equal(simultaneousDifferentCalls.length, 2);
+
+const sameTrunkDifferentCallers = groupCdrLegs([
+  {
+    uniqueid: '1785768307.84', linkedid: '1785768307.84', calldate: '2026-08-03 17:45:07',
+    src: did, did, dst: '11', dcontext: 'from-trunk', duration: 96, billsec: 86, disposition: 'ANSWERED'
+  },
+  {
+    uniqueid: '1785768307.86', linkedid: '1785768307.86', calldate: '2026-08-03 17:45:07',
+    src: did, did, dst: '12', dcontext: 'from-trunk', duration: 10, billsec: 0, disposition: 'NO ANSWER'
+  }
+]);
+assert.equal(sameTrunkDifferentCallers.length, 2);
 
 const externalInboundLeg = {
   src: externalCaller, cnum: externalCaller, dst: '201', did,

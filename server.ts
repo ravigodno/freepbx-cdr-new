@@ -192,6 +192,7 @@ import {
   buildAiHandoffTimeline,
   type AiHandoffMetadata
 } from './server/calls/aiHandoffLogicalCall.js';
+import { groupCdrLegs } from './server/calls/cdrLogicalGrouping.js';
 
 // Load environment variables
 dotenv.config();
@@ -3581,13 +3582,21 @@ const findDirectoryContactByNumber = (directory: any[], num: any): any | null =>
 const enrichCallsWithDirectoryBulk = async (calls: any[], localDb: any, req: Request): Promise<{ lookupMs: number; sqlQueryCount: number }> => {
   const phones = Array.from(new Set((calls || []).flatMap(call => [call?.src, call?.dst]).map(value => String(value || '').trim()).filter(Boolean)));
   const result = await bulkLookupDirectoryPhonesSql(phones, getDirectorySqlAccessContext(localDb, req, true), 2000);
+  const legacyMode = await getDirectoryStorageMode() !== 'sql';
+  const authUser = (req as any).user;
+  const dbUser = getAuthenticatedDbUser(localDb, req);
+  const visibleLegacyDirectory = legacyMode
+    ? (Array.isArray(localDb.directory) ? localDb.directory : [])
+        .filter((entry: any) => canReadDirectoryEntry(entry, authUser, dbUser, localDb.settings))
+        .map((entry: any) => normalizeDirectoryEntry(entry, localDb.settings))
+    : [];
   for (const call of calls || []) {
     const srcKey = onlyDigits(call.src);
     const dstKey = onlyDigits(call.dst);
     const srcCanonical = srcKey.length >= 10 ? `7${srcKey.slice(-10)}` : srcKey;
     const dstCanonical = dstKey.length >= 10 ? `7${dstKey.slice(-10)}` : dstKey;
-    const srcContact = result.matches[srcCanonical] || null;
-    const dstContact = result.matches[dstCanonical] || null;
+    const srcContact = result.matches[srcCanonical] || findDirectoryContactByNumber(visibleLegacyDirectory, call.src);
+    const dstContact = result.matches[dstCanonical] || findDirectoryContactByNumber(visibleLegacyDirectory, call.dst);
     call.srcDirectoryContact = srcContact;
     call.dstDirectoryContact = dstContact;
     const resolved = srcContact || dstContact;
@@ -3596,7 +3605,7 @@ const enrichCallsWithDirectoryBulk = async (calls: any[], localDb: any, req: Req
       call.resolvedType = resolved.type;
     }
   }
-  console.info('[DIRECTORY_CDR_BULK]', JSON.stringify({ calls: calls.length, uniquePhones: phones.length, matched: result.matched, lookupMs: result.lookupMs, sqlQueryCount: result.sqlQueryCount }));
+  console.info('[DIRECTORY_CDR_BULK]', JSON.stringify({ calls: calls.length, uniquePhones: phones.length, matched: result.matched, legacyMode, lookupMs: result.lookupMs, sqlQueryCount: result.sqlQueryCount }));
   return { lookupMs: result.lookupMs, sqlQueryCount: result.sqlQueryCount };
 };
 
@@ -15852,11 +15861,21 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
       if (!linkedGroups.has(key)) linkedGroups.set(key, []);
       linkedGroups.get(key)!.push(c);
     });
+    const registryGroups = groupCdrLegs(
+      Array.from(linkedGroups.values()).flat().filter(call => {
+        const meeting = meetingByChannelId.get(String(call.uniqueid || '')) || meetingByChannelId.get(String(call.linkedid || ''));
+        return !meeting;
+      })
+    ) as CallEntry[][];
+    const meetingGroups = Array.from(linkedGroups.entries())
+      .filter(([key]) => String(key).startsWith('meeting:'))
+      .map(([, group]) => group);
+    const callGroups = [...meetingGroups, ...registryGroups];
     const aiHandoffMetadata = await loadAiHandoffMetadata(
-      Array.from(linkedGroups.keys()).filter(key => !String(key).startsWith('meeting:'))
+      registryGroups.map(group => String(group[0]?.linkedid || group[0]?.uniqueid || '')).filter(Boolean)
     );
 
-    calls = Array.from(linkedGroups.values()).map(group => {
+    calls = callGroups.map(group => {
       const meeting = group.map(c => meetingByChannelId.get(String(c.uniqueid || '')) || meetingByChannelId.get(String(c.linkedid || ''))).find(Boolean);
       if (meeting) {
         const sorted = [...group].sort((a, b) => new Date(a.calldate).getTime() - new Date(b.calldate).getTime());
@@ -23009,7 +23028,7 @@ const notificationRuntime = registerNotificationRoutes(app, {
         normalize: normalizePhoneNumberForAnalytics,
         resolveCaller: legs => resolveInboundExternalCaller(legs).externalCallerNumber || String(legs[0]?.src || ''),
         mask: maskPhone
-      }).map(row => ({ ...row, linkedidHash: crypto.createHash('sha256').update(row.linkedid).digest('hex').slice(0, 24), linkedid: undefined }));
+      }).map(row => ({ ...row, linkedidHash: crypto.createHash('sha256').update(row.linkedid).digest('hex').slice(0, 24) }));
     },
     trunksStatus: async () => (await aiPbxReadServices.trunksStatus({}, undefined, { tenantId: 0, actorId: 'notification-service', permissions: [] })).items || []
   }
