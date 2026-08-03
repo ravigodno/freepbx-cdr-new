@@ -23,6 +23,11 @@ export function restrictDirectoryContactInputToOwner(input: any, authUser: any, 
   };
 }
 
+export function assignManualDirectoryResponsibleUser(input: any, currentUserId: string): any {
+  if (String(input?.responsibleUserId || '').trim() || !String(currentUserId || '').trim()) return input;
+  return { ...input, responsibleUserId: String(currentUserId).trim() };
+}
+
 export function canEditDirectoryContactByOwner(entry: any, authUser: any, currentUserId: string): boolean {
   if (authUser?.role === 'su') return true;
   if (isOwnDirectoryEditRestricted(authUser)) {

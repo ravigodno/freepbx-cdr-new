@@ -43,7 +43,7 @@ export function buildCallRouteView(chronologyData: any): RouteView {
 
   const externalNumber = chronologyData?.externalCallerNumber || first.externalCallerNumber || first.src || first.cnum || '—';
   const dialedNumber = first.dst || steps?.[0]?.destination || '—';
-  const callerExt = steps?.[0]?.number || getExtFromChannel(first.channel) || first.src || '—';
+  const callerExt = chronologyData?.callerExtension || steps?.[0]?.number || getExtFromChannel(first.channel) || first.src || '—';
   const trunkNumber = chronologyData?.trunkNumber || chronologyData?.inboundDid || first.did || routeAnalysis.did || getTrunkFromChannel(first.channel) || '—';
 
   const ringGroupStep = steps.find((s: any) => s.type === 'ring_group');
@@ -103,6 +103,7 @@ export function buildCallRouteView(chronologyData: any): RouteView {
 
   const isInternalRoute =
     direction !== 'inbound' &&
+    direction !== 'outbound' &&
     /^\d{2,6}$/.test(String(dialedNumber || '')) &&
     /^\d{2,6}$/.test(String(callerExt || ''));
 

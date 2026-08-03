@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import {
+  assignManualDirectoryResponsibleUser,
   canEditDirectoryContactByOwner,
   isOwnDirectoryEditRestricted,
   restrictDirectoryContactInputToOwner
 } from '../server/directoryContactAccess.js';
+import { loadDirectorySingleContact } from '../server/directorySingleContact.js';
 
 const ownOnly = { role: 'operator', permissions: { edit_own_directory_contacts: true } };
 const full = { role: 'manager', permissions: { edit_directory: true } };
@@ -32,5 +34,19 @@ assert.deepEqual(
   restrictDirectoryContactInputToOwner({ name: 'Shared', visibility: 'shared' }, full, 'u1'),
   { name: 'Shared', visibility: 'shared' }
 );
+assert.deepEqual(assignManualDirectoryResponsibleUser({ name: 'Manual' }, 'u0'), { name: 'Manual', responsibleUserId: 'u0' });
+assert.deepEqual(assignManualDirectoryResponsibleUser({ name: 'Assigned', responsibleUserId: 'u2' }, 'u0'), { name: 'Assigned', responsibleUserId: 'u2' });
+
+const legacyContact = { id: 'legacy-1', visibility: 'shared' };
+assert.equal(await loadDirectorySingleContact({
+  mode: 'legacy', id: 'legacy-1', legacyContacts: [legacyContact], loadSql: async () => null, canReadLegacy: () => true
+}), legacyContact);
+assert.equal(await loadDirectorySingleContact({
+  mode: 'legacy', id: 'legacy-1', legacyContacts: [legacyContact], loadSql: async () => legacyContact, canReadLegacy: () => false
+}), null);
+const sqlContact = { id: 'sql-1', visibility: 'shared' };
+assert.equal(await loadDirectorySingleContact({
+  mode: 'sql', id: 'sql-1', legacyContacts: [], loadSql: async () => sqlContact, canReadLegacy: () => false
+}), sqlContact);
 
 console.log('directory own-contact permission tests: OK');

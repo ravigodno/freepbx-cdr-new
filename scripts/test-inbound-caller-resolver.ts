@@ -13,6 +13,7 @@ import {
 } from '../server/liveCallDirection.js';
 import { buildCallRouteView } from '../src/modules/cdr/utils/buildCallRouteView.js';
 import { buildCdrRowViewModel } from '../src/modules/cdr/utils/CDRRowHelpers.js';
+import { resolveCdrCallerExtension } from '../shared/cdrCallerExtension.js';
 import {
   buildLiveCallBannerDisplay,
   getLiveCallPopupTitle,
@@ -101,6 +102,47 @@ assert.equal(outboundRow.displayedDst, externalCaller);
 const internalRow = buildCdrRowViewModel({ src: '201', cnum: '201', dst: '200', dcontext: 'from-internal', disposition: 'ANSWERED' }, []);
 assert.equal(internalRow.displayedSrc, '201');
 assert.equal(internalRow.displayedDst, '200');
+
+const trunkCallerId = '74994907209';
+const cleanInstallOutboundLeg = {
+  uniqueid: '1785743772.38', linkedid: '1785743772.38', src: trunkCallerId, cnum: '11',
+  dst: '00000', dcontext: 'from-internal', channel: 'PJSIP/11-0000001c',
+  dstchannel: `PJSIP/${trunkCallerId}-0000001d`, disposition: 'ANSWERED', billsec: 816
+};
+assert.equal(resolveCdrCallerExtension([cleanInstallOutboundLeg]), '11');
+const cleanInstallRow = buildCdrRowViewModel({
+  ...cleanInstallOutboundLeg,
+  callerExtension: resolveCdrCallerExtension([cleanInstallOutboundLeg])
+}, []);
+assert.equal(cleanInstallRow.callerName, 'Внутренний 11');
+assert.equal(cleanInstallRow.displayedSrc, trunkCallerId);
+
+const externalInboundLeg = {
+  src: externalCaller, cnum: externalCaller, dst: '201', did,
+  dcontext: 'from-trunk', channel: 'PJSIP/MTS-in-00001'
+};
+assert.equal(resolveCdrCallerExtension([externalInboundLeg]), '');
+assert.equal(buildCdrRowViewModel(externalInboundLeg, []).displayedSrc, externalCaller);
+
+const emptyCallerRow = buildCdrRowViewModel({ src: '', cnum: '', dst: '', dcontext: '' }, []);
+assert.equal(emptyCallerRow.displayedSrc, '--');
+
+const zeroCallerRow = buildCdrRowViewModel({ callerExtension: '0', src: '', dst: '200', dcontext: 'from-internal' }, []);
+assert.equal(zeroCallerRow.callerName, 'Внутренний 0');
+
+const linkedCallLegs = [
+  cleanInstallOutboundLeg,
+  { ...cleanInstallOutboundLeg, uniqueid: '1785743772.39', src: trunkCallerId, cnum: '', channel: `PJSIP/${trunkCallerId}-0000001d` }
+];
+assert.equal(resolveCdrCallerExtension(linkedCallLegs), '11');
+
+const correctedRouteView = buildCallRouteView({
+  callerExtension: '11',
+  timeline: [cleanInstallOutboundLeg],
+  routeAnalysis: { direction: 'outbound', steps: [{ type: 'outbound_start', number: '11', destination: '00000' }] }
+});
+assert.match(correctedRouteView.routeSteps[0]?.title || '', /Исходящий вызов от внутреннего номера 11/);
+assert.doesNotMatch(correctedRouteView.routeSteps[0]?.title || '', /Внутренний вызов от номера/);
 
 const liveIncomingFixture = [
   {

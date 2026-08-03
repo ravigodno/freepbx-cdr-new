@@ -31,6 +31,8 @@ import http from 'http';
 import https from 'https';
 import { CallEntry, MissedCallStatus, AppSettings, DashboardStats, UserRole, WebUser } from './src/types.js';
 import{validateDirectoryPhone as validateSharedDirectoryPhone}from'./shared/directoryImportValidation.js';
+import { resolveCdrCallerExtension } from './shared/cdrCallerExtension.js';
+import { resolveClickToCallContext } from './server/clickToCallContext.js';
 import os from 'os';
 import { registerManagementRoutes } from './server-management.js';
 import { generateAIResponse, registerAiPbxAdminRoutes } from './server/aiPbxAdmin.js';
@@ -108,11 +110,13 @@ import {
   getContactImportDuplicateWarning
 } from './server/contactImportDuplicate.js';
 import {
+  assignManualDirectoryResponsibleUser,
   canEditDirectoryContactByOwner,
   hasFullDirectoryEditPermission,
   hasOwnDirectoryEditPermission,
   restrictDirectoryContactInputToOwner
 } from './server/directoryContactAccess.js';
+import { loadDirectorySingleContact } from './server/directorySingleContact.js';
 import { canReadDirectoryContact } from './server/directoryOwnership.js';
 import {
   assertDirectorySqlWriteTestAllowed,
@@ -12040,9 +12044,18 @@ app.get('/api/directory/contacts/:id', requireAuth(), async (req, res) => {
   if (!(await checkUserPermission(req, 'view_directory'))) return res.status(403).json({ error: 'Access denied: view_directory permission required' });
   try {
     const localDb = await readLocalDb();
-    const entry = await getDirectoryContactSql(req.params.id, getDirectorySqlAccessContext(localDb, req));
+    const dbUser = getAuthenticatedDbUser(localDb, req);
+    const mode = await getDirectoryStorageMode();
+    const directoryRuntime = mode === 'legacy' ? await getDirectoryRuntimeSnapshotForRequest(localDb, req) : null;
+    const entry = await loadDirectorySingleContact({
+      mode,
+      id: String(req.params.id),
+      legacyContacts: directoryRuntime?.contacts || [],
+      loadSql: id => getDirectoryContactSql(id, getDirectorySqlAccessContext(localDb, req)),
+      canReadLegacy: item => canReadDirectoryEntry(item, (req as any).user, dbUser, localDb.settings)
+    });
     if (!entry) return res.status(404).json({ error: 'Контакт не найден' });
-    res.json({ ...entry, responsibleUserLabel: getDirectoryResponsibleUserLabel(entry.responsibleUserId, localDb) });
+    res.json(normalizeDirectoryEntry({ ...entry, responsibleUserLabel: getDirectoryResponsibleUserLabel(entry.responsibleUserId, localDb) }, localDb.settings));
   } catch (error: any) {
     res.status(500).json({ error: sanitizePBXPulsDbError(error) });
   }
@@ -12554,7 +12567,11 @@ app.post('/api/directory', requireAuth(), async (req, res) => {
 
     const localDb = await readLocalDb();
     const dbUser = getAuthenticatedDbUser(localDb, req);
-    const createBody = restrictDirectoryContactInputToOwner(req.body, authUser, getDirectoryUserId(dbUser, authUser));
+    const currentUserId = getDirectoryUserId(dbUser, authUser);
+    const createBody = assignManualDirectoryResponsibleUser(
+      restrictDirectoryContactInputToOwner(req.body, authUser, currentUserId),
+      currentUserId
+    );
 
     const actor = getDirectoryStorageModeActor(req);
     const writeDecision = await getDirectoryWriteRuntimeDecision('create', actor);
@@ -13288,7 +13305,7 @@ async function resolveClickToCallChannelTechnology(extension: string): Promise<C
 }
 
 function runAMICallSimulate(log: string[], fromExtension: string, toPhoneNumber: string, context: string, channelTechnology: ClickToCallChannelTechnology, resolve: Function) {
-  const clickToCallContext = process.env.CLICK2CALL_CONTEXT || 'cdr-panel-click2call';
+  const clickToCallContext = resolveClickToCallContext(context);
   const origChannel = `${channelTechnology}/${fromExtension}`;
 
   log.push(`[AMI-SIMULATOR] Начат имитационный вызов из внутреннего номера [${fromExtension}] на номер [${toPhoneNumber}]...`);
@@ -13311,7 +13328,7 @@ function triggerAMICall(settings: AppSettings, fromExtension: string, toPhoneNum
     const user = settings.amiUser || 'clicktocall';
     const pass = settings.amiPass || '';
     const context = settings.amiContext || 'from-internal';
-    const clickToCallContext = process.env.CLICK2CALL_CONTEXT || 'cdr-panel-click2call';
+    const clickToCallContext = resolveClickToCallContext(context);
     const safeFromExtension = fromExtension.replace(/[^0-9]/g, '');
     const safeToPhoneNumber = toPhoneNumber.replace(/[^0-9+#*]/g, '');
     
@@ -15601,6 +15618,7 @@ app.get('/api/calls/:uniqueid/chronology', requireAuth(), async (req, res) => {
       blindTransferTargetExt: chronologyTransferTarget,
       externalCallerNumber: externalCallerResolution.externalCallerNumber,
       externalCallerResolution,
+      callerExtension: resolveCdrCallerExtension(legs),
       inboundDid: String(routeAnalysis?.did || legs.find((leg: any) => leg.did)?.did || '').split('→')[0].trim(),
       trunkNumber: String(routeAnalysis?.steps?.find((step: any) => step.type === 'inbound_trunk')?.number || routeAnalysis?.did || '').trim(),
       routeDestination: routeAnalysis?.steps?.find((step: any) => step.type === 'inbound_route')?.destination || '',
@@ -15859,7 +15877,10 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
         const logicalCall = aggregateAiHandoffLogicalCall(group, handoff);
         if (logicalCall) return logicalCall as CallEntry;
       }
-      if (group.length === 1) return normalizeClickToCallForDisplay(normalizeInboundCallerForDisplay(group[0]));
+      if (group.length === 1) {
+        const normalized = normalizeClickToCallForDisplay(normalizeInboundCallerForDisplay(group[0]));
+        return { ...normalized, callerExtension: resolveCdrCallerExtension(group) };
+      }
 
       const sorted = [...group].map(c => normalizeClickToCallForDisplay(c)).sort((a, b) => new Date(a.calldate).getTime() - new Date(b.calldate).getTime());
       const answered = sorted.find(c => c.disposition === "ANSWERED" && Number(c.billsec || 0) > 0);
@@ -15902,6 +15923,7 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
 
       return {
         ...routeLeg,
+        callerExtension: resolveCdrCallerExtension(sorted),
         uniqueid: first.linkedid || first.uniqueid,
         linkedid: first.linkedid || first.uniqueid,
         calldate: first.calldate,

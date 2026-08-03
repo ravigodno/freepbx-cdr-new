@@ -148,8 +148,10 @@ export function buildCdrRowViewModel(call: any, directory: any[], relatedLegs: a
   const ch = call.channel || '';
   const srcVal = (call.src || '').trim();
   const dstVal = (call.dst || '').trim();
+  const callerExtension = String(call.callerExtension ?? '').trim();
 
   const isIncoming = (() => {
+    if (callerExtension) return false;
     if (isInternalExt(srcVal)) return false;
 
     const dctxLower = dctx.toLowerCase();
@@ -212,6 +214,11 @@ export function buildCdrRowViewModel(call: any, directory: any[], relatedLegs: a
       return srcVal;
     }
 
+    // FreePBX may store the outbound CallerID/trunk in src while cnum/channel
+    // contain the real internal initiator. Preserve that CallerID as the
+    // secondary row value; callerExtension identifies the subscriber above it.
+    if (callerExtension && srcVal && !isInternalExt(srcVal)) return srcVal;
+
     if (call.cnum && call.cnum.trim()) return call.cnum.trim();
     if (call.src && call.src.trim()) return call.src.trim();
 
@@ -223,7 +230,7 @@ export function buildCdrRowViewModel(call: any, directory: any[], relatedLegs: a
     return '';
   };
 
-  const displayedSrc = getCallerNumber() || call.src || 'Неизвестно';
+  const displayedSrc = getCallerNumber() || call.src || '--';
 
   const getCalleeNumber = () => {
     if (isIncoming) {
@@ -282,16 +289,24 @@ export function buildCdrRowViewModel(call: any, directory: any[], relatedLegs: a
 
   const displayedDst = getCalleeNumber() || call.dst || 'Неизвестно';
 
-  const dMatch = call.srcDirectoryContact || directory.find(e => directoryEntryMatchesNumber(e, displayedSrc));
-  const isSrcInternal = isInternalExt(displayedSrc);
+  const callerExtensionMatch = callerExtension
+    ? directory.find(e => directoryEntryMatchesNumber(e, callerExtension))
+    : null;
+  const dMatch = callerExtension
+    ? callerExtensionMatch
+    : (call.srcDirectoryContact || directory.find(e => directoryEntryMatchesNumber(e, displayedSrc)));
+  const isSrcInternal = Boolean(callerExtension) || isInternalExt(displayedSrc);
 
   let callerName = '';
   let callerType = isSrcInternal ? 'internal' : 'client';
   let isFound = false;
 
   if (dMatch) {
-    callerName = dMatch.name;
-    callerType = dMatch.type;
+    const resolvedName = String(dMatch.name || '').trim();
+    callerName = callerExtension
+      ? (resolvedName ? `${resolvedName} · ${callerExtension}` : callerExtension)
+      : (resolvedName || displayedSrc);
+    callerType = callerExtension ? 'internal' : dMatch.type;
     isFound = true;
   } else if (isIncoming) {
     const clidName = renderClidName(call.clid, displayedSrc);
@@ -304,7 +319,7 @@ export function buildCdrRowViewModel(call: any, directory: any[], relatedLegs: a
       callerName = isSrcInternal ? `Внутренний ${displayedSrc}` : 'Внешний клиент';
     }
   } else {
-    callerName = isSrcInternal ? `Внутренний ${displayedSrc}` : 'Внешний клиент';
+    callerName = callerExtension ? `Внутренний ${callerExtension}` : (isSrcInternal ? `Внутренний ${displayedSrc}` : 'Внешний клиент');
   }
 
   const isMultiInternalDst = displayedDst.split(',').map(v => v.trim()).filter(Boolean).every(isInternalExt);

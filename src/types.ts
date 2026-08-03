@@ -34,6 +34,7 @@ export interface CallEntry {
   
   // FreePBX additions
   cnum?: string;
+  callerExtension?: string;
   externalCallerNumber?: string;
   externalCallerSourceField?: string | null;
   externalCallerConfidence?: 'high' | 'medium' | 'low' | 'none';
