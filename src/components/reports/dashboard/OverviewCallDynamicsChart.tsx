@@ -43,6 +43,32 @@ function formatHourBucket(date: Date): { key: string; label: string } {
   };
 }
 
+function getWeekNumber(date: Date): number {
+  const value = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const day = value.getUTCDay() || 7;
+  value.setUTCDate(value.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(value.getUTCFullYear(), 0, 1));
+  return Math.ceil((((value.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+}
+
+function formatCalendarBucket(date: Date, groupType: string): { key: string; label: string } {
+  const year = date.getFullYear();
+  if (groupType === 'year') return { key: String(year), label: String(year) };
+  if (groupType === 'month') {
+    const months = ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
+    const label = `${months[date.getMonth()]} ${year}`;
+    return { key: label, label };
+  }
+  if (groupType === 'week') {
+    const label = `W${String(getWeekNumber(date)).padStart(2, '0')} ${year}`;
+    return { key: label, label };
+  }
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const label = `${day}.${month}`;
+  return { key: label, label };
+}
+
 function normalizePoint(point: OverviewPoint | undefined, key: string, label: string, sortKey: number): OverviewPoint {
   return {
     key,
@@ -59,7 +85,7 @@ function normalizePoint(point: OverviewPoint | undefined, key: string, label: st
 }
 
 export function buildOverviewData(data: OverviewPoint[], groupType: string, startDate: string, endDate: string): OverviewPoint[] {
-  if (groupType !== 'hour') {
+  if (groupType === 'weekday') {
     return [...data]
       .sort((a, b) => Number(a.sortKey || 0) - Number(b.sortKey || 0))
       .map(point => normalizePoint(point, point.key || point.label, point.label, Number(point.sortKey || 0)));
@@ -67,7 +93,26 @@ export function buildOverviewData(data: OverviewPoint[], groupType: string, star
 
   const start = parseDate(startDate);
   const endDateValue = parseDate(endDate);
-  if (!start || !endDateValue || start > endDateValue) return [];
+  if (!start || !endDateValue || start > endDateValue) return [...data].sort((a, b) => Number(a.sortKey || 0) - Number(b.sortKey || 0));
+  if (groupType !== 'hour') {
+    const byKey = new Map(data.map(point => [point.key || point.label, point]));
+    const result: OverviewPoint[] = [];
+    let current = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+    let safety = 0;
+    while (current <= endDateValue && safety < 10000) {
+      const { key, label } = formatCalendarBucket(current, groupType);
+      if (!result.some(point => point.key === key)) result.push(normalizePoint(byKey.get(key), key, label, current.getTime()));
+      if (groupType === 'week') current = new Date(current.getFullYear(), current.getMonth(), current.getDate() + 7);
+      else if (groupType === 'month') current = new Date(current.getFullYear(), current.getMonth() + 1, 1);
+      else if (groupType === 'year') current = new Date(current.getFullYear() + 1, 0, 1);
+      else current = new Date(current.getFullYear(), current.getMonth(), current.getDate() + 1);
+      safety++;
+    }
+    const endBucket = formatCalendarBucket(endDateValue, groupType);
+    if (!result.some(point => point.key === endBucket.key)) result.push(normalizePoint(byKey.get(endBucket.key), endBucket.key, endBucket.label, endDateValue.getTime()));
+    return result.sort((a, b) => Number(a.sortKey || 0) - Number(b.sortKey || 0));
+  }
+
   const end = new Date(endDateValue.getFullYear(), endDateValue.getMonth(), endDateValue.getDate(), 23);
   const byKey = new Map(data.map(point => [point.key || point.label, point]));
   const result: OverviewPoint[] = [];
@@ -129,7 +174,7 @@ export function OverviewCallDynamicsChart({ data, groupType, startDate, endDate 
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={chartData} margin={{ top: 10, right: 18, left: 0, bottom: 8 }}>
               <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 7" vertical={false} />
-              <XAxis dataKey="label" minTickGap={30} tick={{ fontSize: 10, fill: '#64748b' }} />
+              <XAxis dataKey="label" interval="preserveStartEnd" minTickGap={30} tick={{ fontSize: 10, fill: '#64748b' }} />
               <YAxis yAxisId="count" allowDecimals={false} tick={{ fontSize: 10, fill: '#64748b' }} width={38} />
               <YAxis yAxisId="sla" orientation="right" domain={[0, 100]} tickFormatter={value => `${value}%`} tick={{ fontSize: 10, fill: '#7c3aed' }} width={42} />
               <Tooltip content={<OverviewTooltip />} />

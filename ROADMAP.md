@@ -1,5 +1,13 @@
 # PBXPuls Roadmap
 
+## v5.8.5 — Complete report chart periods
+
+Status: completed
+
+- Report charts include empty calendar buckets from the selected start date.
+- Daily, weekly, monthly and yearly views preserve the selected period bounds.
+- The first and last X-axis labels remain visible.
+
 ## v5.8.4 — Site lead reporting
 
 Status: completed

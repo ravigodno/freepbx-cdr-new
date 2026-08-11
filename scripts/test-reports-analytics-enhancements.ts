@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import { calculateAnsweredIncomingMetrics } from '../server/reportIncomingMetrics.js';
 import { buildUniqueNumbersSql, escapeReportCsv, normalizeReportExternalPhone } from '../server/reportUniqueNumbers.js';
 import { isWithinCompanyWorkingHours, normalizeCompanyWorkingHours } from '../shared/companyWorkingHours.js';
+import { buildOverviewData } from '../src/components/reports/dashboard/OverviewCallDynamicsChart.js';
 
 const workingHours = normalizeCompanyWorkingHours({ companyWorkStart: '08:30', companyWorkEnd: '18:15' });
 assert.deepEqual(workingHours, { start: '08:30', end: '18:15' });
@@ -33,6 +34,14 @@ assert.deepEqual(metrics, {
 });
 assert.equal(calculateAnsweredIncomingMetrics(rows.slice(0, 2), row => row.direction === 'incoming', row => row.duration - row.billsec).answeredMedianWaitSeconds, 15);
 assert.equal(calculateAnsweredIncomingMetrics([], () => true, () => null).answeredAverageWaitSeconds, null);
+
+const julyTimeline = buildOverviewData([
+  { label: '21.07', sortKey: new Date(2026, 6, 21).getTime(), totalCalls: 3, inboundCalls: 2 }
+] as any, 'day', '2026-07-01', '2026-07-31');
+assert.equal(julyTimeline.length, 31);
+assert.equal(julyTimeline[0].label, '01.07');
+assert.equal(julyTimeline.at(-1)?.label, '31.07');
+assert.equal(julyTimeline.find(point => point.label === '21.07')?.inboundCalls, 2);
 
 assert.equal(normalizeReportExternalPhone('+7 (978) 123-45-67'), '79781234567');
 assert.equal(normalizeReportExternalPhone('8 978 123-45-67'), '79781234567');
@@ -68,6 +77,7 @@ assert.match(heatmap, /Высокая/);
 assert.match(chart, /lg:grid-cols-\[minmax\(0,1fr\)_190px\]/);
 assert.match(chart, /aria-label="Серии графика"/);
 assert.match(chart, /yAxisId="sla"/);
+assert.match(chart, /interval="preserveStartEnd"/);
 assert.match(route, /res\.write\('\\uFEFF'\)/);
 assert.match(route, /bulkLookup\(/);
 assert.match(route, /view_reports/);
@@ -76,6 +86,6 @@ console.log(JSON.stringify({
   incomingMetrics: metrics,
   phoneNormalization: 'ok',
   uniqueExport: { logicalAggregation: true, streaming: true, bulkLookup: true, rbac: true },
-  chartControls: { desktopRight: true, responsiveGrid: true, dualAxis: true },
+  chartControls: { desktopRight: true, responsiveGrid: true, dualAxis: true, preservesSelectedPeriod: true },
   workingHours: 'ok'
 }));
