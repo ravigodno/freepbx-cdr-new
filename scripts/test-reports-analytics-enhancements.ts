@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { calculateAnsweredIncomingMetrics } from '../server/reportIncomingMetrics.js';
 import { buildUniqueNumbersSql, escapeReportCsv, normalizeReportExternalPhone } from '../server/reportUniqueNumbers.js';
 import { isWithinCompanyWorkingHours, normalizeCompanyWorkingHours } from '../shared/companyWorkingHours.js';
-import { buildOverviewData } from '../src/components/reports/dashboard/OverviewCallDynamicsChart.js';
+import { buildOverviewData, buildOverviewTicks } from '../src/components/reports/dashboard/OverviewCallDynamicsChart.js';
 
 const workingHours = normalizeCompanyWorkingHours({ companyWorkStart: '08:30', companyWorkEnd: '18:15' });
 assert.deepEqual(workingHours, { start: '08:30', end: '18:15' });
@@ -42,6 +42,9 @@ assert.equal(julyTimeline.length, 31);
 assert.equal(julyTimeline[0].label, '01.07');
 assert.equal(julyTimeline.at(-1)?.label, '31.07');
 assert.equal(julyTimeline.find(point => point.label === '21.07')?.inboundCalls, 2);
+const julyTicks = buildOverviewTicks(julyTimeline);
+assert.equal(julyTicks[0], '01.07');
+assert.equal(julyTicks.at(-1), '31.07');
 
 assert.equal(normalizeReportExternalPhone('+7 (978) 123-45-67'), '79781234567');
 assert.equal(normalizeReportExternalPhone('8 978 123-45-67'), '79781234567');
@@ -77,7 +80,8 @@ assert.match(heatmap, /Высокая/);
 assert.match(chart, /lg:grid-cols-\[minmax\(0,1fr\)_190px\]/);
 assert.match(chart, /aria-label="Серии графика"/);
 assert.match(chart, /yAxisId="sla"/);
-assert.match(chart, /interval="preserveStartEnd"/);
+assert.match(chart, /ticks=\{axisTicks\}/);
+assert.match(chart, /interval=\{0\}/);
 assert.match(route, /res\.write\('\\uFEFF'\)/);
 assert.match(route, /bulkLookup\(/);
 assert.match(route, /view_reports/);

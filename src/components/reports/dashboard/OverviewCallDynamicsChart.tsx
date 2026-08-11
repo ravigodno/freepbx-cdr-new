@@ -128,6 +128,16 @@ export function buildOverviewData(data: OverviewPoint[], groupType: string, star
   return result;
 }
 
+export function buildOverviewTicks(data: OverviewPoint[], maxTicks = 8): string[] {
+  if (data.length <= maxTicks) return data.map(point => point.label);
+  const lastIndex = data.length - 1;
+  const indexes = new Set<number>([0, lastIndex]);
+  for (let position = 1; position < maxTicks - 1; position++) {
+    indexes.add(Math.round((lastIndex * position) / (maxTicks - 1)));
+  }
+  return [...indexes].sort((a, b) => a - b).map(index => data[index].label);
+}
+
 function OverviewTooltip({ active, label, payload }: any) {
   if (!active || !payload?.length) return null;
   return (
@@ -152,6 +162,7 @@ function OverviewTooltip({ active, label, payload }: any) {
 export function OverviewCallDynamicsChart({ data, groupType, startDate, endDate }: { data: OverviewPoint[]; groupType: string; startDate: string; endDate: string }) {
   const [selected, setSelected] = useState<Set<OverviewSeriesKey>>(() => new Set(allSeries));
   const chartData = useMemo(() => buildOverviewData(data, groupType, startDate, endDate), [data, groupType, startDate, endDate]);
+  const axisTicks = useMemo(() => buildOverviewTicks(chartData), [chartData]);
   const allSelected = selected.size === series.length;
 
   const toggleSeries = (key: OverviewSeriesKey) => {
@@ -174,7 +185,7 @@ export function OverviewCallDynamicsChart({ data, groupType, startDate, endDate 
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={chartData} margin={{ top: 10, right: 18, left: 0, bottom: 8 }}>
               <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 7" vertical={false} />
-              <XAxis dataKey="label" interval="preserveStartEnd" minTickGap={30} tick={{ fontSize: 10, fill: '#64748b' }} />
+              <XAxis dataKey="label" ticks={axisTicks} interval={0} minTickGap={30} tick={{ fontSize: 10, fill: '#64748b' }} />
               <YAxis yAxisId="count" allowDecimals={false} tick={{ fontSize: 10, fill: '#64748b' }} width={38} />
               <YAxis yAxisId="sla" orientation="right" domain={[0, 100]} tickFormatter={value => `${value}%`} tick={{ fontSize: 10, fill: '#7c3aed' }} width={42} />
               <Tooltip content={<OverviewTooltip />} />
