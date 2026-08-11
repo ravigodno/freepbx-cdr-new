@@ -16348,7 +16348,7 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
     let siteFormLeadsInSla = 0;
     let siteFormLeadsLate = 0;
     try {
-      if (siteFormsEnabled && !relatedMissedCallId) {
+      if (siteFormsEnabled) {
         const clauses=["l.deleted_at IS NULL","l.status NOT IN('spam','duplicate','rejected')"],params:any[]=[];
         if(startDate){clauses.push('l.created_at>=?');params.push(buildDateTimeFilter(startDate,startTime))}if(endDate){clauses.push('l.created_at<=?');params.push(buildDateTimeFilter(endDate,endTime))}
         if(numberFilter){clauses.push('l.phone_normalized LIKE ?');params.push(`%${String(numberFilter).replace(/\D/g,'').slice(0,32)}%`)}
@@ -16357,7 +16357,14 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
         siteFormLeadsTotal=Number(siteFormCounters.total||0);
         siteFormLeadsInSla=Number(siteFormCounters.in_sla||0);
         siteFormLeadsLate=Number(siteFormCounters.late||0);
-        if(statusFilter==='SITE_FORMS'||showMixedRegistry){
+        if(relatedMissedCallId){
+          const rows=await queryPBXPulsDb(`SELECT l.id,l.created_at,l.customer_name,l.phone_raw,l.phone_normalized,l.comment,l.form_name,l.status,l.sla_status,l.sla_deadline_at,l.first_call_at,l.first_answered_call_at,l.raw_payload_json,
+            (SELECT lc.linkedid FROM site_form_lead_calls lc WHERE lc.lead_id=l.id ORDER BY lc.is_answered DESC,lc.call_started_at DESC LIMIT 1) linked_call_id
+            FROM site_form_leads l WHERE l.deleted_at IS NULL AND EXISTS(SELECT 1 FROM site_form_lead_calls lc WHERE lc.lead_id=l.id AND (lc.linkedid=? OR lc.uniqueid=?))
+            ORDER BY l.created_at DESC,l.id DESC LIMIT 10`,[relatedMissedCallId,relatedMissedCallId]);
+          siteFormLeads=rows.map(row=>{let message=String(row.comment||'');try{const raw=JSON.parse(String(row.raw_payload_json||'{}')),fields=raw?.rawFields||{};message=String(fields.MESSAGE||fields.COMMENT||fields.COMMENTS||fields.QUESTION||fields.TEXT||message)}catch{}const{raw_payload_json:_raw,...safe}=row;return{...safe,message:message.slice(0,1000)}});
+          totalCount=sortedCalls.length+siteFormLeads.length;
+        }else if(statusFilter==='SITE_FORMS'||showMixedRegistry){
           const leadsLimit=showMixedRegistry?page*limit:limit,leadsOffset=showMixedRegistry?0:(page-1)*limit;
           const rows=await queryPBXPulsDb(`SELECT l.id,l.created_at,l.customer_name,l.phone_raw,l.phone_normalized,l.comment,l.form_name,l.status,l.sla_status,l.sla_deadline_at,l.first_call_at,l.first_answered_call_at,l.raw_payload_json,
             (SELECT c.linkedid FROM site_form_lead_calls c WHERE c.lead_id=l.id ORDER BY c.is_answered DESC,c.call_started_at DESC LIMIT 1) linked_call_id

@@ -1,5 +1,13 @@
 # PBXPuls Roadmap
 
+## v5.8.3 — Reliable Bitrix Pull and linked lead drill-down
+
+Status: completed
+
+- A malformed Bitrix form result no longer blocks later results from other forms.
+- Invalid Pull responses are reported as synchronization errors instead of silent success.
+- Clicking a site-lead SLA sticker shows both the lead and its linked call.
+
 ## Purpose
 
 This roadmap defines the planned development direction for PBXPuls.
