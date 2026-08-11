@@ -4141,6 +4141,7 @@ export default function App() {
         accessUsers={accessUsers}
         directory={directoryLookup.length ? directoryLookup : directory}
         settings={settings}
+        canViewSiteFormReports={isAdminRole(session?.role) || session?.permissions?.view_site_form_reports === true}
         onStartDateChange={setStartDate}
         onEndDateChange={setEndDate}
       />

@@ -27,8 +27,8 @@ Maintainability is more important than short-term implementation speed.
 - TypeScript
 - FreePBX REST API
 - Asterisk AMI
-- MariaDB only when REST cannot provide required data
-- Local JSON storage for PBXPuls state, previews, templates, and logs
+- MariaDB as the only persistent store for PBXPuls runtime and business data
+- FreePBX MariaDB tables only when REST or AMI cannot provide required PBX data
 
 ### Frontend
 
@@ -69,11 +69,9 @@ Recommended structure:
 │   ├── services/
 │   ├── types.ts
 │   └── utils/
-├── data/
-│   ├── db.json
-│   ├── extension-templates.json
-│   ├── management-change-log.json
-│   └── management-previews.json
+├── server/
+│   ├── pbxpulsDb.ts
+│   └── pbxpulsMigrations.ts
 ├── setup/
 ├── AGENTS.md
 ├── PBXPULS_ARCHITECTURE.md
@@ -240,17 +238,22 @@ Rules:
 
 ## MariaDB Rules
 
-MariaDB is a fallback, not the default source.
+MariaDB is the only source of truth for PBXPuls runtime and business data.
 
-Use MariaDB only when:
+The REST/AMI-first rule applies only to reading or changing FreePBX and Asterisk
+data. Direct access to FreePBX-owned MariaDB tables remains a fallback when:
 
-- REST cannot provide required data;
-- AMI cannot provide required data;
+- REST cannot provide required PBX data;
+- AMI cannot provide required PBX data;
 - historical CDR data is required;
 - FreePBX configuration data is unavailable through REST.
 
 When using MariaDB:
 
+- keep PBXPuls-owned data in PBXPuls-owned tables;
+- manage schema changes through idempotent migrations;
+- use transactions for related writes;
+- preserve the database across application releases;
 - prefer read-only queries;
 - never write to FreePBX tables without explicit instruction;
 - document why REST was not enough;
@@ -258,24 +261,24 @@ When using MariaDB:
 
 ---
 
-## Local Storage
+## Persistent Storage
 
-PBXPuls may use local JSON files for internal state:
-
-```text
-data/db.json
-data/extension-templates.json
-data/management-change-log.json
-data/management-previews.json
-```
+PBXPuls must not use mutable JSON, CSV, SQLite, or other local files as runtime
+storage, a source of truth, or a backup mechanism.
 
 Rules:
 
-- Do not store secrets in plain text.
-- Mask secrets in logs and previews.
-- Preview storage is temporary.
-- Changelog must never contain raw passwords or tokens.
-- Local cache must not be treated as source of truth when live PBX data is required.
+- all settings, contacts, users, previews, templates, journals, events, cursors,
+  integration state and other mutable application data belong in MariaDB;
+- new code must not introduce writes to `data/*.json` or equivalent files;
+- existing file-backed modules are legacy technical debt and must be migrated to
+  MariaDB incrementally without losing production data;
+- a migration must preview and verify record counts before switching its runtime
+  source, and keep a recoverable database backup until verification succeeds;
+- application deployment must never replace, initialize, or reset business data;
+- generated build assets, temporary exports and diagnostic captures are not
+  persistent application storage and must not be treated as backups;
+- secrets must be encrypted or hashed as appropriate and never logged.
 
 ---
 
