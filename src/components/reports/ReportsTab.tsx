@@ -17,6 +17,7 @@ import { EmployeesDashboard } from './dashboard/EmployeesDashboard';
 import { DepartmentsDashboard } from './dashboard/DepartmentsDashboard';
 import { LinesDashboard } from './dashboard/LinesDashboard';
 import { OutgoingDashboard } from './dashboard/OutgoingDashboard';
+import { SiteFormLeadsDashboard } from './dashboard/SiteFormLeadsDashboard';
 
 type Props = {
   startDate: string;
@@ -28,6 +29,7 @@ type Props = {
   accessUsers: any[];
   directory: DirectoryEntry[];
   settings: AppSettings | null;
+  canViewSiteFormReports?: boolean;
   onStartDateChange?: (val: string) => void;
   onEndDateChange?: (val: string) => void;
 };
@@ -257,6 +259,7 @@ export default function ReportsTab({
   accessUsers,
   directory,
   settings,
+  canViewSiteFormReports = false,
   onStartDateChange,
   onEndDateChange
 }: Props) {
@@ -436,6 +439,7 @@ export default function ReportsTab({
     ['departments', 'Отделы'],
     ['employees', 'Сотрудники'],
     ['clients', 'Клиенты'],
+    ...(canViewSiteFormReports && settings?.siteFormLeadsEnabled !== false ? [['site-leads', 'Заявки']] : []),
     ['trunks', 'Линии'],
     ['marketing', 'Маркетинг'],
     ['reports', 'Отчеты']
@@ -483,6 +487,8 @@ export default function ReportsTab({
 
       {activeTab === 'clients' ? (
         <ClientAnalyticsPanel analytics={clientAnalytics} periodLabel={periodLabel} />
+      ) : activeTab === 'site-leads' ? (
+        <SiteFormLeadsDashboard startDate={startDate} endDate={endDate} refreshKey={refreshes} />
       ) : activeTab === 'inbound' ? (
         <InboundDashboard 
           slaSummary={slaSummary}

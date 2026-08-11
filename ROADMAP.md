@@ -1,5 +1,23 @@
 # PBXPuls Roadmap
 
+## v5.8.4 — Site lead reporting
+
+Status: completed
+
+- Added a dedicated site-leads tab to Reports.
+- Added KPI cards, lead dynamics, funnel, status, source, site and form charts.
+- Documented MariaDB as the only persistent store for PBXPuls runtime data.
+
+## Persistent storage consolidation
+
+Status: required
+
+- Inventory every remaining mutable `data/*.json` reader and writer.
+- Add PBXPuls-owned MariaDB schemas and idempotent migrations for each module.
+- Migrate data with preview, source/destination counts, transactional apply and rollback protection.
+- Switch both reads and writes to MariaDB only after production verification.
+- Remove file-backed runtime persistence and protect database data during every deployment.
+
 ## v5.8.3 — Reliable Bitrix Pull and linked lead drill-down
 
 Status: completed

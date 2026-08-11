@@ -21,6 +21,17 @@ Before implementing any feature, the agent must read `PBXPULS_ARCHITECTURE.md` c
 - Improve existing architecture incrementally.
 - Do not create commits, tags, or pushes unless explicitly requested.
 
+## Persistence Rules
+
+- MariaDB is the only permitted persistent store for PBXPuls runtime and business data.
+- Do not create new mutable JSON, CSV, SQLite, or other file-backed runtime stores.
+- Do not write new application state to `data/*.json`.
+- Existing file-backed stores are legacy technical debt; migrate them incrementally to PBXPuls-owned MariaDB tables.
+- Never claim a file-backed module is migrated until its reads and writes both use MariaDB and production record counts have been verified.
+- Deployments must preserve MariaDB and must not initialize, replace, truncate, or reset business data.
+- Before a storage migration, provide a preview with source and destination counts; after applying it, verify counts and runtime mode.
+- The REST/AMI-first rule applies to FreePBX-owned data. PBXPuls-owned data belongs in MariaDB.
+
 ---
 
 ## Required Workflow

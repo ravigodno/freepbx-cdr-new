@@ -1,5 +1,14 @@
 # PBXPULS_KNOWLEDGE_BASE
 
+## Persistent data policy
+
+- MariaDB is the only source of truth for PBXPuls runtime and business data.
+- PBXPuls does not introduce or maintain mutable file-backed runtime stores.
+- `data/db.json` and other mutable JSON stores are legacy technical debt, not an accepted architecture.
+- Every remaining legacy reader and writer must be migrated to PBXPuls-owned MariaDB tables.
+- A release must preserve database contents and verify critical record counts before and after deployment.
+- FreePBX data is still accessed through verified REST or AMI interfaces first; direct FreePBX database access remains a documented fallback.
+
 ## Bitrix Pull resilience
 
 - The connector must advance its cursor past malformed historical form results and report the skipped count.
