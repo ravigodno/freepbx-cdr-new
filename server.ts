@@ -16766,10 +16766,21 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
         sqlParams.push(callbackWindowMinutes);
       }
 
-      sql += ' ORDER BY calldate DESC LIMIT 10000'; // Higher limit for wider analytical trend queries
-
       try {
-        calls = await queryFreePBXCDR(localDb.settings, false, sql, sqlParams);
+        const reportPageSize = 10000;
+        let reportOffset = 0;
+        let pageCount = 0;
+        while (pageCount < 1000) {
+          const pageSql = `${sql} ORDER BY calldate DESC, uniqueid DESC LIMIT ${reportPageSize} OFFSET ${reportOffset}`;
+          const page = await queryFreePBXCDR(localDb.settings, false, pageSql, sqlParams);
+          calls.push(...page);
+          pageCount++;
+          if (page.length < reportPageSize) break;
+          reportOffset += reportPageSize;
+        }
+        if (pageCount >= 1000) {
+          throw new Error('Report CDR pagination safety limit reached');
+        }
       } catch (e: any) {
         calls = JSON.parse(JSON.stringify(mockCDRData));
         (req as any).dbError = `База данных CDR недоступна.`;

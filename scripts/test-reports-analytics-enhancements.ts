@@ -67,6 +67,7 @@ const outbound = fs.readFileSync('src/components/reports/dashboard/OutgoingDashb
 const chart = fs.readFileSync('src/components/reports/dashboard/OverviewCallDynamicsChart.tsx', 'utf8');
 const heatmap = fs.readFileSync('src/components/reports/dashboard/CallHeatmap.tsx', 'utf8');
 const route = fs.readFileSync('server/reportUniqueNumbers.ts', 'utf8');
+const server = fs.readFileSync('server.ts', 'utf8');
 assert.match(inbound, /Среднее ожидание/);
 assert.match(inbound, /Медиана ожидания/);
 assert.match(inbound, /Экспорт уникальных номеров|UniqueNumbersExportButton/);
@@ -82,6 +83,9 @@ assert.match(chart, /aria-label="Серии графика"/);
 assert.match(chart, /yAxisId="sla"/);
 assert.match(chart, /ticks=\{axisTicks\}/);
 assert.match(chart, /interval=\{0\}/);
+assert.match(server, /reportPageSize = 10000/);
+assert.match(server, /OFFSET \$\{reportOffset\}/);
+assert.doesNotMatch(server, /ORDER BY calldate DESC LIMIT 10000/);
 assert.match(route, /res\.write\('\\uFEFF'\)/);
 assert.match(route, /bulkLookup\(/);
 assert.match(route, /view_reports/);
