@@ -103,6 +103,9 @@ export interface CallEntry {
   phoneMeetingId?: string;
   phoneMeetingInitiator?: string;
   phoneMeetingParticipants?: string[];
+  siteFormLeadId?: number;
+  siteFormExternalResultId?: string | null;
+  siteFormName?: string | null;
 }
 
 export interface MissedCallStatus {
@@ -154,6 +157,8 @@ export interface AppSettings {
   missedCallCallbackSlaHours?: number;
   missedCallCallbackSlaMinutes?: number;
   calltrackingMatchWindowMinutes?: number;
+  companyWorkStart?: string;
+  companyWorkEnd?: string;
 
   // FreePBX REST API Settings
   freepbxApiUrl?: string;

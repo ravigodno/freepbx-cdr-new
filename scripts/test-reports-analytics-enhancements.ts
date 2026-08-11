@@ -2,6 +2,15 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { calculateAnsweredIncomingMetrics } from '../server/reportIncomingMetrics.js';
 import { buildUniqueNumbersSql, escapeReportCsv, normalizeReportExternalPhone } from '../server/reportUniqueNumbers.js';
+import { isWithinCompanyWorkingHours, normalizeCompanyWorkingHours } from '../shared/companyWorkingHours.js';
+
+const workingHours = normalizeCompanyWorkingHours({ companyWorkStart: '08:30', companyWorkEnd: '18:15' });
+assert.deepEqual(workingHours, { start: '08:30', end: '18:15' });
+assert.equal(isWithinCompanyWorkingHours(new Date(2026, 6, 1, 8, 29), workingHours), false);
+assert.equal(isWithinCompanyWorkingHours(new Date(2026, 6, 1, 8, 30), workingHours), true);
+assert.equal(isWithinCompanyWorkingHours(new Date(2026, 6, 1, 18, 14), workingHours), true);
+assert.equal(isWithinCompanyWorkingHours(new Date(2026, 6, 1, 18, 15), workingHours), false);
+assert.deepEqual(normalizeCompanyWorkingHours({ companyWorkStart: '19:00', companyWorkEnd: '08:00' }), { start: '08:00', end: '19:00' });
 
 const rows = [
   { direction: 'incoming', disposition: 'ANSWERED', duration: 20, billsec: 10 },
@@ -67,5 +76,6 @@ console.log(JSON.stringify({
   incomingMetrics: metrics,
   phoneNormalization: 'ok',
   uniqueExport: { logicalAggregation: true, streaming: true, bulkLookup: true, rbac: true },
-  chartControls: { desktopRight: true, responsiveGrid: true, dualAxis: true }
+  chartControls: { desktopRight: true, responsiveGrid: true, dualAxis: true },
+  workingHours: 'ok'
 }));

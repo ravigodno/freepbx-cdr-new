@@ -96,6 +96,14 @@ const GROUPS: PermissionGroup[] = [
       { key: 'manage_calltracking', label: 'CallTracking', kind: 'feature', hint: 'Разрешает управлять сайтами, номерами и правилами подмены' },
       { key: 'manage_yandex_metrika', label: 'Яндекс Метрика', kind: 'feature', hint: 'Разрешает подключать счетчики, цели и интеграции Метрики' },
       { key: 'manage_yandex_direct', label: 'Яндекс Директ', kind: 'feature', hint: 'Разрешает управлять настройками расходов и отчетами Директа' }
+      ,{ key: 'view_site_form_leads', label: 'Заявки с сайта', kind: 'tab', hint: 'Просмотр доступных заявок с форм сайта' }
+      ,{ key: 'manage_site_form_leads', label: 'Обработка заявок', kind: 'feature', hint: 'Статусы, комментарии и завершение заявок' }
+      ,{ key: 'call_site_form_leads', label: 'Звонки по заявкам', kind: 'feature', hint: 'Click-to-call из заявки' }
+      ,{ key: 'assign_site_form_leads', label: 'Назначение заявок', kind: 'feature', hint: 'Назначение ответственного и подразделения' }
+      ,{ key: 'export_site_form_leads', label: 'Экспорт заявок', kind: 'feature', hint: 'CSV/XLSX-выгрузка заявок' }
+      ,{ key: 'view_site_form_reports', label: 'Отчёты по заявкам', kind: 'feature', hint: 'KPI, SLA и конверсии заявок' }
+      ,{ key: 'manage_site_form_integrations', label: 'Интеграции форм', kind: 'feature', hint: 'Webhook, токены и настройки сайтов' }
+      ,{ key: 'view_site_form_webhook_logs', label: 'Журнал webhook', kind: 'feature', hint: 'Безопасный журнал приёма заявок' }
     ]
   },
   {

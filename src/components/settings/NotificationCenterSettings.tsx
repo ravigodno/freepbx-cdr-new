@@ -1,7 +1,7 @@
 import React,{useCallback,useEffect,useMemo,useState}from'react';
 import{Bell,CheckCircle,Loader2,Send,Trash2}from'lucide-react';
 
-const CATEGORY_LABELS:Record<string,string>={balance:'Балансы',calls:'Звонки',telephony:'Телефония',monitoring:'Мониторинг',system:'Система',security:'Безопасность'};
+const CATEGORY_LABELS:Record<string,string>={balance:'Балансы',calls:'Звонки',telephony:'Телефония',monitoring:'Мониторинг',marketing:'Маркетинг и заявки',system:'Система',security:'Безопасность'};
 const STATUS_LABELS:Record<string,string>={pending:'Ожидает',sent:'Отправлено',failed:'Ошибка',retry_scheduled:'Повтор запланирован',disabled:'Отключено',filtered_by_severity:'Отфильтровано по важности',cooldown:'Cooldown',duplicate:'Дубликат'};
 export default function NotificationCenterSettings({token,canManage,canViewLog}:{token:string;canManage:boolean;canViewLog:boolean}){
  const[data,setData]=useState<any>(null),[secret,setSecret]=useState(''),[replace,setReplace]=useState(false),[preview,setPreview]=useState<any>(null),[bot,setBot]=useState<any>(null),[telegramChats,setTelegramChats]=useState<any[]>([]),[rows,setRows]=useState<any[]>([]),[busy,setBusy]=useState('load'),[message,setMessage]=useState<any>(null),[filters,setFilters]=useState({status:'',category:'',eventType:'',from:'',to:''});

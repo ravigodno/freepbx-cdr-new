@@ -6,6 +6,7 @@ import {
   PhoneOutgoing,
   PhoneMissed,
   PhoneCall,
+  ExternalLink,
   Headphones,
   Mic2,
   Settings,
@@ -76,6 +77,7 @@ import SipDialogsTab from './modules/monitoring/tabs/monitoring/SipDialogsTab';
 import TcpdumpTab from './modules/monitoring/tabs/monitoring/TcpdumpTab';
 import ReportsTab from './components/reports/ReportsTab';
 import MarketingTab from './components/marketing/MarketingTab';
+import SiteFormsWorkspace from './components/marketing/siteForms/SiteFormsWorkspace';
 import { AboutSystemTab } from './components/AboutSystemTab';
 import NotificationCenterSettings from './components/settings/NotificationCenterSettings';
 import { type LiveTransferResult, type LiveTransferSearchTarget } from './components/LiveTransferSearch';
@@ -567,6 +569,8 @@ export default function App() {
 
   // Calls list and filtration states
   const [calls, setCalls] = useState<CallEntry[]>([]);
+  const [siteFormRegistryLeads, setSiteFormRegistryLeads] = useState<any[]>([]);
+  const [siteFormRegistryTotal, setSiteFormRegistryTotal] = useState(0);
   const [totalCalls, setTotalCalls] = useState(0);
   const [page, setPage] = useState(1);
   const [limit] = useState(15);
@@ -695,7 +699,7 @@ export default function App() {
   const [isTestingFreePBXApi, setIsTestingFreePBXApi] = useState(false);
   const [freepbxApiTestResult, setFreePBXApiTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<'pbx' | 'directory' | 'access' | 'permissions' | 'notifications' | 'design' | 'appearance'>('pbx');
+  const [settingsTab, setSettingsTab] = useState<'pbx' | 'integrations' | 'directory' | 'access' | 'permissions' | 'notifications' | 'design' | 'appearance'>('pbx');
 
   // Load public settings for logo and copyright customization
   const [publicSettings, setPublicSettings] = useState<{ customLogoUrl?: string; customCopyright?: string } | null>(null);
@@ -3224,6 +3228,8 @@ export default function App() {
 
       const data = await fetchCdrCalls(qParams, session.token);
       setCalls(data.calls);
+      setSiteFormRegistryLeads(Array.isArray(data.siteFormLeads) ? data.siteFormLeads : []);
+      setSiteFormRegistryTotal(Number(data.siteFormLeadsTotal || 0));
       setTotalCalls(data.total);
       setTotalPages(data.totalPages || 1);
       setPage(data.page || 1);
@@ -5794,7 +5800,10 @@ export default function App() {
             {/* Phone Registry */}
             {hasPermission('view_calls') && (
               <button
-                onClick={() => setActiveView('calls')}
+                onClick={() => {
+                  window.history.replaceState({}, '', '/');
+                  setActiveView('calls');
+                }}
                 className={`flex items-center ${isSidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl transition-all relative group cursor-pointer ${
                   activeView === 'calls'
                     ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-900/30 shadow-inner'
@@ -6609,6 +6618,13 @@ export default function App() {
                   )}
                   <XCircle className="h-5 w-5 text-amber-500/80 self-center" /></div>
               </button>
+              <button
+                onClick={() => { setStatusFilter(statusFilter === 'SITE_FORMS' ? 'ALL' : 'SITE_FORMS'); setPage(1); }}
+                className={`text-left p-4 flex flex-col justify-between rounded-xl shadow-sm hover:shadow-md transition-all cursor-pointer border ${statusFilter === 'SITE_FORMS' ? 'bg-blue-50 border-blue-400 ring-2 ring-blue-500/30' : 'bg-white border-blue-150'}`}
+              >
+                <span className="text-xs font-bold tracking-wide text-blue-650">Заявки с сайта</span>
+                <div className="mt-2 flex items-baseline justify-between w-full"><span className="text-2xl font-bold text-blue-600 font-mono">{siteFormRegistryTotal}</span><ExternalLink className="h-5 w-5 text-blue-500" /></div>
+              </button>
             </section>
 
         {/* Filters configuration section */}
@@ -6863,7 +6879,7 @@ export default function App() {
                   Повторить попытку
                 </button>
           </div>
-            ) : calls.length === 0 ? (
+            ) : calls.length === 0 && siteFormRegistryLeads.length === 0 ? (
               <div className="flex flex-col items-center justify-center p-20 space-y-2 text-center font-sans">
                 <Phone className="h-12 w-12 text-slate-400" />
                 <h3 className="text-base font-semibold text-slate-600 leading-normal">Звонки не найдены</h3>
@@ -6874,6 +6890,7 @@ export default function App() {
               <>
                 <LegacyCDRTable
                   calls={calls}
+                  siteFormLeads={siteFormRegistryLeads}
                   directory={directoryLookup.length ? directoryLookup : directory}
                   session={session}
                   copiedNumber={copiedNumber}
@@ -6888,6 +6905,8 @@ export default function App() {
                   toggleRowDropdown={toggleRowDropdown}
                   fetchChronology={fetchChronology}
                   showProcessingEvent={showProcessingEvent}
+                  reloadRegistry={() => reloadData(page)}
+                  showLeadCall={(linkedid) => { setRelatedMissedCallId(linkedid); setPage(1); void loadCalls(1, linkedid); }}
                   setActiveDropdownCallId={setActiveDropdownCallId}
                   formatSeconds={formatSeconds}
                 />
@@ -6898,7 +6917,7 @@ export default function App() {
           {/* Simple pagination footer */}
           <div className="px-4 py-3 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs shrink-0">
             <span className="text-slate-550 text-sm font-light">
-              Показано <span className="font-semibold text-slate-800">{calls.length}</span> строк из <span className="font-semibold text-slate-800">{totalCalls}</span>
+              Показано <span className="font-semibold text-slate-800">{calls.length + siteFormRegistryLeads.length}</span> строк, звонков: <span className="font-semibold text-slate-800">{totalCalls}</span>
             </span>
 
             <div className="flex items-center gap-1.5">
@@ -7858,6 +7877,7 @@ export default function App() {
                   ...(isAdminRole(session?.role) ? {
                     pbx: 'Настройки АТС',
                     directory: 'Телефонный справочник',
+                    integrations: 'Интеграции',
                     access: 'Доступ и пользователи',
                     permissions: 'Права доступа',
                     ...(hasPermission('view_notification_center') ? { notifications: 'Центр уведомлений' } : {}),
@@ -7965,6 +7985,18 @@ export default function App() {
                             <span className="mt-1 block max-w-full break-words whitespace-normal text-[11px] font-medium leading-relaxed text-slate-500">Сколько минут после клика по телефону PBXPuls ищет звонок в CDR. Это техническое окно атрибуции, не SLA.</span>
                           </label>
                         </div>
+                        <div className="mt-4 border-t border-slate-200 pt-4">
+                          <h5 className="text-xs font-black text-slate-700">Рабочее время компании</h5>
+                          <div className="mt-2 grid min-w-0 max-w-md grid-cols-1 gap-3 sm:grid-cols-2">
+                            <label className="text-xs font-bold text-slate-600">Начало рабочего дня
+                              <input type="time" value={draftSettings.companyWorkStart || '08:00'} onChange={(e) => setDraftSettings({ ...draftSettings, companyWorkStart: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900" required />
+                            </label>
+                            <label className="text-xs font-bold text-slate-600">Окончание рабочего дня
+                              <input type="time" value={draftSettings.companyWorkEnd || '19:00'} onChange={(e) => setDraftSettings({ ...draftSettings, companyWorkEnd: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900" required />
+                            </label>
+                          </div>
+                          <span className="mt-2 block text-[11px] font-medium leading-relaxed text-slate-500">Используется в статистике входящих звонков для определения обращений вне рабочего времени.</span>
+                        </div>
                       </div>
                       
                       <div className="min-w-0 max-w-full rounded-2xl border border-slate-200 bg-slate-50 p-4">
@@ -8047,6 +8079,9 @@ export default function App() {
                       canManage={hasPermission('manage_notification_center')}
                       canViewLog={hasPermission('view_notification_delivery_log')}
                     />
+                  )}
+                  {settingsTab === 'integrations' && hasPermission('manage_site_form_integrations') && (
+                    <SiteFormsWorkspace initialTab="integrations" showNavigation={false} />
                   )}
                   {settingsTab === 'directory' && draftSettings && (
                     <div className="space-y-5">

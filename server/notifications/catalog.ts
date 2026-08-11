@@ -22,4 +22,10 @@ export const NOTIFICATION_EVENT_CATALOG: NotificationEventDefinition[] = [
   { eventType:'pbxpuls.critical_error', category:'system', title:'Критическая ошибка PBXPuls', defaultSeverity:'critical', producer:'active' },
   { eventType:'disk.space_critical', category:'system', title:'Критически мало места на диске', defaultSeverity:'critical', producer:'registered' },
   { eventType:'security.critical_event', category:'security', title:'Критическое событие безопасности', defaultSeverity:'critical', producer:'registered' }
+  ,{ eventType:'site_forms.lead_received', category:'marketing', title:'Новая заявка с сайта', defaultSeverity:'info', producer:'active' }
+  ,{ eventType:'site_forms.lead_unclaimed', category:'marketing', title:'Заявка не взята в работу', defaultSeverity:'warning', producer:'registered' }
+  ,{ eventType:'site_forms.sla_due', category:'marketing', title:'Приближается SLA заявки', defaultSeverity:'warning', producer:'registered' }
+  ,{ eventType:'site_forms.sla_overdue', category:'marketing', title:'SLA заявки нарушен', defaultSeverity:'error', producer:'registered' }
+  ,{ eventType:'site_forms.webhook_failed', category:'marketing', title:'Ошибка webhook формы', defaultSeverity:'error', producer:'registered' }
+  ,{ eventType:'site_forms.integration_stale', category:'marketing', title:'Интеграция форм давно не получала заявки', defaultSeverity:'warning', producer:'registered' }
 ];

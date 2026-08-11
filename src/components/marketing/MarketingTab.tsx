@@ -10,10 +10,12 @@ import { MarketingEmptyState } from './MarketingEmptyState';
 import { CalltrackingPhoneNumber, CalltrackingReplacementRule, CalltrackingSite, CalltrackingSummaryResponse, MarketingAggregatesResponse, MarketingOverviewSummary, PhoneClickEvent, TrafficSourceSummary, UsedCallQualitySettings, YandexDirectSourceRow, YandexDirectSummary, YandexMetrikaIntegration, YandexMetrikaPageSummary, YandexMetrikaPhoneGoalEventsResponse, YandexMetrikaPhoneGoalEventRow, YandexMetrikaPhoneGoalSummaryResponse, YandexMetrikaSourceSummary, YandexMetrikaSummary } from './types';
 import { useServerClock } from '../../hooks/useServerClock';
 import { getServerNow } from '../../utils/serverClock';
+import SiteFormsWorkspace from './siteForms/SiteFormsWorkspace';
 
-type MarketingTabId = 'overview' | 'phone-clicks' | 'sources' | 'campaigns' | 'pages' | 'utm' | 'lost-leads' | 'analytics' | 'integrations' | 'numbers';
+type MarketingTabId = 'site-forms' | 'overview' | 'phone-clicks' | 'sources' | 'campaigns' | 'pages' | 'utm' | 'lost-leads' | 'analytics' | 'integrations' | 'numbers';
 
 const tabs: Array<{ id: MarketingTabId; label: string }> = [
+  { id: 'site-forms', label: 'Заявки с сайта' },
   { id: 'overview', label: 'Обзор' },
   { id: 'phone-clicks', label: 'Клики по телефонам' },
   { id: 'sources', label: 'Источники' },
@@ -316,6 +318,7 @@ export default function MarketingTab() {
   ], [summary, summaryData, callbackSlaMinutes, directSummary, useMetrikaVisits, isDirectConnected, isDirectLimited, directLimitedWarning]);
 
   const renderTab = () => {
+    if (activeTab === 'site-forms') return <SiteFormsWorkspace />;
     if (activeTab === 'phone-clicks') return <PhoneClicksTable events={phoneClicks} metrikaGoalSummary={metrikaGoalSummary} metrikaGoalRows={metrikaGoalRows} metrikaGoalError={metrikaGoalWarning} />;
     if (activeTab === 'sources') return <TrafficSourcesTable sources={mergedSources} />;
     if (activeTab === 'campaigns') return <CampaignsReportTable />;

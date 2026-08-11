@@ -1,0 +1,11 @@
+CREATE TABLE IF NOT EXISTS pbxpuls_phone_clicks (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  event_id VARCHAR(191) NOT NULL,
+  event_time DATETIME NOT NULL,
+  page_url VARCHAR(1000) NOT NULL DEFAULT '', referrer VARCHAR(1000) NOT NULL DEFAULT '',
+  phone_text VARCHAR(120) NOT NULL DEFAULT '', phone_href VARCHAR(160) NOT NULL DEFAULT '', session_id VARCHAR(191) NOT NULL DEFAULT '',
+  utm_source VARCHAR(191) NOT NULL DEFAULT '', utm_medium VARCHAR(191) NOT NULL DEFAULT '', utm_campaign VARCHAR(255) NOT NULL DEFAULT '',
+  utm_content VARCHAR(255) NOT NULL DEFAULT '', utm_term VARCHAR(255) NOT NULL DEFAULT '', ip_hash CHAR(64) NOT NULL DEFAULT '', user_agent VARCHAR(500) NOT NULL DEFAULT '',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_pbxpuls_click_event(event_id), KEY idx_pbxpuls_click_cursor(id,event_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

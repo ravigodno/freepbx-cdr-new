@@ -55,6 +55,8 @@ import { authenticatePBXPulsSqlUser, compareLegacyUserWithSql, getAuthStorageMod
 import { getPBXPulsDbRuntimeStatus, isPBXPulsDbAvailable, queryPBXPulsDb, sanitizePBXPulsDbError } from './server/pbxpulsDb.js';
 import { getPBXPulsDbConfigLogFields } from './server/pbxpulsDbConfig.js';
 import { writePBXPulsSystemEvent } from './server/pbxpulsEvents.js';
+import { registerSiteFormRoutes } from './server/siteForms/router.js';
+import { SiteFormPullService } from './server/siteForms/pullService.js';
 import { upsertPBXPulsSetting } from './server/pbxpulsSettings.js';
 import { buildLegacySettingsSeedRows } from './server/pbxpulsLegacySettings.js';
 import { buildHybridSettingsSnapshot, getPBXPulsRuntimeSettingsSnapshot, getSettingsStorageMode, isSettingsApiRuntimeSwitchEnabled } from './server/pbxpulsSettingsRuntime.js';
@@ -135,6 +137,7 @@ import {
 } from './server/pbxpulsDirectorySync.js';
 import { findBlindTransferTargetFromCel, getExplicitBlindTransferTarget } from './server/cdrBlindTransfer.js';
 import { buildReportHourlyTimeline, formatReportHourBucket } from './server/reportDynamicsBuckets.js';
+import { isWithinCompanyWorkingHours, normalizeCompanyWorkingHours } from './shared/companyWorkingHours.js';
 import { calculateCpuPercent, parseProcStatCpuSample, type ProcStatCpuSample } from './server/healthCpu.js';
 import { classifyMissedCallResolution, type MissedCallResolutionStatus } from './server/missedCallResolution.js';
 import {
@@ -11372,6 +11375,11 @@ app.post('/api/settings', requireAuth(), async (req, res) => {
   }
 
   const localDb = await readLocalDb();
+  if ('companyWorkStart' in settingsUpdate || 'companyWorkEnd' in settingsUpdate) {
+    const workingHours = normalizeCompanyWorkingHours({ ...localDb.settings, ...settingsUpdate });
+    settingsUpdate.companyWorkStart = workingHours.start;
+    settingsUpdate.companyWorkEnd = workingHours.end;
+  }
   if ('missedCallCallbackSlaHours' in settingsUpdate && !('missedCallCallbackSlaMinutes' in settingsUpdate)) {
     settingsUpdate.missedCallCallbackSlaMinutes = Number(settingsUpdate.missedCallCallbackSlaHours) * 60;
   }
@@ -16311,11 +16319,48 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
     const sortedCalls = filteredCalls.sort((a, b) => new Date(b.calldate).getTime() - new Date(a.calldate).getTime());
 
     // Paginate results
-    const totalCount = sortedCalls.length;
-    const paginatedCalls = sortedCalls.slice((page - 1) * limit, page * limit);
+    let totalCount = statusFilter === 'SITE_FORMS' ? 0 : sortedCalls.length;
+    const paginatedCalls = statusFilter === 'SITE_FORMS' ? [] : sortedCalls.slice((page - 1) * limit, page * limit);
+    try {
+      const linkedIds = [...new Set(paginatedCalls.map(call => String(call.linkedid || call.uniqueid || '')).filter(Boolean))];
+      if (linkedIds.length) {
+        const placeholders = linkedIds.map(() => '?').join(',');
+        const leadLinks = await queryPBXPulsDb(`SELECT c.linkedid,c.uniqueid,l.id lead_id,l.external_result_id,l.form_name
+          FROM site_form_lead_calls c JOIN site_form_leads l ON l.id=c.lead_id
+          WHERE c.linkedid IN(${placeholders}) OR c.uniqueid IN(${placeholders})`, [...linkedIds,...linkedIds]);
+        const byCallId = new Map<string,any>();
+        for (const link of leadLinks) { byCallId.set(String(link.linkedid),link);byCallId.set(String(link.uniqueid),link); }
+        for (const call of paginatedCalls) {
+          const link = byCallId.get(String(call.linkedid || call.uniqueid)) || byCallId.get(String(call.uniqueid));
+          if (link) Object.assign(call,{siteFormLeadId:Number(link.lead_id),siteFormExternalResultId:link.external_result_id,siteFormName:link.form_name});
+        }
+      }
+    } catch (error: any) {
+      if (!String(error?.message || '').includes("doesn't exist")) console.warn('[SITE_FORMS] call registry enrichment skipped:', sanitizePBXPulsDbError(error));
+    }
 
+    let siteFormLeads:any[]=[];
+    let siteFormLeadsTotal = 0;
+    try {
+      if (!relatedMissedCallId) {
+        const clauses=["l.deleted_at IS NULL","l.status NOT IN('spam','duplicate','rejected')"],params:any[]=[];
+        if(startDate){clauses.push('l.created_at>=?');params.push(buildDateTimeFilter(startDate,startTime))}if(endDate){clauses.push('l.created_at<=?');params.push(buildDateTimeFilter(endDate,endTime))}
+        if(numberFilter){clauses.push('l.phone_normalized LIKE ?');params.push(`%${String(numberFilter).replace(/\D/g,'').slice(0,32)}%`)}
+        if(searchFilter&&!shouldSkipGeneralSearch){const value=`%${String(searchFilter).slice(0,191)}%`;clauses.push('(l.customer_name LIKE ? OR l.phone_raw LIKE ? OR l.comment LIKE ? OR l.form_name LIKE ?)');params.push(value,value,value,value)}
+        siteFormLeadsTotal=Number((await queryPBXPulsDb(`SELECT COUNT(*) total FROM site_form_leads l WHERE ${clauses.join(' AND ')}`,params))[0]?.total||0);
+        if(statusFilter==='SITE_FORMS'){
+          const rows=await queryPBXPulsDb(`SELECT l.id,l.created_at,l.customer_name,l.phone_raw,l.phone_normalized,l.comment,l.form_name,l.status,l.sla_status,l.sla_deadline_at,l.first_call_at,l.first_answered_call_at,l.raw_payload_json,
+            (SELECT c.linkedid FROM site_form_lead_calls c WHERE c.lead_id=l.id ORDER BY c.is_answered DESC,c.call_started_at DESC LIMIT 1) linked_call_id
+            FROM site_form_leads l WHERE ${clauses.join(' AND ')} ORDER BY l.created_at DESC,l.id DESC LIMIT ? OFFSET ?`,[...params,limit,(page-1)*limit]);
+          siteFormLeads=rows.map(row=>{let message=String(row.comment||'');try{const raw=JSON.parse(String(row.raw_payload_json||'{}')),fields=raw?.rawFields||{};message=String(fields.MESSAGE||fields.COMMENT||fields.COMMENTS||fields.QUESTION||fields.TEXT||message)}catch{}const{raw_payload_json:_raw,...safe}=row;return{...safe,message:message.slice(0,1000)}});
+          totalCount=siteFormLeadsTotal;
+        }
+      }
+    } catch(error:any){if(!String(error?.message||'').includes("doesn't exist"))console.warn('[SITE_FORMS] registry leads skipped:',sanitizePBXPulsDbError(error))}
     res.json({
       calls: paginatedCalls,
+      siteFormLeads,
+      siteFormLeadsTotal,
       total: totalCount,
       page,
       limit,
@@ -16667,10 +16712,13 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
     const callbackWindowMinutes = req.query.callbackWindowMinutes !== undefined
       ? clampCallQualityNumber(req.query.callbackWindowMinutes, qualitySettings.missedCallCallbackSlaMinutes, 1, 10080)
       : legacyCallbackMinutes;
+    const companyWorkingHours = normalizeCompanyWorkingHours(localDb.settings);
     const usedSettings = {
       ...qualitySettings,
       answerSlaSeconds: slaThresholdSeconds,
-      missedCallCallbackSlaMinutes: callbackWindowMinutes
+      missedCallCallbackSlaMinutes: callbackWindowMinutes,
+      companyWorkStart: companyWorkingHours.start,
+      companyWorkEnd: companyWorkingHours.end
     };
 
     let calls: CallEntry[] = [];
@@ -17053,7 +17101,13 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
       if (trunkFilter && trunkFilter !== 'all' && (extractTrunkName(c) || UNKNOWN_TRUNK_NAME) !== trunkFilter) return false;
       return true;
     });
+    const outOfHoursMissedCalls = reportFilteredCalls.filter(call => {
+      if (!isIncoming(call) || !isMissedDisposition(String(call?.disposition || '').toUpperCase())) return false;
+      const date = new Date(String(call?.calldate || '').replace(' ', 'T'));
+      return !isWithinCompanyWorkingHours(date, companyWorkingHours);
+    }).length;
     const slaSummary = calculateSlaMetrics(reportFilteredCalls, slaThresholdSeconds);
+    (slaSummary as any).outOfHoursMissedCalls = outOfHoursMissedCalls;
     const trunkSummary = calculateTrunkMetrics(reportFilteredCalls);
     const lostCallAnalytics = buildLostCallAnalytics(calls, {
       startMs: reportStartMs,
@@ -23033,6 +23087,42 @@ const notificationRuntime = registerNotificationRoutes(app, {
     trunksStatus: async () => (await aiPbxReadServices.trunksStatus({}, undefined, { tenantId: 0, actorId: 'notification-service', permissions: [] })).items || []
   }
 });
+const importSiteFormClickEvents = async (siteId:string,items:any[]) => {
+  const localDb=await readLocalDb();if(!Array.isArray(localDb.calltrackingEvents))localDb.calltrackingEvents=[];const existing=new Set(localDb.calltrackingEvents.map((event:any)=>String(event.id||'')));let imported=0;
+  for(const item of items){const id=`pull_${String(item.eventId||item.id||'').slice(0,180)}`;if(id==='pull_'||existing.has(id))continue;const utm=item.utm&&typeof item.utm==='object'?item.utm:{};localDb.calltrackingEvents.push({id,siteId,eventType:'phone_click',eventTime:normalizeCalltrackingDate(item.eventTime),pageUrl:cleanMarketingString(item.pageUrl,1000),referrer:cleanMarketingString(item.referrer,1000),phoneText:cleanMarketingString(item.phoneText,120),phoneHref:cleanMarketingString(item.phoneHref,160),ymClientId:'',utmSource:cleanMarketingString(utm.source,160),utmMedium:cleanMarketingString(utm.medium,160),utmCampaign:cleanMarketingString(utm.campaign,240),utmContent:cleanMarketingString(utm.content,240),utmTerm:cleanMarketingString(utm.term,240),userAgent:cleanMarketingString(item.userAgent,500),ipHash:cleanMarketingString(item.ipHash,64),sessionId:cleanMarketingString(item.sessionId,160)||null,rawPayload:{source:'bitrix_pull'},createdAt:new Date().toISOString()});existing.add(id);imported++}
+  if(imported)await writeLocalDb(localDb);return imported;
+};
+const siteFormSecret=process.env.SITE_FORMS_TOKEN_HASH_KEY || process.env.JWT_SECRET || JWT_SECRET;
+const siteFormsRuntime = registerSiteFormRoutes(app, {
+  requireAuth,
+  checkPermission: checkUserPermission,
+  secret: siteFormSecret,
+  resolveUserExtension: async req => {
+    const localDb = await readLocalDb();
+    return String(getAuthenticatedDbUser(localDb, req)?.extension || (req as any).user?.extension || '').trim();
+  },
+  listAssignableUsers: async () => {
+    const localDb = await readLocalDb();
+    return Array.isArray(localDb.users) ? localDb.users : [];
+  },
+  importClickEvents: importSiteFormClickEvents,
+  startCall: async (from, to) => {
+    const localDb = await readLocalDb();
+    const technology = await resolveClickToCallChannelTechnology(from);
+    if (!technology) return { success: false, error: `Внутренний номер ${from} не найден` };
+    return triggerAMICall(localDb.settings, from, to, technology);
+  },
+  queryCdr: async (sql, params) => {
+    const localDb = await readLocalDb();
+    return queryFreePBXCDR(localDb.settings, isDemoMode(localDb.settings), sql, params);
+  }
+});
+const siteFormsPullRuntime=new SiteFormPullService(siteFormSecret,importSiteFormClickEvents);
+const siteFormsMatcherTimer = setInterval(() => {
+  void siteFormsPullRuntime.syncDue().catch(error=>console.warn('[SITE_FORMS] Pull sync failed:',sanitizePBXPulsDbError(error)));
+  void siteFormsRuntime.matchRecent().catch(error => console.warn('[SITE_FORMS] CDR matcher failed:', sanitizePBXPulsDbError(error)));
+}, 60_000);
+siteFormsMatcherTimer.unref();
 
 // API fallback must stay before Vite/static SPA fallback so missing API routes return JSON, not index.html.
 app.use('/api', (req, res) => {
@@ -23082,7 +23172,7 @@ async function startServer() {
 
 let aiPlatformShutdownStarted=false;
 let phonebookListener: import('node:http').Server | null = null;
-for(const signal of ['SIGTERM','SIGINT'] as const)process.once(signal,()=>{if(aiPlatformShutdownStarted)return;aiPlatformShutdownStarted=true;notificationRuntime.stop();balanceRuntime.stop();void Promise.all([aiPlatformRuntime.stop(),stopPhonebookListener(phonebookListener)]).finally(()=>process.exit(0))});
+for(const signal of ['SIGTERM','SIGINT'] as const)process.once(signal,()=>{if(aiPlatformShutdownStarted)return;aiPlatformShutdownStarted=true;clearInterval(siteFormsMatcherTimer);notificationRuntime.stop();balanceRuntime.stop();void Promise.all([aiPlatformRuntime.stop(),stopPhonebookListener(phonebookListener)]).finally(()=>process.exit(0))});
 
 startServer().catch((err) => {
   console.error('Fatal initialization error:', err);
