@@ -1973,8 +1973,127 @@ const MIGRATIONS: Migration[] = [
         ('disk.space_critical','system',0,'critical',3600,1,'{"registeredOnly":true}'),
         ('security.critical_event','security',0,'critical',3600,0,'{"registeredOnly":true}')`
     ]
+  },
+  {
+    key:'20260803_077_site_form_leads',
+    description:'Add secure site form integrations, leads, call links, history and reports foundation',
+    statements:[
+      `CREATE TABLE IF NOT EXISTS site_form_integrations(
+        id CHAR(36) PRIMARY KEY,name VARCHAR(191) NOT NULL,provider ENUM('bitrix_site','bitrix24','universal') NOT NULL,
+        site_id VARCHAR(100) NULL,site_url VARCHAR(2048) NULL,webhook_token_hash CHAR(64) NOT NULL,is_enabled TINYINT(1) NOT NULL DEFAULT 1,
+        allowed_ips_json LONGTEXT NOT NULL,allowed_form_ids_json LONGTEXT NOT NULL,default_user_id INT NULL,default_department_id VARCHAR(100) NULL,
+        sla_minutes INT NOT NULL DEFAULT 30,duplicate_detection_enabled TINYINT(1) NOT NULL DEFAULT 1,duplicate_window_minutes INT NOT NULL DEFAULT 1440,
+        call_match_window_days INT NOT NULL DEFAULT 7,minimum_answered_seconds INT NOT NULL DEFAULT 3,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at DATETIME NULL,last_success_at DATETIME NULL,last_error_at DATETIME NULL,last_error_message VARCHAR(500) NULL,
+        KEY idx_site_form_integrations_enabled(is_enabled),KEY idx_site_form_integrations_site(site_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS site_form_leads(
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,integration_id CHAR(36) NOT NULL,event_id VARCHAR(191) NOT NULL,external_result_id VARCHAR(191) NULL,
+        external_form_id VARCHAR(100) NOT NULL,form_code VARCHAR(100) NULL,form_name VARCHAR(191) NULL,site_id VARCHAR(100) NULL,site_url VARCHAR(2048) NULL,
+        page_url VARCHAR(2048) NULL,page_title VARCHAR(500) NULL,referer VARCHAR(2048) NULL,customer_name VARCHAR(191) NULL,
+        phone_raw VARCHAR(100) NOT NULL,phone_normalized VARCHAR(32) NOT NULL,phone_extension VARCHAR(16) NULL,email VARCHAR(191) NULL,company VARCHAR(191) NULL,
+        comment TEXT NULL,preferred_time VARCHAR(191) NULL,utm_source VARCHAR(191) NULL,utm_medium VARCHAR(191) NULL,utm_campaign VARCHAR(191) NULL,utm_content VARCHAR(191) NULL,utm_term VARCHAR(191) NULL,
+        visitor_client_id VARCHAR(191) NULL,visitor_session_id VARCHAR(191) NULL,visitor_ip VARCHAR(64) NULL,visitor_user_agent VARCHAR(500) NULL,
+        status ENUM('new','in_progress','call_scheduled','contact_attempted','contacted','completed','rejected','spam','duplicate') NOT NULL DEFAULT 'new',priority ENUM('low','normal','high','urgent') NOT NULL DEFAULT 'normal',
+        assigned_user_id INT NULL,assigned_department_id VARCHAR(100) NULL,scheduled_call_at DATETIME NULL,first_opened_at DATETIME NULL,first_call_at DATETIME NULL,first_answered_call_at DATETIME NULL,
+        completed_at DATETIME NULL,rejected_at DATETIME NULL,rejection_reason VARCHAR(500) NULL,is_duplicate TINYINT(1) NOT NULL DEFAULT 0,duplicate_of_lead_id BIGINT NULL,is_test TINYINT(1) NOT NULL DEFAULT 0,
+        sla_deadline_at DATETIME NOT NULL,sla_status ENUM('pending','in_sla','late','overdue','not_applicable') NOT NULL DEFAULT 'pending',raw_payload_json LONGTEXT NOT NULL,
+        created_at DATETIME NOT NULL,received_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at DATETIME NULL,
+        UNIQUE KEY uniq_site_form_event(integration_id,event_id),KEY idx_site_form_leads_created(created_at),KEY idx_site_form_leads_status(status,created_at),
+        KEY idx_site_form_leads_phone(phone_normalized,created_at),KEY idx_site_form_leads_user(assigned_user_id,status),KEY idx_site_form_leads_form(integration_id,external_form_id,created_at),
+        KEY idx_site_form_leads_sla(sla_status,sla_deadline_at),KEY idx_site_form_leads_first_call(first_call_at),KEY idx_site_form_leads_first_answer(first_answered_call_at),
+        CONSTRAINT fk_site_form_lead_integration FOREIGN KEY(integration_id) REFERENCES site_form_integrations(id),
+        CONSTRAINT fk_site_form_lead_duplicate FOREIGN KEY(duplicate_of_lead_id) REFERENCES site_form_leads(id) ON DELETE SET NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS site_form_lead_calls(
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,lead_id BIGINT NOT NULL,cdr_id VARCHAR(191) NULL,uniqueid VARCHAR(191) NOT NULL,linkedid VARCHAR(191) NOT NULL,
+        phone_normalized VARCHAR(32) NOT NULL,employee_extension VARCHAR(32) NULL,call_direction ENUM('incoming','outgoing','unknown') NOT NULL,
+        call_started_at DATETIME NOT NULL,call_answered_at DATETIME NULL,call_ended_at DATETIME NULL,disposition VARCHAR(64) NULL,billsec INT NOT NULL DEFAULT 0,
+        is_first_call TINYINT(1) NOT NULL DEFAULT 0,is_answered TINYINT(1) NOT NULL DEFAULT 0,is_manual_link TINYINT(1) NOT NULL DEFAULT 0,
+        match_confidence ENUM('confirmed','probable','manual') NOT NULL DEFAULT 'confirmed',linked_by_user_id INT NULL,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at DATETIME NULL,
+        UNIQUE KEY uniq_site_form_lead_link(lead_id,linkedid),KEY idx_site_form_calls_linkedid(linkedid),KEY idx_site_form_calls_uniqueid(uniqueid),
+        KEY idx_site_form_calls_phone_time(phone_normalized,call_started_at),KEY idx_site_form_calls_lead_time(lead_id,call_started_at),
+        CONSTRAINT fk_site_form_call_lead FOREIGN KEY(lead_id) REFERENCES site_form_leads(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS site_form_lead_history(
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,lead_id BIGINT NOT NULL,event_type VARCHAR(100) NOT NULL,old_value TEXT NULL,new_value TEXT NULL,user_id INT NULL,
+        actor_label VARCHAR(191) NULL,metadata_json LONGTEXT NULL,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        KEY idx_site_form_history_lead(lead_id,created_at),KEY idx_site_form_history_event(event_type,created_at),
+        CONSTRAINT fk_site_form_history_lead FOREIGN KEY(lead_id) REFERENCES site_form_leads(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS site_form_webhook_log(
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,integration_id CHAR(36) NULL,event_id VARCHAR(191) NULL,request_ip VARCHAR(64) NULL,http_status SMALLINT NOT NULL,
+        processing_status VARCHAR(64) NOT NULL,lead_id BIGINT NULL,error_code VARCHAR(100) NULL,error_message VARCHAR(500) NULL,processing_time_ms INT NOT NULL,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        KEY idx_site_form_webhook_integration(integration_id,created_at),KEY idx_site_form_webhook_status(processing_status,created_at),KEY idx_site_form_webhook_event(event_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS site_form_match_cursors(producer_key VARCHAR(100) PRIMARY KEY,cursor_at DATETIME NOT NULL,cursor_value VARCHAR(191) NULL,updated_at DATETIME NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `INSERT IGNORE INTO permissions(permission_key,name,description,category) VALUES
+        ('view_site_form_leads','View site form leads','View permitted site form leads','marketing'),('manage_site_form_leads','Manage site form leads','Change site form lead status and comments','marketing'),
+        ('call_site_form_leads','Call site form leads','Start calls from site form leads','marketing'),('assign_site_form_leads','Assign site form leads','Assign site form leads to users','marketing'),
+        ('export_site_form_leads','Export site form leads','Export filtered site form lead data','marketing'),('view_site_form_reports','View site form reports','View site form lead analytics','marketing'),
+        ('manage_site_form_integrations','Manage site form integrations','Create and rotate site form webhooks','marketing'),('view_site_form_webhook_logs','View site form webhook logs','View safe site form webhook delivery logs','marketing')`,
+      `INSERT IGNORE INTO role_permissions(role_id,permission_id) SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key LIKE '%site_form%' WHERE r.role_key IN('su','admin')`,
+      `INSERT IGNORE INTO notification_rules(event_type,category,enabled,severity,cooldown_seconds,notify_on_recovery,parameters_json) VALUES
+        ('site_forms.lead_received','marketing',0,'info',0,0,'{}'),('site_forms.lead_unclaimed','marketing',0,'warning',900,0,'{}'),
+        ('site_forms.sla_due','marketing',0,'warning',900,0,'{}'),('site_forms.sla_overdue','marketing',0,'error',3600,0,'{}'),
+        ('site_forms.webhook_failed','marketing',0,'error',900,1,'{}'),('site_forms.integration_stale','marketing',0,'warning',86400,1,'{}')`
+    ],
+    seed: seedLegacySiteFormPermissions
+  },
+  {
+    key:'20260804_078_site_form_bitrix_pull',
+    description:'Add outbound Bitrix Pull API sources for site form leads and phone click events',
+    statements:[
+      `ALTER TABLE site_form_integrations
+        MODIFY COLUMN provider ENUM('bitrix_site','bitrix24','universal','bitrix_pull') NOT NULL,
+        MODIFY COLUMN webhook_token_hash CHAR(64) NULL`,
+      `CREATE TABLE IF NOT EXISTS site_form_pull_sources(
+        integration_id CHAR(36) PRIMARY KEY,endpoint_url VARCHAR(2048) NOT NULL,token_encrypted TEXT NOT NULL,selected_form_ids_json LONGTEXT NOT NULL,
+        leads_cursor BIGINT NOT NULL DEFAULT 0,clicks_cursor BIGINT NOT NULL DEFAULT 0,calltracking_site_id VARCHAR(120) NULL,sync_interval_seconds INT NOT NULL DEFAULT 60,
+        next_sync_at DATETIME NULL,last_attempt_at DATETIME NULL,last_success_at DATETIME NULL,last_error VARCHAR(500) NULL,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at DATETIME NULL,
+        CONSTRAINT fk_site_form_pull_integration FOREIGN KEY(integration_id) REFERENCES site_form_integrations(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+    ]
+  },
+  {
+    key:'20260804_079_site_form_soft_delete',
+    description:'Add recoverable soft deletion for site form lead cleanup',
+    statements:[
+      `ALTER TABLE site_form_leads
+        ADD COLUMN deleted_at DATETIME NULL AFTER updated_at,
+        ADD COLUMN deleted_by_user_id INT NULL AFTER deleted_at,
+        ADD KEY idx_site_form_leads_deleted(deleted_at,created_at)`
+    ]
+  },
+  {
+    key:'20260811_080_site_form_integration_soft_delete',
+    description:'Add recoverable soft deletion for site form integrations',
+    statements:[
+      `ALTER TABLE site_form_integrations
+        ADD COLUMN deleted_at DATETIME NULL AFTER updated_at,
+        ADD COLUMN deleted_by_user_id INT NULL AFTER deleted_at,
+        ADD KEY idx_site_form_integrations_deleted(deleted_at,is_enabled)`
+    ]
   }
 ];
+
+async function seedLegacySiteFormPermissions(): Promise<void> {
+  const legacyPath = path.join(process.cwd(), 'data', 'db.json');
+  if (!fs.existsSync(legacyPath)) return;
+  const db = JSON.parse(fs.readFileSync(legacyPath, 'utf8'));
+  if (!Array.isArray(db.roles)) return;
+  const permissions = ['view_site_form_leads','manage_site_form_leads','call_site_form_leads','assign_site_form_leads','export_site_form_leads','view_site_form_reports','manage_site_form_integrations','view_site_form_webhook_logs'];
+  let changed = false;
+  for (const role of db.roles) {
+    if (!['su','admin'].includes(String(role?.id || ''))) continue;
+    role.permissions = role.permissions && typeof role.permissions === 'object' ? role.permissions : {};
+    for (const permission of permissions) if (role.permissions[permission] !== true) { role.permissions[permission] = true; changed = true; }
+  }
+  if (!changed) return;
+  const temporaryPath = `${legacyPath}.site-form-permissions.tmp`;
+  fs.writeFileSync(temporaryPath, JSON.stringify(db,null,2), 'utf8');
+  fs.renameSync(temporaryPath, legacyPath);
+}
 
 async function seedRussianVoiceLatencyV15(connection:Connection):Promise<void>{
   const [tenants]=await connection.query("SELECT id FROM ai_tenants WHERE tenant_key='installation' LIMIT 1");

@@ -1,4 +1,5 @@
 import mysql from 'mysql2/promise';
+import type { PoolConnection } from 'mysql2/promise';
 import { getPBXPulsDbConfig, getPBXPulsDbConfigLogFields, getPBXPulsDbConnectionOptions } from './pbxpulsDbConfig.js';
 
 const RETRY_AFTER_MS = 60_000;
@@ -72,6 +73,28 @@ export async function queryPBXPulsDb(sql: string, params: any[] = []): Promise<a
     // disable unrelated PBXPuls DB consumers (monitoring, directory, reports).
     if (isPBXPulsDbConnectivityError(error)) markUnavailable(error);
     throw error;
+  }
+}
+
+export async function withPBXPulsTransaction<T>(work: (connection: PoolConnection) => Promise<T>): Promise<T> {
+  const config = getPBXPulsDbConfig();
+  if (!config.configured) throw new Error('PBXPuls DB access denied / not configured');
+  if (Date.now() < unavailableUntil) throw new Error(lastError || 'PBXPuls DB temporarily unavailable');
+  const connection = await getPool().getConnection();
+  try {
+    await connection.beginTransaction();
+    const result = await work(connection);
+    await connection.commit();
+    unavailableUntil = 0;
+    lastError = '';
+    lastSuccessfulAt = Date.now();
+    return result;
+  } catch (error) {
+    await connection.rollback().catch(() => undefined);
+    if (isPBXPulsDbConnectivityError(error)) markUnavailable(error);
+    throw error;
+  } finally {
+    connection.release();
   }
 }
 

@@ -11,6 +11,14 @@ export type PermissionKey =
   | 'manage_calltracking'
   | 'manage_yandex_metrika'
   | 'manage_yandex_direct'
+  | 'view_site_form_leads'
+  | 'manage_site_form_leads'
+  | 'call_site_form_leads'
+  | 'assign_site_form_leads'
+  | 'export_site_form_leads'
+  | 'view_site_form_reports'
+  | 'manage_site_form_integrations'
+  | 'view_site_form_webhook_logs'
   | 'listen_recordings'
   | 'make_calls'
   | 'show_call_modal'
@@ -165,6 +173,14 @@ const PERMISSION_MODULE_MAP: Partial<Record<PermissionKey, OptionalModuleKey>> =
   manage_calltracking: 'marketing',
   manage_yandex_metrika: 'marketing',
   manage_yandex_direct: 'marketing',
+  view_site_form_leads: 'marketing',
+  manage_site_form_leads: 'marketing',
+  call_site_form_leads: 'marketing',
+  assign_site_form_leads: 'marketing',
+  export_site_form_leads: 'marketing',
+  view_site_form_reports: 'marketing',
+  manage_site_form_integrations: 'marketing',
+  view_site_form_webhook_logs: 'marketing',
 
   view_monitoring: 'monitoring',
   view_active_calls: 'monitoring',

@@ -52,6 +52,7 @@ interface SlaSummary {
   answeredMedianWaitSeconds?: number | null;
   averageTalkSeconds?: number | null;
   totalTalkSeconds?: number;
+  outOfHoursMissedCalls?: number;
   waitCalculationSource?: 'duration_minus_billsec' | 'answer_time';
   waitBuckets?: {
     under10: number;
@@ -338,21 +339,7 @@ export function InboundDashboard({
 
   // 5. Inbound call status breakdown (donut chart)
   const pieData = useMemo(() => {
-    // We break down missedCalls into "Не дождались ответа" and "Вне рабочего времени"
-    let outOfHoursMissed = 0;
-    if (heatmap?.days) {
-      heatmap.days.forEach(day => {
-        if (day.hours) {
-          day.hours.forEach(h => {
-            const hr = Number(h.hour);
-            // TODO: Move business hours to report settings. Current working hours are 08:00-19:00.
-            if (hr < 8 || hr >= 19) {
-              outOfHoursMissed += h.missed || 0;
-            }
-          });
-        }
-      });
-    }
+    const outOfHoursMissed = Math.min(missedInbound, Math.max(0, safeNumber(slaSummary?.outOfHoursMissedCalls)));
     
     const inHoursMissed = Math.max(0, missedInbound - outOfHoursMissed);
     const didNotWaitMissed = Math.round(inHoursMissed * 0.58);
@@ -366,7 +353,7 @@ export function InboundDashboard({
       { name: 'Не дождались ответа', value: didNotWaitMissed, percentage: ((didNotWaitMissed / totalCalculated) * 100).toFixed(1), color: '#f59e0b' },
       { name: 'Вне рабочего времени', value: outOfHoursMissed, percentage: ((outOfHoursMissed / totalCalculated) * 100).toFixed(1), color: '#cbd5e1' }
     ];
-  }, [answeredInbound, missedInbound, heatmap]);
+  }, [answeredInbound, missedInbound, slaSummary?.outOfHoursMissedCalls]);
 
   // Peak Hour calculation
   const peakHour = useMemo(() => {
