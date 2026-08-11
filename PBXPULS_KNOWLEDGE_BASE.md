@@ -1,5 +1,11 @@
 # PBXPULS_KNOWLEDGE_BASE
 
+## Bitrix Pull resilience
+
+- The connector must advance its cursor past malformed historical form results and report the skipped count.
+- PBXPuls must reject Pull pages without an `items` array and a numeric `nextCursor`.
+- A call drill-down opened from a site-form lead must return the linked lead row as well as the CDR row.
+
 ## Проверенные особенности
 
 ### FreePBX REST

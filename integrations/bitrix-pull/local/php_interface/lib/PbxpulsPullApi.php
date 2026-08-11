@@ -107,21 +107,29 @@ final class PbxpulsPullApi
             WHERE r.ID>".$after." AND r.FORM_ID IN(".$ids.") ORDER BY r.ID ASC LIMIT ".$limit);
         $items = [];
         $lastId = $after;
+        $fetched = 0;
+        $skipped = 0;
         while ($row = $rows->fetch()) {
+            $fetched++;
             $lastId = max($lastId, (int)$row['ID']);
-            $fields = $this->resultFields((int)$row['ID']);
-            $phone = $fields['PHONE'] ?? null;
-            if (!is_string($phone) || trim($phone) === '') {
+            try {
+                $fields = $this->resultFields((int)$row['ID']);
+                $phone = $fields['PHONE'] ?? null;
+                if (!is_string($phone) || trim($phone) === '') {
+                    continue;
+                }
+                $siteIds=array_values(array_filter(explode(',',(string)$row['SITE_IDS'])));
+                $items[] = ['eventId' => 'bitrix-form-'.$row['FORM_ID'].'-result-'.$row['ID'], 'formId' => (string)$row['FORM_ID'], 'siteId' => count($siteIds)===1?$siteIds[0]:null, 'siteIds'=>$siteIds,
+                    'resultId' => (string)$row['ID'], 'formCode' => (string)$row['FORM_CODE'], 'formName' => (string)$row['FORM_NAME'],
+                    'createdAt' => (new DateTimeImmutable((string)$row['DATE_CREATE']))->format(DateTimeInterface::ATOM),
+                    'fields' => ['name' => $fields['NAME'] ?? $fields['FIO'] ?? null, 'phone' => $phone, 'email' => $fields['EMAIL'] ?? null,
+                        'company' => $fields['COMPANY'] ?? null, 'comment' => $fields['MESSAGE'] ?? null], 'rawFields' => $fields];
+            } catch (Throwable $error) {
+                $skipped++;
                 continue;
             }
-            $siteIds=array_values(array_filter(explode(',',(string)$row['SITE_IDS'])));
-            $items[] = ['eventId' => 'bitrix-form-'.$row['FORM_ID'].'-result-'.$row['ID'], 'formId' => (string)$row['FORM_ID'], 'siteId' => count($siteIds)===1?$siteIds[0]:null, 'siteIds'=>$siteIds,
-                'resultId' => (string)$row['ID'], 'formCode' => (string)$row['FORM_CODE'], 'formName' => (string)$row['FORM_NAME'],
-                'createdAt' => (new DateTimeImmutable((string)$row['DATE_CREATE']))->format(DateTimeInterface::ATOM),
-                'fields' => ['name' => $fields['NAME'] ?? $fields['FIO'] ?? null, 'phone' => $phone, 'email' => $fields['EMAIL'] ?? null,
-                    'company' => $fields['COMPANY'] ?? null, 'comment' => $fields['MESSAGE'] ?? null], 'rawFields' => $fields];
         }
-        return ['items' => $items, 'nextCursor' => (string)$lastId, 'hasMore' => count($items) >= $limit];
+        return ['items' => $items, 'nextCursor' => (string)$lastId, 'hasMore' => $fetched >= $limit, 'skipped' => $skipped];
     }
 
     private function resultFields(int $resultId): array

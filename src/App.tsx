@@ -6864,7 +6864,7 @@ export default function App() {
         <section id="cdr-log" className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm flex flex-col">
           {relatedMissedCallId && (
             <div className="flex items-center justify-between gap-3 border-b border-blue-200 bg-blue-50 px-4 py-2.5 text-xs text-blue-800">
-              <span className="font-semibold">Показаны пропущенный звонок и событие, которым он был обработан</span>
+              <span className="font-semibold">Показаны заявка и связанный с ней звонок</span>
               <button
                 type="button"
                 onClick={clearProcessingEventFilter}
