@@ -23,18 +23,24 @@ assert.throws(()=>normalizeWebhookPayload({eventId:'x',formId:'12',fields:{phone
 
 const migration=fs.readFileSync('server/pbxpulsMigrations.ts','utf8'),router=fs.readFileSync('server/siteForms/router.ts','utf8');
 const setupGuide=fs.readFileSync('src/components/marketing/siteForms/SiteFormsSetupGuide.tsx','utf8');
+const server=fs.readFileSync('server.ts','utf8');
+const registryTable=fs.readFileSync('src/modules/cdr/components/LegacyCDRTable.tsx','utf8');
 const pairing=fs.readFileSync('integrations/bitrix-pull/local/php_interface/lib/PbxpulsPairing.php','utf8'),injector=fs.readFileSync('integrations/bitrix-pull/local/php_interface/lib/PbxpulsTrackerInjector.php','utf8'),remotePairing=fs.readFileSync('server/siteForms/remotePairing.ts','utf8'),bitrixSetup=fs.readFileSync('src/components/marketing/siteForms/BitrixPullSetup.tsx','utf8');
 for(const table of ['site_form_integrations','site_form_leads','site_form_lead_calls','site_form_lead_history','site_form_webhook_log'])assert.match(migration,new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`));
 for(const permission of ['view_site_form_leads','manage_site_form_leads','call_site_form_leads','assign_site_form_leads','export_site_form_leads','view_site_form_reports','manage_site_form_integrations','view_site_form_webhook_logs'])assert.match(migration,new RegExp(permission));
 for(const endpoint of ['/api/integrations/site-forms/:integrationId/webhook','/api/site-forms/leads','/api/site-forms/reports/overview','/api/site-forms/export.csv','/api/site-forms/integrations/:id/delete-preview','/api/site-forms/integrations/:id/delete-apply'])assert.ok(router.includes(endpoint));
 assert.match(router,/event_already_processed/);assert.match(router,/beginTransaction|withPBXPulsTransaction/);assert.doesNotMatch(router,/console\.(log|info).*token/i);
 assert.match(router,/if\(result\.created\).*site_forms\.lead_received/);
-assert.match(migration,/20260811_080_site_form_integration_soft_delete/);assert.match(router,/preservedLeads:true/);
+assert.match(migration,/20260811_080_site_form_integration_soft_delete/);assert.match(migration,/20260811_081_site_form_bitrix_multisite/);assert.match(migration,/selected_site_ids_json/);assert.match(router,/preservedLeads:true/);
 for(const text of ['Как подключить сайт','Webhook','1С-Битрикс Pull API','Authorization: Bearer','Пример curl','Пример PHP'])assert.ok(setupGuide.includes(text));
-assert.match(setupGuide,/pbxpuls-bitrix-connector-v5\.8\.0\.zip/);
+assert.match(setupGuide,/pbxpuls-bitrix-connector-v5\.8\.1\.zip/);
 for(const endpoint of ['bitrix-pair-preview','bitrix-pair-apply'])assert.ok(router.includes(endpoint));
 assert.match(pairing,/random_int\(10000000, 99999999\)/);assert.match(pairing,/PAIR_ATTEMPTS/);assert.match(pairing,/ensureClickTable/);assert.match(pairing,/ensureTrackerHandler/);
 assert.match(injector,/OnEndBufferContent|data-pbxpuls-tracker/);assert.match(injector,/pbxpuls_tracking_site_ids/);assert.match(remotePairing,/assertDnsSafe/);assert.match(remotePairing,/pairingVersion!==1/);
-for(const text of ['Одноразовый код','Сайты, веб-формы и клики по телефонам','Собирать клики по телефонам','trackingEnabled'])assert.ok(bitrixSetup.includes(text));
+for(const text of ['Одноразовый код','Сайты, веб-формы и клики по телефонам','Собирать клики по телефонам','trackingEnabled','Можно выбрать несколько','siteIds:selectedSites'])assert.ok(bitrixSetup.includes(text));
+assert.match(injector,/data-site-id/);assert.match(fs.readFileSync('integrations/bitrix-pull/local/api/pbxpuls/tracker.js','utf8'),/siteId:siteId/);assert.match(fs.readFileSync('integrations/bitrix-pull/local/php_interface/lib/PbxpulsClickCollector.php','utf8'),/event_id,site_id,event_time/);
 assert.match(fs.readFileSync('server/siteForms/pullService.ts','utf8'),/alreadyRunning:true/);
+assert.match(router,/const sqlNow=.*timeZone:'Europe\/Moscow'/);
+assert.match(server,/showMixedRegistry/);assert.match(server,/callsTotal: sortedCalls\.length/);assert.match(server,/totalCount=sortedCalls\.length\+siteFormLeadsTotal/);
+assert.match(registryTable,/answeredLate/);assert.doesNotMatch(registryTable,/Обработано вне SLA/);
 console.log(JSON.stringify({phoneNormalization:'ok',tokenSecurity:'ok',payloadValidation:'ok',migrationTables:5,permissions:8,apiContracts:'ok'}));

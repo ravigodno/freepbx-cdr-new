@@ -157,6 +157,7 @@ export interface AppSettings {
   missedCallCallbackSlaHours?: number;
   missedCallCallbackSlaMinutes?: number;
   calltrackingMatchWindowMinutes?: number;
+  siteFormLeadsEnabled?: boolean;
   companyWorkStart?: string;
   companyWorkEnd?: string;
 

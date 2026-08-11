@@ -98,7 +98,7 @@ function getDefaultMarketingRange() {
   return { startDate: start.toISOString().slice(0, 10), endDate };
 }
 
-export default function MarketingTab() {
+export default function MarketingTab({ siteFormsEnabled = true }: { siteFormsEnabled?: boolean }) {
   const serverClockRevision = useServerClock(getAuthToken());
   const [activeTab, setActiveTab] = useState<MarketingTabId>(() => getInitialMarketingTab());
   const [summaryData, setSummaryData] = useState<CalltrackingSummaryResponse | null>(null);
@@ -125,6 +125,11 @@ export default function MarketingTab() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const visibleTabs = useMemo(() => siteFormsEnabled ? tabs : tabs.filter(tab => tab.id !== 'site-forms'), [siteFormsEnabled]);
+
+  useEffect(() => {
+    if (!siteFormsEnabled && activeTab === 'site-forms') setActiveTab('overview');
+  }, [activeTab, siteFormsEnabled]);
 
   useEffect(() => {
     if (serverClockRevision === 0) return;
@@ -318,7 +323,7 @@ export default function MarketingTab() {
   ], [summary, summaryData, callbackSlaMinutes, directSummary, useMetrikaVisits, isDirectConnected, isDirectLimited, directLimitedWarning]);
 
   const renderTab = () => {
-    if (activeTab === 'site-forms') return <SiteFormsWorkspace />;
+    if (siteFormsEnabled && activeTab === 'site-forms') return <SiteFormsWorkspace />;
     if (activeTab === 'phone-clicks') return <PhoneClicksTable events={phoneClicks} metrikaGoalSummary={metrikaGoalSummary} metrikaGoalRows={metrikaGoalRows} metrikaGoalError={metrikaGoalWarning} />;
     if (activeTab === 'sources') return <TrafficSourcesTable sources={mergedSources} />;
     if (activeTab === 'campaigns') return <CampaignsReportTable />;
@@ -357,7 +362,7 @@ export default function MarketingTab() {
 
       <div className="overflow-x-auto rounded-2xl border border-slate-200/70 bg-white p-1.5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <div className="flex min-w-max gap-1">
-          {tabs.map(tab => (
+          {visibleTabs.map(tab => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}

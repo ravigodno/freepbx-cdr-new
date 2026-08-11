@@ -2074,8 +2074,24 @@ const MIGRATIONS: Migration[] = [
         ADD COLUMN deleted_by_user_id INT NULL AFTER deleted_at,
         ADD KEY idx_site_form_integrations_deleted(deleted_at,is_enabled)`
     ]
+  },
+  {
+    key:'20260811_081_site_form_bitrix_multisite',
+    description:'Allow one Bitrix Pull integration to collect leads and phone clicks from multiple Bitrix sites',
+    statements:[],
+    seed: seedBitrixMultisitePullSources
   }
 ];
+
+async function seedBitrixMultisitePullSources(connection: any): Promise<void> {
+  const [columns]: any = await connection.query("SELECT column_name FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='site_form_pull_sources' AND column_name='selected_site_ids_json'");
+  if (!columns.length) await connection.query('ALTER TABLE site_form_pull_sources ADD COLUMN selected_site_ids_json LONGTEXT NULL AFTER selected_form_ids_json');
+  await connection.query(`UPDATE site_form_pull_sources s
+    JOIN site_form_integrations i ON i.id=s.integration_id
+    SET s.selected_site_ids_json=CONCAT('["',REPLACE(i.site_id,'"',''),'"]')
+    WHERE s.selected_site_ids_json IS NULL AND i.site_id IS NOT NULL AND i.site_id<>''`);
+  await connection.query("UPDATE site_form_pull_sources SET selected_site_ids_json='[]' WHERE selected_site_ids_json IS NULL");
+}
 
 async function seedLegacySiteFormPermissions(): Promise<void> {
   const legacyPath = path.join(process.cwd(), 'data', 'db.json');

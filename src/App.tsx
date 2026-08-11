@@ -571,6 +571,8 @@ export default function App() {
   const [calls, setCalls] = useState<CallEntry[]>([]);
   const [siteFormRegistryLeads, setSiteFormRegistryLeads] = useState<any[]>([]);
   const [siteFormRegistryTotal, setSiteFormRegistryTotal] = useState(0);
+  const [siteFormRegistryInSla, setSiteFormRegistryInSla] = useState(0);
+  const [siteFormRegistryLate, setSiteFormRegistryLate] = useState(0);
   const [totalCalls, setTotalCalls] = useState(0);
   const [page, setPage] = useState(1);
   const [limit] = useState(15);
@@ -691,6 +693,7 @@ export default function App() {
   // Settings Modal state
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<AppSettings | null>(null);
+  const siteFormsEnabled = settings?.siteFormLeadsEnabled !== false;
   const [draftSettings, setDraftSettings] = useState<AppSettings | null>(null);
   const [isTestingDb, setIsTestingDb] = useState(false);
   const [dbTestResult, setDbTestResult] = useState<{ success: boolean; message: string } | null>(null);
@@ -3230,7 +3233,9 @@ export default function App() {
       setCalls(data.calls);
       setSiteFormRegistryLeads(Array.isArray(data.siteFormLeads) ? data.siteFormLeads : []);
       setSiteFormRegistryTotal(Number(data.siteFormLeadsTotal || 0));
-      setTotalCalls(data.total);
+      setSiteFormRegistryInSla(Number(data.siteFormLeadsInSla || 0));
+      setSiteFormRegistryLate(Number(data.siteFormLeadsLate || 0));
+      setTotalCalls(Number(data.callsTotal ?? data.total ?? 0));
       setTotalPages(data.totalPages || 1);
       setPage(data.page || 1);
       setCallsError(null);
@@ -6478,7 +6483,7 @@ export default function App() {
               />
             )}
             {/* KPI Dashboard cards section */}
-            <section id="kpi-dashboard" className="grid grid-cols-2 lg:grid-cols-6 gap-3">
+            <section id="kpi-dashboard" className={`grid grid-cols-2 gap-3 ${siteFormsEnabled ? 'lg:grid-cols-7' : 'lg:grid-cols-6'}`}>
               {/* Входящие */}
               <button
                 onClick={() => {
@@ -6580,18 +6585,19 @@ export default function App() {
                     : 'bg-white border-emerald-100'
                 }`}
               >
-                <span className="text-xs text-emerald-600 font-bold tracking-wide flex items-center gap-1">
-                  Обработанные
-                </span>
+                <div className="flex items-start justify-between gap-2">
+                  <span className="text-xs text-emerald-600 font-bold tracking-wide">Обработанные</span>
+                  <span className="whitespace-nowrap text-[11px] font-bold" title="В SLA / Позже SLA">
+                    <span className="text-emerald-600">{stats?.processedInSla ?? 0}</span>
+                    <span className="px-0.5 text-slate-400">/</span>
+                    <span className="text-rose-600">{stats?.processedLate ?? 0}</span>
+                  </span>
+                </div>
                 <div className="mt-2 flex items-center justify-between gap-2 w-full">
                   {isLoadingStats ? (
                     <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
                   ) : (
-                    <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                      <span className="text-2xl font-bold text-emerald-605 font-mono">{stats?.processedCalls ?? 0}</span>
-                      <span className="whitespace-nowrap text-[10px] font-bold text-emerald-600">В SLA: {stats?.processedInSla ?? 0}</span>
-                      <span className="whitespace-nowrap text-[10px] font-bold text-rose-600">Позже SLA: {stats?.processedLate ?? 0}</span>
-                    </div>
+                    <span className="text-2xl font-bold text-emerald-605 font-mono">{stats?.processedCalls ?? 0}</span>
                   )}
                   <CheckCircle className="h-5 w-5 text-emerald-500/80 self-center" /></div>
               </button>
@@ -6618,13 +6624,23 @@ export default function App() {
                   )}
                   <XCircle className="h-5 w-5 text-amber-500/80 self-center" /></div>
               </button>
-              <button
+              {siteFormsEnabled && <button
                 onClick={() => { setStatusFilter(statusFilter === 'SITE_FORMS' ? 'ALL' : 'SITE_FORMS'); setPage(1); }}
                 className={`text-left p-4 flex flex-col justify-between rounded-xl shadow-sm hover:shadow-md transition-all cursor-pointer border ${statusFilter === 'SITE_FORMS' ? 'bg-blue-50 border-blue-400 ring-2 ring-blue-500/30' : 'bg-white border-blue-150'}`}
               >
-                <span className="text-xs font-bold tracking-wide text-blue-650">Заявки с сайта</span>
-                <div className="mt-2 flex items-baseline justify-between w-full"><span className="text-2xl font-bold text-blue-600 font-mono">{siteFormRegistryTotal}</span><ExternalLink className="h-5 w-5 text-blue-500" /></div>
-              </button>
+                <div className="flex items-start justify-between gap-2">
+                  <span className="text-xs font-bold tracking-wide text-blue-650">Заявки с сайта</span>
+                  <span className="whitespace-nowrap text-[11px] font-bold" title="В SLA / Позже SLA">
+                    <span className="text-emerald-600">{siteFormRegistryInSla}</span>
+                    <span className="px-0.5 text-slate-400">/</span>
+                    <span className="text-rose-600">{siteFormRegistryLate}</span>
+                  </span>
+                </div>
+                <div className="mt-2 flex items-center justify-between gap-2 w-full">
+                  <span className="text-2xl font-bold text-blue-600 font-mono">{siteFormRegistryTotal}</span>
+                  <ExternalLink className="h-5 w-5 shrink-0 text-blue-500" />
+                </div>
+              </button>}
             </section>
 
         {/* Filters configuration section */}
@@ -6917,7 +6933,7 @@ export default function App() {
           {/* Simple pagination footer */}
           <div className="px-4 py-3 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs shrink-0">
             <span className="text-slate-550 text-sm font-light">
-              Показано <span className="font-semibold text-slate-800">{calls.length + siteFormRegistryLeads.length}</span> строк, звонков: <span className="font-semibold text-slate-800">{totalCalls}</span>
+              Показано <span className="font-semibold text-slate-800">{calls.length + siteFormRegistryLeads.length}</span> строк, звонков: <span className="font-semibold text-slate-800">{totalCalls}</span>{siteFormsEnabled && <>, заявок: <span className="font-semibold text-slate-800">{siteFormRegistryTotal}</span></>}
             </span>
 
             <div className="flex items-center gap-1.5">
@@ -7835,7 +7851,7 @@ export default function App() {
 
     {activeView === 'reports' && renderReportsView()}
 
-    {activeView === 'marketing' && hasPermission('view_marketing') && <MarketingTab />}
+    {activeView === 'marketing' && hasPermission('view_marketing') && <MarketingTab siteFormsEnabled={siteFormsEnabled} />}
 
     {activeView === 'monitoring' && hasAnyMonitoringTabPermission() && renderMonitoringView()}
 
@@ -8080,8 +8096,17 @@ export default function App() {
                       canViewLog={hasPermission('view_notification_delivery_log')}
                     />
                   )}
-                  {settingsTab === 'integrations' && hasPermission('manage_site_form_integrations') && (
-                    <SiteFormsWorkspace initialTab="integrations" showNavigation={false} />
+                  {settingsTab === 'integrations' && hasPermission('manage_site_form_integrations') && draftSettings && (
+                    <div className="space-y-4">
+                      <label className="flex items-start justify-between gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                        <span>
+                          <span className="block text-sm font-black text-slate-900">Заявки с сайта</span>
+                          <span className="mt-1 block text-xs leading-relaxed text-slate-500">Показывать раздел заявок и счётчик в реестре звонков. Отключение не удаляет интеграции и накопленные данные.</span>
+                        </span>
+                        <input type="checkbox" checked={draftSettings.siteFormLeadsEnabled !== false} onChange={(event) => setDraftSettings({ ...draftSettings, siteFormLeadsEnabled: event.target.checked })} className="mt-1 h-4 w-4 shrink-0 rounded border-slate-300 text-blue-600" />
+                      </label>
+                      {draftSettings.siteFormLeadsEnabled !== false && <SiteFormsWorkspace initialTab="integrations" showNavigation={false} />}
+                    </div>
                   )}
                   {settingsTab === 'directory' && draftSettings && (
                     <div className="space-y-5">
