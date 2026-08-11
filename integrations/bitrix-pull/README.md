@@ -17,15 +17,21 @@ the plaintext token in the repository or application logs.
 
 1. Copy the archive's `local/` directory into the Bitrix document root. Merge
    it with the existing `local/` directory; do not replace that directory.
-2. Copy `pbxpuls-pull-config.example.php` to
-   `local/php_interface/pbxpuls-pull-config.php`.
-3. Generate a random token and write only its lowercase SHA-256 hash to
-   `tokenHash`. Enter the original token once in PBXPuls.
-4. Set `siteHost`, `siteSuffix` and, when needed, `allowedFormIds`.
-5. If phone-click collection is required, apply `schema.sql` to the Bitrix
-   database and include `PbxpulsClickCollector.php` from the site bootstrap.
-6. In PBXPuls select "Connect 1C-Bitrix Pull API" and use the public HTTPS URL
-   `/local/api/pbxpuls/leads.php`.
+2. Open `/local/api/pbxpuls/setup.php` while signed in as a Bitrix
+   administrator and generate an eight-digit pairing code.
+3. In PBXPuls select "Add integration", choose 1C-Bitrix, enter the site URL
+   and the pairing code. The code expires after 10 minutes and after 10 failed
+   attempts.
+4. Select the Bitrix site (`s1`, `s2`, ...), forms and whether phone-click
+   tracking should be enabled.
+5. PBXPuls receives a dedicated token, stores it encrypted and configures the
+   read-only Pull API. The administrator password never leaves Bitrix.
+6. When click tracking is enabled, the connector creates its event table and
+   injects `tracker.js` only into the selected Bitrix site. The browser receives
+   a public site key, never the Pull token.
+
+`pbxpuls-pull-config.example.php` and `schema.sql` remain available for legacy
+manual installation and diagnostics. New installations should use pairing.
 
 The connector is read-only for Bitrix web-form results. Test it on a staging
 site or a single selected form before enabling regular synchronization.

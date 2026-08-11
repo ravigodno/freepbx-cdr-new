@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 use Bitrix\Main\Application;
 use Bitrix\Main\DB\Connection;
+require_once __DIR__.'/PbxpulsPairing.php';
 
 final class PbxpulsPullApi
 {
@@ -32,6 +33,11 @@ final class PbxpulsPullApi
                 $this->json($this->clicks());
                 return;
             }
+            if ($action === 'tracking-sites') {
+                PbxpulsPairing::setTrackingSites(explode(',', (string)($_GET['siteIds'] ?? '')));
+                $this->json(['success' => true]);
+                return;
+            }
             $this->fail(404, 'action_not_found', 'Неизвестное действие');
         } catch (Throwable $error) {
             if (!headers_sent()) {
@@ -49,6 +55,7 @@ final class PbxpulsPullApi
             $this->fail(403, 'https_required', 'Требуется HTTPS');
         }
         $expected = strtolower((string)($this->config['tokenHash'] ?? ''));
+        if (!preg_match('/^[a-f0-9]{64}$/', $expected)) $expected = PbxpulsPairing::tokenHash();
         $token = trim((string)($_SERVER['HTTP_X_PBXPULS_TOKEN'] ?? ''));
         if (!preg_match('/^[a-f0-9]{64}$/', $expected) || $token === '' || !hash_equals($expected, hash('sha256', $token))) {
             $this->fail(401, 'invalid_token', 'Неверный токен');
@@ -138,6 +145,9 @@ final class PbxpulsPullApi
     {
         $allowed = array_values(array_filter(array_map('intval', (array)($this->config['allowedFormIds'] ?? []))));
         if ($allowed) return $alias.'.ID IN('.implode(',', $allowed).')';
+        $siteId = (string)($_GET['siteId'] ?? '');
+        if (preg_match('/^[a-zA-Z0-9_-]{1,16}$/', $siteId)) return "EXISTS(SELECT 1 FROM b_form_2_site pfs WHERE pfs.FORM_ID=".$alias.".ID AND pfs.SITE_ID='".$this->connection->getSqlHelper()->forSql($siteId)."')";
+        if (preg_match('/^[a-f0-9]{64}$/', PbxpulsPairing::tokenHash())) return '1=1';
         $suffix = (string)($this->config['siteSuffix'] ?? '_s1');
         return $alias.".SID LIKE '%".$this->connection->getSqlHelper()->forSql($suffix)."'";
     }
