@@ -22,11 +22,13 @@ assert.equal(bitrix.eventId,'onCrmFormResultAdd');assert.equal(bitrix.externalFo
 assert.throws(()=>normalizeWebhookPayload({eventId:'x',formId:'12',fields:{phone:''}}),/телефон/i);
 
 const migration=fs.readFileSync('server/pbxpulsMigrations.ts','utf8'),router=fs.readFileSync('server/siteForms/router.ts','utf8');
+const setupGuide=fs.readFileSync('src/components/marketing/siteForms/SiteFormsSetupGuide.tsx','utf8');
 for(const table of ['site_form_integrations','site_form_leads','site_form_lead_calls','site_form_lead_history','site_form_webhook_log'])assert.match(migration,new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`));
 for(const permission of ['view_site_form_leads','manage_site_form_leads','call_site_form_leads','assign_site_form_leads','export_site_form_leads','view_site_form_reports','manage_site_form_integrations','view_site_form_webhook_logs'])assert.match(migration,new RegExp(permission));
 for(const endpoint of ['/api/integrations/site-forms/:integrationId/webhook','/api/site-forms/leads','/api/site-forms/reports/overview','/api/site-forms/export.csv','/api/site-forms/integrations/:id/delete-preview','/api/site-forms/integrations/:id/delete-apply'])assert.ok(router.includes(endpoint));
 assert.match(router,/event_already_processed/);assert.match(router,/beginTransaction|withPBXPulsTransaction/);assert.doesNotMatch(router,/console\.(log|info).*token/i);
 assert.match(router,/if\(result\.created\).*site_forms\.lead_received/);
 assert.match(migration,/20260811_080_site_form_integration_soft_delete/);assert.match(router,/preservedLeads:true/);
+for(const text of ['Как подключить сайт','Webhook','1С-Битрикс Pull API','Authorization: Bearer','Пример curl','Пример PHP'])assert.ok(setupGuide.includes(text));
 assert.match(fs.readFileSync('server/siteForms/pullService.ts','utf8'),/alreadyRunning:true/);
 console.log(JSON.stringify({phoneNormalization:'ok',tokenSecurity:'ok',payloadValidation:'ok',migrationTables:5,permissions:8,apiContracts:'ok'}));

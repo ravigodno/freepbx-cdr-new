@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import BitrixPullSetup from "./BitrixPullSetup";
 import SiteFormsLeadTable from "./SiteFormsLeadTable";
+import SiteFormsSetupGuide from "./SiteFormsSetupGuide";
 
 type Tab = "leads" | "reports" | "integrations";
 const statusLabels: Record<string, string> = {
@@ -124,6 +125,7 @@ export default function SiteFormsWorkspace({
     [showCreate, setShowCreate] = useState(false),
     [editingIntegrationId, setEditingIntegrationId] = useState(""),
     [oneTimeToken, setOneTimeToken] = useState(""),
+    [createdWebhookPath, setCreatedWebhookPath] = useState(""),
     [updatingIntegrationId, setUpdatingIntegrationId] = useState("");
   const [form, setForm] = useState<any>(emptyIntegrationForm),
     [assignableUsers, setAssignableUsers] = useState<any[]>([]),
@@ -300,6 +302,7 @@ export default function SiteFormsWorkspace({
           body: JSON.stringify(integrationPayload()),
         });
         setOneTimeToken(data.webhookToken);
+        setCreatedWebhookPath(data.webhookUrl || "");
       }
       setShowCreate(false);
       setEditingIntegrationId("");
@@ -417,28 +420,10 @@ export default function SiteFormsWorkspace({
           {error}
         </div>
       )}
-      {tab === "integrations" && <BitrixPullSetup onChanged={load} />}
-      {oneTimeToken && (
-        <div className="rounded-2xl border border-amber-300 bg-amber-50 p-4">
-          <div className="font-black text-amber-900">
-            Скопируйте токен сейчас — повторно он не показывается
-          </div>
-          <div className="mt-2 flex gap-2">
-            <code className="min-w-0 flex-1 break-all rounded bg-white p-2 text-xs">
-              {oneTimeToken}
-            </code>
-            <button
-              onClick={() => void copyText(oneTimeToken)}
-              className="rounded-lg bg-amber-600 px-3 text-white"
-            >
-              <Copy className="h-4 w-4" />
-            </button>
-            <button onClick={() => setOneTimeToken("")}>
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-        </div>
+      {tab === "integrations" && (
+        <SiteFormsSetupGuide oneTimeToken={oneTimeToken} webhookPath={createdWebhookPath} onDismissToken={() => { setOneTimeToken(""); setCreatedWebhookPath(""); }} />
       )}
+      {tab === "integrations" && <BitrixPullSetup onChanged={load} />}
       {tab === "leads" && (
         <>
           <div className="flex flex-wrap gap-2 rounded-2xl border bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
