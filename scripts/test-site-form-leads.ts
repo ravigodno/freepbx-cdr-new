@@ -30,5 +30,6 @@ assert.match(router,/event_already_processed/);assert.match(router,/beginTransac
 assert.match(router,/if\(result\.created\).*site_forms\.lead_received/);
 assert.match(migration,/20260811_080_site_form_integration_soft_delete/);assert.match(router,/preservedLeads:true/);
 for(const text of ['Как подключить сайт','Webhook','1С-Битрикс Pull API','Authorization: Bearer','Пример curl','Пример PHP'])assert.ok(setupGuide.includes(text));
+assert.match(setupGuide,/pbxpuls-bitrix-connector-v5\.8\.0\.zip/);
 assert.match(fs.readFileSync('server/siteForms/pullService.ts','utf8'),/alreadyRunning:true/);
 console.log(JSON.stringify({phoneNormalization:'ok',tokenSecurity:'ok',payloadValidation:'ok',migrationTables:5,permissions:8,apiContracts:'ok'}));
