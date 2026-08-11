@@ -17,7 +17,7 @@ final class PbxpulsTrackerInjector
         if (!$enabled || !in_array($siteId, $enabled, true)) return;
         $key = Option::get('main', 'pbxpuls_public_site_key', '');
         if ($key === '' || strpos($content, 'data-pbxpuls-tracker') !== false) return;
-        $tag = '<script defer data-pbxpuls-tracker="1" data-site-key="'.htmlspecialchars($key, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8').'" src="/local/api/pbxpuls/tracker.js"></script>';
+        $tag = '<script defer data-pbxpuls-tracker="1" data-site-key="'.htmlspecialchars($key, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8').'" data-site-id="'.htmlspecialchars($siteId, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8').'" src="/local/api/pbxpuls/tracker.js"></script>';
         $content = preg_replace('/<\/body>/i', $tag.'</body>', $content, 1) ?? $content;
     }
 }

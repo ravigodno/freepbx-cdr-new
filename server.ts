@@ -11352,6 +11352,7 @@ app.get('/api/settings', requireAuth(), async (req, res) => {
       fileImportEnabled: clientSettings.fileImportEnabled !== false,
       yandexCarddavEnabled: clientSettings.yandexCarddavEnabled !== false,
       mailruCarddavEnabled: clientSettings.mailruCarddavEnabled !== false,
+      siteFormLeadsEnabled: clientSettings.siteFormLeadsEnabled !== false,
       customLogoUrl: clientSettings.customLogoUrl,
       customCopyright: clientSettings.customCopyright,
       moduleVisibility: normalizeModuleVisibilitySettings(clientSettings.moduleVisibility),
@@ -16319,9 +16320,12 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
     const sortedCalls = filteredCalls.sort((a, b) => new Date(b.calldate).getTime() - new Date(a.calldate).getTime());
 
     // Paginate results
-    let totalCount = statusFilter === 'SITE_FORMS' ? 0 : sortedCalls.length;
-    const paginatedCalls = statusFilter === 'SITE_FORMS' ? [] : sortedCalls.slice((page - 1) * limit, page * limit);
+    const siteFormsEnabled = localDb.settings?.siteFormLeadsEnabled !== false;
+    const showMixedRegistry = siteFormsEnabled && !relatedMissedCallId && (!statusFilter || statusFilter === 'ALL');
+    let totalCount = siteFormsEnabled && statusFilter === 'SITE_FORMS' ? 0 : sortedCalls.length;
+    let paginatedCalls = siteFormsEnabled && statusFilter === 'SITE_FORMS' ? [] : sortedCalls.slice(showMixedRegistry ? 0 : (page - 1) * limit, page * limit);
     try {
+      if (!siteFormsEnabled) throw new Error('site_forms_disabled');
       const linkedIds = [...new Set(paginatedCalls.map(call => String(call.linkedid || call.uniqueid || '')).filter(Boolean))];
       if (linkedIds.length) {
         const placeholders = linkedIds.map(() => '?').join(',');
@@ -16336,24 +16340,35 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
         }
       }
     } catch (error: any) {
-      if (!String(error?.message || '').includes("doesn't exist")) console.warn('[SITE_FORMS] call registry enrichment skipped:', sanitizePBXPulsDbError(error));
+      if (!['site_forms_disabled'].includes(String(error?.message || '')) && !String(error?.message || '').includes("doesn't exist")) console.warn('[SITE_FORMS] call registry enrichment skipped:', sanitizePBXPulsDbError(error));
     }
 
     let siteFormLeads:any[]=[];
     let siteFormLeadsTotal = 0;
+    let siteFormLeadsInSla = 0;
+    let siteFormLeadsLate = 0;
     try {
-      if (!relatedMissedCallId) {
+      if (siteFormsEnabled && !relatedMissedCallId) {
         const clauses=["l.deleted_at IS NULL","l.status NOT IN('spam','duplicate','rejected')"],params:any[]=[];
         if(startDate){clauses.push('l.created_at>=?');params.push(buildDateTimeFilter(startDate,startTime))}if(endDate){clauses.push('l.created_at<=?');params.push(buildDateTimeFilter(endDate,endTime))}
         if(numberFilter){clauses.push('l.phone_normalized LIKE ?');params.push(`%${String(numberFilter).replace(/\D/g,'').slice(0,32)}%`)}
         if(searchFilter&&!shouldSkipGeneralSearch){const value=`%${String(searchFilter).slice(0,191)}%`;clauses.push('(l.customer_name LIKE ? OR l.phone_raw LIKE ? OR l.comment LIKE ? OR l.form_name LIKE ?)');params.push(value,value,value,value)}
-        siteFormLeadsTotal=Number((await queryPBXPulsDb(`SELECT COUNT(*) total FROM site_form_leads l WHERE ${clauses.join(' AND ')}`,params))[0]?.total||0);
-        if(statusFilter==='SITE_FORMS'){
+        const siteFormCounters=(await queryPBXPulsDb(`SELECT COUNT(*) total,SUM(l.sla_status='in_sla') in_sla,SUM(l.sla_status IN('late','overdue')) late FROM site_form_leads l WHERE ${clauses.join(' AND ')}`,params))[0]||{};
+        siteFormLeadsTotal=Number(siteFormCounters.total||0);
+        siteFormLeadsInSla=Number(siteFormCounters.in_sla||0);
+        siteFormLeadsLate=Number(siteFormCounters.late||0);
+        if(statusFilter==='SITE_FORMS'||showMixedRegistry){
+          const leadsLimit=showMixedRegistry?page*limit:limit,leadsOffset=showMixedRegistry?0:(page-1)*limit;
           const rows=await queryPBXPulsDb(`SELECT l.id,l.created_at,l.customer_name,l.phone_raw,l.phone_normalized,l.comment,l.form_name,l.status,l.sla_status,l.sla_deadline_at,l.first_call_at,l.first_answered_call_at,l.raw_payload_json,
             (SELECT c.linkedid FROM site_form_lead_calls c WHERE c.lead_id=l.id ORDER BY c.is_answered DESC,c.call_started_at DESC LIMIT 1) linked_call_id
-            FROM site_form_leads l WHERE ${clauses.join(' AND ')} ORDER BY l.created_at DESC,l.id DESC LIMIT ? OFFSET ?`,[...params,limit,(page-1)*limit]);
+            FROM site_form_leads l WHERE ${clauses.join(' AND ')} ORDER BY l.created_at DESC,l.id DESC LIMIT ? OFFSET ?`,[...params,leadsLimit,leadsOffset]);
           siteFormLeads=rows.map(row=>{let message=String(row.comment||'');try{const raw=JSON.parse(String(row.raw_payload_json||'{}')),fields=raw?.rawFields||{};message=String(fields.MESSAGE||fields.COMMENT||fields.COMMENTS||fields.QUESTION||fields.TEXT||message)}catch{}const{raw_payload_json:_raw,...safe}=row;return{...safe,message:message.slice(0,1000)}});
-          totalCount=siteFormLeadsTotal;
+          if(showMixedRegistry){
+            const mixed=[...paginatedCalls.map(call=>({kind:'call' as const,time:new Date(call.calldate).getTime(),call})),...siteFormLeads.map(lead=>({kind:'lead' as const,time:new Date(String(lead.created_at).replace(' ','T')).getTime(),lead}))].sort((a,b)=>b.time-a.time).slice((page-1)*limit,page*limit);
+            paginatedCalls=mixed.filter(item=>item.kind==='call').map(item=>(item as any).call);
+            siteFormLeads=mixed.filter(item=>item.kind==='lead').map(item=>(item as any).lead);
+            totalCount=sortedCalls.length+siteFormLeadsTotal;
+          }else totalCount=siteFormLeadsTotal;
         }
       }
     } catch(error:any){if(!String(error?.message||'').includes("doesn't exist"))console.warn('[SITE_FORMS] registry leads skipped:',sanitizePBXPulsDbError(error))}
@@ -16361,6 +16376,10 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
       calls: paginatedCalls,
       siteFormLeads,
       siteFormLeadsTotal,
+      siteFormLeadsInSla,
+      siteFormLeadsLate,
+      siteFormsEnabled,
+      callsTotal: sortedCalls.length,
       total: totalCount,
       page,
       limit,
