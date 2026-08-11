@@ -22,7 +22,7 @@ final class PbxpulsPullApi
             $this->guardRequest();
             $action = (string)($_GET['action'] ?? '');
             if ($action === 'forms') {
-                $this->json(['forms' => $this->forms()]);
+                $this->json(['sites' => PbxpulsPairing::sites(), 'forms' => $this->forms()]);
                 return;
             }
             if ($action === 'leads') {

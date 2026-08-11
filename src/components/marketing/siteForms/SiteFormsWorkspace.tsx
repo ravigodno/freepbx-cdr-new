@@ -16,6 +16,7 @@ import {
   X,
 } from "lucide-react";
 import BitrixPullSetup from "./BitrixPullSetup";
+import BitrixPullEditor from "./BitrixPullEditor";
 import SiteFormsLeadTable from "./SiteFormsLeadTable";
 import SiteFormsSetupGuide from "./SiteFormsSetupGuide";
 
@@ -123,6 +124,7 @@ export default function SiteFormsWorkspace({
     [integrations, setIntegrations] = useState<any[]>([]),
     [webhookLog, setWebhookLog] = useState<any[]>([]),
     [showCreate, setShowCreate] = useState(false),
+    [editingPullIntegration, setEditingPullIntegration] = useState<any>(null),
     [editingIntegrationId, setEditingIntegrationId] = useState(""),
     [oneTimeToken, setOneTimeToken] = useState(""),
     [createdWebhookPath, setCreatedWebhookPath] = useState(""),
@@ -280,6 +282,10 @@ export default function SiteFormsWorkspace({
     setShowCreate(true);
   };
   const openEdit = (integration: any) => {
+    if (integration.provider === "bitrix_pull") {
+      setEditingPullIntegration(integration);
+      return;
+    }
     setEditingIntegrationId(integration.id);
     setForm({
       ...integration,
@@ -901,6 +907,16 @@ export default function SiteFormsWorkspace({
             )}
           </div>
         </div>
+      )}
+      {editingPullIntegration && (
+        <BitrixPullEditor
+          integration={editingPullIntegration}
+          onClose={() => setEditingPullIntegration(null)}
+          onChanged={async () => {
+            setEditingPullIntegration(null);
+            await load();
+          }}
+        />
       )}
       {selected && (
         <div className="fixed inset-0 z-40 flex justify-end bg-slate-950/40">
