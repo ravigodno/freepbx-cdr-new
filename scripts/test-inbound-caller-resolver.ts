@@ -19,7 +19,8 @@ import {
   buildLiveCallBannerDisplay,
   getLiveCallPopupTitle,
   isLiveCallPopupVisible,
-  normalizeLiveCallBannerPayload
+  normalizeLiveCallBannerPayload,
+  stabilizeLiveCallBannerPayload
 } from '../src/utils/liveCallBanner.js';
 
 const did = '74951234567';
@@ -327,6 +328,36 @@ const outboundViaInternalTrunkEndpoint = detectLiveCallDirection([
 assert.equal(outboundViaInternalTrunkEndpoint.direction, 'outgoing');
 assert.equal(outboundViaInternalTrunkEndpoint.internalCaller, '200');
 assert.equal(outboundViaInternalTrunkEndpoint.destinationNumber, numericTrunkDialedNumber);
+
+const realShortCallCelDirection = detectLiveCallDirection([
+  { eventtype: 'CHAN_START', cid_num: '200', exten: numericTrunkDialedNumber, context: 'from-internal', channame: 'PJSIP/200-00000056' },
+  { eventtype: 'CHAN_START', cid_num: '', exten: 's', context: 'from-trunk-sip-729455-in', channame: 'SIP/729455-in-00000057' },
+  { eventtype: 'HANGUP', cid_num: numericTrunkDialedNumber, exten: numericTrunkDialedNumber, context: 'from-trunk-sip-729455-in', channame: 'SIP/729455-in-00000057' }
+], '200');
+assert.equal(realShortCallCelDirection.direction, 'outgoing');
+assert.equal(realShortCallCelDirection.internalCaller, '200');
+assert.equal(realShortCallCelDirection.destinationNumber, numericTrunkDialedNumber);
+
+const stabilizedAfterDial = stabilizeLiveCallBannerPayload({
+  active: true,
+  linkedid: '1786538995.66',
+  direction: 'incoming',
+  callerNumber: numericTrunkDialedNumber,
+  destinationNumber: '200',
+  displayNumber: numericTrunkDialedNumber,
+  number: numericTrunkDialedNumber
+}, {
+  active: true,
+  linkedid: '1786538995.66',
+  direction: 'outgoing',
+  operatorExt: '200',
+  callerNumber: '200',
+  destinationNumber: '',
+  displayNumber: '',
+  number: ''
+});
+assert.equal(stabilizedAfterDial.callerNumber, '200');
+assert.equal(stabilizedAfterDial.destinationNumber, numericTrunkDialedNumber);
 
 const liveInternalFixture = [
   {

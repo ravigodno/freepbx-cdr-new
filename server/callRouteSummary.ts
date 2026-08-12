@@ -173,7 +173,7 @@ export function buildCallRouteSummaryFromLivePayload(data: any): CallRouteSummar
   const queueRow = rows.find((row: any, index: number) => contexts[index] === 'ext-queues' || clean(row?.Application ?? row?.lastapp).toLowerCase() === 'queue');
   const ringRow = rows.find((_row: any, index: number) => contexts[index] === 'ext-group');
   const ivrRow = rows.find((_row: any, index: number) => contexts[index].startsWith('ivr-'));
-  const incoming = direction === 'incoming' || Boolean(queueRow || ringRow || ivrRow || rows.some((row: any, index: number) => contexts[index].includes('from-trunk') || /-in-[0-9a-f]+/i.test(clean(row?.Channel ?? row?.channel))));
+  const incoming = direction === 'incoming' || (direction !== 'outgoing' && Boolean(queueRow || ringRow || ivrRow || rows.some((row: any, index: number) => contexts[index].includes('from-trunk') || /-in-[0-9a-f]+/i.test(clean(row?.Channel ?? row?.channel)))));
 
   if (incoming) {
     summary.trunk = clean(data?.trunk || data?.did || rows.map((row: any) => trunkFromChannel(row?.Channel ?? row?.channel)).find(Boolean));

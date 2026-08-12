@@ -35,6 +35,7 @@ import{validateDirectoryPhone as validateSharedDirectoryPhone}from'./shared/dire
 import { resolveCdrCallerExtension } from './shared/cdrCallerExtension.js';
 import { resolveMissedCallCallbackSlaMinutes } from './shared/missedCallCallbackSla.js';
 import { resolveClickToCallContext } from './server/clickToCallContext.js';
+import { clearClickToCallLiveIntent, getClickToCallLiveIntent, markClickToCallLiveIntentActive, rememberClickToCallLiveIntent } from './server/clickToCallLiveIntent.js';
 import os from 'os';
 import { registerManagementRoutes } from './server-management.js';
 import { generateAIResponse, registerAiPbxAdminRoutes } from './server/aiPbxAdmin.js';
@@ -14168,6 +14169,48 @@ async function buildLiveCallBannerPayloads(
   return rankLiveCallBanners(candidates);
 }
 
+function applyClickToCallIntentToBanner(
+  banner: LiveCallBanner,
+  operatorExt: string,
+  directory: any[],
+  settings: AppSettings
+): LiveCallBanner {
+  if (!banner.active || banner.direction === 'incoming') return banner;
+  const intent = getClickToCallLiveIntent(operatorExt);
+  if (!intent) return banner;
+  markClickToCallLiveIntentActive(operatorExt);
+
+  const callerContact = resolveLiveContact(intent.fromExtension, directory, settings);
+  const destinationContact = resolveLiveContact(intent.destinationNumber, directory, settings);
+  const withIntent: LiveCallBanner = {
+    ...banner,
+    scenario: 'outgoing',
+    direction: 'outgoing',
+    operatorExt: intent.fromExtension,
+    callerNumber: intent.fromExtension,
+    internalCaller: intent.fromExtension,
+    sourceNumber: intent.fromExtension,
+    destinationNumber: intent.destinationNumber,
+    dialedNumber: intent.destinationNumber,
+    targetNumber: intent.destinationNumber,
+    internalNumber: intent.fromExtension,
+    displayNumber: intent.destinationNumber,
+    number: intent.destinationNumber,
+    displayName: destinationContact.name,
+    callerDisplayName: callerContact.name,
+    destinationDisplayName: destinationContact.name,
+    callerCompany: callerContact.company,
+    callerPosition: callerContact.position,
+    destinationCompany: destinationContact.company,
+    destinationPosition: destinationContact.position,
+    callerDirectoryFields: callerContact.fields,
+    destinationDirectoryFields: destinationContact.fields,
+    company: destinationContact.company,
+    position: destinationContact.position
+  };
+  return { ...withIntent, ...buildLiveCallBannerDisplay(withIntent as Record<string, any>) };
+}
+
 const liveCelEvidenceCache = new Map<string, { expiresAt: number; rows: any[] }>();
 const liveCdrEvidenceCache = new Map<string, { expiresAt: number; rows: any[] }>();
 
@@ -14179,7 +14222,7 @@ async function loadLiveCallEvidenceFromCel(settings: AppSettings, linkedid: stri
   if (cached && cached.expiresAt > Date.now()) return cached.rows;
 
   const celRows = await loadCelCallerChain(settings, false, key);
-  liveCelEvidenceCache.set(key, { expiresAt: Date.now() + 5000, rows: celRows });
+  liveCelEvidenceCache.set(key, { expiresAt: Date.now() + (celRows.length ? 5000 : 500), rows: celRows });
   if (liveCelEvidenceCache.size > 500) {
     const now = Date.now();
     liveCelEvidenceCache.forEach((entry, cacheKey) => {
@@ -14279,32 +14322,38 @@ async function buildLiveCallBannerPayload(
   const evidenceNumber = banner.direction === 'incoming'
     ? incomingEvidence?.externalCallerNumber || ''
     : celDirection.destinationNumber;
+  const effectiveDirection = banner.direction !== 'incoming'
+    && celDirection.direction === 'outgoing'
+    && isExternalNumber(evidenceNumber)
+      ? 'outgoing'
+      : banner.direction;
   const incomingRoute = chronologySummary?.scenario?.startsWith('incoming_')
     ? { ...banner, ...mapRouteSummaryToLivePopup(chronologySummary, banner as Record<string, any>) }
     : banner;
-  const validEvidenceNumber = banner.direction === 'incoming' || banner.direction === 'outgoing'
+  const validEvidenceNumber = effectiveDirection === 'incoming' || effectiveDirection === 'outgoing'
     ? isExternalNumber(evidenceNumber)
     : isInternalExt(evidenceNumber) && onlyDigits(evidenceNumber) !== onlyDigits(celDirection.internalCaller);
   if (!validEvidenceNumber) return finalize(incomingRoute);
 
-  const callerNumber = banner.direction === 'incoming'
+  const callerNumber = effectiveDirection === 'incoming'
     ? evidenceNumber
     : (celDirection.internalCaller || banner.callerNumber || '');
   const contact = resolveLiveContact(evidenceNumber, directory, settings);
   const callerContact = resolveLiveContact(callerNumber, directory, settings);
-  const destinationNumber = banner.direction === 'incoming' ? banner.destinationNumber : evidenceNumber;
+  const destinationNumber = effectiveDirection === 'incoming' ? banner.destinationNumber : evidenceNumber;
   const destinationContact = resolveLiveContact(destinationNumber, directory, settings);
   banner = {
     ...incomingRoute,
+    direction: effectiveDirection,
     number: evidenceNumber,
     callerNumber,
-    externalCallerNumber: banner.direction === 'incoming' ? evidenceNumber : '',
-    internalCaller: banner.direction === 'incoming' ? '' : callerNumber,
+    externalCallerNumber: effectiveDirection === 'incoming' ? evidenceNumber : '',
+    internalCaller: effectiveDirection === 'incoming' ? '' : callerNumber,
     sourceNumber: callerNumber,
     destinationNumber,
-    dialedNumber: banner.direction === 'outgoing' ? evidenceNumber : '',
-    targetNumber: banner.direction === 'incoming' ? banner.destinationNumber : evidenceNumber,
-    internalNumber: banner.direction === 'internal' ? evidenceNumber : (banner.internalNumber || ''),
+    dialedNumber: effectiveDirection === 'outgoing' ? evidenceNumber : '',
+    targetNumber: effectiveDirection === 'incoming' ? banner.destinationNumber : evidenceNumber,
+    internalNumber: effectiveDirection === 'internal' ? evidenceNumber : (banner.internalNumber || ''),
     displayNumber: evidenceNumber,
     displayName: contact.name,
     callerDisplayName: callerContact.name,
@@ -14404,6 +14453,8 @@ app.get('/api/live/call-banner', requireAuth(), async (req, res) => {
       localDb.phoneMeetings || []
     );
     if (!banner.active) {
+      const clickIntent = getClickToCallLiveIntent(effectiveOperatorExt);
+      if (clickIntent?.seenActive) clearClickToCallLiveIntent(effectiveOperatorExt);
       res.json(banner);
       return;
     }
@@ -14415,8 +14466,19 @@ app.get('/api/live/call-banner', requireAuth(), async (req, res) => {
       localDb.settings,
       localDb.phoneMeetings || []
     );
-    banner = calls[0] || banner;
-    res.json({ ...banner, calls });
+    const intentCalls = calls.map(call => applyClickToCallIntentToBanner(
+      call,
+      effectiveOperatorExt,
+      directoryRuntime.contacts,
+      localDb.settings
+    ));
+    banner = intentCalls[0] || applyClickToCallIntentToBanner(
+      banner,
+      effectiveOperatorExt,
+      directoryRuntime.contacts,
+      localDb.settings
+    );
+    res.json({ ...banner, calls: intentCalls });
   } catch (error: any) {
     res.json({ active: false, error: error.message });
   }
@@ -15029,6 +15091,7 @@ app.post('/api/click-to-call', requireAuth(), async (req, res) => {
       return;
     }
     const result = await triggerAMICall(localDb.settings, effectiveFromExtension, toPhoneNumber.trim(), channelTechnology);
+    if (result.success) rememberClickToCallLiveIntent(effectiveFromExtension, toPhoneNumber);
     res.json(result);
   } catch (error: any) {
     res.status(500).json({ error: error.message });

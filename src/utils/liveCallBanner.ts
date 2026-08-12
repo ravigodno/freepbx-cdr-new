@@ -99,6 +99,56 @@ export function normalizeLiveCallBannerPayload<T extends Record<string, any>>(pa
   return { ...payload, ...buildLiveCallBannerDisplay(payload) };
 }
 
+export function stabilizeLiveCallBannerPayload<T extends Record<string, any>>(previous: T | null | undefined, current: T): T {
+  if (!previous?.active || !current?.active) return current;
+  const previousId = cleanLiveValue(previous.linkedid);
+  const currentId = cleanLiveValue(current.linkedid);
+  if (!previousId || previousId !== currentId || current.direction !== 'outgoing') return current;
+
+  const currentDestination = firstLiveValue([
+    current.destinationNumber,
+    current.dialedNumber,
+    current.targetNumber,
+    current.displayNumber,
+    current.number
+  ], isExternalLiveNumber);
+  if (currentDestination) return current;
+
+  const preservedDestination = firstLiveValue([
+    previous.destinationNumber,
+    previous.dialedNumber,
+    previous.targetNumber,
+    previous.externalCallerNumber,
+    previous.callerNumber,
+    previous.displayNumber,
+    previous.number
+  ], value => isExternalLiveNumber(value) && liveDigits(value) !== liveDigits(current.trunkNumber));
+  if (!preservedDestination) return current;
+
+  const callerNumber = firstLiveValue([
+    current.internalCaller,
+    current.callerNumber,
+    current.sourceNumber,
+    current.operatorExt,
+    previous.destinationNumber
+  ], isInternalLiveNumber);
+  return {
+    ...current,
+    callerNumber,
+    internalCaller: callerNumber,
+    sourceNumber: callerNumber,
+    destinationNumber: preservedDestination,
+    dialedNumber: preservedDestination,
+    targetNumber: preservedDestination,
+    displayNumber: preservedDestination,
+    number: preservedDestination,
+    destinationDisplayName: current.destinationDisplayName || previous.callerDisplayName || previous.displayName || '',
+    destinationCompany: current.destinationCompany || previous.callerCompany || previous.company || '',
+    destinationPosition: current.destinationPosition || previous.callerPosition || previous.position || '',
+    destinationDirectoryFields: current.destinationDirectoryFields || previous.callerDirectoryFields || {}
+  };
+}
+
 export function isLiveCallPopupVisible(payload: Record<string, any> | null | undefined): boolean {
   return normalizeLiveCallBannerPayload(payload) !== null;
 }

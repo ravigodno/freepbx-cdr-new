@@ -58,6 +58,21 @@ assert.equal(outgoing.scenario, 'outgoing');
 assert.equal(outgoing.direction, 'outgoing');
 assert.equal(outgoing.displayNumber, '79788101210');
 
+const outgoingThroughInNamedTrunk = buildCallRouteSummaryFromLivePayload({
+  direction: 'outgoing',
+  internalCaller: '200',
+  destinationNumber: '79788101210',
+  displayNumber: '79788101210',
+  rows: [{
+    Channel: 'SIP/729455-in-00000036',
+    Context: 'macro-dialout-trunk',
+    Application: 'Dial',
+    ApplicationData: 'SIP/729455-in/79788101210,300,Tb(func-apply-sipheaders^s^1,(1))'
+  }]
+});
+assert.equal(outgoingThroughInNamedTrunk.direction, 'outgoing');
+assert.equal(outgoingThroughInNamedTrunk.displayNumber, '79788101210');
+
 const meeting = buildCallRouteSummaryFromLivePayload({
   phoneMeeting: true, phoneMeetingInitiator: '200', queue: '9000', rows: []
 });

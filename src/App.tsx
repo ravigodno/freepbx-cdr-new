@@ -83,7 +83,7 @@ import NotificationCenterSettings from './components/settings/NotificationCenter
 import { type LiveTransferResult, type LiveTransferSearchTarget } from './components/LiveTransferSearch';
 import { CallTargetSelector, type ConferenceBackendStatus, type ConsultTransferCapabilities } from './components/CallTargetSelector';
 import ActiveCallsTab from './modules/monitoring/tabs/monitoring/ActiveCallsTab';
-import { getLiveCallPopupTitle, normalizeLiveCallBannerPayload } from './utils/liveCallBanner';
+import { getLiveCallPopupTitle, normalizeLiveCallBannerPayload, stabilizeLiveCallBannerPayload } from './utils/liveCallBanner';
 import { useServerClock } from './hooks/useServerClock';
 import { getServerNow } from './utils/serverClock';
 import { loadInterfacePreferences, saveInterfacePreferences, type InterfacePreferences } from './utils/interfacePreferences';
@@ -2517,7 +2517,10 @@ export default function App() {
       }
       if (!resp.ok) return;
       const data = await resp.json();
-      const normalized = normalizeLiveCallBannerPayload(data) as LiveCallBanner | null;
+      const nextBanner = normalizeLiveCallBannerPayload(data) as LiveCallBanner | null;
+      const normalized = nextBanner
+        ? stabilizeLiveCallBannerPayload(liveCallBannerRef.current, nextBanner) as LiveCallBanner
+        : null;
       if (!normalized) {
         dismissedLiveCallIdRef.current = '';
         const delaySeconds = interfacePreferences.livePopupHideAfterEndSeconds;
