@@ -1,9 +1,8 @@
 import React from 'react';
 import DirectoryTypeIcon from './DirectoryTypeIcon';
 import {
-  Check,
-  Copy,
   PhoneCall,
+  Search,
   UserPlus,
 } from 'lucide-react';
 
@@ -12,11 +11,9 @@ interface Props {
   callerDirectoryName?: string;
   callerType: string;
   displayedSrc: string;
-  copiedKey: string;
-  copiedNumber?: string | null;
   isFound: boolean;
+  searchEngine?: 'yandex' | 'google';
 
-  handleCopy: (num: string, copiedKey?: string) => void;
   triggerClickToCall: (phone: string, name?: string) => void;
   openAddFromCall: (number: string, initialName?: string) => void;
   filterCallsByNumber?: (number: string) => void;
@@ -28,10 +25,8 @@ export default function CDRCallerCell({
   callerDirectoryName = '',
   callerType,
   displayedSrc,
-  copiedKey,
-  copiedNumber,
   isFound,
-  handleCopy,
+  searchEngine = 'yandex',
   triggerClickToCall,
   openAddFromCall,
   filterCallsByNumber = () => {},
@@ -59,15 +54,18 @@ export default function CDRCallerCell({
 
         <div className="flex items-center gap-1.5 flex-wrap select-none">
           <button
-            onClick={() => handleCopy(displayedSrc, copiedKey)}
+            type="button"
+            onClick={() => {
+              const url = searchEngine === 'google'
+                ? `https://www.google.com/search?q=${encodeURIComponent(displayedSrc)}`
+                : `https://yandex.ru/search/?text=${encodeURIComponent(displayedSrc)}`;
+              window.open(url, '_blank', 'noopener,noreferrer');
+            }}
             className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-600 dark:hover:text-slate-303 transition-colors cursor-pointer"
-            title={`Копировать ${displayedSrc}`}
+            title={`Найти номер ${displayedSrc} в ${searchEngine === 'google' ? 'Google' : 'Яндексе'}`}
+            aria-label={`Найти номер ${displayedSrc} в интернете`}
           >
-            {copiedNumber === copiedKey ? (
-              <Check className="h-3.5 w-3.5 text-emerald-500" />
-            ) : (
-              <Copy className="h-3.5 w-3.5" />
-            )}
+            <Search className="h-3.5 w-3.5" />
           </button>
 
           <button

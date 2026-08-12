@@ -42,6 +42,7 @@ interface LegacyCDRTableProps {
   cdrTextScale?: 90 | 100 | 110;
   cdrStickyHeader?: boolean;
   cdrStripedRows?: boolean;
+  searchEngine?: 'yandex' | 'google';
 }
 
 const formatSiteFormPhone=(value:any)=>{const digits=String(value||'').replace(/\D/g,'');if(digits.length===11&&digits.startsWith('7'))return`+7 (${digits.slice(1,4)}) ${digits.slice(4,7)}-${digits.slice(7,9)}-${digits.slice(9)}`;return digits?`+${digits}`:'—'};
@@ -76,6 +77,7 @@ export default function LegacyCDRTable({
   cdrTextScale = 100,
   cdrStickyHeader = true,
   cdrStripedRows = true,
+  searchEngine = 'yandex',
   formatSeconds = (sec: number) => {
     const n = Number(sec || 0);
     const m = Math.floor(n / 60);
@@ -195,10 +197,8 @@ export default function LegacyCDRTable({
                 callerDirectoryName={callerDirectoryName}
                 callerType={callerType}
                 displayedSrc={displayedSrc}
-                copiedKey={`${call.uniqueid}:${displayedSrc}`}
-                copiedNumber={copiedNumber}
                 isFound={isFound}
-                handleCopy={handleCopy}
+                searchEngine={searchEngine}
                 triggerClickToCall={triggerClickToCall}
                 openAddFromCall={openAddFromCall}
                 filterCallsByNumber={filterCallsByNumber}

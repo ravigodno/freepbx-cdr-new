@@ -7116,6 +7116,7 @@ export default function App() {
                   cdrTextScale={interfacePreferences.cdrTextScale}
                   cdrStickyHeader={interfacePreferences.cdrStickyHeader}
                   cdrStripedRows={interfacePreferences.cdrStripedRows}
+                  searchEngine={interfacePreferences.searchEngine}
                   setActiveDropdownCallId={setActiveDropdownCallId}
                   formatSeconds={formatSeconds}
                 />
