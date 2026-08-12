@@ -17,6 +17,7 @@ export {
 
 export {
   analyzeOutboundRoute,
+  extractOutboundTrunkChannelId,
 } from './outboundTracer';
 
 export function extractRingGroupIdsFromLegs(legs: any[]): string[] {

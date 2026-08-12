@@ -7,6 +7,7 @@ import {
   analyzeRingGroups,
   getAnsweredExtFromLegs,
   getQueueWaitSecondsFromLegs,
+  extractOutboundTrunkChannelId,
   analyzeOutboundRoute
 } from './server/freepbx/routeBuilder';
 import express, { Request, Response, NextFunction } from 'express';
@@ -15201,6 +15202,7 @@ async function enrichFreePBXRoute(settings: any, legs: any[]) {
       routeSteps.push(...await analyzeOutboundRoute({
         settings,
         dialedNumber: firstDst,
+        actualTrunkChannelId: extractOutboundTrunkChannelId(legs),
         queryFreePBXCDR,
       }));
     } catch (e: any) {

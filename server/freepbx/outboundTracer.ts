@@ -7,7 +7,7 @@ function escapeFreepbxPatternChar(ch: string): string {
   return '\\^$.*+?()[]{}|'.includes(ch) ? '\\' + ch : ch;
 }
 
-function freepbxDialPatternMatches(
+export function freepbxDialPatternMatches(
   number: string,
   prefix: string,
   pattern: string
@@ -21,25 +21,53 @@ function freepbxDialPatternMatches(
   const rest = pref ? n.slice(pref.length) : n;
   let rx = '';
 
-  for (const ch of pat) {
+  for (let index = 0; index < pat.length; index += 1) {
+    const ch = pat[index];
     if (ch === 'X') rx += '\\d';
     else if (ch === 'Z') rx += '[1-9]';
     else if (ch === 'N') rx += '[2-9]';
     else if (ch === '.') rx += '\\d+';
     else if (ch === '!') rx += '\\d*';
+    else if (ch === '[') {
+      const closingIndex = pat.indexOf(']', index + 1);
+      const content = closingIndex > index ? pat.slice(index + 1, closingIndex) : '';
+      if (content && /^[0-9-]+$/.test(content)) {
+        rx += `[${content}]`;
+        index = closingIndex;
+      } else {
+        rx += '\\[';
+      }
+    }
     else rx += escapeFreepbxPatternChar(ch);
   }
 
   return new RegExp('^' + rx + '$').test(rest);
 }
 
+export function extractOutboundTrunkChannelId(legs: any[]): string {
+  const rows = Array.isArray(legs) ? legs : [];
+  for (const row of rows) {
+    const dstChannel = String(row?.dstchannel || row?.DstChannel || '').trim();
+    const channelMatch = dstChannel.match(/^(?:SIP|PJSIP)\/(.+?)-[0-9a-f]+$/i);
+    if (channelMatch?.[1]) return channelMatch[1];
+
+    const dialData = String(row?.lastdata || row?.ApplicationData || '').trim();
+    const endpointMatch = dialData.match(/^(?:SIP|PJSIP)\/[^,@/]+@([^,/)]+)/i)
+      || dialData.match(/^(?:SIP|PJSIP)\/([^,/)]+)\//i);
+    if (endpointMatch?.[1]) return endpointMatch[1];
+  }
+  return '';
+}
+
 export async function analyzeOutboundRoute({
   settings,
   dialedNumber,
+  actualTrunkChannelId = '',
   queryFreePBXCDR,
 }: {
   settings: any;
   dialedNumber: string;
+  actualTrunkChannelId?: string;
   queryFreePBXCDR: QueryFreePBXCDR;
 }): Promise<FreepbxRouteTraceStep[]> {
   const rows = await queryFreePBXCDR(
@@ -66,13 +94,21 @@ export async function analyzeOutboundRoute({
     []
   );
 
-  const matched = rows.find((r: any) =>
+  const matchingRows = rows.filter((r: any) =>
     freepbxDialPatternMatches(
       dialedNumber,
       r.match_pattern_prefix || '',
       r.match_pattern_pass || ''
     )
-  ) || rows[0];
+  );
+  const normalizedActualTrunk = String(actualTrunkChannelId || '').trim().toLowerCase();
+  const actualTrunkRows = normalizedActualTrunk
+    ? rows.filter((row: any) => String(row.trunk_channelid || '').trim().toLowerCase() === normalizedActualTrunk)
+    : [];
+  const matched = matchingRows.find((row: any) => actualTrunkRows.some((actual: any) => actual.route_id === row.route_id))
+    || matchingRows[0]
+    || actualTrunkRows[0]
+    || rows[0];
 
   if (!matched) {
     return [{
@@ -86,7 +122,11 @@ export async function analyzeOutboundRoute({
 
   const routeRows = rows.filter(
     (r: any) => r.route_id === matched.route_id
-  );
+  ).sort((left: any, right: any) => {
+    const leftActual = String(left.trunk_channelid || '').trim().toLowerCase() === normalizedActualTrunk ? 0 : 1;
+    const rightActual = String(right.trunk_channelid || '').trim().toLowerCase() === normalizedActualTrunk ? 0 : 1;
+    return leftActual - rightActual || Number(left.seq || 0) - Number(right.seq || 0);
+  });
 
   return [{
     type: 'outbound_route',
@@ -101,6 +141,7 @@ export async function analyzeOutboundRoute({
       patternPrefix: matched.match_pattern_prefix || '',
       patternPass: matched.match_pattern_pass || '',
       prependDigits: matched.prepend_digits || '',
+      actualTrunkChannelId,
       trunks: routeRows
         .filter((r: any) =>
           r.trunk_id !== null &&
