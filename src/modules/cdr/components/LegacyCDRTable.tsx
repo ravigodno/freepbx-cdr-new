@@ -32,6 +32,16 @@ interface LegacyCDRTableProps {
   showProcessingEvent?: (call: any) => void;
   reloadRegistry?: () => void;
   showLeadCall?: (linkedid: string) => void;
+  filterCallsByNumber?: (number: string) => void;
+  openDirectoryByName?: (name: string) => void;
+  cdrDateTimeFormat?: 'dmy-dash' | 'dmy-short-dash' | 'dmy-dot' | 'dmy-slash' | 'ymd-dash';
+  cdrShowSeconds?: boolean;
+  cdrUseBrowserTimezone?: boolean;
+  cdrHourCycle?: 12 | 24;
+  cdrDensity?: 'compact' | 'standard' | 'comfortable';
+  cdrTextScale?: 90 | 100 | 110;
+  cdrStickyHeader?: boolean;
+  cdrStripedRows?: boolean;
 }
 
 const formatSiteFormPhone=(value:any)=>{const digits=String(value||'').replace(/\D/g,'');if(digits.length===11&&digits.startsWith('7'))return`+7 (${digits.slice(1,4)}) ${digits.slice(4,7)}-${digits.slice(7,9)}-${digits.slice(9)}`;return digits?`+${digits}`:'—'};
@@ -56,6 +66,16 @@ export default function LegacyCDRTable({
   showProcessingEvent = () => {},
   reloadRegistry = () => {},
   showLeadCall = () => {},
+  filterCallsByNumber = () => {},
+  openDirectoryByName = () => {},
+  cdrDateTimeFormat = 'dmy-dash',
+  cdrShowSeconds = true,
+  cdrUseBrowserTimezone = false,
+  cdrHourCycle = 24,
+  cdrDensity = 'standard',
+  cdrTextScale = 100,
+  cdrStickyHeader = true,
+  cdrStripedRows = true,
   formatSeconds = (sec: number) => {
     const n = Number(sec || 0);
     const m = Math.floor(n / 60);
@@ -84,9 +104,9 @@ export default function LegacyCDRTable({
     } catch (error: any) { alert(error.message || 'Ошибка'); }
   };
   return (
-    <table className="w-full text-left border-collapse">
+    <table className={`w-full border-collapse text-left cdr-density-${cdrDensity} cdr-text-${cdrTextScale}`}>
       <thead>
-        <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-[#1e293b]/20 text-[10px] text-slate-500 dark:text-slate-400 uppercase tracking-widest font-bold">
+        <tr className={`border-b border-slate-200 bg-slate-50/95 text-[10px] font-bold uppercase tracking-widest text-slate-500 dark:border-slate-800 dark:bg-[#1e293b]/95 dark:text-slate-400 ${cdrStickyHeader ? 'sticky top-0 z-10' : ''}`}>
           <th className="py-4 px-4">ВРЕМЯ ВЫЗОВА / ID</th>
           <th className="py-4 px-4 font-bold">КТО ЗВОНИЛ</th>
           <th className="py-4 px-4 font-bold">КУДА ЗВОНИЛ</th>
@@ -135,9 +155,11 @@ export default function LegacyCDRTable({
             displayedSrc,
             displayedDst,
             callerName,
+            callerDirectoryName,
             callerType,
             isFound,
             calleeName,
+            calleeDirectoryName,
             calleeType,
             isFoundDst,
             callDisp,
@@ -149,7 +171,7 @@ export default function LegacyCDRTable({
               className={`hover:bg-slate-100/60 dark:hover:bg-slate-800/50 transition-colors ${
                 isMissed && !call.processed && !call.wasCallbacked
                   ? 'bg-rose-500/[0.015]'
-                  : index % 2 === 0
+                    : !cdrStripedRows || index % 2 === 0
                     ? 'bg-white dark:bg-slate-900'
                     : 'bg-slate-50/60 dark:bg-slate-800/25'
               }`}
@@ -161,11 +183,16 @@ export default function LegacyCDRTable({
                 isIncoming={isIncoming}
                 isOutgoing={isOutgoing}
                 fetchChronology={fetchChronology}
+                dateTimeFormat={cdrDateTimeFormat}
+                showSeconds={cdrShowSeconds}
+                useBrowserTimezone={cdrUseBrowserTimezone}
+                hourCycle={cdrHourCycle}
               />
 
               {/* Column 2: WHO CALLED (Кто звонил) */}
               <CDRCallerCell
                 callerName={callerName}
+                callerDirectoryName={callerDirectoryName}
                 callerType={callerType}
                 displayedSrc={displayedSrc}
                 copiedKey={`${call.uniqueid}:${displayedSrc}`}
@@ -174,17 +201,22 @@ export default function LegacyCDRTable({
                 handleCopy={handleCopy}
                 triggerClickToCall={triggerClickToCall}
                 openAddFromCall={openAddFromCall}
+                filterCallsByNumber={filterCallsByNumber}
+                openDirectoryByName={openDirectoryByName}
               />
 
               {/* Column 3: Callee display (Куда звонил) */}
               <CDRCalleeCell
                 call={displayCall}
                 calleeName={calleeName}
+                calleeDirectoryName={calleeDirectoryName}
                 calleeType={calleeType}
                 displayedDst={displayedDst}
                 isFoundDst={isFoundDst}
                 triggerClickToCall={triggerClickToCall}
                 openAddFromCall={openAddFromCall}
+                filterCallsByNumber={filterCallsByNumber}
+                openDirectoryByName={openDirectoryByName}
               />
 
               {/* Column 4: REKHEM (СТАТУС) */}

@@ -13,22 +13,28 @@ import { isBlindTransferBadgeEligible } from '../utils/isBlindTransferBadgeEligi
 interface Props {
   call: any;
   calleeName: string;
+  calleeDirectoryName?: string;
   calleeType: string;
   displayedDst: string;
   isFoundDst: boolean;
 
   triggerClickToCall: (phone: string, name?: string) => void;
   openAddFromCall: (number: string, initialName?: string) => void;
+  filterCallsByNumber?: (number: string) => void;
+  openDirectoryByName?: (name: string) => void;
 }
 
 export default function CDRCalleeCell({
   call,
   calleeName,
+  calleeDirectoryName = '',
   calleeType,
   displayedDst,
   isFoundDst,
   triggerClickToCall,
   openAddFromCall,
+  filterCallsByNumber = () => {},
+  openDirectoryByName = () => {},
 }: Props) {
   const isMultiDst = isMultiNumberValue(displayedDst);
   const transferTargetExt = String(call?.blindTransferTargetExt || call?.transferTargetExt || '').trim();
@@ -91,18 +97,27 @@ export default function CDRCalleeCell({
           <div className="flex items-center gap-1.5 flex-wrap">
             <span className="inline-flex items-center gap-1.5">
               <DirectoryTypeIcon type={calleeType} className="h-4 w-4 text-slate-700 dark:text-slate-300" />
-              <span className={`font-bold text-xs ${
+              <button
+                type="button"
+                disabled={!calleeDirectoryName}
+                onClick={() => calleeDirectoryName && openDirectoryByName(calleeDirectoryName)}
+                className={`text-left font-bold text-xs ${calleeDirectoryName ? 'cursor-pointer hover:underline' : 'cursor-default'} ${
                 isFoundDst
                   ? 'text-red-800 dark:text-red-400'
                   : 'text-slate-800 dark:text-slate-100'
               }`}>
                 {logicalCalleeLabel}
-              </span>
+              </button>
               {compactInternal && callAction}
               {compactInternal && (
-                <span className="font-mono font-bold text-xs text-slate-800 dark:text-slate-200">
+                <button
+                  type="button"
+                  onClick={() => filterCallsByNumber(displayedDst)}
+                  className="cursor-pointer font-mono text-xs font-bold text-slate-800 underline-offset-2 hover:text-blue-700 hover:underline dark:text-slate-200 dark:hover:text-blue-400"
+                  title={`Показать историю звонков по номеру ${displayedDst}`}
+                >
                   {displayedDst}
-                </span>
+                </button>
               )}
               {compactInternal && addAction}
             </span>
@@ -111,7 +126,14 @@ export default function CDRCalleeCell({
           {!compactInternal && (
             <div className="text-xs font-bold text-slate-800 dark:text-slate-200 flex flex-wrap items-center gap-1.5">
               {callAction}
-              <span>{displayedDst}</span>
+              <button
+                type="button"
+                onClick={() => filterCallsByNumber(displayedDst)}
+                className="cursor-pointer underline-offset-2 hover:text-blue-700 hover:underline dark:hover:text-blue-400"
+                title={`Показать историю звонков по номеру ${displayedDst}`}
+              >
+                {displayedDst}
+              </button>
               {addAction}
             </div>
           )}

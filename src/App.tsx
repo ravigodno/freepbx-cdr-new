@@ -86,6 +86,7 @@ import ActiveCallsTab from './modules/monitoring/tabs/monitoring/ActiveCallsTab'
 import { getLiveCallPopupTitle, normalizeLiveCallBannerPayload } from './utils/liveCallBanner';
 import { useServerClock } from './hooks/useServerClock';
 import { getServerNow } from './utils/serverClock';
+import { loadInterfacePreferences, saveInterfacePreferences, type InterfacePreferences } from './utils/interfacePreferences';
 import CommandCenterTab from './modules/monitoring/tabs/monitoring/CommandCenterTab';
 const DbExplorerTab = lazy(() => import('./modules/monitoring/tabs/monitoring/DbExplorerTab'));
 const SecurityTab = lazy(() => import('./modules/monitoring/tabs/monitoring/SecurityTab'));
@@ -525,6 +526,14 @@ interface LiveCallBanner {
   trunkNumber?: string;
   displayNumber?: string;
   displayName?: string;
+  callerDisplayName?: string;
+  destinationDisplayName?: string;
+  callerCompany?: string;
+  callerPosition?: string;
+  destinationCompany?: string;
+  destinationPosition?: string;
+  callerDirectoryFields?: Record<string, unknown>;
+  destinationDirectoryFields?: Record<string, unknown>;
   subtitle?: string;
   contactType?: 'internal' | 'client';
   contactComment?: string;
@@ -549,6 +558,10 @@ interface LiveCallBanner {
 };
 
 export default function App() {
+  const [interfacePreferences, setInterfacePreferences] = useState<InterfacePreferences>(loadInterfacePreferences);
+  const updateInterfacePreferences = (patch: Partial<InterfacePreferences>) => {
+    setInterfacePreferences(current => ({ ...current, ...patch }));
+  };
   // Authentication states
   const [session, setSession] = useState<UserSession | null>(() => {
     const saved = localStorage.getItem('asterisk_cdr_session');
@@ -575,7 +588,7 @@ export default function App() {
   const [siteFormRegistryLate, setSiteFormRegistryLate] = useState(0);
   const [totalCalls, setTotalCalls] = useState(0);
   const [page, setPage] = useState(1);
-  const [limit] = useState(15);
+  const limit = interfacePreferences.cdrPageSize;
   const [totalPages, setTotalPages] = useState(1);
   const [isLoadingCalls, setIsLoadingCalls] = useState(false);
 
@@ -723,9 +736,13 @@ export default function App() {
   }, []);
 
   // Dark environment / theme settings
-  const [darkMode, setDarkMode] = useState<boolean>(() => {
-    return localStorage.getItem('asterisk_cdr_dark_mode') === 'true';
-  });
+  const [systemDarkMode, setSystemDarkMode] = useState(() => window.matchMedia?.('(prefers-color-scheme: dark)').matches === true);
+  const darkMode = interfacePreferences.theme === 'system' ? systemDarkMode : interfacePreferences.theme === 'dark';
+  const setDarkMode = (value: boolean | ((current: boolean) => boolean)) => {
+    const next = typeof value === 'function' ? value(darkMode) : value;
+    updateInterfacePreferences({ theme: next ? 'dark' : 'light' });
+  };
+  const cdrDateTimeFormat = interfacePreferences.cdrDateTimeFormat;
 
   useEffect(() => {
     if (!session) {
@@ -739,6 +756,21 @@ export default function App() {
     }
     localStorage.setItem('asterisk_cdr_dark_mode', String(darkMode));
   }, [darkMode, session]);
+
+  useEffect(() => {
+    saveInterfacePreferences(interfacePreferences);
+    document.documentElement.style.fontSize = `${interfacePreferences.uiScale}%`;
+    document.documentElement.classList.toggle('pbxpuls-reduce-motion', interfacePreferences.reduceMotion);
+    document.documentElement.classList.toggle('pbxpuls-high-contrast', interfacePreferences.highContrast);
+    document.documentElement.dataset.pbxpulsAccent = interfacePreferences.accentColor;
+  }, [interfacePreferences]);
+
+  useEffect(() => {
+    const media = window.matchMedia?.('(prefers-color-scheme: dark)');
+    const listener = () => setSystemDarkMode(media.matches);
+    media?.addEventListener?.('change', listener);
+    return () => media?.removeEventListener?.('change', listener);
+  }, []);
 
   const [accessUsers, setAccessUsers] = useState<AccessUser[]>([]);
   const [isLoadingUsers, setIsLoadingUsers] = useState(false);
@@ -775,6 +807,7 @@ export default function App() {
   const [activeView, setActiveView] = useState<'calls' | 'directory' | 'reports' | 'marketing' | 'monitoring' | 'management' | 'balance' | 'settings' | 'about' | 'scripts' | 'ai-assistant' | 'ai-pbx-admin' | 'ai-platform'>(() => {
     const params = new URLSearchParams(window.location.search);
     const saved = localStorage.getItem('asterisk_cdr_active_view') as 'calls' | 'directory' | 'reports' | 'marketing' | 'monitoring' | 'management' | 'balance' | 'about' | 'scripts' | 'ai-assistant' | 'ai-pbx-admin' | 'ai-platform' | null;
+    if (params.get('directorySearch')) return 'directory';
     if (/^\/ai-platform(?:\/(?:agents(?:\/\d+(?:\/(?:knowledge|voice|diagnostics))?)?|scripts|assistant|skills|knowledge|conversations|settings|diagnostics))?$/.test(window.location.pathname)) return 'ai-platform';
     if (window.location.pathname === '/management/directory/import') return 'directory';
     if (window.location.pathname === '/management/directory/import-url') return 'directory';
@@ -791,7 +824,7 @@ export default function App() {
       window.history.replaceState({}, '', '/ai-platform/assistant');
       return 'ai-platform';
     }
-    return saved || 'calls';
+    return interfacePreferences.rememberLastView ? (saved || 'calls') : 'calls';
   });
   const [liveSessionsData, setLiveSessionsData] = useState<any>(null);
   const [liveSessionsError, setLiveSessionsError] = useState('');
@@ -808,16 +841,15 @@ export default function App() {
     return saved || 'calls';
   });
 
-  const [isSidebarExpanded, setIsSidebarExpanded] = useState<boolean>(() => {
-    return localStorage.getItem('asterisk_cdr_sidebar_expanded') === 'true';
-  });
+  const [isSidebarExpanded, setIsSidebarExpanded] = useState<boolean>(interfacePreferences.sidebarExpanded);
 
   useEffect(() => {
     localStorage.setItem('asterisk_cdr_sidebar_expanded', String(isSidebarExpanded));
+    updateInterfacePreferences({ sidebarExpanded: isSidebarExpanded });
   }, [isSidebarExpanded]);
 
   useEffect(() => {
-    localStorage.setItem('asterisk_cdr_active_view', activeView);
+    if (interfacePreferences.rememberLastView) localStorage.setItem('asterisk_cdr_active_view', activeView);
     if (activeView !== 'ai-platform' && /^\/ai-platform(?:\/(?:agents(?:\/\d+(?:\/(?:knowledge|voice|diagnostics))?)?|scripts|assistant|skills|knowledge|conversations|settings|diagnostics))?$/.test(window.location.pathname)) window.history.replaceState({}, '', '/');
     if (activeView !== 'directory' && /^\/(?:management\/directory|directory\/import-contacts)/.test(window.location.pathname)) {
       window.history.replaceState({}, '', '/');
@@ -893,7 +925,7 @@ export default function App() {
   const [dirError, setDirError] = useState('');
   const [dirNotice, setDirNotice] = useState('');
   const [isSavingDir, setIsSavingDir] = useState(false);
-  const [dirSearchQuery, setDirSearchQuery] = useState('');
+  const [dirSearchQuery, setDirSearchQuery] = useState(() => new URLSearchParams(window.location.search).get('directorySearch') || '');
   const [dirTypeFilter, setDirTypeFilter] = useState<'all' | 'client' | 'supplier' | 'government' | 'internal'>('all');
   const [dirSpamMode, setDirSpamMode] = useState<'all' | 'exclude_spam' | 'only_spam'>('exclude_spam');
   const [dirVisibilityMode, setDirVisibilityMode] = useState<'all' | 'shared_only' | 'private_only' | 'my_private_only' | 'exclude_private' | 'exclude_shared'>('all');
@@ -2330,6 +2362,9 @@ export default function App() {
   const effectiveOnlyMyCalls = isOwnCallsForced || onlyMyCalls;
   const effectiveMySip = String(session?.extension || myExt).trim();
   const [liveCallBanner, setLiveCallBanner] = useState<LiveCallBanner | null>(null);
+  const dismissedLiveCallIdRef = useRef('');
+  const liveCallBannerRef = useRef<LiveCallBanner | null>(null);
+  const livePopupEndTimerRef = useRef<number | null>(null);
   const [isLiveTransferLoading, setIsLiveTransferLoading] = useState(false);
   const [isLiveMonitorLoading, setIsLiveMonitorLoading] = useState(false);
   const [liveTransferStatus, setLiveTransferStatus] = useState('');
@@ -2481,7 +2516,34 @@ export default function App() {
       }
       if (!resp.ok) return;
       const data = await resp.json();
-      setLiveCallBanner(normalizeLiveCallBannerPayload(data));
+      const normalized = normalizeLiveCallBannerPayload(data) as LiveCallBanner | null;
+      if (!normalized) {
+        dismissedLiveCallIdRef.current = '';
+        const delaySeconds = interfacePreferences.livePopupHideAfterEndSeconds;
+        if (delaySeconds > 0 && liveCallBannerRef.current?.active && livePopupEndTimerRef.current === null) {
+          livePopupEndTimerRef.current = window.setTimeout(() => {
+            liveCallBannerRef.current = null;
+            setLiveCallBanner(null);
+            livePopupEndTimerRef.current = null;
+          }, delaySeconds * 1000);
+        } else if (delaySeconds === 0) {
+          liveCallBannerRef.current = null;
+          setLiveCallBanner(null);
+        }
+        return;
+      }
+      if (livePopupEndTimerRef.current !== null) {
+        window.clearTimeout(livePopupEndTimerRef.current);
+        livePopupEndTimerRef.current = null;
+      }
+      const callId = String(normalized.linkedid || '');
+      if (callId && callId === dismissedLiveCallIdRef.current) {
+        setLiveCallBanner(null);
+        return;
+      }
+      dismissedLiveCallIdRef.current = '';
+      liveCallBannerRef.current = normalized;
+      setLiveCallBanner(normalized);
     } catch (e) {
       // Live popup is auxiliary; ignore network errors here.
     }
@@ -3168,6 +3230,34 @@ export default function App() {
     setDirectoryPageMode('contact_new');
     setActiveView('directory');
     window.history.pushState({}, '', '/management/directory/contact/new');
+  };
+
+  const filterCallRegistryByNumber = (number: string) => {
+    const normalizedNumber = String(number || '').trim();
+    if (!normalizedNumber || normalizedNumber.includes(',')) return;
+    setSearchQuery('');
+    setNumberFilter(normalizedNumber);
+    setRelatedMissedCallId('');
+    setStatusFilter('ALL');
+    setPage(1);
+  };
+
+  const openDirectoryByName = (name: string) => {
+    const query = String(name || '').trim();
+    if (!query || !hasPermission('view_directory')) return;
+    if (interfacePreferences.directoryNewTab) {
+      window.open(`/?directorySearch=${encodeURIComponent(query)}`, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    setDirectoryPageMode('list');
+    setDirSearchQuery(query);
+    setDirTypeFilter('all');
+    setDirSpamMode('all');
+    setDirVisibilityMode('all');
+    setDirSearchTooShort(false);
+    setDirPage(1);
+    window.history.pushState({}, '', '/');
+    setActiveView('directory');
   };
 
   // Fetch Dashboard Stats
@@ -3890,6 +3980,10 @@ export default function App() {
     return () => {
       stopped = true;
       if (timer !== undefined) window.clearTimeout(timer);
+      if (livePopupEndTimerRef.current !== null) {
+        window.clearTimeout(livePopupEndTimerRef.current);
+        livePopupEndTimerRef.current = null;
+      }
       controller?.abort();
     };
   }, [session, myExt]);
@@ -4066,6 +4160,11 @@ export default function App() {
 
     return () => clearTimeout(delayDebounceFn);
   }, [searchQuery, numberFilter]);
+
+  useEffect(() => {
+    if (!session) return;
+    void reloadData(1);
+  }, [limit]);
 
   // Auto-refresh interval loops
   useEffect(() => {
@@ -4800,6 +4899,41 @@ export default function App() {
     className: 'min-w-[160px] max-w-[240px]'
   }));
   const allDirectoryColumnConfigs: DirectoryColumnConfig[] = [...directoryColumnConfigs, ...customDirectoryColumnConfigs];
+  const livePopupDirectoryFieldOptions = [
+    { key: '', label: 'Не показывать' },
+    { key: 'company', label: 'Компания' }, { key: 'position', label: 'Должность' },
+    { key: 'department', label: 'Отдел / группа' }, { key: 'group', label: 'Группа' },
+    { key: 'email', label: 'Email' }, { key: 'website', label: 'Сайт' },
+    { key: 'inn', label: 'ИНН' }, { key: 'kpp', label: 'КПП' }, { key: 'ogrn', label: 'ОГРН' },
+    { key: 'address', label: 'Адрес' }, { key: 'comment', label: 'Комментарий' },
+    { key: 'internalExtension', label: 'Внутренний номер' },
+    { key: 'linkedExternalNumber', label: 'Связанный внешний номер' },
+    { key: 'responsibleUserId', label: 'Ответственный сотрудник' }, { key: 'tags', label: 'Теги' },
+    ...directoryCustomFields.filter(field => Number(field.isVisible) === 1 || field.isVisible === true).map(field => ({ key: field.fieldKey, label: field.fieldName, fieldType: field.fieldType }))
+  ];
+  const selectedLivePopupDirectoryFields = [interfacePreferences.livePopupDirectoryFieldSlot1, interfacePreferences.livePopupDirectoryFieldSlot2]
+    .filter((key, index, values) => Boolean(key) && values.indexOf(key) === index)
+    .map(key => {
+      const option = livePopupDirectoryFieldOptions.find(item => item.key === key);
+      return { key, label: option?.label || key, fieldType: option && 'fieldType' in option ? option.fieldType : undefined };
+    });
+  const formatLivePopupDirectoryValue = (value: unknown, fieldType?: DirectoryCustomFieldDefinition['fieldType']): string => {
+    if (fieldType === 'date') {
+      const match = String(value ?? '').trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (match) {
+        const [, year, month, day] = match;
+        if (cdrDateTimeFormat === 'dmy-short-dash') return `${day}-${month}-${year.slice(-2)}`;
+        if (cdrDateTimeFormat === 'dmy-dot') return `${day}.${month}.${year}`;
+        if (cdrDateTimeFormat === 'dmy-slash') return `${day}/${month}/${year}`;
+        if (cdrDateTimeFormat === 'ymd-dash') return `${year}-${month}-${day}`;
+        return `${day}-${month}-${year}`;
+      }
+    }
+    if (Array.isArray(value)) return value.map(item => String(item || '').trim()).filter(Boolean).join(', ');
+    if (typeof value === 'boolean') return value ? 'Да' : 'Нет';
+    if (value && typeof value === 'object') return Object.values(value).map(item => String(item || '').trim()).filter(Boolean).join(', ');
+    return String(value ?? '').trim() || '—';
+  };
   const effectiveDirectoryColumnConfigs: DirectoryColumnConfig[] = [
     ...selectedDirectoryVisibleColumns
       .map(columnKey => allDirectoryColumnConfigs.find(column => column.key === columnKey))
@@ -4905,7 +5039,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    if ((activeView === 'directory' || (activeView === 'settings' && settingsTab === 'directory')) && session?.token) {
+    if ((activeView === 'directory' || (activeView === 'settings' && (settingsTab === 'directory' || settingsTab === 'appearance'))) && session?.token) {
       loadDirectoryColumnSettingsFromApi();
       loadDirectoryCustomFieldsFromApi();
     }
@@ -6201,7 +6335,7 @@ export default function App() {
           </div></div>
       </header>
 
-      {liveCallBanner?.active && (() => {
+      {interfacePreferences.livePopupEnabled && liveCallBanner?.active && (() => {
         const handleLiveCallBannerDragStart = (event: React.MouseEvent<HTMLDivElement>) => {
           if (event.button !== 0) return;
 
@@ -6232,7 +6366,7 @@ export default function App() {
             );
 
             setLiveCallBannerPos(next);
-            localStorage.setItem('pbxpuls_live_call_banner_pos', JSON.stringify(next));
+            if (interfacePreferences.livePopupRememberPosition) localStorage.setItem('pbxpuls_live_call_banner_pos', JSON.stringify(next));
           };
 
           const handleMouseUp = () => {
@@ -6250,23 +6384,39 @@ export default function App() {
 
         const isIncomingLive = liveCallBanner.direction === 'incoming';
         const isOutgoingLive = liveCallBanner.direction === 'outgoing';
-        const isInternalLive = liveCallBanner.direction === 'internal';
-        const title = getLiveCallPopupTitle(liveCallBanner.direction, liveCallBanner.phoneMeeting === true);
         const iconClass = isIncomingLive ? 'text-blue-600 bg-blue-50' : isOutgoingLive ? 'text-indigo-600 bg-indigo-50' : 'text-purple-600 bg-purple-50';
-        const contactTypeLabel = liveCallBanner.contactType === 'internal' ? 'Внутренний' : 'Клиент';
-        const contactTypeClass = liveCallBanner.contactType === 'internal' ? 'bg-gradient-to-br from-slate-50 via-blue-50/40 to-sky-50/50 text-slate-600 border-slate-200' : 'bg-blue-50 text-blue-600 border-blue-100';
-        const display = liveCallBanner.displayName || liveCallBanner.displayNumber || 'Неизвестный номер';
         const isSpamOrBlacklisted = liveCallBanner.isSpam === true || liveCallBanner.isBlacklisted === true;
-        const cleanName = display.replace(/\s*\(([^)]*)\)\s*$/, '');
         const company = String(liveCallBanner.company || '').trim();
         const position = String(liveCallBanner.position || '').trim();
         const durationText = liveCallBanner.durationText || `${Math.floor((liveCallBanner.durationSec || 0) / 60)}:${String((liveCallBanner.durationSec || 0) % 60).padStart(2, '0')}`;
         const canUseLiveMonitorActions = session?.role === 'su' || session?.role === 'admin' || session?.role === 'manager';
         const liveActionButtonClass = 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60';
-        const endpointLabel = isIncomingLive ? 'На мой SIP' : 'От внутреннего';
-        const endpointNumber = isIncomingLive
-          ? (liveCallBanner.destinationNumber || liveCallBanner.internalNumber)
-          : (liveCallBanner.internalCaller || liveCallBanner.sourceNumber || liveCallBanner.callerNumber);
+        const callerNumber = String(liveCallBanner.callerNumber || liveCallBanner.sourceNumber || '').trim();
+        const destinationNumber = String(liveCallBanner.destinationNumber || liveCallBanner.targetNumber || '').trim();
+        const callerName = String(liveCallBanner.callerDisplayName || (isIncomingLive ? liveCallBanner.displayName : '') || '').trim();
+        const destinationName = String(liveCallBanner.destinationDisplayName || (!isIncomingLive ? liveCallBanner.displayName : '') || '').trim();
+        const callerCompany = String(liveCallBanner.callerCompany || (isIncomingLive ? company : '') || '').trim();
+        const callerPosition = String(liveCallBanner.callerPosition || (isIncomingLive ? position : '') || '').trim();
+        const destinationCompany = String(liveCallBanner.destinationCompany || (!isIncomingLive ? company : '') || '').trim();
+        const destinationPosition = String(liveCallBanner.destinationPosition || (!isIncomingLive ? position : '') || '').trim();
+        const callerDirectoryFields = { company: callerCompany, position: callerPosition, ...(liveCallBanner.callerDirectoryFields || {}) };
+        const destinationDirectoryFields = { company: destinationCompany, position: destinationPosition, ...(liveCallBanner.destinationDirectoryFields || {}) };
+        const directoryFieldsTitle = selectedLivePopupDirectoryFields.map(field => field.label).join(' / ');
+        const showLivePopupDirectoryFields = interfacePreferences.livePopupShowCompanyPosition && selectedLivePopupDirectoryFields.length > 0;
+        const callerDirectoryFieldsText = selectedLivePopupDirectoryFields.map(field => formatLivePopupDirectoryValue(callerDirectoryFields[field.key], field.fieldType)).join(' / ');
+        const destinationDirectoryFieldsText = selectedLivePopupDirectoryFields.map(field => formatLivePopupDirectoryValue(destinationDirectoryFields[field.key], field.fieldType)).join(' / ');
+        const closeLiveCallBanner = () => {
+          dismissedLiveCallIdRef.current = String(liveCallBanner.linkedid || '');
+          liveCallBannerRef.current = null;
+          setLiveCallBanner(null);
+        };
+        const searchPhoneNumber = (phoneNumber: string) => {
+          if (!phoneNumber) return;
+          const url = interfacePreferences.searchEngine === 'google'
+            ? `https://www.google.com/search?q=${encodeURIComponent(phoneNumber)}`
+            : `https://yandex.ru/search/?text=${encodeURIComponent(phoneNumber)}`;
+          window.open(url, '_blank', 'noopener,noreferrer');
+        };
         const waitingCalls = (liveCallBanner.calls || []).filter(call => call.linkedid !== liveCallBanner.linkedid);
 
         return (
@@ -6275,7 +6425,7 @@ export default function App() {
             style={{
               left: liveCallBannerPos.x,
               top: liveCallBannerPos.y,
-              width: 'min(calc(100vw - 32px), 1280px)',
+              width: interfacePreferences.livePopupSize === 'compact' ? 'min(calc(100vw - 32px), 1080px)' : 'min(calc(100vw - 32px), 1280px)',
             }}
           >
             <div
@@ -6285,58 +6435,90 @@ export default function App() {
               title="Перетащить окно звонка"
             >
               <div className="absolute inset-y-0 left-0 w-2 bg-gradient-to-b from-blue-500 to-sky-600" />
-              <div className="flex items-stretch min-h-[104px]">
-                <div className="relative flex items-center gap-4 py-4 px-6 min-w-[360px] max-w-[480px] border-r border-slate-200">
-                  <div className={`h-14 w-14 rounded-full flex items-center justify-center shadow-sm shrink-0 ${iconClass}`}>
+              <button
+                type="button"
+                onMouseDown={event => event.stopPropagation()}
+                onClick={closeLiveCallBanner}
+                className="absolute right-2 top-2 z-20 inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                title="Закрыть окно для текущего звонка"
+                aria-label="Закрыть окно активного звонка"
+              >
+                <X className="h-4 w-4" />
+              </button>
+              <div className={`grid grid-cols-1 divide-y divide-slate-200 lg:divide-x lg:divide-y-0 ${showLivePopupDirectoryFields ? (interfacePreferences.livePopupSize === 'compact' ? 'min-h-[92px] lg:grid-cols-[minmax(175px,1fr)_minmax(145px,.8fr)_28px_minmax(175px,1fr)_minmax(145px,.8fr)_minmax(110px,.55fr)_minmax(130px,.65fr)]' : 'min-h-[112px] lg:grid-cols-[minmax(200px,1.05fr)_minmax(190px,1fr)_36px_minmax(200px,1.05fr)_minmax(190px,1fr)_minmax(120px,.6fr)_minmax(145px,.7fr)]') : (interfacePreferences.livePopupSize === 'compact' ? 'min-h-[92px] lg:grid-cols-[minmax(210px,1fr)_28px_minmax(210px,1fr)_minmax(110px,.55fr)_minmax(130px,.65fr)]' : 'min-h-[112px] lg:grid-cols-[minmax(260px,1fr)_36px_minmax(260px,1fr)_minmax(120px,.6fr)_minmax(145px,.7fr)]')}`}>
+                <div className="relative flex min-w-0 items-start gap-3 px-5 py-4">
+                  <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full shadow-sm ${iconClass}`}>
                     {isIncomingLive ? <PhoneIncoming className="h-7 w-7" /> : isOutgoingLive ? <PhoneOutgoing className="h-7 w-7" /> : <PhoneCall className="h-7 w-7" />}
                   </div>
                   <div className="min-w-0">
-                    {!liveCallBanner.phoneMeeting && (
-                      <div className="flex items-center gap-2 text-[12px] uppercase tracking-[0.12em] font-black text-slate-900">
-                        {title}
-                        {isIncomingLive && <span className="h-2.5 w-2.5 rounded-full bg-blue-500 animate-pulse" />}
-                      </div>
-                    )}
-                    <div className="mt-1 flex items-start gap-2 min-w-0" title={display}>
-                      <span className="text-sm leading-4 font-black text-slate-950 line-clamp-2 break-words">
-                        {cleanName || display}
-                      </span>
+                    <div className="flex items-center gap-2 text-[8px] font-medium uppercase tracking-wider text-slate-500">
+                      Кто звонит
+                      {isIncomingLive && <span className="h-2.5 w-2.5 rounded-full bg-blue-500 animate-pulse" />}
+                    </div>
+                    <div className="mt-2 flex min-w-0 items-start gap-2" title={[callerName, callerNumber].filter(Boolean).join(' · ')}>
+                      {(callerName || !callerNumber) && <span className="line-clamp-2 break-words text-sm font-black leading-4 text-slate-950">{callerName || 'Не определено'}</span>}
                       {isSpamOrBlacklisted && (
                         <span className="shrink-0 inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-black text-blue-700">
                           СПАМ / ЧС
                         </span>
                       )}
                     </div>
-                    {liveCallBanner.subtitle && (
-                      <div className="mt-1 flex items-center gap-2 text-sm font-bold text-slate-800">
-                        <Phone className="h-4 w-4 text-cyan-500" />
-                        <span>{liveCallBanner.subtitle}</span>
+                    {callerNumber && (
+                      <div className="mt-1 flex items-center gap-1.5">
+                        {interfacePreferences.livePopupShowSearch && <button
+                          type="button"
+                          onMouseDown={event => event.stopPropagation()}
+                          onClick={() => searchPhoneNumber(callerNumber)}
+                          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-slate-400 transition hover:bg-blue-50 hover:text-blue-700"
+                          title={`Найти номер ${callerNumber} в поисковике`}
+                          aria-label={`Найти номер ${callerNumber} в поисковике`}
+                        >
+                          <Search className="h-3.5 w-3.5" />
+                        </button>}
+                        <span className="font-mono text-xs font-bold text-slate-600">{callerNumber}</span>
                       </div>
                     )}
-                  </div></div>
-
-                <div className="grid grid-cols-2 xl:grid-cols-[minmax(90px,.7fr)_minmax(130px,1fr)_minmax(130px,1fr)_minmax(110px,.8fr)_minmax(110px,.8fr)_minmax(112px,.8fr)] flex-1 divide-x divide-slate-200">
-                  <div className="px-6 py-4 flex flex-col justify-center">
-                    <span className="text-[11px] uppercase tracking-wider font-bold text-slate-500">Тип</span>
-                    <span className={`mt-2 w-fit rounded-md border px-2 py-1 text-xs font-bold ${contactTypeClass}`}>{contactTypeLabel}</span></div>
-                  <div className="px-6 py-4 flex flex-col justify-center min-w-0">
-                    <span className="text-[11px] uppercase tracking-wider font-bold text-slate-500">Компания</span>
-                    <span className="mt-2 text-xs leading-4 font-black text-slate-900 line-clamp-2 break-words" title={company}>{company || '—'}</span></div>
-                  <div className="px-6 py-4 flex flex-col justify-center min-w-0">
-                    <span className="text-[11px] uppercase tracking-wider font-bold text-slate-500">Должность</span>
-                    <span className="mt-2 text-xs leading-4 font-bold text-slate-900 line-clamp-2 break-words" title={position}>{position || '—'}</span></div>
-                  <div className="px-6 py-4 flex flex-col justify-center">
-                    <span className="text-[11px] uppercase tracking-wider font-bold text-slate-500">{endpointLabel}</span>
-                    <span className="mt-2 text-base font-black text-slate-950">{endpointNumber || '—'}</span></div>
-                  <div className="px-6 py-4 flex flex-col justify-center items-start xl:items-end">
-                    <span className="text-sm font-black text-slate-900">{liveCallBanner.startedAt || ''}</span>
-                    <span className="mt-2 text-[11px] uppercase tracking-wider font-bold text-slate-500">Длительность</span>
-                    <span className="mt-1 text-base font-black text-slate-950 font-mono">{durationText}</span>
-                    {liveTransferStatus && (
-                      <span className="mt-2 max-w-[220px] text-right text-[11px] font-bold text-slate-500">{liveTransferStatus}</span>
-                    )}
                   </div>
-                  <div className="px-4 py-4 flex items-center justify-center">
+                </div>
+                {showLivePopupDirectoryFields && <div className="flex min-w-0 flex-col justify-start px-4 py-4">
+                  <div className="text-[8px] font-medium uppercase tracking-wider text-slate-500">{directoryFieldsTitle}</div>
+                  <div className="mt-1 whitespace-normal break-words text-xs font-bold leading-4 text-slate-800" title={callerDirectoryFieldsText}>{callerDirectoryFieldsText}</div>
+                </div>}
+                <div className="hidden items-center justify-center bg-slate-50 text-blue-500 lg:flex">
+                  <ChevronRight className="h-5 w-5" />
+                </div>
+                <div className="flex min-w-0 flex-col justify-start px-5 py-4">
+                  <span className="text-[8px] font-medium uppercase tracking-wider text-slate-500">Куда звонит</span>
+                  {(destinationName || !destinationNumber) && <span className="mt-2 line-clamp-2 break-words text-sm font-black leading-4 text-slate-950" title={[destinationName, destinationNumber].filter(Boolean).join(' · ')}>{destinationName || 'Не определено'}</span>}
+                  {destinationNumber && (
+                    <div className="mt-1 flex items-center gap-1.5">
+                      {interfacePreferences.livePopupShowSearch && <button
+                        type="button"
+                        onMouseDown={event => event.stopPropagation()}
+                        onClick={() => searchPhoneNumber(destinationNumber)}
+                        className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-slate-400 transition hover:bg-blue-50 hover:text-blue-700"
+                        title={`Найти номер ${destinationNumber} в поисковике`}
+                        aria-label={`Найти номер ${destinationNumber} в поисковике`}
+                      >
+                        <Search className="h-3.5 w-3.5" />
+                      </button>}
+                      <span className="font-mono text-xs font-bold text-slate-600">{destinationNumber}</span>
+                    </div>
+                  )}
+                </div>
+                {showLivePopupDirectoryFields && <div className="flex min-w-0 flex-col justify-start px-4 py-4">
+                  <div className="text-[8px] font-medium uppercase tracking-wider text-slate-500">{directoryFieldsTitle}</div>
+                  <div className="mt-1 whitespace-normal break-words text-xs font-bold leading-4 text-slate-800" title={destinationDirectoryFieldsText}>{destinationDirectoryFieldsText}</div>
+                </div>}
+                <div className="flex flex-col items-start justify-start px-5 py-4 lg:items-center">
+                    <span className="text-[8px] font-medium uppercase tracking-wider text-slate-500">Хронометраж</span>
+                    <span className="mt-2 font-mono text-xl font-black tabular-nums text-slate-950">{durationText}</span>
+                    {interfacePreferences.livePopupShowStartedAt && liveCallBanner.startedAt && <span className="mt-1 text-[10px] font-semibold text-slate-400">Начало {liveCallBanner.startedAt}</span>}
+                    {liveTransferStatus && (
+                      <span className="mt-2 max-w-[220px] text-[11px] font-bold text-slate-500 lg:text-center">{liveTransferStatus}</span>
+                    )}
+                </div>
+                  <div className="flex items-center justify-center px-4 py-4 pr-10">
                     <div className="grid grid-cols-3 gap-1.5">
                       <CallTargetSelector
                         mode="transfer"
@@ -6382,7 +6564,7 @@ export default function App() {
                       )}
                     </div>
                   </div>
-                </div></div>
+                </div>
             </div>
             {waitingCalls.length > 0 && (
               <div className="pointer-events-auto relative z-10 mt-2 isolate overflow-hidden rounded-2xl border border-amber-200 bg-white shadow-xl">
@@ -6924,6 +7106,16 @@ export default function App() {
                   showProcessingEvent={showProcessingEvent}
                   reloadRegistry={() => reloadData(page)}
                   showLeadCall={(linkedid) => { setRelatedMissedCallId(linkedid); setPage(1); void loadCalls(1, linkedid); }}
+                  filterCallsByNumber={interfacePreferences.cdrNumberClickFilter ? filterCallRegistryByNumber : undefined}
+                  openDirectoryByName={hasPermission('view_directory') ? openDirectoryByName : undefined}
+                  cdrDateTimeFormat={cdrDateTimeFormat}
+                  cdrShowSeconds={interfacePreferences.cdrShowSeconds}
+                  cdrUseBrowserTimezone={interfacePreferences.cdrUseBrowserTimezone}
+                  cdrHourCycle={interfacePreferences.cdrHourCycle}
+                  cdrDensity={interfacePreferences.cdrDensity}
+                  cdrTextScale={interfacePreferences.cdrTextScale}
+                  cdrStickyHeader={interfacePreferences.cdrStickyHeader}
+                  cdrStripedRows={interfacePreferences.cdrStripedRows}
                   setActiveDropdownCallId={setActiveDropdownCallId}
                   formatSeconds={formatSeconds}
                 />
@@ -8388,25 +8580,45 @@ export default function App() {
                         />
                         {session?.extension && <span className="mt-2 block text-[10px] font-semibold text-blue-600">Назначено администратором в разделе «Доступ и пользователи».</span>}
                       </label>
-                      
-                      <div className="bg-white border border-slate-200 rounded-xl p-4 flex items-center justify-between">
-                        <div>
-                          <span className="text-xs font-bold text-slate-800 block">Тёмная тема</span>
-                          <span className="text-[11px] text-slate-500">Включить ночной режим во всей системе</span></div>
-                        <button
-                          type="button"
-                          onClick={() => setDarkMode(!darkMode)}
-                          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none cursor-pointer theme-toggle-switch ${
-                            darkMode ? 'active' : ''
-                          }`}
-                        >
-                          <span
-                            className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                              darkMode ? 'translate-x-6' : 'translate-x-1'
-                            }`}
-                          />
-                        </button>
-          </div>
+
+                      <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
+                        <h5 className="text-xs font-black text-slate-900">Оформление</h5>
+                        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                          <label className="text-xs font-semibold text-slate-700">Тема<select value={interfacePreferences.theme} onChange={e=>updateInterfacePreferences({theme:e.target.value as InterfacePreferences['theme']})} className="mt-1 w-full rounded-lg border p-2"><option value="light">Светлая</option><option value="dark">Тёмная</option><option value="system">Системная</option></select></label>
+                          <label className="text-xs font-semibold text-slate-700">Масштаб<select value={interfacePreferences.uiScale} onChange={e=>updateInterfacePreferences({uiScale:Number(e.target.value) as 90|100|110})} className="mt-1 w-full rounded-lg border p-2"><option value="90">90%</option><option value="100">100%</option><option value="110">110%</option></select></label>
+                          <label className="text-xs font-semibold text-slate-700">Основной цвет<select value={interfacePreferences.accentColor} onChange={e=>updateInterfacePreferences({accentColor:e.target.value as InterfacePreferences['accentColor']})} className="mt-1 w-full rounded-lg border p-2"><option value="blue">Синий</option><option value="indigo">Индиго</option><option value="emerald">Изумрудный</option></select></label>
+                        </div>
+                        <div className="grid gap-2 sm:grid-cols-2"><InterfaceToggle label="Уменьшенная анимация" checked={interfacePreferences.reduceMotion} onChange={reduceMotion=>updateInterfacePreferences({reduceMotion})}/><InterfaceToggle label="Повышенная контрастность" checked={interfacePreferences.highContrast} onChange={highContrast=>updateInterfacePreferences({highContrast})}/></div>
+                      </div>
+
+                      <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
+                        <h5 className="text-xs font-black text-slate-900">Реестр звонков</h5>
+                        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                          <label className="text-xs font-semibold text-slate-700">Плотность<select value={interfacePreferences.cdrDensity} onChange={e=>updateInterfacePreferences({cdrDensity:e.target.value as InterfacePreferences['cdrDensity']})} className="mt-1 w-full rounded-lg border p-2"><option value="compact">Компактная</option><option value="standard">Стандартная</option><option value="comfortable">Крупная</option></select></label>
+                          <label className="text-xs font-semibold text-slate-700">Размер текста<select value={interfacePreferences.cdrTextScale} onChange={e=>updateInterfacePreferences({cdrTextScale:Number(e.target.value) as 90|100|110})} className="mt-1 w-full rounded-lg border p-2"><option value="90">90%</option><option value="100">100%</option><option value="110">110%</option></select></label>
+                          <label className="text-xs font-semibold text-slate-700">Строк на странице<select value={interfacePreferences.cdrPageSize} onChange={e=>{updateInterfacePreferences({cdrPageSize:Number(e.target.value) as 25|50|100});setPage(1)}} className="mt-1 w-full rounded-lg border p-2"><option value="25">25</option><option value="50">50</option><option value="100">100</option></select></label>
+                          <label className="text-xs font-semibold text-slate-700">Формат даты<select value={cdrDateTimeFormat} onChange={e=>updateInterfacePreferences({cdrDateTimeFormat:e.target.value as InterfacePreferences['cdrDateTimeFormat']})} className="mt-1 w-full rounded-lg border p-2"><option value="dmy-dash">ДД-ММ-ГГГГ</option><option value="dmy-short-dash">ДД-ММ-ГГ</option><option value="dmy-dot">ДД.ММ.ГГГГ</option><option value="dmy-slash">ДД/ММ/ГГГГ</option><option value="ymd-dash">ГГГГ-ММ-ДД</option></select></label>
+                          <label className="text-xs font-semibold text-slate-700">Формат времени<select value={interfacePreferences.cdrHourCycle} onChange={e=>updateInterfacePreferences({cdrHourCycle:Number(e.target.value) as 12|24})} className="mt-1 w-full rounded-lg border p-2"><option value="24">24 часа</option><option value="12">12 часов (AM/PM)</option></select></label>
+                        </div>
+                        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3"><InterfaceToggle label="Закреплять заголовок" checked={interfacePreferences.cdrStickyHeader} onChange={cdrStickyHeader=>updateInterfacePreferences({cdrStickyHeader})}/><InterfaceToggle label="Чередовать фон строк" checked={interfacePreferences.cdrStripedRows} onChange={cdrStripedRows=>updateInterfacePreferences({cdrStripedRows})}/><InterfaceToggle label="Показывать секунды" checked={interfacePreferences.cdrShowSeconds} onChange={cdrShowSeconds=>updateInterfacePreferences({cdrShowSeconds})}/><InterfaceToggle label="Клик по номеру фильтрует историю" checked={interfacePreferences.cdrNumberClickFilter} onChange={cdrNumberClickFilter=>updateInterfacePreferences({cdrNumberClickFilter})}/><InterfaceToggle label="Часовой пояс браузера" description="Иначе отображается время сервера" checked={interfacePreferences.cdrUseBrowserTimezone} onChange={cdrUseBrowserTimezone=>updateInterfacePreferences({cdrUseBrowserTimezone})}/></div>
+                      </div>
+
+                      <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
+                        <h5 className="text-xs font-black text-slate-900">Попап активного звонка</h5>
+                        <div className="grid gap-3 sm:grid-cols-3"><label className="text-xs font-semibold text-slate-700">Размер<select value={interfacePreferences.livePopupSize} onChange={e=>updateInterfacePreferences({livePopupSize:e.target.value as InterfacePreferences['livePopupSize']})} className="mt-1 w-full rounded-lg border p-2"><option value="compact">Компактный</option><option value="standard">Стандартный</option></select></label><label className="text-xs font-semibold text-slate-700">Поисковик<select value={interfacePreferences.searchEngine} onChange={e=>updateInterfacePreferences({searchEngine:e.target.value as InterfacePreferences['searchEngine']})} className="mt-1 w-full rounded-lg border p-2"><option value="yandex">Яндекс</option><option value="google">Google</option></select></label><label className="text-xs font-semibold text-slate-700">Скрыть после завершения<select value={interfacePreferences.livePopupHideAfterEndSeconds} onChange={e=>updateInterfacePreferences({livePopupHideAfterEndSeconds:Number(e.target.value) as 0|3|5|10})} className="mt-1 w-full rounded-lg border p-2"><option value="0">Сразу</option><option value="3">Через 3 сек.</option><option value="5">Через 5 сек.</option><option value="10">Через 10 сек.</option></select></label></div>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <label className="text-xs font-semibold text-slate-700">Дополнительное поле — слот 1<select value={interfacePreferences.livePopupDirectoryFieldSlot1} onChange={e=>updateInterfacePreferences({livePopupDirectoryFieldSlot1:e.target.value})} className="mt-1 w-full rounded-lg border p-2">{livePopupDirectoryFieldOptions.map(option=><option key={option.key} value={option.key}>{option.label}</option>)}</select></label>
+                          <label className="text-xs font-semibold text-slate-700">Дополнительное поле — слот 2<select value={interfacePreferences.livePopupDirectoryFieldSlot2} onChange={e=>updateInterfacePreferences({livePopupDirectoryFieldSlot2:e.target.value})} className="mt-1 w-full rounded-lg border p-2">{livePopupDirectoryFieldOptions.map(option=><option key={option.key} value={option.key}>{option.label}</option>)}</select></label>
+                        </div>
+                        <div className="text-[10px] text-slate-500">Заголовок формируется автоматически из названий выбранных полей. Чтобы показать одно поле, во втором слоте выберите «Не показывать».</div>
+                        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3"><InterfaceToggle label="Показывать попап" checked={interfacePreferences.livePopupEnabled} onChange={livePopupEnabled=>updateInterfacePreferences({livePopupEnabled})}/><InterfaceToggle label="Дополнительные поля справочника" checked={interfacePreferences.livePopupShowCompanyPosition} onChange={livePopupShowCompanyPosition=>updateInterfacePreferences({livePopupShowCompanyPosition})}/><InterfaceToggle label="Время начала" checked={interfacePreferences.livePopupShowStartedAt} onChange={livePopupShowStartedAt=>updateInterfacePreferences({livePopupShowStartedAt})}/><InterfaceToggle label="Кнопки поиска" checked={interfacePreferences.livePopupShowSearch} onChange={livePopupShowSearch=>updateInterfacePreferences({livePopupShowSearch})}/><InterfaceToggle label="Запоминать положение" checked={interfacePreferences.livePopupRememberPosition} onChange={livePopupRememberPosition=>updateInterfacePreferences({livePopupRememberPosition})}/></div>
+                        <button type="button" onClick={()=>{localStorage.removeItem('pbxpuls_live_call_banner_pos');setLiveCallBannerPos({x:16,y:74})}} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">Сбросить положение попапа</button>
+                      </div>
+
+                      <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
+                        <h5 className="text-xs font-black text-slate-900">Навигация</h5>
+                        <div className="grid gap-2 sm:grid-cols-2"><InterfaceToggle label="Запоминать последний раздел" checked={interfacePreferences.rememberLastView} onChange={rememberLastView=>{updateInterfacePreferences({rememberLastView});if(!rememberLastView)localStorage.removeItem('asterisk_cdr_active_view')}}/><InterfaceToggle label="Развёрнутое меню при запуске" checked={interfacePreferences.sidebarExpanded} onChange={sidebarExpanded=>{updateInterfacePreferences({sidebarExpanded});setIsSidebarExpanded(sidebarExpanded)}}/><InterfaceToggle label="Показывать подписи меню" checked={interfacePreferences.showSidebarLabels} onChange={showSidebarLabels=>{updateInterfacePreferences({showSidebarLabels});if(showSidebarLabels)setIsSidebarExpanded(true)}}/><InterfaceToggle label="Справочник в новой вкладке" checked={interfacePreferences.directoryNewTab} onChange={directoryNewTab=>updateInterfacePreferences({directoryNewTab})}/></div>
+                      </div>
                     </div>
                   )}
                   {dbTestResult && (<div className={`p-3.5 border rounded-lg text-xs flex items-start gap-2 ${dbTestResult.success ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-blue-50 border-blue-200 text-blue-700'}`}><AlertCircle className={`h-4.5 w-4.5 shrink-0 mt-0.5 ${dbTestResult.success ? 'text-emerald-600' : 'text-blue-600'}`} /><span>{dbTestResult.message}</span></div>)}
@@ -8699,4 +8911,11 @@ export default function App() {
       )}
       </div></div>
   );
+}
+
+function InterfaceToggle({ label, description, checked, onChange }: { label: string; description?: string; checked: boolean; onChange: (checked: boolean) => void }) {
+  return <label className="flex cursor-pointer items-center justify-between gap-4 rounded-lg border border-slate-200 bg-white p-3">
+    <span><span className="block text-xs font-semibold text-slate-800">{label}</span>{description && <span className="mt-0.5 block text-[10px] text-slate-500">{description}</span>}</span>
+    <input type="checkbox" checked={checked} onChange={event => onChange(event.target.checked)} className="h-4 w-4 shrink-0 accent-blue-600" />
+  </label>;
 }

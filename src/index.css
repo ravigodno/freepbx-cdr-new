@@ -8,6 +8,20 @@ html.dark, html.dark body {
   color: #f1f5f9 !important; /* Slate 100 */
 }
 
+.cdr-density-compact td { padding-top: .5rem !important; padding-bottom: .5rem !important; }
+.cdr-density-comfortable td { padding-top: 1.25rem !important; padding-bottom: 1.25rem !important; }
+.cdr-text-90 { font-size: 90%; }
+.cdr-text-110 { font-size: 110%; }
+.pbxpuls-reduce-motion *, .pbxpuls-reduce-motion *::before, .pbxpuls-reduce-motion *::after {
+  animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important;
+}
+.pbxpuls-high-contrast { filter: contrast(1.12); }
+[data-pbxpuls-accent="indigo"] { --pbxpuls-accent: #4f46e5; }
+[data-pbxpuls-accent="emerald"] { --pbxpuls-accent: #059669; }
+[data-pbxpuls-accent="indigo"] .bg-blue-600, [data-pbxpuls-accent="emerald"] .bg-blue-600 { background-color: var(--pbxpuls-accent) !important; }
+[data-pbxpuls-accent="indigo"] .text-blue-600, [data-pbxpuls-accent="emerald"] .text-blue-600 { color: var(--pbxpuls-accent) !important; }
+[data-pbxpuls-accent="indigo"] .accent-blue-600, [data-pbxpuls-accent="emerald"] .accent-blue-600 { accent-color: var(--pbxpuls-accent) !important; }
+
 /* Base text color overrides when dark */
 html.dark .min-h-screen {
   background-color: #0f172a !important;

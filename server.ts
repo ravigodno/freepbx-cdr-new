@@ -55,6 +55,7 @@ import { authenticatePBXPulsSqlUser, compareLegacyUserWithSql, getAuthStorageMod
 import { getPBXPulsDbRuntimeStatus, isPBXPulsDbAvailable, queryPBXPulsDb, sanitizePBXPulsDbError } from './server/pbxpulsDb.js';
 import { getPBXPulsDbConfigLogFields } from './server/pbxpulsDbConfig.js';
 import { writePBXPulsSystemEvent } from './server/pbxpulsEvents.js';
+import { findLatestDtmfEndByLinkedId, recordDtmfEventSql } from './server/dtmfEventStorage.js';
 import { registerSiteFormRoutes } from './server/siteForms/router.js';
 import { SiteFormPullService } from './server/siteForms/pullService.js';
 import { upsertPBXPulsSetting } from './server/pbxpulsSettings.js';
@@ -221,58 +222,10 @@ const PORT = '3000';
 const NODE_ENV = process.env.NODE_ENV || 'production';
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
-const DTMF_EVENTS_FILE = path.join(DATA_DIR, 'dtmfEvents.json');
 
 // Ensure data directory exists
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-
-// DTMF events storage
-type DtmfEventRecord = {
-  ts: string;
-  linkedid: string;
-  uniqueid: string;
-  channel: string;
-  digit: string;
-  direction: string;
-  event: string;
-};
-
-function readDtmfEvents(): DtmfEventRecord[] {
-  try {
-    if (!fs.existsSync(DTMF_EVENTS_FILE)) return [];
-    const raw = fs.readFileSync(DTMF_EVENTS_FILE, 'utf8');
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch (e: any) {
-    console.error('[DTMF] read error:', e.message);
-    return [];
-  }
-}
-
-function writeDtmfEvents(events: DtmfEventRecord[]) {
-  try {
-    const maxAgeMs = 30 * 24 * 60 * 60 * 1000;
-    const cutoff = Date.now() - maxAgeMs;
-
-    const cleaned = (events || [])
-      .filter((e: DtmfEventRecord) => {
-        const t = Date.parse(e.ts || '');
-        return Number.isFinite(t) && t >= cutoff;
-      })
-      .slice(-100000);
-
-    fs.writeFileSync(DTMF_EVENTS_FILE, JSON.stringify(cleaned, null, 2));
-  } catch (e: any) {
-    console.error('[DTMF] write error:', e.message);
-  }
-}
-
-function appendDtmfEvent(event: DtmfEventRecord) {
-  const events = readDtmfEvents();
-  events.push(event);
-  writeDtmfEvents(events);
 }
 
 function parseAmiPacket(packet: string): Record<string, string> {
@@ -420,7 +373,7 @@ async function startDtmfAmiListener(settings: AppSettings) {
           const channel = ami.Channel || '';
 
           if (digit && linkedid) {
-            appendDtmfEvent({
+            void recordDtmfEventSql({
               ts: new Date().toISOString(),
               linkedid,
               uniqueid,
@@ -428,7 +381,7 @@ async function startDtmfAmiListener(settings: AppSettings) {
               digit,
               direction: ami.Direction || '',
               event: eventName,
-            });
+            }).catch((error: any) => console.error('[DTMF] MariaDB write failed:', sanitizePBXPulsDbError(error)));
 
             console.log(`[DTMF] ${eventName} digit=${digit} linkedid=${linkedid} channel=${channel}`);
           }
@@ -13470,6 +13423,14 @@ interface LiveCallBanner {
   trunkNumber?: string;
   displayNumber?: string;
   displayName?: string;
+  callerDisplayName?: string;
+  destinationDisplayName?: string;
+  callerCompany?: string;
+  callerPosition?: string;
+  destinationCompany?: string;
+  destinationPosition?: string;
+  callerDirectoryFields?: Record<string, unknown>;
+  destinationDirectoryFields?: Record<string, unknown>;
   subtitle?: string;
   contactType?: string;
   contactComment?: string;
@@ -13823,10 +13784,10 @@ function getLiveCallNumberCandidates(...values: any[]): string[] {
   return result;
 }
 
-function resolveLiveContact(number: string, directory: any[], settings: AppSettings): { name: string; type: string; comment: string; isSpam: boolean; isBlacklisted: boolean; company: string; position: string } {
+function resolveLiveContact(number: string, directory: any[], settings: AppSettings): { name: string; type: string; comment: string; isSpam: boolean; isBlacklisted: boolean; company: string; position: string; fields: Record<string, unknown> } {
   const normalized = normalizePhoneNumber(number, settings).replace(/\D/g, '');
   if (!normalized) {
-    return { name: '', type: '', comment: '', isSpam: false, isBlacklisted: false, company: '', position: '' };
+    return { name: '', type: '', comment: '', isSpam: false, isBlacklisted: false, company: '', position: '', fields: {} };
   }
 
   const getPhones = (entry: any): string[] => {
@@ -13836,7 +13797,10 @@ function resolveLiveContact(number: string, directory: any[], settings: AppSetti
       entry?.phone,
       entry?.phone1,
       entry?.phone2,
-      entry?.phone3
+      entry?.phone3,
+      entry?.internalExtension,
+      entry?.extension,
+      entry?.internal_number
     ];
 
     return Array.from(new Set(
@@ -13860,15 +13824,20 @@ function resolveLiveContact(number: string, directory: any[], settings: AppSetti
 
   const found = (directory || []).find((entry: any) => {
     return getPhones(entry).some(entryDigits => {
-      return entryDigits &&
-        (
-          entryDigits === normalized ||
-          entryDigits.endsWith(normalized) ||
-          normalized.endsWith(entryDigits)
-        );
+      if (!entryDigits) return false;
+      if (entryDigits === normalized) return true;
+      if (entryDigits.length <= 5 || normalized.length <= 5) return false;
+      return entryDigits.endsWith(normalized) || normalized.endsWith(entryDigits);
     });
   });
 
+  const fields = found ? {
+    company: found.company || '', position: found.position || '', department: found.department || '',
+    group: found.group || '', email: found.email || '', website: found.website || '', inn: found.inn || '',
+    kpp: found.kpp || '', ogrn: found.ogrn || '', address: found.address || '', comment: found.comment || '',
+    internalExtension: found.internalExtension || '', linkedExternalNumber: found.linkedExternalNumber || '',
+    responsibleUserId: found.responsibleUserId || '', tags: found.tags || [], ...(found.customFields || {})
+  } : {};
   return {
     name: found?.name || '',
     type: found?.type || '',
@@ -13876,7 +13845,8 @@ function resolveLiveContact(number: string, directory: any[], settings: AppSetti
     isSpam: found?.isSpam === true,
     isBlacklisted: found?.isBlacklisted === true,
     company: found?.company || '',
-    position: found?.position || ''
+    position: found?.position || '',
+    fields
   };
 }
 
@@ -14115,6 +14085,8 @@ function buildLiveCallBannerFromAmiChannels(channels: AmiBlock[], operatorExt: s
     const destinationNumber = routeSummary.direction === 'incoming'
       ? (routeSummary.answeredBy || routeSummary.queue || routeSummary.ringGroup || routeSummary.internalDestination)
       : selectedNumber;
+    const callerContact = resolveLiveContact(callerNumber, directory, settings);
+    const destinationContact = resolveLiveContact(destinationNumber, directory, settings);
     const baseBanner: LiveCallBanner = {
       active: true,
       direction: routeSummary.direction === 'unknown' ? direction : routeSummary.direction,
@@ -14131,6 +14103,14 @@ function buildLiveCallBannerFromAmiChannels(channels: AmiBlock[], operatorExt: s
       trunkNumber: routeSummary.trunk || directionResolution.trunkNumber,
       displayNumber: selectedNumber,
       displayName: contact.name || (routeSummary.direction === 'incoming' && routeSummary.externalCaller ? 'Внешний клиент' : ''),
+      callerDisplayName: callerContact.name,
+      destinationDisplayName: destinationContact.name,
+      callerCompany: callerContact.company,
+      callerPosition: callerContact.position,
+      destinationCompany: destinationContact.company,
+      destinationPosition: destinationContact.position,
+      callerDirectoryFields: callerContact.fields,
+      destinationDirectoryFields: destinationContact.fields,
       contactType: contact.type,
       contactComment: contact.comment,
       isSpam: contact.isSpam,
@@ -14141,7 +14121,7 @@ function buildLiveCallBannerFromAmiChannels(channels: AmiBlock[], operatorExt: s
       linkedid: first?.Linkedid || first?.Uniqueid || '',
       durationSec,
       durationText: liveFormatSeconds(durationSec),
-      startedAt: new Date().toLocaleTimeString('ru-RU', { hour12: false }),
+      startedAt: new Date(Date.now() - durationSec * 1000).toLocaleTimeString('ru-RU', { hour12: false }),
       connected,
       ringing
     };
@@ -14302,6 +14282,9 @@ async function buildLiveCallBannerPayload(
     ? evidenceNumber
     : (celDirection.internalCaller || banner.callerNumber || '');
   const contact = resolveLiveContact(evidenceNumber, directory, settings);
+  const callerContact = resolveLiveContact(callerNumber, directory, settings);
+  const destinationNumber = banner.direction === 'incoming' ? banner.destinationNumber : evidenceNumber;
+  const destinationContact = resolveLiveContact(destinationNumber, directory, settings);
   banner = {
     ...incomingRoute,
     number: evidenceNumber,
@@ -14309,12 +14292,20 @@ async function buildLiveCallBannerPayload(
     externalCallerNumber: banner.direction === 'incoming' ? evidenceNumber : '',
     internalCaller: banner.direction === 'incoming' ? '' : callerNumber,
     sourceNumber: callerNumber,
-    destinationNumber: banner.direction === 'incoming' ? banner.destinationNumber : evidenceNumber,
+    destinationNumber,
     dialedNumber: banner.direction === 'outgoing' ? evidenceNumber : '',
     targetNumber: banner.direction === 'incoming' ? banner.destinationNumber : evidenceNumber,
     internalNumber: banner.direction === 'internal' ? evidenceNumber : (banner.internalNumber || ''),
     displayNumber: evidenceNumber,
     displayName: contact.name,
+    callerDisplayName: callerContact.name,
+    destinationDisplayName: destinationContact.name,
+    callerCompany: callerContact.company,
+    callerPosition: callerContact.position,
+    destinationCompany: destinationContact.company,
+    destinationPosition: destinationContact.position,
+    callerDirectoryFields: callerContact.fields,
+    destinationDirectoryFields: destinationContact.fields,
     contactType: contact.type,
     contactComment: contact.comment,
     isSpam: contact.isSpam,
@@ -15338,13 +15329,11 @@ async function enrichFreePBXRoute(settings: any, legs: any[]) {
     const m = String(inboundIvrStep.destination || '').match(/^ivr-(\d+)/i);
     const ivrNumber = m?.[1] || '';
 
-    const realDtmf = readDtmfEvents()
-      .filter((e: any) =>
-        String(e.linkedid || '') === String(legs[0]?.linkedid || legs[0]?.uniqueid || '') &&
-        String(e.event || '') === 'DTMFEnd' &&
-        String(e.digit || '').trim()
-      )
-      .slice(-1)[0];
+    const realDtmf = await findLatestDtmfEndByLinkedId(String(legs[0]?.linkedid || legs[0]?.uniqueid || ''))
+      .catch((error: any) => {
+        console.error('[DTMF] MariaDB read failed:', sanitizePBXPulsDbError(error));
+        return null;
+      });
 
     routeSteps.push({
       type: 'ivr',

@@ -2080,8 +2080,53 @@ const MIGRATIONS: Migration[] = [
     description:'Allow one Bitrix Pull integration to collect leads and phone clicks from multiple Bitrix sites',
     statements:[],
     seed: seedBitrixMultisitePullSources
+  },
+  {
+    key:'20260812_082_dtmf_event_history',
+    description:'Persist AMI DTMF event history in PBXPuls MariaDB',
+    statements:[
+      `CREATE TABLE IF NOT EXISTS dtmf_events(
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        source_event_key CHAR(64) NOT NULL,
+        event_time DATETIME(3) NOT NULL,
+        linkedid VARCHAR(80) NOT NULL,
+        uniqueid VARCHAR(80) NOT NULL DEFAULT '',
+        channel VARCHAR(255) NOT NULL DEFAULT '',
+        digit VARCHAR(16) NOT NULL,
+        direction VARCHAR(32) NOT NULL DEFAULT '',
+        event_name ENUM('DTMFBegin','DTMFEnd') NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_dtmf_events_source(source_event_key),
+        KEY idx_dtmf_events_linked_time(linkedid,event_time),
+        KEY idx_dtmf_events_time(event_time)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+    ],
+    seed: seedLegacyDtmfEvents
   }
 ];
+
+async function seedLegacyDtmfEvents(connection: Connection): Promise<void> {
+  const legacyPath = path.join(process.cwd(), 'data', 'dtmfEvents.json');
+  if (!fs.existsSync(legacyPath)) return;
+  const parsed = JSON.parse(fs.readFileSync(legacyPath, 'utf8'));
+  if (!Array.isArray(parsed)) return;
+  for (const row of parsed) {
+    const ts = String(row?.ts || '').trim();
+    const linkedid = String(row?.linkedid || '').trim();
+    const digit = String(row?.digit || '').trim();
+    const eventName = String(row?.event || '').trim();
+    if (!Number.isFinite(Date.parse(ts)) || !linkedid || !digit || !['DTMFBegin','DTMFEnd'].includes(eventName)) continue;
+    const values = [ts, linkedid, String(row?.uniqueid || ''), String(row?.channel || ''), digit,
+      String(row?.direction || ''), eventName];
+    const sourceEventKey = crypto.createHash('sha256').update(values.join('|')).digest('hex');
+    await connection.execute(
+      `INSERT IGNORE INTO dtmf_events
+        (source_event_key,event_time,linkedid,uniqueid,channel,digit,direction,event_name)
+       VALUES (?,?,?,?,?,?,?,?)`,
+      [sourceEventKey, new Date(ts), ...values.slice(1)]
+    );
+  }
+}
 
 async function seedBitrixMultisitePullSources(connection: any): Promise<void> {
   const [columns]: any = await connection.query("SELECT column_name FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='site_form_pull_sources' AND column_name='selected_site_ids_json'");

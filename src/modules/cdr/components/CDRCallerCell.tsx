@@ -9,6 +9,7 @@ import {
 
 interface Props {
   callerName: string;
+  callerDirectoryName?: string;
   callerType: string;
   displayedSrc: string;
   copiedKey: string;
@@ -18,10 +19,13 @@ interface Props {
   handleCopy: (num: string, copiedKey?: string) => void;
   triggerClickToCall: (phone: string, name?: string) => void;
   openAddFromCall: (number: string, initialName?: string) => void;
+  filterCallsByNumber?: (number: string) => void;
+  openDirectoryByName?: (name: string) => void;
 }
 
 export default function CDRCallerCell({
   callerName,
+  callerDirectoryName = '',
   callerType,
   displayedSrc,
   copiedKey,
@@ -30,6 +34,8 @@ export default function CDRCallerCell({
   handleCopy,
   triggerClickToCall,
   openAddFromCall,
+  filterCallsByNumber = () => {},
+  openDirectoryByName = () => {},
 }: Props) {
   return (
     <td className="py-4 px-4 m-0">
@@ -37,13 +43,17 @@ export default function CDRCallerCell({
         <div className="flex items-center gap-1.5 flex-wrap">
           <span className="inline-flex items-center gap-1.5">
             <DirectoryTypeIcon type={callerType} className="h-4 w-4 text-slate-700 dark:text-slate-300" />
-            <span className={`font-bold text-xs ${
+            <button
+              type="button"
+              disabled={!callerDirectoryName}
+              onClick={() => callerDirectoryName && openDirectoryByName(callerDirectoryName)}
+              className={`text-left font-bold text-xs ${callerDirectoryName ? 'cursor-pointer hover:underline' : 'cursor-default'} ${
               isFound
                 ? 'text-red-800 dark:text-red-400'
                 : 'text-slate-800 dark:text-slate-150'
             }`}>
               {callerName}
-            </span>
+            </button>
           </span>
         </div>
 
@@ -60,9 +70,14 @@ export default function CDRCallerCell({
             )}
           </button>
 
-          <span className="font-bold text-slate-700 dark:text-slate-300 font-mono select-all text-xs">
+          <button
+            type="button"
+            onClick={() => filterCallsByNumber(displayedSrc)}
+            className="cursor-pointer font-mono text-xs font-bold text-slate-700 underline-offset-2 hover:text-blue-700 hover:underline dark:text-slate-300 dark:hover:text-blue-400"
+            title={`Показать историю звонков по номеру ${displayedSrc}`}
+          >
             {displayedSrc}
-          </span>
+          </button>
 
           <button
             onClick={() => triggerClickToCall(displayedSrc, callerName)}

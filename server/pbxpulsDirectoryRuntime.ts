@@ -328,10 +328,12 @@ async function selectDirectoryMetadataRows(contactIds: string[]): Promise<Map<st
 
   const placeholders = contactIds.map(() => '?').join(', ');
   const rows = await queryPBXPulsDb(
-    `SELECT contact_id, metadata_key, metadata_value, metadata_json, value
-     FROM directory_contact_metadata
-     WHERE contact_id IN (${placeholders})
-     ORDER BY contact_id, metadata_key`,
+    `SELECT m.contact_id, m.metadata_key, m.metadata_value, m.metadata_json, m.value,
+            f.field_key, f.show_in_search, f.is_visible, f.field_type
+     FROM directory_contact_metadata m
+     LEFT JOIN directory_custom_fields f ON f.id = m.field_id
+     WHERE m.contact_id IN (${placeholders})
+     ORDER BY m.contact_id, m.metadata_key`,
     contactIds
   ) as DirectorySqlMetadataRow[];
 
@@ -401,8 +403,12 @@ function buildDirectoryEntryFromSql(row: DirectorySqlContactRow, metadataRows: D
 
 function applyDirectoryMetadata(entry: DirectoryEntry, metadata: DirectorySqlMetadataRow): void {
   const key = safeText(metadata.metadata_key, 100);
-  if (!key) return;
   const value = parseDirectoryMetadataValue(metadata);
+  const customFieldKey = safeText(metadata.field_key, 100);
+  if (customFieldKey && Number(metadata.is_visible ?? 1) === 1) {
+    entry.customFields = { ...(entry.customFields || {}), [customFieldKey]: value };
+  }
+  if (!key) return;
 
   if (key === 'phones') {
     const phones = Array.isArray(value) ? value : [value];
