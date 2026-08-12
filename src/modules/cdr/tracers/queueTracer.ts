@@ -35,6 +35,21 @@ export function findQueueLeg(timeline: any[]): any | null {
   }) || null;
 }
 
+export function getQueueWaitSeconds(timeline: any[], answeredExt?: string): number {
+  const answeredDialLeg = (timeline || []).find((leg: any) =>
+    normalize(leg?.disposition).toUpperCase() === 'ANSWERED' &&
+    normalize(leg?.lastapp).toUpperCase() === 'DIAL' &&
+    normalize(leg?.dst) === normalize(answeredExt) &&
+    Number(leg?.billsec || 0) > 0
+  );
+
+  if (answeredDialLeg) {
+    return Math.max(0, Number(answeredDialLeg?.duration || 0) - Number(answeredDialLeg?.billsec || 0));
+  }
+
+  return Math.max(0, Number(findQueueLeg(timeline)?.duration || 0));
+}
+
 export function buildQueueStep(timeline: any[], answeredExt?: string): RouteStep | null {
   const queueLeg = findQueueLeg(timeline);
 
@@ -43,7 +58,7 @@ export function buildQueueStep(timeline: any[], answeredExt?: string): RouteStep
   }
 
   const queueNumber = getQueueNumberFromLeg(queueLeg);
-  const waitSeconds = Number(queueLeg?.duration || 0);
+  const waitSeconds = getQueueWaitSeconds(timeline, answeredExt);
 
   const dialedMembers = (timeline || [])
     .filter((leg: any) =>

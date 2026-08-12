@@ -1,6 +1,7 @@
 export {
   detectCallDirection,
   getAnsweredExtFromLegs,
+  getQueueWaitSecondsFromLegs,
 } from './callDetection';
 
 export {

@@ -98,7 +98,7 @@ import HealthReportTab from './modules/monitoring/tabs/monitoring/HealthReportTa
 import { DirectoryStatusIcon } from './modules/directory/components/DirectoryStatusIcon';
 import { DirectoryTextTooltip } from './modules/directory/components/DirectoryTextTooltip';
 import { PhonebookProfilesPanel } from './modules/directory/components/PhonebookProfilesPanel';
-import { fetchDirectory, fetchDirectoryAll, fetchDirectoryContact, saveDirectoryEntry, deleteDirectoryEntry, toggleDirectoryBlacklist, toggleDirectorySpam, previewDirectoryImport, previewDirectoryImportOwnership, previewDirectoryBulkDelete, applyDirectoryBulkDelete, createDirectoryImportJob, prepareDirectoryImportSource, deleteDirectoryImportSource, getDirectoryImportJob, cancelDirectoryImportJob, resumeDirectoryImportJob, previewDirectoryImportRollback, getDirectoryImportJobErrors, fetchDirectoryColumnSettings, saveMyDirectoryColumnSettings, resetMyDirectoryColumnSettings, saveGlobalDirectoryColumnSettings, resetGlobalDirectoryColumnSettings, fetchDirectoryCustomFields, createDirectoryCustomField, setDirectoryFavorite, type DirectoryImportPreparedSource, type DirectoryCustomFieldDefinition } from './modules/directory/services/directoryApi';
+import { fetchDirectory, fetchDirectoryAll, fetchDirectoryContact, saveDirectoryEntry, deleteDirectoryEntry, toggleDirectoryBlacklist, toggleDirectorySpam, previewDirectoryImport, previewDirectoryImportOwnership, previewDirectoryBulkDelete, applyDirectoryBulkDelete, createDirectoryImportJob, prepareDirectoryImportSource, deleteDirectoryImportSource, getDirectoryImportJob, cancelDirectoryImportJob, resumeDirectoryImportJob, previewDirectoryImportRollback, getDirectoryImportJobErrors, fetchDirectoryColumnSettings, saveMyDirectoryColumnSettings, resetMyDirectoryColumnSettings, saveGlobalDirectoryColumnSettings, resetGlobalDirectoryColumnSettings, fetchDirectoryCustomFields, createDirectoryCustomField, previewDirectoryCustomFieldUpdate, applyDirectoryCustomFieldUpdate, previewDirectoryCustomFieldDelete, applyDirectoryCustomFieldDelete, setDirectoryFavorite, type DirectoryImportPreparedSource, type DirectoryCustomFieldDefinition } from './modules/directory/services/directoryApi';
 import { calculateDirectoryImportDigest, getDirectoryImportDigestCapability, DIRECTORY_IMPORT_MAX_BYTES, isSupportedDirectoryImportFile, summarizeDirectoryImportSource, type DirectoryImportDigestStatus, type DirectoryImportSourceKind, type DirectoryImportSourceSummary } from './modules/directory/utils/directoryImportSource';
 import { applyDirectoryOwnershipPreview, buildDirectoryEffectiveRows, directoryImportPipelineSteps, getDirectoryImportActiveStep, getDirectoryImportDisabledReason, normalizeDirectoryEntriesForOwnership } from './modules/directory/utils/directoryImportPipeline';
 import { downloadDirectoryCsv, downloadDirectoryExcel } from './modules/directory/utils/directoryExport';
@@ -956,6 +956,7 @@ export default function App() {
   const [newDirectoryColumnType, setNewDirectoryColumnType] = useState<DirectoryCustomFieldDefinition['fieldType']>('string');
   const [newDirectoryColumnSearchable, setNewDirectoryColumnSearchable] = useState(false);
   const [isCreatingDirectoryColumn, setIsCreatingDirectoryColumn] = useState(false);
+  const [editingDirectoryColumnId, setEditingDirectoryColumnId] = useState<string | null>(null);
   const [selectedDirectoryVisibleColumns, setSelectedDirectoryVisibleColumns] = useState<DirectoryVisibleColumnKey[]>(loadDirectoryVisibleColumns);
 
   const [directoryColumnSettingsSource, setDirectoryColumnSettingsSource] = useState<DirectoryColumnSettingsSource>('system');
@@ -5041,9 +5042,12 @@ export default function App() {
   useEffect(() => {
     if ((activeView === 'directory' || (activeView === 'settings' && (settingsTab === 'directory' || settingsTab === 'appearance'))) && session?.token) {
       loadDirectoryColumnSettingsFromApi();
-      loadDirectoryCustomFieldsFromApi();
     }
   }, [activeView, settingsTab, session?.token]);
+
+  useEffect(() => {
+    if (session?.token) loadDirectoryCustomFieldsFromApi();
+  }, [session?.token]);
 
   const handleCreateDirectoryCustomColumn = async () => {
     if (!session?.token || !canManageGlobalDirectoryColumns || newDirectoryColumnName.trim().length < 2) return;
@@ -5071,6 +5075,55 @@ export default function App() {
     } finally {
       setIsCreatingDirectoryColumn(false);
     }
+  };
+
+  const resetDirectoryCustomColumnEditor = () => {
+    setEditingDirectoryColumnId(null);
+    setNewDirectoryColumnName('');
+    setNewDirectoryColumnType('string');
+    setNewDirectoryColumnSearchable(false);
+  };
+
+  const startDirectoryCustomColumnEdit = (field: DirectoryCustomFieldDefinition) => {
+    setEditingDirectoryColumnId(field.id);
+    setNewDirectoryColumnName(field.fieldName);
+    setNewDirectoryColumnType(field.fieldType);
+    setNewDirectoryColumnSearchable(Boolean(Number(field.showInSearch)));
+    setDirectoryColumnSettingsStatus('');
+  };
+
+  const handleUpdateDirectoryCustomColumn = async () => {
+    if (!session?.token || !editingDirectoryColumnId || newDirectoryColumnName.trim().length < 2) return;
+    setIsCreatingDirectoryColumn(true);
+    setDirectoryColumnSettingsStatus('');
+    try {
+      const input = { fieldName: newDirectoryColumnName.trim(), fieldType: newDirectoryColumnType, showInSearch: newDirectoryColumnSearchable };
+      const preview = await previewDirectoryCustomFieldUpdate(session.token, editingDirectoryColumnId, input);
+      const warning = preview.incompatibleCount > 0 ? `\nНесовместимых с новым типом значений: ${preview.incompatibleCount}. Значения сохранятся, но могут отображаться некорректно.` : '';
+      if (!window.confirm(`Изменить столбец «${preview.current.fieldName}»?\nЗаполненных значений: ${preview.valueCount}.${warning}`)) return;
+      const response = await applyDirectoryCustomFieldUpdate(session.token, editingDirectoryColumnId, input, preview.previewToken, preview.incompatibleCount > 0);
+      setDirectoryCustomFields(previous => previous.map(field => field.id === editingDirectoryColumnId ? response.item : field));
+      resetDirectoryCustomColumnEditor();
+      setDirectoryColumnSettingsStatus(`Столбец «${response.item.fieldName}» изменён.`);
+    } catch (error: any) {
+      setDirectoryColumnSettingsStatus(error?.message || 'Не удалось изменить пользовательский столбец');
+    } finally { setIsCreatingDirectoryColumn(false); }
+  };
+
+  const handleDeleteDirectoryCustomColumn = async (field: DirectoryCustomFieldDefinition) => {
+    if (!session?.token) return;
+    setDirectoryColumnSettingsStatus('');
+    try {
+      const preview = await previewDirectoryCustomFieldDelete(session.token, field.id);
+      if (!window.confirm(`Удалить столбец «${field.fieldName}»?\nБудет удалено заполненных значений: ${preview.valueCount}. Это действие нельзя отменить.`)) return;
+      const response = await applyDirectoryCustomFieldDelete(session.token, field.id, preview.previewToken);
+      const customKey = `custom:${response.fieldKey}` as DirectoryCustomColumnKey;
+      setDirectoryCustomFields(previous => previous.filter(item => item.id !== field.id));
+      setSelectedDirectoryVisibleColumns(previous => previous.filter(key => key !== customKey));
+      setDraftDirectoryVisibleColumns(previous => previous.filter(key => key !== customKey));
+      if (editingDirectoryColumnId === field.id) resetDirectoryCustomColumnEditor();
+      setDirectoryColumnSettingsStatus(`Столбец «${field.fieldName}» и ${response.deletedValues} заполненных значений удалены.`);
+    } catch (error: any) { setDirectoryColumnSettingsStatus(error?.message || 'Не удалось удалить пользовательский столбец'); }
   };
 
   const saveDirectoryColumnSettings = async () => {
@@ -8367,18 +8420,29 @@ export default function App() {
 
                         {canManageGlobalDirectoryColumns && (
                           <div className="mt-4 rounded-xl border border-blue-200 bg-blue-50 p-3">
-                            <h5 className="text-xs font-black text-blue-900">Добавить свой столбец для всех</h5>
+                            <h5 className="text-xs font-black text-blue-900">{editingDirectoryColumnId ? 'Редактировать свой столбец' : 'Добавить свой столбец для всех'}</h5>
                             <p className="mt-1 text-[11px] text-blue-700">Определение создаётся в существующей модели дополнительных полей справочника.</p>
                             <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-[minmax(180px,1fr)_180px_auto]">
                               <input value={newDirectoryColumnName} onChange={event => setNewDirectoryColumnName(event.target.value)} maxLength={100} placeholder="Название столбца" className="rounded-lg border border-blue-200 bg-white px-3 py-2 text-xs" />
                               <select value={newDirectoryColumnType} onChange={event => setNewDirectoryColumnType(event.target.value as DirectoryCustomFieldDefinition['fieldType'])} className="rounded-lg border border-blue-200 bg-white px-3 py-2 text-xs">
                                 <option value="string">Строка</option><option value="text">Длинный текст</option><option value="number">Число</option><option value="date">Дата</option><option value="boolean">Да / нет</option><option value="phone">Телефон</option><option value="email">Email</option>
                               </select>
-                              <button type="button" onClick={handleCreateDirectoryCustomColumn} disabled={isCreatingDirectoryColumn || newDirectoryColumnName.trim().length < 2} className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">
-                                {isCreatingDirectoryColumn ? 'Добавление…' : 'Добавить для всех'}
+                              <button type="button" onClick={editingDirectoryColumnId ? handleUpdateDirectoryCustomColumn : handleCreateDirectoryCustomColumn} disabled={isCreatingDirectoryColumn || newDirectoryColumnName.trim().length < 2} className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">
+                                {isCreatingDirectoryColumn ? 'Сохранение…' : editingDirectoryColumnId ? 'Проверить и сохранить' : 'Добавить для всех'}
                               </button>
                             </div>
                             <label className="mt-2 flex items-center gap-2 text-[11px] font-semibold text-blue-800"><input type="checkbox" checked={newDirectoryColumnSearchable} onChange={event => setNewDirectoryColumnSearchable(event.target.checked)} className="rounded border-blue-300 text-blue-600" />Учитывать поле в глобальном поиске</label>
+                            {editingDirectoryColumnId && <button type="button" onClick={resetDirectoryCustomColumnEditor} className="mt-2 text-[11px] font-bold text-blue-700 underline">Отменить редактирование</button>}
+
+                            {directoryCustomFields.some(field => Boolean(field.createdBy)) && <div className="mt-4 space-y-2 border-t border-blue-200 pt-3">
+                              <div className="text-[11px] font-black uppercase tracking-wide text-blue-800">Созданные столбцы</div>
+                              {directoryCustomFields.filter(field => Boolean(field.createdBy)).map(field => <div key={field.id} className="flex items-center gap-2 rounded-lg border border-blue-200 bg-white px-3 py-2 text-xs">
+                                <span className="min-w-0 flex-1 truncate font-semibold text-slate-700">{field.fieldName}</span>
+                                <span className="text-[10px] text-slate-400">{field.fieldType}</span>
+                                <button type="button" onClick={() => startDirectoryCustomColumnEdit(field)} className="rounded p-1.5 text-blue-700 hover:bg-blue-50" title="Редактировать"><Edit2 className="h-3.5 w-3.5" /></button>
+                                <button type="button" onClick={() => void handleDeleteDirectoryCustomColumn(field)} className="rounded p-1.5 text-rose-700 hover:bg-rose-50" title="Удалить"><Trash2 className="h-3.5 w-3.5" /></button>
+                              </div>)}
+                            </div>}
                           </div>
                         )}
 

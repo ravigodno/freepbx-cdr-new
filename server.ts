@@ -6,6 +6,7 @@ import {
   extractRingGroupIdsFromLegs,
   analyzeRingGroups,
   getAnsweredExtFromLegs,
+  getQueueWaitSecondsFromLegs,
   analyzeOutboundRoute
 } from './server/freepbx/routeBuilder';
 import express, { Request, Response, NextFunction } from 'express';
@@ -189,6 +190,7 @@ import { registerNotificationRoutes } from './server/notifications/router.js';
 import { findUnreturnedMissedCalls } from './server/notifications/missedCallDetector.js';
 import { calculateAnsweredIncomingMetrics } from './server/reportIncomingMetrics.js';
 import { writePBXPulsAuditLog } from './server/pbxpulsEvents.js';
+import { registerDirectoryCustomFieldRoutes } from './server/directoryCustomFields/router.js';
 import { mergeDeviceNetworkIdentity, readIpNeighborMacs } from './server/deviceNetworkIdentity.js';
 import { getLatestRtcpQuality, qualityVariableForChannel, recordAsteriskRtcpQuality } from './server/rtcpQualityCollector.js';
 import { voiceHash } from './server/ai-platform/voice/voiceEncryption.js';
@@ -11716,7 +11718,7 @@ app.get('/api/directory/custom-fields', requireAuth(), async (req, res) => {
     const rows = await queryPBXPulsDb(
       `SELECT id,field_key AS fieldKey,field_name AS fieldName,field_type AS fieldType,
               is_required AS isRequired,is_visible AS isVisible,show_in_card AS showInCard,
-              show_in_search AS showInSearch,sort_order AS sortOrder
+              show_in_search AS showInSearch,sort_order AS sortOrder,created_by AS createdBy
        FROM directory_custom_fields
        WHERE entity_type='directory_contact' AND is_visible=1
        ORDER BY sort_order,field_name,id`
@@ -11747,11 +11749,17 @@ app.post('/api/directory/custom-fields', requireAuth(), async (req, res) => {
       [id, fieldKey, fieldName, fieldType, req.body?.showInSearch === true ? 1 : 0, createdBy]
     );
     res.status(201).json({
-      item: { id, fieldKey, fieldName, fieldType, isRequired: 0, isVisible: 1, showInCard: 1, showInSearch: req.body?.showInSearch === true ? 1 : 0, sortOrder: 100 }
+      item: { id, fieldKey, fieldName, fieldType, isRequired: 0, isVisible: 1, showInCard: 1, showInSearch: req.body?.showInSearch === true ? 1 : 0, sortOrder: 100, createdBy }
     });
   } catch (error: any) {
     res.status(500).json({ error: sanitizePBXPulsDbError(error) || 'Не удалось создать пользовательский столбец' });
   }
+});
+
+registerDirectoryCustomFieldRoutes(app, {
+  requireAuth,
+  canManage: canManageGlobalDirectoryColumns,
+  secret: JWT_SECRET
 });
 
 app.post('/api/directory/column-settings/me', requireAuth(), async (req, res) => {
@@ -15384,7 +15392,7 @@ async function enrichFreePBXRoute(settings: any, legs: any[]) {
       details: {
         queueNumber,
         strategy: '',
-        waitTime: queueLeg.duration || 0,
+        waitTime: getQueueWaitSecondsFromLegs(legs, answeredExt),
         rawDestination: queueLeg.dst || '',
         rawLastData: queueLeg.lastdata || '',
       },

@@ -46,6 +46,7 @@ export interface DirectoryCustomFieldDefinition {
   showInCard: number | boolean;
   showInSearch: number | boolean;
   sortOrder: number;
+  createdBy?: string | null;
 }
 
 async function parseDirectorySettingsResponse(resp: Response, fallbackError: string) {
@@ -460,6 +461,20 @@ export async function createDirectoryCustomField(token: string, input: { fieldNa
   });
   return parseDirectorySettingsResponse(resp, 'Не удалось создать пользовательский столбец');
 }
+
+export type DirectoryCustomFieldInput = { fieldName: string; fieldType: DirectoryCustomFieldDefinition['fieldType']; showInSearch: boolean };
+
+async function customFieldAction(token: string, fieldId: string, action: string, body: Record<string, unknown> = {}) {
+  const resp = await fetch(`/api/directory/custom-fields/${encodeURIComponent(fieldId)}/${action}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(body)
+  });
+  return parseDirectorySettingsResponse(resp, 'Не удалось изменить пользовательский столбец');
+}
+
+export const previewDirectoryCustomFieldUpdate = (token: string, fieldId: string, input: DirectoryCustomFieldInput) => customFieldAction(token, fieldId, 'update-preview', input);
+export const applyDirectoryCustomFieldUpdate = (token: string, fieldId: string, input: DirectoryCustomFieldInput, previewToken: string, confirmIncompatible: boolean) => customFieldAction(token, fieldId, 'update-apply', { ...input, previewToken, confirmIncompatible });
+export const previewDirectoryCustomFieldDelete = (token: string, fieldId: string) => customFieldAction(token, fieldId, 'delete-preview');
+export const applyDirectoryCustomFieldDelete = (token: string, fieldId: string, previewToken: string) => customFieldAction(token, fieldId, 'delete-apply', { previewToken });
 
 export async function saveMyDirectoryColumnSettings(token: string, visibleColumns: string[]): Promise<DirectoryColumnSettingsResponse> {
   const resp = await fetch('/api/directory/column-settings/me', {

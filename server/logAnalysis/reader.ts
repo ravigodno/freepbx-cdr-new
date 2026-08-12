@@ -7,7 +7,9 @@ import { sanitizeLogText } from './redaction.js';
 import { parseLogLine } from './parsers.js';
 import type { LogCursor, LogReadResult, LogSourceDefinition } from './types.js';
 
-const MAX_CHUNK_BYTES = 256 * 1024; const MAX_LINES = 2000; const MAX_LINE = 8000;
+// Read logs incrementally. Large first-run chunks used to create thousands of
+// individual MariaDB writes and kept the monitoring HTTP request open for a minute.
+const MAX_CHUNK_BYTES = 16 * 1024; const MAX_LINES = 100; const MAX_LINE = 8000;
 const hash = (value:string) => crypto.createHash('sha256').update(value).digest('hex');
 const ROTATED_SUFFIX=/(?:\.\d+|[-.]\d{8}|-\d{6,14})(?:\.gz)?$/;
 
@@ -36,7 +38,7 @@ export async function readAllowedLogFile(sourceKey: string, cursor?: Partial<Log
 
 export async function readAllowedJournal(source: LogSourceDefinition, cursor?: Partial<LogCursor>): Promise<{lines:string[];nextCursor:LogCursor;bytesRead:number;durationMs:number}> {
   if(source.sourceType!=='journald'||!source.journalUnit)throw new Error('Некорректный journald source'); const started=Date.now();
-  const args=['-u',source.journalUnit,'--no-pager','-o','json','-n','1000']; if(cursor?.journalCursor)args.push('--after-cursor',cursor.journalCursor);
+  const args=['-u',source.journalUnit,'--no-pager','-o','json','-n',String(MAX_LINES)]; if(cursor?.journalCursor)args.push('--after-cursor',cursor.journalCursor);
   else args.push('--since','15 minutes ago'); const result=await runSecurityCommand('journalctl',args,8000); if(!result.ok)throw new Error(result.stderr||'journald недоступен');
   const rows=result.stdout.split(/\r?\n/).filter(Boolean).slice(-MAX_LINES);let journalCursor=cursor?.journalCursor;const lines:string[]=[];
   for(const row of rows){try{const parsed=JSON.parse(row);journalCursor=parsed.__CURSOR||journalCursor;lines.push(`${parsed.__REALTIME_TIMESTAMP||''} ${parsed.SYSLOG_IDENTIFIER||parsed._COMM||''}[${parsed._PID||''}]: ${parsed.MESSAGE||''}`);}catch{lines.push(row);}}

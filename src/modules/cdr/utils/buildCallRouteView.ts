@@ -1,7 +1,7 @@
 import { buildFollowMeStep } from '../tracers/followMeTracer';
 import { buildAnnouncementStep } from '../tracers/announcementTracer';
 import { buildTimeConditionStep } from '../tracers/timeConditionTracer';
-import { buildQueueStep } from '../tracers/queueTracer';
+import { buildQueueStep, getQueueWaitSeconds } from '../tracers/queueTracer';
 import { RouteView } from '../types/callRoute';
 function getExtFromChannel(value: any): string {
   const m = String(value || '').match(/\/(\d{2,6})-/);
@@ -86,11 +86,7 @@ export function buildCallRouteView(chronologyData: any): RouteView {
     .filter(Boolean)
     .filter((ext: string) => ext !== String(answeredExt));
 
-  const queueWaitLeg = timeline.find((t: any) =>
-    String(t.dcontext || '').toLowerCase() === 'ext-queues' ||
-    String(t.lastapp || '').toLowerCase() === 'queue'
-  );
-  const queueWaitSeconds = Number(queueWaitLeg?.duration || 0);
+  const queueWaitSeconds = queueStep ? getQueueWaitSeconds(timeline, answeredExt) : 0;
   const queueWaitText = queueWaitSeconds ? ` Ожидание в очереди: ${queueWaitSeconds} сек.` : '';
 
   const directInboundExt =
