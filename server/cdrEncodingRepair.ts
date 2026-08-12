@@ -9,7 +9,8 @@ const run = promisify(execFile);
 const ODBC_INI = '/etc/odbc.ini';
 const ODBCINST_INI = '/etc/odbcinst.ini';
 const PREVIEW_TTL_MS = 10 * 60_000;
-const previews = new Map<string, { user: string; expiresAt: number; sourceHash: string; actions: string[] }>();
+type PackageManager = 'yum' | 'apt-get' | null;
+const previews = new Map<string, { user: string; expiresAt: number; sourceHash: string; actions: string[]; installRequired: boolean; packageManager: PackageManager; packageName: string }>();
 
 type IniSection = Record<string, string>;
 
@@ -17,7 +18,7 @@ export type CdrEncodingStatus = {
   state: 'healthy' | 'repairable' | 'manual_required' | 'unsupported';
   message: string;
   os: { id: string; version: string; supported: boolean };
-  connector: { mariaDbInstalled: boolean; mysqlInstalled: boolean };
+  connector: { mariaDbInstalled: boolean; mysqlInstalled: boolean; installAvailable: boolean; packageManager: PackageManager; packageName: string };
   driver: { registered: boolean; libraryPath: string; libraryExists: boolean };
   dsn: { exists: boolean; driver: string; charset: string };
   checks: Array<{ key: string; ok: boolean; label: string }>;
@@ -65,9 +66,29 @@ function configHash(source: string): string {
   return crypto.createHash('sha256').update(source).digest('hex');
 }
 
-async function packageInstalled(name: string): Promise<boolean> {
-  try { await run('rpm', ['-q', name], { timeout: 5000, maxBuffer: 64 * 1024 }); return true; }
+async function packageInstalled(name: string, manager: PackageManager): Promise<boolean> {
+  if (!manager) return false;
+  try {
+    if (manager === 'yum') await run('/usr/bin/rpm', ['-q', name], { timeout: 5000, maxBuffer: 64 * 1024 });
+    else await run('/usr/bin/dpkg-query', ['-W', '-f=${Status}', name], { timeout: 5000, maxBuffer: 64 * 1024 });
+    return true;
+  }
   catch { return false; }
+}
+
+function resolvePackageManager(os: Record<string, string>, available = {
+  yum: fs.existsSync('/usr/bin/yum'),
+  aptGet: fs.existsSync('/usr/bin/apt-get'),
+  dpkgQuery: fs.existsSync('/usr/bin/dpkg-query')
+}): { manager: PackageManager; packageName: string; supported: boolean } {
+  const family = `${os.ID || ''} ${os.ID_LIKE || ''}`.toLowerCase();
+  if (/(sangoma|centos|rhel|fedora)/.test(family) && available.yum) {
+    return { manager: 'yum', packageName: 'mariadb-connector-odbc', supported: true };
+  }
+  if (/(debian|ubuntu)/.test(family) && available.aptGet && available.dpkgQuery) {
+    return { manager: 'apt-get', packageName: 'odbc-mariadb', supported: true };
+  }
+  return { manager: null, packageName: '', supported: false };
 }
 
 function readOsRelease(): Record<string, string> {
@@ -81,9 +102,13 @@ function readOsRelease(): Record<string, string> {
 
 export async function inspectCdrEncoding(): Promise<CdrEncodingStatus> {
   const os = readOsRelease();
-  const supported = ['sangoma', 'centos', 'rhel'].includes(String(os.ID || '').toLowerCase()) && String(os.VERSION_ID || '').startsWith('7');
+  const packageTarget = resolvePackageManager(os);
+  const supported = packageTarget.supported;
   const [mariaDbInstalled, mysqlInstalled] = await Promise.all([
-    packageInstalled('mariadb-connector-odbc'), packageInstalled('mysql-connector-odbc')
+    packageInstalled(packageTarget.packageName, packageTarget.manager),
+    packageTarget.manager === 'yum'
+      ? packageInstalled('mysql-connector-odbc', packageTarget.manager)
+      : packageInstalled('libmyodbc', packageTarget.manager)
   ]);
   const odbc = fs.existsSync(ODBC_INI) ? fs.readFileSync(ODBC_INI, 'utf8') : '';
   const drivers = fs.existsSync(ODBCINST_INI) ? fs.readFileSync(ODBCINST_INI, 'utf8') : '';
@@ -94,21 +119,24 @@ export async function inspectCdrEncoding(): Promise<CdrEncodingStatus> {
   const libraryExists = Boolean(libraryPath && fs.existsSync(libraryPath));
   const dsnDriver = String(dsn?.driver || '');
   const charset = String(dsn?.charset || '');
+  const driverUsable = registered && libraryExists;
+  const installAvailable = supported && Boolean(packageTarget.manager && packageTarget.packageName);
+  const effectiveMariaDbInstalled = mariaDbInstalled || driverUsable;
   const checks = [
-    { key: 'mariadb_package', ok: mariaDbInstalled, label: 'MariaDB ODBC установлен' },
+    { key: 'mariadb_package', ok: effectiveMariaDbInstalled, label: 'MariaDB ODBC доступен' },
     { key: 'mariadb_driver', ok: registered && libraryExists, label: 'Драйвер MariaDB зарегистрирован' },
     { key: 'cdr_dsn', ok: Boolean(dsn), label: 'DSN MySQL-asteriskcdrdb найден' },
     { key: 'dsn_driver', ok: dsnDriver.toLowerCase() === 'mariadb', label: 'CDR использует драйвер MariaDB' },
     { key: 'charset', ok: /^utf-?8(?:mb4)?$/i.test(charset), label: 'Для CDR задан UTF-8' }
   ];
-  const healthy = checks.every(check => check.ok);
-  const repairable = supported && mariaDbInstalled && registered && libraryExists && Boolean(dsn);
+  const healthy = driverUsable && Boolean(dsn) && dsnDriver.toLowerCase() === 'mariadb' && /^utf-?8(?:mb4)?$/i.test(charset);
+  const repairable = supported && Boolean(dsn) && (driverUsable || installAvailable);
   const state = healthy ? 'healthy' : repairable ? 'repairable' : supported ? 'manual_required' : 'unsupported';
   return {
     state,
     message: healthy ? 'Кодировка CDR настроена правильно' : repairable ? 'Конфигурацию DSN можно безопасно исправить' : supported ? 'Требуется ручная установка MariaDB ODBC' : 'Автоматическое исправление для этой ОС не поддерживается',
     os: { id: String(os.ID || 'unknown'), version: String(os.VERSION_ID || ''), supported },
-    connector: { mariaDbInstalled, mysqlInstalled },
+    connector: { mariaDbInstalled: effectiveMariaDbInstalled, mysqlInstalled, installAvailable, packageManager: packageTarget.manager, packageName: packageTarget.packageName },
     driver: { registered, libraryPath, libraryExists },
     dsn: { exists: Boolean(dsn), driver: dsnDriver, charset }, checks, secretsMasked: true
   };
@@ -117,22 +145,50 @@ export async function inspectCdrEncoding(): Promise<CdrEncodingStatus> {
 async function createPreview(user: string) {
   const status = await inspectCdrEncoding();
   const source = fs.existsSync(ODBC_INI) ? fs.readFileSync(ODBC_INI, 'utf8') : '';
-  const actions = status.state === 'repairable' ? ['Создать резервную копию /etc/odbc.ini', 'Установить driver=MariaDB для MySQL-asteriskcdrdb', 'Установить Charset=utf8 для MySQL-asteriskcdrdb'] : [];
+  const installRequired = !(status.driver.registered && status.driver.libraryExists);
+  const actions = status.state === 'repairable' ? [
+    ...(installRequired ? [`Установить пакет ${status.connector.packageName} через ${status.connector.packageManager} без удаления других пакетов`] : []),
+    'Создать резервную копию /etc/odbc.ini',
+    'Установить driver=MariaDB для MySQL-asteriskcdrdb',
+    'Установить Charset=utf8 для MySQL-asteriskcdrdb',
+    'Повторно проверить драйвер, DSN и UTF-8'
+  ] : [];
   const previewId = crypto.randomUUID();
   const expiresAt = Date.now() + PREVIEW_TTL_MS;
-  previews.set(previewId, { user, expiresAt, sourceHash: configHash(source), actions });
+  previews.set(previewId, { user, expiresAt, sourceHash: configHash(source), actions, installRequired, packageManager: status.connector.packageManager, packageName: status.connector.packageName });
   return { previewId, expiresAt: new Date(expiresAt).toISOString(), status, actions, applyAllowed: status.state === 'repairable', restartRequired: status.state === 'repairable' };
 }
 
 async function applyPreview(previewId: string, user: string) {
   const preview = previews.get(previewId);
   if (!preview || preview.user !== user || preview.expiresAt <= Date.now()) throw new Error('Предпросмотр устарел. Выполните проверку повторно.');
-  const status = await inspectCdrEncoding();
+  let status = await inspectCdrEncoding();
   if (status.state !== 'repairable') throw new Error(status.state === 'healthy' ? 'Исправление уже применено' : 'Автоматическое исправление недоступно');
   const stat = fs.lstatSync(ODBC_INI);
   if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Небезопасный тип /etc/odbc.ini');
   const source = fs.readFileSync(ODBC_INI, 'utf8');
   if (configHash(source) !== preview.sourceHash) throw new Error('Конфигурация изменилась после preview. Повторите проверку.');
+  let packageInstalledByApply = false;
+  if (preview.installRequired) {
+    if (!status.connector.installAvailable) throw new Error('Автоматическая установка MariaDB ODBC недоступна на этой системе');
+    try {
+      if (preview.packageManager === 'yum' && preview.packageName === 'mariadb-connector-odbc') {
+        await run('/usr/bin/yum', ['-y', 'install', preview.packageName], { timeout: 180_000, maxBuffer: 3 * 1024 * 1024 });
+      } else if (preview.packageManager === 'apt-get' && preview.packageName === 'odbc-mariadb') {
+        const aptOptions = { timeout: 180_000, maxBuffer: 3 * 1024 * 1024, env: { ...process.env, DEBIAN_FRONTEND: 'noninteractive' } };
+        await run('/usr/bin/apt-get', ['update'], aptOptions);
+        await run('/usr/bin/apt-get', ['-y', 'install', preview.packageName], aptOptions);
+      } else {
+        throw new Error('Неподдерживаемый пакетный менеджер в preview');
+      }
+      packageInstalledByApply = true;
+    } catch (error: any) {
+      throw new Error(`Не удалось установить MariaDB ODBC: ${String(error?.code || 'yum_failed').slice(0, 80)}`);
+    }
+    status = await inspectCdrEncoding();
+    if (!(status.driver.registered && status.driver.libraryExists)) throw new Error('Пакет установлен, но драйвер MariaDB не зарегистрирован');
+    if (configHash(fs.readFileSync(ODBC_INI, 'utf8')) !== preview.sourceHash) throw new Error('Установка пакета изменила DSN. Выполните проверку повторно.');
+  }
   let next = replaceIniValue(source, 'MySQL-asteriskcdrdb', 'driver', 'MariaDB');
   next = replaceIniValue(next, 'MySQL-asteriskcdrdb', 'Charset', 'utf8');
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -143,7 +199,9 @@ async function applyPreview(previewId: string, user: string) {
   fs.chownSync(temporaryPath, stat.uid, stat.gid);
   fs.renameSync(temporaryPath, ODBC_INI);
   previews.delete(previewId);
-  return { success: true, backupPath, status: await inspectCdrEncoding(), restartRequired: true, restartPerformed: false };
+  const finalStatus = await inspectCdrEncoding();
+  if (finalStatus.state !== 'healthy') throw new Error('Исправление применено не полностью; проверьте ODBC вручную');
+  return { success: true, backupPath, packageInstalled: packageInstalledByApply, status: finalStatus, restartRequired: true, restartPerformed: false };
 }
 
 export function registerCdrEncodingRepairRoutes(app: Express, deps: { requireAuth: any; checkPermission: (req: Request, permission: string) => Promise<boolean> }) {
@@ -176,4 +234,4 @@ export function registerCdrEncodingRepairRoutes(app: Express, deps: { requireAut
   });
 }
 
-export const cdrEncodingRepairInternals = { parseIniSection, replaceIniValue };
+export const cdrEncodingRepairInternals = { parseIniSection, replaceIniValue, resolvePackageManager };

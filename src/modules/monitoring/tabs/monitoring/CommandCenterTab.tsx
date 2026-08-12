@@ -242,7 +242,7 @@ interface HistoryItem {
 type CdrEncodingStatus = {
   state: 'healthy' | 'repairable' | 'manual_required' | 'unsupported';
   message: string;
-  connector: { mariaDbInstalled: boolean; mysqlInstalled: boolean };
+  connector: { mariaDbInstalled: boolean; mysqlInstalled: boolean; installAvailable: boolean; packageManager: 'yum' | 'apt-get' | null; packageName: string };
   driver: { registered: boolean; libraryExists: boolean };
   dsn: { exists: boolean; driver: string; charset: string };
   checks: Array<{ key: string; ok: boolean; label: string }>;
@@ -448,7 +448,7 @@ export default function CommandCenterTab({ token, onNavigate }: CommandCenterTab
 
   const applyCdrEncodingRepair = async () => {
     if (!cdrEncodingPreview?.applyAllowed) return;
-    if (!window.confirm('Будет создан backup /etc/odbc.ini и исправлены только driver/Charset секции MySQL-asteriskcdrdb. Продолжить?')) return;
+    if (!window.confirm(`Будут выполнены только действия из preview:\n\n${cdrEncodingPreview.actions.map(action => `• ${action}`).join('\n')}\n\nFreePBX автоматически не перезапускается. Продолжить?`)) return;
     setCdrEncodingLoading(true);
     try {
       const response = await fetch('/api/monitoring/cdr-encoding/apply', {
@@ -459,7 +459,7 @@ export default function CommandCenterTab({ token, onNavigate }: CommandCenterTab
       if (!response.ok) throw new Error(data.error || 'Не удалось применить исправление');
       setCdrEncodingStatus(data.status);
       setCdrEncodingPreview(null);
-      setCdrEncodingMessage(`Исправление применено, backup: ${data.backupPath}. Перезапуск FreePBX выполните отдельно в согласованное окно.`);
+      setCdrEncodingMessage(`Проблема исправлена${data.packageInstalled ? ', MariaDB ODBC установлен' : ''}. Backup: ${data.backupPath}. Для активации новых ODBC-сессий перезапустите FreePBX отдельно в согласованное окно.`);
     } catch (error: any) { setCdrEncodingMessage(error.message || String(error)); }
     finally { setCdrEncodingLoading(false); }
   };
@@ -1088,10 +1088,10 @@ export default function CommandCenterTab({ token, onNavigate }: CommandCenterTab
           {activeTab === 'encoding' && (
             <div className={`rounded-xl border p-4 ${cdrEncodingStatus?.state === 'healthy' ? 'border-emerald-200 bg-emerald-50/70 dark:border-emerald-900 dark:bg-emerald-950/20' : cdrEncodingStatus?.state === 'repairable' ? 'border-amber-200 bg-amber-50/70 dark:border-amber-900 dark:bg-amber-950/20' : 'border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900'}`}>
               <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                <div className="min-w-0"><div className="flex items-center gap-2 text-sm font-black text-slate-900 dark:text-white"><ShieldCheck className={`h-4 w-4 ${cdrEncodingStatus?.state === 'healthy' ? 'text-emerald-600' : 'text-amber-600'}`} />Мастер кодировки CDR</div><p className="mt-1 text-xs text-slate-600 dark:text-slate-400">Проверяет MariaDB ODBC и UTF-8 без вывода паролей. Пакеты автоматически не удаляются.</p>{cdrEncodingMessage && <div className="mt-2 text-xs font-bold text-slate-700 dark:text-slate-300">{cdrEncodingMessage}</div>}</div>
+                <div className="min-w-0"><div className="flex items-center gap-2 text-sm font-black text-slate-900 dark:text-white"><ShieldCheck className={`h-4 w-4 ${cdrEncodingStatus?.state === 'healthy' ? 'text-emerald-600' : 'text-amber-600'}`} />Мастер кодировки CDR</div><p className="mt-1 text-xs text-slate-600 dark:text-slate-400">Проверяет MariaDB ODBC и UTF-8 без вывода паролей. Пакеты автоматически не удаляются.</p>{cdrEncodingStatus?.connector.packageManager && <div className="mt-1 text-[11px] text-slate-500">Установка для этой системы: <b>{cdrEncodingStatus.connector.packageManager}</b> · пакет <b>{cdrEncodingStatus.connector.packageName}</b></div>}{cdrEncodingMessage && <div className="mt-2 text-xs font-bold text-slate-700 dark:text-slate-300">{cdrEncodingMessage}</div>}</div>
                 <div className="flex shrink-0 flex-wrap gap-2"><button onClick={previewCdrEncodingRepair} disabled={cdrEncodingLoading} className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-white px-3 py-2 text-xs font-black text-indigo-700 hover:bg-indigo-50 disabled:opacity-50 dark:border-indigo-900 dark:bg-slate-800 dark:text-indigo-300"><RefreshCw className={`h-3.5 w-3.5 ${cdrEncodingLoading ? 'animate-spin' : ''}`} /> Проверить</button>{cdrEncodingPreview?.applyAllowed && <button onClick={applyCdrEncodingRepair} disabled={cdrEncodingLoading} className="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-2 text-xs font-black text-white hover:bg-amber-700 disabled:opacity-50"><ShieldCheck className="h-3.5 w-3.5" /> Исправить безопасно</button>}</div>
               </div>
-              {cdrEncodingStatus && <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">{cdrEncodingStatus.checks.map(check => <div key={check.key} className="flex items-center gap-1.5 rounded-lg border border-white/70 bg-white/70 px-2.5 py-2 text-[11px] font-bold text-slate-700 dark:border-slate-800 dark:bg-slate-950/40 dark:text-slate-300">{check.ok ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-600" /> : <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-600" />}{check.label}</div>)}</div>}
+              {cdrEncodingStatus && <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">{cdrEncodingStatus.checks.map(check => <div key={check.key} className="flex items-center gap-1.5 rounded-lg border border-white/70 bg-white/70 px-2.5 py-2 text-[11px] font-bold text-slate-700 dark:border-slate-800 dark:bg-slate-950/40 dark:text-slate-300">{check.ok ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-600" /> : <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-600" />}<span className="min-w-0 flex-1">{check.label}</span><span className={check.ok ? 'text-emerald-700 dark:text-emerald-400' : 'text-amber-700 dark:text-amber-400'}>{check.ok ? 'Да' : 'Нет'}</span></div>)}</div>}
               {cdrEncodingPreview?.actions.length ? <div className="mt-3 rounded-lg border border-amber-200 bg-white/80 p-3 text-xs text-slate-700 dark:border-amber-900 dark:bg-slate-950/40 dark:text-slate-300"><div className="font-black">Предпросмотр действий</div><ul className="mt-1 list-disc space-y-1 pl-5">{cdrEncodingPreview.actions.map(action => <li key={action}>{action}</li>)}</ul><div className="mt-2 text-[11px] text-amber-700 dark:text-amber-300">После исправления потребуется отдельно согласовать перезапуск FreePBX.</div></div> : null}
             </div>
           )}
