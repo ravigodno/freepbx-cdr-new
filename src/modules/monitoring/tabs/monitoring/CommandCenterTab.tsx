@@ -239,8 +239,26 @@ interface HistoryItem {
   ip: string;
 }
 
+type CdrEncodingStatus = {
+  state: 'healthy' | 'repairable' | 'manual_required' | 'unsupported';
+  message: string;
+  connector: { mariaDbInstalled: boolean; mysqlInstalled: boolean };
+  driver: { registered: boolean; libraryExists: boolean };
+  dsn: { exists: boolean; driver: string; charset: string };
+  checks: Array<{ key: string; ok: boolean; label: string }>;
+};
+
+type CdrEncodingPreview = {
+  previewId: string;
+  expiresAt: string;
+  status: CdrEncodingStatus;
+  actions: string[];
+  applyAllowed: boolean;
+  restartRequired: boolean;
+};
+
 export default function CommandCenterTab({ token, onNavigate }: CommandCenterTabProps) {
-  const [activeTab, setActiveTab] = useState<'diagnostic' | 'asterisk' | 'freepbx' | 'guide' | 'history' | 'favorites'>('diagnostic');
+  const [activeTab, setActiveTab] = useState<'diagnostic' | 'asterisk' | 'freepbx' | 'encoding' | 'guide' | 'history' | 'favorites'>('diagnostic');
   const [cliCommand, setCliCommand] = useState('core show channels');
   const [output, setOutput] = useState('');
   const [cliLoading, setCliLoading] = useState(false);
@@ -265,6 +283,10 @@ export default function CommandCenterTab({ token, onNavigate }: CommandCenterTab
     licenseStatus: 'ACTIVE'
   });
   const [statsLoading, setStatsLoading] = useState(false);
+  const [cdrEncodingStatus, setCdrEncodingStatus] = useState<CdrEncodingStatus | null>(null);
+  const [cdrEncodingPreview, setCdrEncodingPreview] = useState<CdrEncodingPreview | null>(null);
+  const [cdrEncodingLoading, setCdrEncodingLoading] = useState(false);
+  const [cdrEncodingMessage, setCdrEncodingMessage] = useState('');
 
   // Favorites
   const [favCommands, setFavCommands] = useState<string[]>(() => {
@@ -398,8 +420,53 @@ export default function CommandCenterTab({ token, onNavigate }: CommandCenterTab
     }
   };
 
+  const fetchCdrEncodingStatus = async () => {
+    setCdrEncodingLoading(true);
+    try {
+      const response = await fetch('/api/monitoring/cdr-encoding/status', { headers: { Authorization: `Bearer ${token}` } });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Не удалось проверить кодировку CDR');
+      setCdrEncodingStatus(data.status);
+      setCdrEncodingPreview(null);
+      setCdrEncodingMessage(data.status.message || 'Проверка завершена');
+    } catch (error: any) { setCdrEncodingMessage(error.message || String(error)); }
+    finally { setCdrEncodingLoading(false); }
+  };
+
+  const previewCdrEncodingRepair = async () => {
+    setCdrEncodingLoading(true);
+    try {
+      const response = await fetch('/api/monitoring/cdr-encoding/preview', { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Не удалось подготовить исправление');
+      setCdrEncodingStatus(data.status);
+      setCdrEncodingPreview(data);
+      setCdrEncodingMessage(data.applyAllowed ? 'Предпросмотр готов. Проверьте действия перед применением.' : data.status.message);
+    } catch (error: any) { setCdrEncodingMessage(error.message || String(error)); }
+    finally { setCdrEncodingLoading(false); }
+  };
+
+  const applyCdrEncodingRepair = async () => {
+    if (!cdrEncodingPreview?.applyAllowed) return;
+    if (!window.confirm('Будет создан backup /etc/odbc.ini и исправлены только driver/Charset секции MySQL-asteriskcdrdb. Продолжить?')) return;
+    setCdrEncodingLoading(true);
+    try {
+      const response = await fetch('/api/monitoring/cdr-encoding/apply', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ previewId: cdrEncodingPreview.previewId, confirm: true })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Не удалось применить исправление');
+      setCdrEncodingStatus(data.status);
+      setCdrEncodingPreview(null);
+      setCdrEncodingMessage(`Исправление применено, backup: ${data.backupPath}. Перезапуск FreePBX выполните отдельно в согласованное окно.`);
+    } catch (error: any) { setCdrEncodingMessage(error.message || String(error)); }
+    finally { setCdrEncodingLoading(false); }
+  };
+
   useEffect(() => {
     fetchTelemetry();
+    fetchCdrEncodingStatus();
   }, [token]);
 
   // Run selected CLI command
@@ -982,6 +1049,13 @@ export default function CommandCenterTab({ token, onNavigate }: CommandCenterTab
           FreePBX CLI
         </button>
         <button
+          onClick={() => setActiveTab('encoding')}
+          className={`px-4 py-2 text-xs font-extrabold border-b-2 transition cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${activeTab === 'encoding' ? 'border-cyan-600 text-cyan-700 dark:text-cyan-400' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+        >
+          <ShieldCheck className="h-4 w-4" />
+          Кодировка CDR
+        </button>
+        <button
           onClick={() => setActiveTab('guide')}
           className={`px-4 py-2 text-xs font-extrabold border-b-2 transition cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${activeTab === 'guide' ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
         >
@@ -1009,6 +1083,18 @@ export default function CommandCenterTab({ token, onNavigate }: CommandCenterTab
         
         {/* LEFT COMPONENT COLUMN (DYNAMIC VIEWS BASED ON TAB) */}
         <div className="xl:col-span-8 space-y-4">
+
+          {/* CDR ENCODING TAB */}
+          {activeTab === 'encoding' && (
+            <div className={`rounded-xl border p-4 ${cdrEncodingStatus?.state === 'healthy' ? 'border-emerald-200 bg-emerald-50/70 dark:border-emerald-900 dark:bg-emerald-950/20' : cdrEncodingStatus?.state === 'repairable' ? 'border-amber-200 bg-amber-50/70 dark:border-amber-900 dark:bg-amber-950/20' : 'border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900'}`}>
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div className="min-w-0"><div className="flex items-center gap-2 text-sm font-black text-slate-900 dark:text-white"><ShieldCheck className={`h-4 w-4 ${cdrEncodingStatus?.state === 'healthy' ? 'text-emerald-600' : 'text-amber-600'}`} />Мастер кодировки CDR</div><p className="mt-1 text-xs text-slate-600 dark:text-slate-400">Проверяет MariaDB ODBC и UTF-8 без вывода паролей. Пакеты автоматически не удаляются.</p>{cdrEncodingMessage && <div className="mt-2 text-xs font-bold text-slate-700 dark:text-slate-300">{cdrEncodingMessage}</div>}</div>
+                <div className="flex shrink-0 flex-wrap gap-2"><button onClick={previewCdrEncodingRepair} disabled={cdrEncodingLoading} className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-white px-3 py-2 text-xs font-black text-indigo-700 hover:bg-indigo-50 disabled:opacity-50 dark:border-indigo-900 dark:bg-slate-800 dark:text-indigo-300"><RefreshCw className={`h-3.5 w-3.5 ${cdrEncodingLoading ? 'animate-spin' : ''}`} /> Проверить</button>{cdrEncodingPreview?.applyAllowed && <button onClick={applyCdrEncodingRepair} disabled={cdrEncodingLoading} className="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-2 text-xs font-black text-white hover:bg-amber-700 disabled:opacity-50"><ShieldCheck className="h-3.5 w-3.5" /> Исправить безопасно</button>}</div>
+              </div>
+              {cdrEncodingStatus && <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">{cdrEncodingStatus.checks.map(check => <div key={check.key} className="flex items-center gap-1.5 rounded-lg border border-white/70 bg-white/70 px-2.5 py-2 text-[11px] font-bold text-slate-700 dark:border-slate-800 dark:bg-slate-950/40 dark:text-slate-300">{check.ok ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-600" /> : <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-600" />}{check.label}</div>)}</div>}
+              {cdrEncodingPreview?.actions.length ? <div className="mt-3 rounded-lg border border-amber-200 bg-white/80 p-3 text-xs text-slate-700 dark:border-amber-900 dark:bg-slate-950/40 dark:text-slate-300"><div className="font-black">Предпросмотр действий</div><ul className="mt-1 list-disc space-y-1 pl-5">{cdrEncodingPreview.actions.map(action => <li key={action}>{action}</li>)}</ul><div className="mt-2 text-[11px] text-amber-700 dark:text-amber-300">После исправления потребуется отдельно согласовать перезапуск FreePBX.</div></div> : null}
+            </div>
+          )}
           
           {/* 1. DIAGNOSTICS TAB */}
           {activeTab === 'diagnostic' && (

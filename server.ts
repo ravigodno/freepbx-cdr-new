@@ -55,6 +55,7 @@ import { authenticatePBXPulsSqlUser, compareLegacyUserWithSql, getAuthStorageMod
 import { getPBXPulsDbRuntimeStatus, isPBXPulsDbAvailable, queryPBXPulsDb, sanitizePBXPulsDbError } from './server/pbxpulsDb.js';
 import { getPBXPulsDbConfigLogFields } from './server/pbxpulsDbConfig.js';
 import { writePBXPulsSystemEvent } from './server/pbxpulsEvents.js';
+import { registerCdrEncodingRepairRoutes } from './server/cdrEncodingRepair.js';
 import { findLatestDtmfEndByLinkedId, recordDtmfEventSql } from './server/dtmfEventStorage.js';
 import { registerSiteFormRoutes } from './server/siteForms/router.js';
 import { SiteFormPullService } from './server/siteForms/pullService.js';
@@ -23035,6 +23036,7 @@ registerLogAnalysisRoutes(app, requireAuth, checkUserPermission, {
     return queryFreePBXCDR(localDb.settings, isDemoMode(localDb.settings), sql, params);
   }
 });
+registerCdrEncodingRepairRoutes(app, { requireAuth, checkPermission: checkUserPermission });
 registerCallIntelligenceRoutes(app, requireAuth, checkUserPermission, {
   queryCdr: async (sql: string, params: any[]) => {
     const localDb = await readLocalDb();
