@@ -312,6 +312,22 @@ assert.equal(outgoingBanner?.trunkNumber, outboundTrunkNumber);
 assert.equal(getLiveCallPopupTitle(outgoingBanner?.direction), 'Исходящий звонок');
 assert.equal(isLiveCallPopupVisible(outgoingBanner), true);
 
+// Реальный снимок тестовой АТС, linkedid 1786538995.66: значение 300 — это
+// второй аргумент Dial (таймаут), а не внутренний адресат вызова.
+const numericTrunkDialedNumber = '797878101210';
+const outboundViaInternalTrunkEndpoint = detectLiveCallDirection([
+  {
+    Channel: 'PJSIP/200-00000036', Context: 'macro-dialout-trunk', Exten: 's',
+    CallerIDNum: '729455', ConnectedLineNum: '300',
+    Application: 'Dial',
+    ApplicationData: `SIP/729455-in/${numericTrunkDialedNumber},300,Tb(func-apply-sipheaders^s^1,(1))U(sub-send-obroute-email^${numericTrunkDialedNumber}^${numericTrunkDialedNumber}^1^1786538995^^729455)`,
+    Uniqueid: '1786538995.66', Linkedid: '1786538995.66'
+  }
+], '200');
+assert.equal(outboundViaInternalTrunkEndpoint.direction, 'outgoing');
+assert.equal(outboundViaInternalTrunkEndpoint.internalCaller, '200');
+assert.equal(outboundViaInternalTrunkEndpoint.destinationNumber, numericTrunkDialedNumber);
+
 const liveInternalFixture = [
   {
     Channel: 'PJSIP/200-00020', Context: 'from-internal', Exten: '100',
