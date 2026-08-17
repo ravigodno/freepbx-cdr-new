@@ -448,6 +448,21 @@ data/
 Они должны быть перечислены в `.gitignore`.
 
 ---
+ cd /opt/asterisk-cdr-panel && \
+  git diff --quiet && git diff --cached --quiet || { echo "Остановка: есть несохранённые изменения";
+  exit 1; }; \
+  git fetch origin --tags --prune && \
+  PBXPULS_TAG="$(git tag -l 'v*' | sort -V | tail -n 1)" && \
+  test -n "$PBXPULS_TAG" && \
+  git checkout --detach "$PBXPULS_TAG" && \
+  npm install && \
+  npm run build && \
+  pm2 restart asterisk-cdr-panel --update-env && \
+  echo "PBXPuls обновлён до $PBXPULS_TAG"
+---
+
+
+
 
 # Репозиторий проекта
 
