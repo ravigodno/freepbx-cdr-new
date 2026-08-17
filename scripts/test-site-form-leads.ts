@@ -30,6 +30,13 @@ const pairing=fs.readFileSync('integrations/bitrix-pull/local/php_interface/lib/
 for(const table of ['site_form_integrations','site_form_leads','site_form_lead_calls','site_form_lead_history','site_form_webhook_log'])assert.match(migration,new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`));
 for(const permission of ['view_site_form_leads','manage_site_form_leads','call_site_form_leads','assign_site_form_leads','export_site_form_leads','view_site_form_reports','manage_site_form_integrations','view_site_form_webhook_logs'])assert.match(migration,new RegExp(permission));
 for(const endpoint of ['/api/integrations/site-forms/:integrationId/webhook','/api/site-forms/leads','/api/site-forms/reports/overview','/api/site-forms/export.csv','/api/site-forms/integrations/:id/delete-preview','/api/site-forms/integrations/:id/delete-apply'])assert.ok(router.includes(endpoint));
+assert.ok(router.includes('/api/site-forms/leads-notifications'));
+assert.match(router,/l\.id>\? ORDER BY l\.id ASC LIMIT 20/);
+assert.match(router,/nextAfterId=rows\.length\?Number\(rows\[rows\.length-1\]\.id\):afterId/);
+assert.match(router,/hasMore:nextAfterId<latestId/);
+const notifier=fs.readFileSync('src/components/marketing/siteForms/SiteFormLeadNotifier.tsx','utf8');
+assert.match(notifier,/data\.nextAfterId \?\? data\.latestId/);
+assert.doesNotMatch(notifier,/slice\(-10\)/);
 assert.match(router,/event_already_processed/);assert.match(router,/beginTransaction|withPBXPulsTransaction/);assert.doesNotMatch(router,/console\.(log|info).*token/i);
 assert.match(router,/if\(result\.created\).*site_forms\.lead_received/);
 assert.match(migration,/20260811_080_site_form_integration_soft_delete/);assert.match(migration,/20260811_081_site_form_bitrix_multisite/);assert.match(migration,/selected_site_ids_json/);assert.match(router,/preservedLeads:true/);

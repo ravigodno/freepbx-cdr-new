@@ -78,6 +78,7 @@ import TcpdumpTab from './modules/monitoring/tabs/monitoring/TcpdumpTab';
 import ReportsTab from './components/reports/ReportsTab';
 import MarketingTab from './components/marketing/MarketingTab';
 import SiteFormsWorkspace from './components/marketing/siteForms/SiteFormsWorkspace';
+import SiteFormLeadNotifier from './components/marketing/siteForms/SiteFormLeadNotifier';
 import { AboutSystemTab } from './components/AboutSystemTab';
 import NotificationCenterSettings from './components/settings/NotificationCenterSettings';
 import { type LiveTransferResult, type LiveTransferSearchTarget } from './components/LiveTransferSearch';
@@ -8904,6 +8905,15 @@ export default function App() {
           setChronologyData(null);
         }}
       />
+
+      {session && siteFormsEnabled && hasPermission('view_site_form_leads') && (
+        <SiteFormLeadNotifier
+          token={session.token}
+          username={session.username}
+          canManage={hasPermission('manage_site_form_leads')}
+          canCall={hasPermission('call_site_form_leads')}
+        />
+      )}
 
       {/* CALL PROCESSING / COMMENTING DIALOG MODAL PANEL */}
       <CDRProcessModal
