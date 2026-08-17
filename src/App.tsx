@@ -716,7 +716,38 @@ export default function App() {
   const [isTestingFreePBXApi, setIsTestingFreePBXApi] = useState(false);
   const [freepbxApiTestResult, setFreePBXApiTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [isDownloadingBrowserExtension, setIsDownloadingBrowserExtension] = useState(false);
+  const [browserExtensionMessage, setBrowserExtensionMessage] = useState('');
   const [settingsTab, setSettingsTab] = useState<'pbx' | 'integrations' | 'directory' | 'access' | 'permissions' | 'notifications' | 'design' | 'appearance'>('pbx');
+
+  const downloadBrowserExtension = async () => {
+    if (!session?.token || isDownloadingBrowserExtension) return;
+    setIsDownloadingBrowserExtension(true);
+    setBrowserExtensionMessage('');
+    try {
+      const response = await fetch('/api/browser-extension/download', {
+        headers: { Authorization: `Bearer ${session.token}` },
+        cache: 'no-store'
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${response.status}`);
+      }
+      const url = URL.createObjectURL(await response.blob());
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = 'PBXPuls-Desktop-Alerts-0.1.16.zip';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      setBrowserExtensionMessage('Архив скачан. Распакуйте его и выберите папку через «Загрузить распакованное расширение».');
+    } catch (error: any) {
+      setBrowserExtensionMessage(error?.message || 'Не удалось скачать расширение');
+    } finally {
+      setIsDownloadingBrowserExtension(false);
+    }
+  };
 
   // Load public settings for logo and copyright customization
   const [publicSettings, setPublicSettings] = useState<{ customLogoUrl?: string; customCopyright?: string } | null>(null);
@@ -8649,6 +8680,23 @@ export default function App() {
                         />
                         {session?.extension && <span className="mt-2 block text-[10px] font-semibold text-blue-600">Назначено администратором в разделе «Доступ и пользователи».</span>}
                       </label>
+
+                      <div className="rounded-xl border border-blue-200 bg-white p-4">
+                        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="min-w-0">
+                            <h5 className="flex items-center gap-2 text-xs font-black text-slate-900"><Download className="h-4 w-4 text-blue-600" />Расширение PBXPuls для браузера</h5>
+                            <p className="mt-1 text-[11px] leading-relaxed text-slate-500">Версия 0.1.16 · клик по алерту открывает справочник с фильтром по ФИО, доступны отдельное окно звонка и безопасный click-to-call для ссылок <code className="rounded bg-slate-100 px-1 py-0.5">tel:</code>.</p>
+                          </div>
+                          <button type="button" onClick={()=>void downloadBrowserExtension()} disabled={isDownloadingBrowserExtension} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-xs font-bold text-white hover:bg-blue-700 disabled:opacity-50">
+                            {isDownloadingBrowserExtension ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                            Скачать расширение
+                          </button>
+                        </div>
+                        <div className="mt-3 rounded-lg bg-blue-50 px-3 py-2 text-[10px] leading-relaxed text-blue-800">
+                          Chrome/Edge: распакуйте ZIP → <a href="chrome://extensions" target="_blank" rel="noreferrer" onClick={()=>void navigator.clipboard?.writeText('chrome://extensions')} className="font-black text-blue-700 underline decoration-blue-300 underline-offset-2 hover:text-blue-900">откройте chrome://extensions</a> → включите режим разработчика → «Загрузить распакованное». Если Chrome заблокирует переход, адрес уже скопирован — вставьте его в адресную строку. Автоматическая установка одним кликом доступна только после публикации в Chrome Web Store или через корпоративную policy.
+                        </div>
+                        {browserExtensionMessage && <div className="mt-2 text-[10px] font-semibold text-slate-600">{browserExtensionMessage}</div>}
+                      </div>
 
                       <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
                         <h5 className="text-xs font-black text-slate-900">Оформление</h5>

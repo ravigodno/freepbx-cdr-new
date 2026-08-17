@@ -189,7 +189,11 @@ export function buildCallRouteSummaryFromLivePayload(data: any): CallRouteSummar
     summary.inboundRoute = clean(data?.inboundRoute || 'ANY');
     summary.ivr = clean(data?.ivr || (ivrRow ? contexts[rows.indexOf(ivrRow)].replace(/^ivr-/, '') : ''));
     summary.answeredBy = digits(data?.answeredBy)
-      || rows.map((row: any) => channelExtension(row?.Channel ?? row?.channel)).find(ext => ext && ext !== summary.queue && ext !== summary.ringGroup)
+      || rows.filter((row: any) => {
+        const state = clean(row?.ChannelStateDesc ?? row?.state).toLowerCase();
+        const bridge = clean(row?.BridgeId ?? row?.bridgeId ?? row?.BridgedChannel);
+        return state === 'up' && Boolean(bridge);
+      }).map((row: any) => channelExtension(row?.Channel ?? row?.channel)).find(ext => ext && ext !== summary.queue && ext !== summary.ringGroup)
       || '';
     if (summary.queue) {
       summary.scenario = 'incoming_queue';

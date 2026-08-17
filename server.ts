@@ -158,7 +158,12 @@ import {
   selectLiveOutgoingDestination,
   stripLiveTechnicalAddresses
 } from './server/liveCallDirection.js';
-import { groupLiveChannelsForOperator, liveChannelGroupHasOperator, preserveLiveCallCandidate } from './server/liveCallGroups.js';
+import {
+  groupLiveChannelsForOperator,
+  liveChannelGroupHasOperator,
+  preserveLiveCallCandidate,
+  synchronizeIncomingCallerIdentity
+} from './server/liveCallGroups.js';
 import {
   buildLiveTransferTargetOptions,
   normalizeLiveTransferDirectoryNumber,
@@ -11260,6 +11265,19 @@ app.get('/api/settings/public', async (req, res) => {
   }
 });
 
+const BROWSER_EXTENSION_VERSION = '0.1.16';
+const BROWSER_EXTENSION_ARCHIVE = `PBXPuls-Desktop-Alerts-${BROWSER_EXTENSION_VERSION}.zip`;
+
+app.get('/api/browser-extension/download', requireAuth(), (req, res) => {
+  const archivePath = path.resolve(process.cwd(), BROWSER_EXTENSION_ARCHIVE);
+  if (!fs.existsSync(archivePath)) {
+    res.status(404).json({ error: 'Архив расширения не найден' });
+    return;
+  }
+  res.setHeader('Cache-Control', 'no-store');
+  res.download(archivePath, BROWSER_EXTENSION_ARCHIVE);
+});
+
 // Settings endpoint
 app.get('/api/settings', requireAuth(), async (req, res) => {
   const localDb = await readLocalDb();
@@ -14079,12 +14097,19 @@ function buildLiveCallBannerFromAmiChannels(channels: AmiBlock[], operatorExt: s
       .filter(ch => /FMPR-/i.test(String(ch.Channel || '')) || /FMPR-/i.test(String(ch.ApplicationData || '')))
       .flatMap(ch => getLiveAppDataNumberCandidates(ch.ApplicationData))
       .filter(candidate => isExternalNumber(candidate))));
+    const ringGroup = group.find(ch => {
+      const appData = String(ch.ApplicationData || '');
+      return String(ch.Application || '').toLowerCase() === 'dial'
+        && appData.includes('&')
+        && isInternalExt(ch.Exten);
+    })?.Exten || '';
     const routeSummary = buildCallRouteSummaryFromLivePayload({
       rows: group,
       direction: directionResolution.direction,
       externalCaller: inboundCallerResolution?.externalCallerNumber || inboundCaller,
       trunk: directionResolution.trunkNumber || did,
       did,
+      ringGroup,
       destinationNumber: directionResolution.destinationNumber,
       internalCaller: directionResolution.internalCaller,
       displayNumber: number,
@@ -14430,6 +14455,37 @@ function buildLiveCallDebugGroups(channels: AmiBlock[], operatorExt: string) {
   });
 }
 
+const liveCallBannerLogState = new Map<string, string>();
+
+function logLiveCallBannerState(operatorExt: string, banner: LiveCallBanner, channelCount: number, calls: LiveCallBanner[] = []) {
+  const callId = banner.active ? String(banner.linkedid || '') : '';
+  const callerDigits = onlyDigits(banner.callerNumber || banner.sourceNumber || '');
+  const destinationDigits = onlyDigits(banner.destinationNumber || banner.targetNumber || '');
+  const state = [banner.active === true, callId, banner.direction, callerDigits.length, destinationDigits, banner.connected, banner.ringing].join(':');
+  if (liveCallBannerLogState.get(operatorExt) === state) return;
+  liveCallBannerLogState.set(operatorExt, state);
+  console.info('[LIVE_POPUP_STATE]', {
+    operatorExt,
+    active: banner.active === true,
+    callId: callId ? crypto.createHash('sha256').update(callId).digest('hex').slice(0, 12) : '',
+    channelCount,
+    direction: banner.direction || '',
+    callerKind: callerDigits.length >= 7 ? 'external' : (callerDigits ? 'internal' : 'missing'),
+    destinationKind: destinationDigits === '9999'
+      ? 'ring_group'
+      : (destinationDigits === onlyDigits(operatorExt) ? 'operator' : (destinationDigits ? 'other' : 'missing')),
+    connected: banner.connected === true,
+    ringing: banner.ringing === true,
+    candidates: calls.map(call => ({
+      direction: call.direction || '',
+      callerKind: onlyDigits(call.callerNumber || call.sourceNumber || '').length >= 7 ? 'external' : 'internal',
+      destinationKind: onlyDigits(call.destinationNumber || call.targetNumber || '') === '9999' ? 'ring_group' : 'other',
+      connected: call.connected === true,
+      ringing: call.ringing === true
+    }))
+  });
+}
+
 app.get('/api/live/call-banner', requireAuth(), async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store');
@@ -14456,6 +14512,7 @@ app.get('/api/live/call-banner', requireAuth(), async (req, res) => {
     if (!banner.active) {
       const clickIntent = getClickToCallLiveIntent(effectiveOperatorExt);
       if (clickIntent?.seenActive) clearClickToCallLiveIntent(effectiveOperatorExt);
+      logLiveCallBannerState(effectiveOperatorExt, banner, channels.length);
       res.json(banner);
       return;
     }
@@ -14467,18 +14524,22 @@ app.get('/api/live/call-banner', requireAuth(), async (req, res) => {
       localDb.settings,
       localDb.phoneMeetings || []
     );
-    const intentCalls = calls.map(call => applyClickToCallIntentToBanner(
-      call,
-      effectiveOperatorExt,
-      directoryRuntime.contacts,
-      localDb.settings
+    const intentCalls = calls.map(call => synchronizeIncomingCallerIdentity(
+      applyClickToCallIntentToBanner(
+        call,
+        effectiveOperatorExt,
+        directoryRuntime.contacts,
+        localDb.settings
+      ),
+      number => resolveLiveContact(number, directoryRuntime.contacts, localDb.settings)
     ));
-    banner = intentCalls[0] || applyClickToCallIntentToBanner(
+    banner = intentCalls[0] || synchronizeIncomingCallerIdentity(applyClickToCallIntentToBanner(
       banner,
       effectiveOperatorExt,
       directoryRuntime.contacts,
       localDb.settings
-    );
+    ), number => resolveLiveContact(number, directoryRuntime.contacts, localDb.settings));
+    logLiveCallBannerState(effectiveOperatorExt, banner, channels.length, intentCalls);
     res.json({ ...banner, calls: intentCalls });
   } catch (error: any) {
     res.json({ active: false, error: error.message });

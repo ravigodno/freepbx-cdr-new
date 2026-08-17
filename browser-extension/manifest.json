@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "PBXPuls Desktop Alerts",
+  "version": "0.1.16",
+  "description": "Заявки, звонки и click-to-call PBXPuls",
+  "minimum_chrome_version": "109",
+  "permissions": ["alarms", "notifications", "scripting", "storage", "tabs", "windows"],
+  "host_permissions": ["http://*/*", "https://*/*"],
+  "background": { "service_worker": "service-worker.js" },
+  "icons": { "128": "icon128.png" },
+  "action": { "default_title": "PBXPuls", "default_popup": "options.html", "default_icon": "icon128.png" },
+  "options_page": "options.html",
+  "content_scripts": [{
+    "matches": ["http://*/*", "https://*/*"],
+    "js": ["tel-links.js"],
+    "run_at": "document_start"
+  }],
+  "web_accessible_resources": [{
+    "resources": ["confirm-call.html"],
+    "matches": ["<all_urls>"]
+  }]
+}

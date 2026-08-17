@@ -74,3 +74,28 @@ FREEPBX_API_REFERENCE_FULL.md.
 - Bot tokens are encrypted with an environment-derived installation key. APIs expose `hasToken`, never token fragments or plaintext.
 - Telegram Chat ID is a signed integer and is not restricted to the `-100` group prefix.
 - Package minutes, generic Asterisk/AMI health, disk and security events remain catalog-only until a reliable producer is explicitly connected.
+
+# Live call popup and desktop alert contract
+
+The built-in PBXPuls popup and the Desktop Alerts extension must use the same normalized live-call payload. UI components must not independently infer the caller from arbitrary AMI rows.
+
+## Incoming calls
+
+- `Кто звонит` is always the calling party, never the current operator, DID, trunk, queue, ring group or an unanswered group member.
+- For an external incoming call, the authoritative caller is the external number received on the inbound trunk. The displayed name, company, position and directory fields must all be resolved again from that final number; identity fields from a previously selected AMI branch must not be preserved.
+- For an internal incoming call, the caller is the source extension and its directory identity.
+- `Куда звонит` shows the logical destination before answer: direct extension, queue or ring group number.
+- After answer, `Куда звонит` shows the extension that actually answered. Ringing or cancelled parallel members must never be shown as the answered extension.
+
+## Ring groups
+
+- FreePBX may assign different `Linkedid` values to the inbound trunk leg and each parallel member leg. They still form one logical incoming call when the trunk `Dial` targets the member and the member leg has the same ring-group destination in the same time window.
+- PBXPuls must correlate those legs before direction detection, ranking and contact resolution.
+- Confirmed inbound-trunk evidence has priority over internal-looking member legs. Outgoing evidence is evaluated first so trunks whose names contain `-in-` do not turn real outgoing calls into incoming calls.
+- While group `9999` is ringing, the expected mapping is `Кто звонит = external caller`, `Куда звонит = 9999`.
+- When a member answers, the expected mapping is `Кто звонит = external caller`, `Куда звонит = answered extension`.
+
+## Regression protection
+
+- Changes to live-call grouping, direction detection, ranking or caller identity must run `test:live-popup-parallel-external`, `test:live-popup-route-summary`, `test:live-popup-priority` and `test:inbound-caller`.
+- The external parallel-call fixture must retain separate `Linkedid` values for the trunk and member branch; using one shared `Linkedid` does not reproduce production FreePBX behavior.

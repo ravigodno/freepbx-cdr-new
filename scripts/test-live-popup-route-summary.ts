@@ -33,6 +33,25 @@ assert.notEqual(queue9000.displayNumber, '9000');
 assert.notEqual(queue9000.internalCaller, '8405');
 assert.ok(queue9000.rejectedCandidates.some(item => item.value === '8405' && item.reason.includes('trunk/route fragment')));
 
+const ringingGroup = buildCallRouteSummaryFromLivePayload({
+  direction: 'incoming', externalCaller: '79788101210', trunk: '79885090300', ringGroup: '9999',
+  destinationNumber: '9999', rows: [
+    { Channel: 'PJSIP/11-0001', Exten: '9999', ChannelStateDesc: 'Ringing', BridgeId: '' }
+  ]
+});
+assert.equal(ringingGroup.ringGroup, '9999');
+assert.equal(ringingGroup.answeredBy, '');
+assert.equal(mapRouteSummaryToLivePopup(ringingGroup).destinationNumber, '9999');
+
+const answeredGroup = buildCallRouteSummaryFromLivePayload({
+  direction: 'incoming', externalCaller: '79788101210', trunk: '79885090300', ringGroup: '9999',
+  destinationNumber: '9999', rows: [
+    { Channel: 'PJSIP/15-0002', Exten: '9999', ChannelStateDesc: 'Up', BridgeId: 'bridge-1' }
+  ]
+});
+assert.equal(answeredGroup.answeredBy, '15');
+assert.equal(mapRouteSummaryToLivePopup(answeredGroup).destinationNumber, '15');
+
 const internal = buildCallRouteSummaryFromLivePayload({
   direction: 'internal', internalCaller: '200', destinationNumber: '100', rows: []
 });

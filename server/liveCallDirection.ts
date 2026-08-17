@@ -155,6 +155,27 @@ export function detectLiveCallDirection(group: any[], operatorExt = ''): LiveCal
       && directDestinationCandidates(row).some(isExternal)
       && !followMePrimaryDestination(row);
   });
+  const hasExplicitInboundContext = rows.some(row => isInboundContext(rowContext(row)) || isInboundTrunkChannel(row));
+  const hasInboundRouteWithExternalCaller = rows.some(row => {
+    const context = rowContext(row);
+    const caller = numberCandidates(read(row, 'CallerIDNum', 'callerId', 'caller', 'cid', 'cid_num', 'src', 'cnum')).find(isExternal);
+    return isInboundRouteContext(context) && Boolean(caller);
+  });
+  const hasInboundRingGroupDial = rows.some(row => {
+    const caller = numberCandidates(read(row, 'CallerIDNum', 'callerId', 'caller', 'cid', 'cid_num', 'src', 'cnum')).find(isExternal);
+    const application = String(read(row, 'Application', 'application', 'lastapp')).toLowerCase();
+    const appData = String(read(row, 'ApplicationData', 'appData', 'applicationData', 'lastdata'));
+    return Boolean(caller)
+      && application === 'dial'
+      && appData.includes('&')
+      && /(?:SIP|PJSIP)\/[0-9]{2,5}(?=\D|$)/i.test(appData);
+  });
+
+  if (!hasExplicitOutgoingDestination && (hasExplicitInboundContext || hasInboundRouteWithExternalCaller || hasInboundRingGroupDial)) {
+    const destinationNumber = rows.flatMap(directDestinationCandidates).find(isInternal) || '';
+    const trunkNumber = rows.map(inboundTrunkNumber).find(Boolean) || '';
+    return { direction: 'incoming', internalCaller: '', destinationNumber, trunkNumber };
+  }
 
   // Follow Me places its parallel external destinations into ApplicationData.
   // A direct internal Exten/dst remains the authoritative dialed destination.
@@ -189,14 +210,7 @@ export function detectLiveCallDirection(group: any[], operatorExt = ''): LiveCal
   // macro-dial-one. The original SIP/<trunk>-in-* channel remains the reliable
   // inbound evidence. Outgoing is checked above first, because this PBX also
   // uses a trunk name ending in "-in" for outbound calls.
-  const hasExplicitInboundContext = rows.some(row => isInboundContext(rowContext(row)) || isInboundTrunkChannel(row));
-  const hasInboundRouteWithExternalCaller = rows.some(row => {
-    const context = rowContext(row);
-    const caller = numberCandidates(read(row, 'CallerIDNum', 'callerId', 'caller', 'cid', 'cid_num', 'src', 'cnum')).find(isExternal);
-    return isInboundRouteContext(context) && Boolean(caller);
-  });
-
-  if (hasExplicitInboundContext || hasInboundRouteWithExternalCaller) {
+  if (hasExplicitInboundContext || hasInboundRouteWithExternalCaller || hasInboundRingGroupDial) {
     const destinationNumber = rows.flatMap(directDestinationCandidates).find(isInternal) || '';
     const trunkNumber = rows.map(inboundTrunkNumber).find(Boolean) || '';
     return { direction: 'incoming', internalCaller: '', destinationNumber, trunkNumber };
