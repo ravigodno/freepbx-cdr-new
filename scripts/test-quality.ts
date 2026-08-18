@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { normalizeQualityMetrics } from '../server/qualityMetrics.js';
-import { averageMetric, compareNullableMetrics, formatMetric } from '../src/modules/monitoring/qualityPresentation.js';
+import { averageMetric, compareNullableMetrics, formatMetric, matchesQualityDeviceSearch } from '../src/modules/monitoring/qualityPresentation.js';
 import { endpointFromAsteriskChannel, parseAsteriskRtcpAll, qualityVariableForChannel, recordAsteriskRtcpQuality, getLatestRtcpQuality } from '../server/rtcpQualityCollector.js';
 
 const onlineNoRtcp=normalizeQualityMetrics({status:'Online',ip:'192.0.2.1',rtt:28});
@@ -60,6 +60,9 @@ assert.equal(averageMetric([{v:null}],row=>row.v),null);
 assert(compareNullableMetrics(0,null,'asc')<0);
 assert(compareNullableMetrics(10,2,'asc')>0);
 assert(compareNullableMetrics(10,2,'desc')<0);
+assert.equal(matchesQualityDeviceSearch({ext:'200',name:undefined,ip:null,userAgent:undefined},'200'),true);
+assert.equal(matchesQualityDeviceSearch({ext:undefined,name:undefined,ip:undefined,userAgent:undefined},'200'),false);
+assert.equal(matchesQualityDeviceSearch({ext:undefined,name:undefined,ip:undefined,userAgent:undefined},''),true);
 
 const server=fs.readFileSync('server.ts','utf8');
 const ui=fs.readFileSync('src/modules/monitoring/tabs/monitoring/QualityTab.tsx','utf8');

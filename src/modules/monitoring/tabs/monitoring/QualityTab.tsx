@@ -23,7 +23,7 @@ import {
 } from 'lucide-react';
 import { useServerClock } from '../../../../hooks/useServerClock';
 import { getServerNow } from '../../../../utils/serverClock';
-import { averageMetric, availabilityLabel, compareNullableMetrics, formatMetric, qualityLabel, type AvailabilityStatus, type QualityStatus } from '../../qualityPresentation';
+import { averageMetric, availabilityLabel, compareNullableMetrics, formatMetric, matchesQualityDeviceSearch, qualityLabel, type AvailabilityStatus, type QualityStatus } from '../../qualityPresentation';
 
 // Pure React/SVG charting components to prevent any ResizeObserver, Canvas or React 19 compatibility crashes
 function CustomMiniAreaChart({ 
@@ -652,15 +652,8 @@ export default function QualityTab({ token }: Props) {
 
   // Filtered devices list based on search query and status
   const filteredDevices = useMemo(() => {
-    const q = searchQuery.toLowerCase().trim();
-
     return devices.filter(d => {
-      const matchesSearch =
-        !q ||
-        d.ext.includes(q) ||
-        d.name.toLowerCase().includes(q) ||
-        d.ip.includes(q) ||
-        d.userAgent.toLowerCase().includes(q);
+      const matchesSearch = matchesQualityDeviceSearch(d as unknown as Record<string, unknown>, searchQuery);
 
       const availability = d.availabilityStatus || (d.status === 'Offline' ? 'offline' : 'online');
       const quality = d.qualityStatus || 'insufficient_data';

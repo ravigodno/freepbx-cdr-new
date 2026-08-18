@@ -26,6 +26,13 @@ export function compareNullableMetrics(a: unknown, b: unknown, direction: 'asc' 
   return direction === 'asc' ? a - b : b - a;
 }
 
+export function matchesQualityDeviceSearch(device: Record<string, unknown>, query: unknown): boolean {
+  const normalizedQuery = String(query ?? '').toLowerCase().trim();
+  if (!normalizedQuery) return true;
+  return [device.ext, device.name, device.ip, device.userAgent]
+    .some(value => String(value ?? '').toLowerCase().includes(normalizedQuery));
+}
+
 export function availabilityLabel(status: AvailabilityStatus): string {
   return status === 'online' ? 'Online' : status === 'offline' ? 'Offline' : 'Неизвестно';
 }
