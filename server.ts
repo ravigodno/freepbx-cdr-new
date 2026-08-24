@@ -193,6 +193,7 @@ import { startLogAnalysisCollector } from './server/logAnalysis/service.js';
 import { registerOutgoingReportRoutes } from './server/outgoingReports.js';
 import { registerUniqueNumberExportRoutes } from './server/reportUniqueNumbers.js';
 import { registerBalanceRoutes } from './server/balance/router.js';
+import { registerGsmGatewayRoutes } from './server/gsmGateways/router.js';
 import { registerNotificationRoutes } from './server/notifications/router.js';
 import { findUnreturnedMissedCalls } from './server/notifications/missedCallDetector.js';
 import { calculateAnsweredIncomingMetrics } from './server/reportIncomingMetrics.js';
@@ -23224,6 +23225,11 @@ const balanceRuntime = registerBalanceRoutes(app, {
     return queryFreePBXCDR(localDb.settings, isDemoMode(localDb.settings), sql, params);
   }
 });
+const gsmGatewayRuntime = registerGsmGatewayRoutes(app, {
+  requireAuth,
+  checkPermission: checkUserPermission,
+  hashSecret: process.env.GSM_GATEWAY_ENCRYPTION_KEY || process.env.JWT_SECRET || JWT_SECRET
+});
 const notificationRuntime = registerNotificationRoutes(app, {
   requireAuth,
   checkPermission: checkUserPermission,
@@ -23246,7 +23252,8 @@ const notificationRuntime = registerNotificationRoutes(app, {
         mask: maskPhone
       }).map(row => ({ ...row, linkedidHash: crypto.createHash('sha256').update(row.linkedid).digest('hex').slice(0, 24) }));
     },
-    trunksStatus: async () => (await aiPbxReadServices.trunksStatus({}, undefined, { tenantId: 0, actorId: 'notification-service', permissions: [] })).items || []
+    trunksStatus: async () => (await aiPbxReadServices.trunksStatus({}, undefined, { tenantId: 0, actorId: 'notification-service', permissions: [] })).items || [],
+    gsmStatus: async () => gsmGatewayRuntime.notificationSnapshot()
   }
 });
 const importSiteFormClickEvents = async (siteId:string,items:any[]) => {
@@ -23321,6 +23328,7 @@ async function startServer() {
   startSecurityCollector();
   startLogAnalysisCollector();
   balanceRuntime.start();
+  gsmGatewayRuntime.start();
   notificationRuntime.start();
   startDtmfAmiListener(startupDb.settings).catch((e: any) => console.error('[DTMF] listener start failed:', e.message));
 
@@ -23334,7 +23342,7 @@ async function startServer() {
 
 let aiPlatformShutdownStarted=false;
 let phonebookListener: import('node:http').Server | null = null;
-for(const signal of ['SIGTERM','SIGINT'] as const)process.once(signal,()=>{if(aiPlatformShutdownStarted)return;aiPlatformShutdownStarted=true;clearInterval(siteFormsMatcherTimer);notificationRuntime.stop();balanceRuntime.stop();void Promise.all([aiPlatformRuntime.stop(),stopPhonebookListener(phonebookListener)]).finally(()=>process.exit(0))});
+for(const signal of ['SIGTERM','SIGINT'] as const)process.once(signal,()=>{if(aiPlatformShutdownStarted)return;aiPlatformShutdownStarted=true;clearInterval(siteFormsMatcherTimer);notificationRuntime.stop();balanceRuntime.stop();gsmGatewayRuntime.stop();void Promise.all([aiPlatformRuntime.stop(),stopPhonebookListener(phonebookListener)]).finally(()=>process.exit(0))});
 
 startServer().catch((err) => {
   console.error('Fatal initialization error:', err);

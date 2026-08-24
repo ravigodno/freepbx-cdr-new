@@ -139,6 +139,7 @@ import {
   resetAuthExpiredHandled
 } from './services/apiClient';
 const BalanceCenter = lazy(() => import('./modules/management/BalanceCenter'));
+const GsmGatewaysPage = lazy(() => import('./modules/gsmGateways/GsmGatewaysPage'));
 
 
 type DirectoryRequiredColumnKey = 'type' | 'fullName' | 'phone';
@@ -836,9 +837,9 @@ export default function App() {
   const [timeToNextRefresh, setTimeToNextRefresh] = useState<number>(30);
 
   // --- TELEPHONE DIRECTORY STATE & HANDLERS ---
-  const [activeView, setActiveView] = useState<'calls' | 'directory' | 'reports' | 'marketing' | 'monitoring' | 'management' | 'balance' | 'settings' | 'about' | 'scripts' | 'ai-assistant' | 'ai-pbx-admin' | 'ai-platform'>(() => {
+  const [activeView, setActiveView] = useState<'calls' | 'directory' | 'reports' | 'marketing' | 'monitoring' | 'management' | 'balance' | 'gsm-gateways' | 'settings' | 'about' | 'scripts' | 'ai-assistant' | 'ai-pbx-admin' | 'ai-platform'>(() => {
     const params = new URLSearchParams(window.location.search);
-    const saved = localStorage.getItem('asterisk_cdr_active_view') as 'calls' | 'directory' | 'reports' | 'marketing' | 'monitoring' | 'management' | 'balance' | 'about' | 'scripts' | 'ai-assistant' | 'ai-pbx-admin' | 'ai-platform' | null;
+    const saved = localStorage.getItem('asterisk_cdr_active_view') as 'calls' | 'directory' | 'reports' | 'marketing' | 'monitoring' | 'management' | 'balance' | 'gsm-gateways' | 'about' | 'scripts' | 'ai-assistant' | 'ai-pbx-admin' | 'ai-platform' | null;
     if (params.get('directorySearch')) return 'directory';
     if (/^\/ai-platform(?:\/(?:agents(?:\/\d+(?:\/(?:knowledge|voice|diagnostics))?)?|scripts|assistant|skills|knowledge|conversations|settings|diagnostics))?$/.test(window.location.pathname)) return 'ai-platform';
     if (window.location.pathname === '/management/directory/import') return 'directory';
@@ -4123,6 +4124,7 @@ export default function App() {
     if (hasAnyMonitoringTabPermission()) return 'monitoring';
     if (hasPermission('view_management')) return 'management';
     if (hasPermission('view_balance')) return 'balance';
+    if (hasPermission('view_gsm_gateways')) return 'gsm-gateways';
     if (hasPermission('view_scripts')) return 'scripts';
     if (hasPermission('view_ai_assistant')) return 'ai-assistant';
     if (hasPermission('view_ai_pbx_admin')) return 'ai-pbx-admin';
@@ -4142,6 +4144,7 @@ export default function App() {
     if (view === 'monitoring') return hasAnyMonitoringTabPermission();
     if (view === 'management') return hasPermission('view_management');
     if (view === 'balance') return hasPermission('view_balance');
+    if (view === 'gsm-gateways') return hasPermission('view_gsm_gateways');
     if (view === 'scripts') return hasPermission('view_scripts');
     if (view === 'ai-assistant') return hasPermission('view_ai_assistant');
     if (view === 'ai-pbx-admin') return hasPermission('view_ai_pbx_admin');
@@ -6195,6 +6198,17 @@ export default function App() {
                 </button>
               )}
 
+              {hasPermission('view_gsm_gateways') && (
+                <button
+                  onClick={() => setActiveView('gsm-gateways')}
+                  className={`flex items-center ${isSidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl transition-all relative group cursor-pointer ${activeView === 'gsm-gateways' ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-900/30 shadow-inner' : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent'}`}
+                  title={isSidebarExpanded ? '' : 'GSM-шлюзы'}
+                >
+                  <Network className="h-5 w-5 shrink-0" />
+                  {isSidebarExpanded && <span className="text-xs font-semibold truncate">GSM-шлюзы</span>}
+                </button>
+              )}
+
               {(hasPermission('view_ai_platform') || hasPermission('view_scripts') || hasPermission('view_ai_assistant')) && (
                 <button onClick={() => { setActiveView('ai-platform'); window.history.replaceState({}, '', hasPermission('view_ai_platform') ? '/ai-platform/agents' : hasPermission('view_scripts') ? '/ai-platform/scripts' : '/ai-platform/assistant'); }} className={`flex items-center ${isSidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl transition-all relative group cursor-pointer ${activeView === 'ai-platform' ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-900/30 shadow-inner' : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent'}`} title={isSidebarExpanded ? '' : 'AI Platform'}>
                   <Bot className="h-5 w-5 shrink-0" />{isSidebarExpanded && <span className="text-xs font-semibold truncate">AI Platform</span>}
@@ -6329,6 +6343,7 @@ export default function App() {
                   {activeView === 'monitoring' && <Activity className="h-5 w-5 animate-pulse" />}
                   {activeView === 'management' && <Wrench className="h-5 w-5" />}
                   {activeView === 'balance' && <Wallet className="h-5 w-5" />}
+                  {activeView === 'gsm-gateways' && <Network className="h-5 w-5" />}
                   {activeView === 'settings' && <Settings className="h-5 w-5" />}
                 </div>
                 <div>
@@ -6340,6 +6355,7 @@ export default function App() {
                     {activeView === 'monitoring' && 'Мониторинг звонков'}
                     {activeView === 'management' && 'Управление АТС'}
                     {activeView === 'balance' && 'Баланс операторов'}
+                    {activeView === 'gsm-gateways' && 'GSM-шлюзы'}
                     {activeView === 'settings' && 'Настройки системы'}
                   </h1>
                   <p className="text-slate-500 dark:text-slate-400 text-xs font-light">
@@ -8144,6 +8160,12 @@ export default function App() {
     {activeView === 'balance' && (
       <Suspense fallback={<div className="p-8 text-center text-slate-500 font-bold bg-white dark:bg-slate-800 rounded-2xl border border-slate-100 dark:border-slate-700">Загрузка модуля баланса...</div>}>
         <BalanceCenter session={session} hasPermission={hasPermission} />
+      </Suspense>
+    )}
+
+    {activeView === 'gsm-gateways' && hasPermission('view_gsm_gateways') && (
+      <Suspense fallback={<div className="p-8 text-center text-slate-500">Загрузка GSM-шлюзов...</div>}>
+        <GsmGatewaysPage token={session.token} canManage={hasPermission('manage_gsm_gateways')} canViewSms={hasPermission('view_gsm_sms')} canSend={hasPermission('send_gsm_sms')} canViewBalances={hasPermission('view_gsm_balances')} canManageBalances={hasPermission('manage_gsm_balances')} canManageServices={hasPermission('manage_gsm_services')} />
       </Suspense>
     )}
 

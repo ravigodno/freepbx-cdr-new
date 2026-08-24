@@ -69,6 +69,13 @@ export type PermissionKey =
   | 'manage_balance_sources'
   | 'view_balance_alerts'
   | 'manage_balance_providers'
+  | 'view_gsm_gateways'
+  | 'view_gsm_sms'
+  | 'view_gsm_balances'
+  | 'manage_gsm_balances'
+  | 'manage_gsm_services'
+  | 'manage_gsm_gateways'
+  | 'send_gsm_sms'
   | 'view_scripts'
   | 'manage_scripts'
   | 'view_ai_assistant'
@@ -215,6 +222,14 @@ const PERMISSION_MODULE_MAP: Partial<Record<PermissionKey, OptionalModuleKey>> =
   manage_balance_sources: 'balance',
   view_balance_alerts: 'balance',
   manage_balance_providers: 'balance',
+
+  view_gsm_gateways: 'management',
+  view_gsm_sms: 'management',
+  view_gsm_balances: 'management',
+  manage_gsm_balances: 'management',
+  manage_gsm_services: 'management',
+  manage_gsm_gateways: 'management',
+  send_gsm_sms: 'management',
 
   view_scripts: 'scripts',
   manage_scripts: 'scripts',

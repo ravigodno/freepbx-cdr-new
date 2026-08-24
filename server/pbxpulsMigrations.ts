@@ -2102,6 +2102,120 @@ const MIGRATIONS: Migration[] = [
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
     ],
     seed: seedLegacyDtmfEvents
+  },
+  {
+    key:'20260824_083_gsm_gateway_foundation',
+    description:'Add GSM gateway settings, safe operations and access permissions',
+    statements:[
+      `CREATE TABLE IF NOT EXISTS gsm_gateways(
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,provider VARCHAR(32) NOT NULL,name VARCHAR(191) NOT NULL,
+        base_url VARCHAR(191) NOT NULL,username_encrypted LONGTEXT NOT NULL,password_encrypted LONGTEXT NOT NULL,
+        sms_username_encrypted LONGTEXT NULL,sms_password_encrypted LONGTEXT NULL,
+        config_json LONGTEXT NOT NULL,enabled TINYINT(1) NOT NULL DEFAULT 1,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NULL,
+        UNIQUE KEY uniq_gsm_gateway_url(base_url)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS gsm_gateway_operations(
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,gateway_id BIGINT UNSIGNED NOT NULL,
+        operation_type ENUM('sms','ussd') NOT NULL,status ENUM('preview','applied','failed','expired') NOT NULL,
+        preview_payload_encrypted LONGTEXT NOT NULL,preview_json LONGTEXT NOT NULL,result_json LONGTEXT NULL,safe_error_code VARCHAR(64) NULL,
+        actor_label VARCHAR(191) NULL,applied_by VARCHAR(191) NULL,expires_at DATETIME NOT NULL,applied_at DATETIME NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,KEY idx_gsm_operations_gateway_time(gateway_id,created_at),
+        CONSTRAINT fk_gsm_operations_gateway FOREIGN KEY(gateway_id) REFERENCES gsm_gateways(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `INSERT IGNORE INTO permissions(permission_key,name,description,category) VALUES
+       ('view_gsm_gateways','View GSM gateways','View GSM, SIP and operation status','gsm_gateways'),
+       ('manage_gsm_gateways','Manage GSM gateways','Configure gateways and prepare USSD operations','gsm_gateways'),
+       ('send_gsm_sms','Send GSM SMS','Preview and apply SMS sending','gsm_gateways')`,
+      `INSERT IGNORE INTO role_permissions(role_id,permission_id) SELECT r.id,p.id FROM roles r JOIN permissions p ON p.category='gsm_gateways' WHERE r.role_key IN('su','admin')`
+    ]
+  },
+  {
+    key:'20260824_084_gsm_balance_snapshots',
+    description:'Add persistent GSM SIM balance snapshots and auto refresh state',
+    statements:[
+      `CREATE TABLE IF NOT EXISTS gsm_gateway_balance_snapshots(
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,gateway_id BIGINT UNSIGNED NOT NULL,port VARCHAR(32) NOT NULL,
+        response_text TEXT NOT NULL,balance_amount DECIMAL(20,6) NULL,currency VARCHAR(16) NULL,status ENUM('success','failed') NOT NULL,
+        safe_error_code VARCHAR(64) NULL,measured_at DATETIME NOT NULL,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        KEY idx_gsm_balance_port_time(gateway_id,port,measured_at),
+        CONSTRAINT fk_gsm_balance_gateway FOREIGN KEY(gateway_id) REFERENCES gsm_gateways(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+    ]
+  },
+  {
+    key:'20260824_085_gsm_gateway_ami_credentials',
+    description:'Add encrypted AMI credentials for GSM gateway USSD operations',
+    statements:[
+      `ALTER TABLE gsm_gateways ADD COLUMN ami_username_encrypted LONGTEXT NULL AFTER sms_password_encrypted`,
+      `ALTER TABLE gsm_gateways ADD COLUMN ami_secret_encrypted LONGTEXT NULL AFTER ami_username_encrypted`,
+      `ALTER TABLE gsm_gateways ADD COLUMN ami_port INT UNSIGNED NOT NULL DEFAULT 5038 AFTER ami_secret_encrypted`
+    ]
+  },
+  {
+    key:'20260824_086_gsm_permissions_notifications',
+    description:'Add granular GSM permissions and gateway notification rules',
+    statements:[
+      `INSERT IGNORE INTO permissions(permission_key,name,description,category) VALUES
+       ('view_gsm_sms','View GSM SMS history','View incoming and outgoing GSM SMS','gsm_gateways'),
+       ('view_gsm_balances','View GSM balances','View current SIM balances and balance history','gsm_gateways'),
+       ('manage_gsm_balances','Manage GSM balances','Run USSD balance checks and configure automatic refresh','gsm_gateways')`,
+      `INSERT IGNORE INTO role_permissions(role_id,permission_id)
+       SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key IN('view_gsm_sms','view_gsm_balances','manage_gsm_balances')
+       WHERE r.role_key IN('su','admin')`,
+      `INSERT IGNORE INTO notification_rules(event_type,category,enabled,severity,cooldown_seconds,notify_on_recovery,parameters_json) VALUES
+       ('gsm.balance_low','gsm',0,'warning',3600,1,'{"threshold":100}'),
+       ('gsm.sip_latency_high','gsm',0,'warning',1800,1,'{"thresholdMs":57,"consecutiveFailures":2}'),
+       ('gsm.signal_low','gsm',0,'warning',1800,1,'{"thresholdCsq":10,"consecutiveFailures":2}'),
+       ('gsm.port_unavailable','gsm',0,'critical',1800,1,'{"consecutiveFailures":2}')`
+    ]
+  },
+  {
+    key:'20260824_087_gsm_ussd_services',
+    description:'Add managed GSM USSD service presets and permission',
+    statements:[
+      `CREATE TABLE IF NOT EXISTS gsm_gateway_ussd_presets(
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,gateway_id BIGINT UNSIGNED NOT NULL,
+        name VARCHAR(191) NOT NULL,ussd_code VARCHAR(64) NOT NULL,action_type ENUM('check','enable','disable') NOT NULL DEFAULT 'check',
+        description VARCHAR(500) NULL,enabled TINYINT(1) NOT NULL DEFAULT 1,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NULL,KEY idx_gsm_ussd_presets_gateway(gateway_id,enabled,name),
+        CONSTRAINT fk_gsm_ussd_preset_gateway FOREIGN KEY(gateway_id) REFERENCES gsm_gateways(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `INSERT IGNORE INTO permissions(permission_key,name,description,category) VALUES
+       ('manage_gsm_services','Manage GSM USSD services','Manage presets and execute confirmed USSD service commands','gsm_gateways')`,
+      `INSERT IGNORE INTO role_permissions(role_id,permission_id)
+       SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key='manage_gsm_services' WHERE r.role_key IN('su','admin')`
+    ]
+  },
+  {
+    key:'20260824_088_gsm_metric_history',
+    description:'Add retained GSM and SIP quality metric history',
+    statements:[
+      `CREATE TABLE IF NOT EXISTS gsm_gateway_metric_snapshots(
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,gateway_id BIGINT UNSIGNED NOT NULL,port VARCHAR(32) NOT NULL,
+        sim_number VARCHAR(32) NULL,signal_csq SMALLINT NULL,ber SMALLINT NULL,sip_latency_ms INT NULL,pdd DECIMAL(12,3) NULL,
+        acd DECIMAL(12,3) NULL,asr DECIMAL(12,3) NULL,registration VARCHAR(191) NULL,module_state VARCHAR(191) NULL,
+        ready TINYINT(1) NOT NULL DEFAULT 0,measured_at DATETIME NOT NULL,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        KEY idx_gsm_metrics_port_time(gateway_id,port,measured_at),KEY idx_gsm_metrics_time(measured_at),
+        CONSTRAINT fk_gsm_metric_gateway FOREIGN KEY(gateway_id) REFERENCES gsm_gateways(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+    ]
+  },
+  {
+    key:'20260824_089_gsm_ussd_followups',
+    description:'Persist SMS follow-up messages linked to confirmed GSM USSD operations',
+    statements:[
+      `CREATE TABLE IF NOT EXISTS gsm_gateway_ussd_followups(
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,operation_id BIGINT UNSIGNED NOT NULL,
+        gateway_id BIGINT UNSIGNED NOT NULL,port VARCHAR(32) NOT NULL,source_key CHAR(64) NOT NULL,
+        sender VARCHAR(64) NULL,message_text TEXT NOT NULL,received_at DATETIME NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_gsm_ussd_followup_source(gateway_id,source_key),
+        KEY idx_gsm_ussd_followup_operation(operation_id,received_at),
+        CONSTRAINT fk_gsm_ussd_followup_operation FOREIGN KEY(operation_id) REFERENCES gsm_gateway_operations(id) ON DELETE CASCADE,
+        CONSTRAINT fk_gsm_ussd_followup_gateway FOREIGN KEY(gateway_id) REFERENCES gsm_gateways(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+    ]
   }
 ];
 

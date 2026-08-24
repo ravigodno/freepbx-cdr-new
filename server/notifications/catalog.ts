@@ -22,6 +22,14 @@ export const NOTIFICATION_EVENT_CATALOG: NotificationEventDefinition[] = [
   { eventType:'pbxpuls.critical_error', category:'system', title:'Критическая ошибка PBXPuls', defaultSeverity:'critical', producer:'active' },
   { eventType:'disk.space_critical', category:'system', title:'Критически мало места на диске', defaultSeverity:'critical', producer:'registered' },
   { eventType:'security.critical_event', category:'security', title:'Критическое событие безопасности', defaultSeverity:'critical', producer:'registered' }
+  ,{ eventType:'gsm.balance_low', category:'gsm', title:'Низкий баланс GSM SIM', defaultSeverity:'warning', producer:'active', recoveryType:'gsm.balance_recovered' }
+  ,{ eventType:'gsm.balance_recovered', category:'gsm', title:'Баланс GSM SIM восстановлен', defaultSeverity:'info', producer:'active' }
+  ,{ eventType:'gsm.sip_latency_high', category:'gsm', title:'Высокая SIP latency GSM', defaultSeverity:'warning', producer:'active', recoveryType:'gsm.sip_latency_recovered' }
+  ,{ eventType:'gsm.sip_latency_recovered', category:'gsm', title:'SIP latency GSM восстановлена', defaultSeverity:'info', producer:'active' }
+  ,{ eventType:'gsm.signal_low', category:'gsm', title:'Слабый сигнал GSM', defaultSeverity:'warning', producer:'active', recoveryType:'gsm.signal_recovered' }
+  ,{ eventType:'gsm.signal_recovered', category:'gsm', title:'Сигнал GSM восстановлен', defaultSeverity:'info', producer:'active' }
+  ,{ eventType:'gsm.port_unavailable', category:'gsm', title:'GSM-порт недоступен', defaultSeverity:'critical', producer:'active', recoveryType:'gsm.port_recovered' }
+  ,{ eventType:'gsm.port_recovered', category:'gsm', title:'GSM-порт восстановлен', defaultSeverity:'info', producer:'active' }
   ,{ eventType:'site_forms.lead_received', category:'marketing', title:'Новая заявка с сайта', defaultSeverity:'info', producer:'active' }
   ,{ eventType:'site_forms.lead_unclaimed', category:'marketing', title:'Заявка не взята в работу', defaultSeverity:'warning', producer:'registered' }
   ,{ eventType:'site_forms.sla_due', category:'marketing', title:'Приближается SLA заявки', defaultSeverity:'warning', producer:'registered' }

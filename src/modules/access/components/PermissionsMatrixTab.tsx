@@ -147,6 +147,13 @@ const GROUPS: PermissionGroup[] = [
       { key: 'manage_trunks', label: 'Транки', kind: 'su', hint: 'Управление SIP-транками' },
       { key: 'manage_outbound_routes', label: 'Исходящие правила', kind: 'su', hint: 'Управление исходящими маршрутами' },
       { key: 'manage_numbering_capacity', label: 'Номерная емкость', kind: 'su', hint: 'Управление номерной емкостью' }
+      ,{ key: 'view_gsm_gateways', label: 'GSM-шлюзы', kind: 'tab', hint: 'Состояние GSM-портов и SIP endpoints' }
+      ,{ key: 'view_gsm_sms', label: 'История GSM SMS', kind: 'feature', hint: 'Просмотр входящих и исходящих SMS' }
+      ,{ key: 'send_gsm_sms', label: 'Отправка GSM SMS', kind: 'su', hint: 'Preview и отправка SMS' }
+      ,{ key: 'view_gsm_balances', label: 'Балансы GSM SIM', kind: 'feature', hint: 'Текущий баланс, история и графики расходов' }
+      ,{ key: 'manage_gsm_balances', label: 'Управление балансами GSM', kind: 'su', hint: 'USSD-проверка и расписание автообновления' }
+      ,{ key: 'manage_gsm_services', label: 'USSD и услуги GSM', kind: 'su', hint: 'Шаблоны, Preview и выполнение USSD-команд' }
+      ,{ key: 'manage_gsm_gateways', label: 'Настройки GSM-шлюзов', kind: 'su', hint: 'Подключение OpenVox и AMI' }
     ]
   },
   {
