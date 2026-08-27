@@ -4,6 +4,8 @@ import {
   buildCallRouteSummaryFromTimeline,
   mapRouteSummaryToLivePopup
 } from '../server/callRouteSummary.js';
+import { detectLiveCallDirection } from '../server/liveCallDirection.js';
+import { stabilizeLiveCallBannerPayload } from '../src/utils/liveCallBanner.js';
 
 const queue9990 = buildCallRouteSummaryFromLivePayload({
   direction: 'incoming', externalCaller: '74994907209', trunk: '841282',
@@ -91,6 +93,27 @@ const outgoingThroughInNamedTrunk = buildCallRouteSummaryFromLivePayload({
 });
 assert.equal(outgoingThroughInNamedTrunk.direction, 'outgoing');
 assert.equal(outgoingThroughInNamedTrunk.displayNumber, '79788101210');
+
+const outgoingWithTechnicalRoute = detectLiveCallDirection([
+  { Channel:'PJSIP/11-00000176',Context:'from-internal',CallerIDNum:'11',ConnectedLineNum:'300',Exten:'300',Application:'Dial',ApplicationData:'PJSIP/out-trunk/79788101210,300,T' },
+  { Channel:'PJSIP/out-trunk-00000177',Context:'macro-dialout-trunk',CallerIDNum:'79781234300',ConnectedLineNum:'11',Exten:'79788101210',Application:'AppDial',ApplicationData:'(Outgoing Line)' }
+], '11');
+assert.deepEqual(outgoingWithTechnicalRoute,{direction:'outgoing',internalCaller:'11',destinationNumber:'79788101210',trunkNumber:'79781234300'});
+
+const outgoingWithFreePbxTrunkDialContext = detectLiveCallDirection([
+  { Channel:'PJSIP/11-00000083',Context:'trunk-dial-with-exten',CallerIDNum:'79885090300',ConnectedLineNum:'300',Exten:'89788101210',Application:'Dial',ApplicationData:'PJSIP/89788101210@79885090300,300,T' },
+  { Channel:'PJSIP/79885090300-00000084',Context:'from-pstn',CallerIDNum:'89788101210',ConnectedLineNum:'11',Exten:'89788101210',Application:'AppDial',ApplicationData:'(Outgoing Line)' }
+], '11');
+assert.deepEqual(outgoingWithFreePbxTrunkDialContext,{direction:'outgoing',internalCaller:'11',destinationNumber:'79788101210',trunkNumber:'79885090300'});
+
+const outgoingRinging={active:true,linkedid:'1787809616.176',scenario:'outgoing',direction:'outgoing',operatorExt:'11',callerNumber:'11',internalCaller:'11',sourceNumber:'11',destinationNumber:'79788101210',dialedNumber:'79788101210',targetNumber:'79788101210',displayNumber:'79788101210',number:'79788101210'};
+const answeredTechnical={active:true,linkedid:'1787809616.176',scenario:'internal',direction:'internal',operatorExt:'11',callerNumber:'300',internalCaller:'300',sourceNumber:'300',destinationNumber:'11',targetNumber:'11',displayNumber:'11',number:'11',connected:true};
+const stableAnswered=stabilizeLiveCallBannerPayload(outgoingRinging,answeredTechnical);
+assert.equal(stableAnswered.direction,'outgoing');
+assert.equal(stableAnswered.callerNumber,'11');
+assert.equal(stableAnswered.destinationNumber,'79788101210');
+assert.equal(stableAnswered.displayNumber,'79788101210');
+assert.notEqual(stableAnswered.callerNumber,'300');
 
 const meeting = buildCallRouteSummaryFromLivePayload({
   phoneMeeting: true, phoneMeetingInitiator: '200', queue: '9000', rows: []

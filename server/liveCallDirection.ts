@@ -113,7 +113,8 @@ function followMePrimaryDestination(row: any): string {
 
 function isOutboundContext(context: string): boolean {
   return context.includes('from-internal') || context.includes('outbound') ||
-    context.includes('dialout') || context.includes('macro-dialout');
+    context.includes('dialout') || context.includes('macro-dialout') ||
+    context.includes('trunk-dial-with-exten');
 }
 
 function isInboundContext(context: string): boolean {
@@ -147,6 +148,19 @@ function allGroupNumbers(group: any[]): string[] {
 export function detectLiveCallDirection(group: any[], operatorExt = ''): LiveCallDirectionResolution {
   const rows = Array.isArray(group) ? group.filter(Boolean) : [];
   const operator = normalizeNumber(operatorExt);
+  const operatorParticipates = Boolean(operator) && rows.some(row =>
+    endpointExtension(row) === operator || explicitCallerExtension(row) === operator
+  );
+  const groupedOutgoingDestination = rows
+    .filter(row => isOutboundContext(rowContext(row)))
+    .flatMap(directDestinationCandidates)
+    .find(isExternal) || '';
+  if (operatorParticipates && groupedOutgoingDestination) {
+    const trunkNumber = allGroupNumbers(rows).find(number =>
+      isTrunkCandidate(number) && number !== groupedOutgoingDestination && number !== operator
+    ) || '';
+    return { direction:'outgoing', internalCaller:operator, destinationNumber:groupedOutgoingDestination, trunkNumber };
+  }
   const hasExplicitOutgoingDestination = rows.some(row => {
     const context = rowContext(row);
     const internalCaller = explicitCallerExtension(row) || (isOutboundContext(context) ? endpointExtension(row) : '');

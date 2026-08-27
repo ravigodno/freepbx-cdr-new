@@ -170,7 +170,7 @@ import {
   type LiveTransferTargetType
 } from './server/liveTransferSearch.js';
 import { isExternalDirectoryTransferAllowed } from './server/liveTransferSettings.js';
-import { buildLiveCallBannerDisplay, rankLiveCallBanners } from './src/utils/liveCallBanner.js';
+import { buildLiveCallBannerDisplay, rankLiveCallBanners, stabilizeLiveCallBannerPayload } from './src/utils/liveCallBanner.js';
 import {
   buildCallRouteSummaryFromLivePayload,
   buildCallRouteSummaryFromTimeline,
@@ -14457,6 +14457,17 @@ function buildLiveCallDebugGroups(channels: AmiBlock[], operatorExt: string) {
 }
 
 const liveCallBannerLogState = new Map<string, string>();
+const liveOutgoingBannerState = new Map<string, { expiresAt:number; banner:LiveCallBanner }>();
+
+function stabilizeServerLiveCallBanner(operatorExt:string,banner:LiveCallBanner):LiveCallBanner {
+  const now=Date.now();
+  if(liveOutgoingBannerState.size>500)for(const[key,value]of liveOutgoingBannerState)if(value.expiresAt<=now)liveOutgoingBannerState.delete(key);
+  if(!banner.active||!banner.linkedid)return banner;
+  const key=`${onlyDigits(operatorExt)}:${banner.linkedid}`,previous=liveOutgoingBannerState.get(key)?.banner;
+  const stabilized=stabilizeLiveCallBannerPayload(previous,banner) as LiveCallBanner;
+  if(stabilized.direction==='outgoing'&&isExternalNumber(stabilized.destinationNumber)&&isInternalExt(stabilized.callerNumber))liveOutgoingBannerState.set(key,{expiresAt:now+15*60_000,banner:stabilized});
+  return stabilized;
+}
 
 function logLiveCallBannerState(operatorExt: string, banner: LiveCallBanner, channelCount: number, calls: LiveCallBanner[] = []) {
   const callId = banner.active ? String(banner.linkedid || '') : '';
@@ -14525,7 +14536,7 @@ app.get('/api/live/call-banner', requireAuth(), async (req, res) => {
       localDb.settings,
       localDb.phoneMeetings || []
     );
-    const intentCalls = calls.map(call => synchronizeIncomingCallerIdentity(
+    const intentCalls = calls.map(call => stabilizeServerLiveCallBanner(effectiveOperatorExt,synchronizeIncomingCallerIdentity(
       applyClickToCallIntentToBanner(
         call,
         effectiveOperatorExt,
@@ -14533,13 +14544,13 @@ app.get('/api/live/call-banner', requireAuth(), async (req, res) => {
         localDb.settings
       ),
       number => resolveLiveContact(number, directoryRuntime.contacts, localDb.settings)
-    ));
-    banner = intentCalls[0] || synchronizeIncomingCallerIdentity(applyClickToCallIntentToBanner(
+    )));
+    banner = intentCalls[0] || stabilizeServerLiveCallBanner(effectiveOperatorExt,synchronizeIncomingCallerIdentity(applyClickToCallIntentToBanner(
       banner,
       effectiveOperatorExt,
       directoryRuntime.contacts,
       localDb.settings
-    ), number => resolveLiveContact(number, directoryRuntime.contacts, localDb.settings));
+    ), number => resolveLiveContact(number, directoryRuntime.contacts, localDb.settings)));
     logLiveCallBannerState(effectiveOperatorExt, banner, channels.length, intentCalls);
     res.json({ ...banner, calls: intentCalls });
   } catch (error: any) {

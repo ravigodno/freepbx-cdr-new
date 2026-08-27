@@ -103,7 +103,7 @@ export function stabilizeLiveCallBannerPayload<T extends Record<string, any>>(pr
   if (!previous?.active || !current?.active) return current;
   const previousId = cleanLiveValue(previous.linkedid);
   const currentId = cleanLiveValue(current.linkedid);
-  if (!previousId || previousId !== currentId || current.direction !== 'outgoing') return current;
+  if (!previousId || previousId !== currentId || (previous.direction !== 'outgoing' && current.direction !== 'outgoing')) return current;
 
   const currentDestination = firstLiveValue([
     current.destinationNumber,
@@ -112,7 +112,7 @@ export function stabilizeLiveCallBannerPayload<T extends Record<string, any>>(pr
     current.displayNumber,
     current.number
   ], isExternalLiveNumber);
-  if (currentDestination) return current;
+  if (currentDestination && current.direction === 'outgoing') return current;
 
   const preservedDestination = firstLiveValue([
     previous.destinationNumber,
@@ -126,17 +126,25 @@ export function stabilizeLiveCallBannerPayload<T extends Record<string, any>>(pr
   if (!preservedDestination) return current;
 
   const callerNumber = firstLiveValue([
+    previous.internalCaller,
+    previous.callerNumber,
+    previous.sourceNumber,
+    previous.operatorExt,
+    current.operatorExt,
     current.internalCaller,
     current.callerNumber,
-    current.sourceNumber,
-    current.operatorExt,
-    previous.destinationNumber
+    current.sourceNumber
   ], isInternalLiveNumber);
   return {
     ...current,
+    scenario: 'outgoing',
+    direction: 'outgoing',
+    operatorExt: callerNumber || current.operatorExt,
     callerNumber,
     internalCaller: callerNumber,
     sourceNumber: callerNumber,
+    externalCallerNumber: '',
+    internalNumber: callerNumber,
     destinationNumber: preservedDestination,
     dialedNumber: preservedDestination,
     targetNumber: preservedDestination,
