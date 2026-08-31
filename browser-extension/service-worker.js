@@ -1,4 +1,28 @@
+importScripts('call-lifecycle.js', 'phone-number.js');
+
 const LEAD_ALARM = 'pbxpuls-leads';
+const SELECTION_CALL_MENU = 'pbxpuls-call-selection';
+const programmaticPopupClosures = new Set();
+const { resolveCallEndPolicy } = PBXPulsCallLifecycle;
+const { normalizePhoneNumber } = PBXPulsPhoneNumber;
+
+async function ensureSelectionCallMenu() {
+  await chrome.contextMenus.remove(SELECTION_CALL_MENU).catch(() => undefined);
+  chrome.contextMenus.create({
+    id: SELECTION_CALL_MENU,
+    title: 'Позвонить через PBXPuls: %s',
+    contexts: ['selection']
+  });
+}
+
+async function openCallConfirmation(value) {
+  const number = normalizePhoneNumber(value);
+  if (!number) throw new Error('Выделенный текст не похож на номер телефона');
+  const target = chrome.runtime.getURL(`confirm-call.html?number=${encodeURIComponent(number)}`);
+  const popup = await chrome.windows.create({ url: target, type: 'popup', width: 390, height: 320, focused: true });
+  await chrome.storage.local.set({ lastTelLinkAt: new Date().toISOString(), lastTelLinkError: '' });
+  return popup;
+}
 
 async function ensureAlarm() {
   if (!await chrome.alarms.get(LEAD_ALARM)) {
@@ -10,7 +34,7 @@ async function injectTelInterceptors() {
   const tabs = await chrome.tabs.query({});
   await Promise.all(tabs
     .filter(tab => tab.id && /^https?:/i.test(String(tab.url || '')))
-    .map(tab => chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['tel-links.js'] }).catch(() => undefined)));
+    .map(tab => chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['phone-number.js', 'tel-links.js'] }).catch(() => undefined)));
 }
 
 let livePollBusy = false;
@@ -45,7 +69,7 @@ async function startBackgroundPolling() {
 }
 
 async function settings() {
-  return chrome.storage.local.get(['baseUrl', 'token', 'extension', 'leadCursor', 'lastCallId', 'callPopupWindowId', 'testPopupUntil']);
+  return chrome.storage.local.get(['baseUrl', 'token', 'refreshToken', 'extension', 'leadCursor', 'lastCallId', 'lastCallDirection', 'lastCallConnected', 'lastCallIsOutgoingForOperator', 'lastCallEndDeadline', 'callPopupWindowId', 'dismissedCallPopupId', 'testPopupUntil']);
 }
 
 function buildDirectorySearchUrl(baseUrl, query) {
@@ -55,43 +79,95 @@ function buildDirectorySearchUrl(baseUrl, query) {
   return url.toString();
 }
 
-async function rememberCallNotificationTarget(notificationId, query) {
+async function rememberCallNotificationTarget(notificationId, query, action = null) {
   const stored = await chrome.storage.local.get('callNotificationTargets');
   const targets = stored.callNotificationTargets && typeof stored.callNotificationTargets === 'object'
     ? stored.callNotificationTargets
     : {};
-  targets[notificationId] = { query: String(query || '').trim(), createdAt: Date.now() };
+  targets[notificationId] = { query: String(query || '').trim(), action, createdAt: Date.now() };
   const recent = Object.fromEntries(Object.entries(targets)
     .sort((left, right) => Number(right[1]?.createdAt || 0) - Number(left[1]?.createdAt || 0))
     .slice(0, 50));
   await chrome.storage.local.set({ callNotificationTargets: recent });
 }
 
-async function closeCallPopup(config) {
+async function closeCallPopupWindow(config) {
   if (Number(config.testPopupUntil || 0) > Date.now()) return;
-  if (config.callPopupWindowId) await chrome.windows.remove(config.callPopupWindowId).catch(() => undefined);
-  await chrome.storage.local.remove(['lastCallId', 'callPopupWindowId', 'testPopupUntil']);
+  if (config.callPopupWindowId) {
+    programmaticPopupClosures.add(config.callPopupWindowId);
+    await chrome.windows.remove(config.callPopupWindowId).catch(() => programmaticPopupClosures.delete(config.callPopupWindowId));
+  }
+  await chrome.storage.local.remove(['callPopupWindowId', 'testPopupUntil']);
+}
+
+async function clearCallNotification(config) {
+  const callId = String(config.lastCallId || '');
+  if (callId) await chrome.notifications.clear(`call:${callId}`).catch(() => undefined);
+  await chrome.storage.local.remove(['lastCallId', 'lastCallDirection', 'lastCallConnected', 'lastCallIsOutgoingForOperator', 'lastCallEndDeadline']);
+}
+
+async function handleEndedCall(config) {
+  await closeCallPopupWindow(config);
+  if (config.dismissedCallPopupId) await chrome.storage.local.remove('dismissedCallPopupId');
+  if (!config.lastCallId || Number(config.testPopupUntil || 0) > Date.now()) {
+    return;
+  }
+  await chrome.notifications.update(`call:${config.lastCallId}`, { buttons: [] }).catch(() => undefined);
+  const policy = resolveCallEndPolicy(
+    config.lastCallDirection,
+    config.lastCallConnected === true,
+    config.lastCallIsOutgoingForOperator === true
+  );
+  if (policy.action === 'keep') {
+    if (config.lastCallEndDeadline) await chrome.storage.local.remove('lastCallEndDeadline');
+    return;
+  }
+  if (policy.delayMs === 0) {
+    await clearCallNotification(config);
+    return;
+  }
+  const deadline = Number(config.lastCallEndDeadline || 0) || Date.now() + policy.delayMs;
+  if (!config.lastCallEndDeadline) await chrome.storage.local.set({ lastCallEndDeadline: deadline });
+  if (Date.now() >= deadline) await clearCallNotification({ ...config, lastCallEndDeadline: deadline });
 }
 
 async function showCallPopup(call, config) {
   const id = String(call.linkedid || call.uniqueid || '');
-  if (!call.active || !id) { await closeCallPopup(config); return; }
-  await chrome.storage.local.set({ lastCallSeenAt: new Date().toISOString(), lastCallSeenId: id });
-  if (config.lastCallId === id && config.callPopupWindowId) {
-    const existing = await chrome.windows.get(config.callPopupWindowId).catch(() => null);
-    if (existing) return;
-    await chrome.storage.local.remove('callPopupWindowId');
-    config.callPopupWindowId = null;
-  }
-  if (config.callPopupWindowId) await chrome.windows.remove(config.callPopupWindowId).catch(() => undefined);
+  if (!call.active || !id) { await handleEndedCall(config); return; }
+  const sameCall = config.lastCallId === id;
+  const wasConnected = call.connected === true || (sameCall && config.lastCallConnected === true);
   const digits = value => String(value || '').replace(/\D/g, '');
   const operatorExtension = digits(call.operatorExt || config.extension);
   const incoming = call.direction === 'incoming';
   const callerNumber = String(incoming
     ? (call.externalCallerNumber || call.callerNumber || call.sourceNumber || call.number || '')
     : (call.internalCaller || call.sourceNumber || call.callerNumber || ''));
-  const destinationNumber = String(call.destinationNumber || call.targetNumber || call.number || '');
   const operatorIsCaller = Boolean(operatorExtension) && digits(callerNumber) === operatorExtension;
+  const isOutgoingForOperator = call.direction === 'outgoing' || (call.direction === 'internal' && operatorIsCaller);
+  await chrome.storage.local.set({
+    lastCallId: id,
+    lastCallDirection: String(call.direction || config.lastCallDirection || ''),
+    lastCallConnected: wasConnected,
+    lastCallIsOutgoingForOperator: isOutgoingForOperator,
+    lastCallEndDeadline: null
+  });
+  await chrome.storage.local.set({ lastCallSeenAt: new Date().toISOString(), lastCallSeenId: id });
+  if (config.dismissedCallPopupId && config.dismissedCallPopupId !== id) {
+    await chrome.storage.local.remove('dismissedCallPopupId');
+    config.dismissedCallPopupId = null;
+  }
+  if (config.dismissedCallPopupId === id) return;
+  if (config.lastCallId === id && config.callPopupWindowId) {
+    const existing = await chrome.windows.get(config.callPopupWindowId).catch(() => null);
+    if (existing) return;
+    await chrome.storage.local.remove('callPopupWindowId');
+    config.callPopupWindowId = null;
+  }
+  if (config.callPopupWindowId) {
+    programmaticPopupClosures.add(config.callPopupWindowId);
+    await chrome.windows.remove(config.callPopupWindowId).catch(() => programmaticPopupClosures.delete(config.callPopupWindowId));
+  }
+  const destinationNumber = String(call.destinationNumber || call.targetNumber || call.number || '');
   const caller = {
     name: String(incoming ? (call.displayName || call.callerDisplayName || '') : (call.callerDisplayName || '')),
     number: callerNumber,
@@ -105,7 +181,6 @@ async function showCallPopup(call, config) {
     position: String(call.destinationPosition || (!incoming ? call.position : '') || '')
   };
   const counterparty = incoming ? caller : (operatorIsCaller ? destination : caller);
-  const isOutgoingForOperator = call.direction === 'outgoing' || (call.direction === 'internal' && operatorIsCaller);
   const params = new URLSearchParams({
     id,
     direction: String(call.direction || ''),
@@ -135,20 +210,30 @@ async function showCallPopup(call, config) {
   if (!popup?.id) throw new Error('Chrome не вернул идентификатор окна звонка');
   await chrome.storage.local.set({
     lastCallId: id,
+    lastCallDirection: String(call.direction || ''),
+    lastCallConnected: wasConnected,
+    lastCallIsOutgoingForOperator: isOutgoingForOperator,
     callPopupWindowId: popup.id,
     lastPopupOpenedAt: new Date().toISOString(),
     lastPopupError: ''
   });
   const notificationId = `call:${id}`;
-  await rememberCallNotificationTarget(notificationId, counterparty.name || counterparty.number);
+  const externalIncomingNumber = incoming ? digits(counterparty.number) : '';
+  const blacklistAction = externalIncomingNumber.length >= 7 && externalIncomingNumber.length <= 20
+    ? { type: 'blacklist-hangup', linkedid: id, operatorExt: String(call.operatorExt || config.extension || ''), callerNumber: externalIncomingNumber }
+    : null;
+  await rememberCallNotificationTarget(notificationId, counterparty.name || counterparty.number, blacklistAction);
   await chrome.notifications.create(notificationId, {
     type: 'basic', iconUrl: 'icon128.png', title: isOutgoingForOperator ? 'Куда звоним' : 'Кто звонит',
     message: [counterparty.name, counterparty.number, counterparty.company, counterparty.position].filter(Boolean).join(' · '),
-    priority: 2, requireInteraction: true
+    priority: 2, requireInteraction: true,
+    ...(blacklistAction ? { buttons: [{ title: 'В ЧС и завершить' }] } : {})
   });
 }
 
-async function api(path, init = {}) {
+let refreshPromise=null;
+async function refreshAccessToken(config){if(!config.refreshToken)return null;if(!refreshPromise)refreshPromise=fetch(config.baseUrl.replace(/\/$/,'')+'/api/auth/browser-extension/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({refreshToken:config.refreshToken})}).then(async response=>{const body=await response.json().catch(()=>({}));if(!response.ok)throw new Error(body.error||`HTTP ${response.status}`);await chrome.storage.local.set({token:body.token,refreshToken:body.refreshToken,sessionExpiresAt:body.sessionExpiresAt,authExpired:false});return body.token;}).finally(()=>{refreshPromise=null});return refreshPromise;}
+async function api(path, init = {}, retried = false) {
   const config = await settings();
   if (!config.baseUrl || !config.token) throw new Error('Расширение не подключено');
   const response = await fetch(config.baseUrl.replace(/\/$/, '') + path, {
@@ -157,7 +242,7 @@ async function api(path, init = {}) {
     headers: { Authorization: `Bearer ${config.token}`, 'Content-Type': 'application/json', ...(init.headers || {}) }
   });
   const body = await response.json().catch(() => ({}));
-  if (response.status === 401) await chrome.storage.local.set({ authExpired: true });
+  if(response.status===401&&!retried){try{if(await refreshAccessToken(config))return api(path,init,true);}catch{}await chrome.storage.local.set({authExpired:true});}
   if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
   return body;
 }
@@ -178,8 +263,8 @@ async function pollLeads() {
   await chrome.storage.local.set({ leadCursor: Number(data.nextAfterId ?? data.latestId ?? config.leadCursor ?? 0) });
 }
 
-chrome.runtime.onInstalled.addListener(() => { void ensureAlarm(); void injectTelInterceptors(); void startBackgroundPolling().catch(() => undefined); });
-chrome.runtime.onStartup.addListener(() => { void ensureAlarm(); void injectTelInterceptors(); void startBackgroundPolling().catch(() => undefined); });
+chrome.runtime.onInstalled.addListener(() => { void ensureAlarm(); void ensureSelectionCallMenu(); void injectTelInterceptors(); void startBackgroundPolling().catch(() => undefined); });
+chrome.runtime.onStartup.addListener(() => { void ensureAlarm(); void ensureSelectionCallMenu(); void injectTelInterceptors(); void startBackgroundPolling().catch(() => undefined); });
 chrome.alarms.onAlarm.addListener(alarm => {
   if (alarm.name === LEAD_ALARM) {
     void pollLeads().catch(() => undefined);
@@ -201,12 +286,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
   if (message?.type === 'tel-link') {
-    const number = String(message.number || '').replace(/[^\d+*#]/g, '');
-    if (!number) { sendResponse({ ok: false, error: 'Номер не распознан' }); return; }
-    const target = chrome.runtime.getURL(`confirm-call.html?number=${encodeURIComponent(number)}`);
-    void chrome.windows.create({ url: target, type: 'popup', width: 390, height: 320, focused: true })
+    void openCallConfirmation(message.number)
       .then(async popup => {
-        await chrome.storage.local.set({ lastTelLinkAt: new Date().toISOString(), lastTelLinkError: '' });
         sendResponse({ ok: true, windowId: popup.id });
       })
       .catch(async error => {
@@ -232,9 +313,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
+chrome.contextMenus.onClicked.addListener((info) => {
+  if (info.menuItemId !== SELECTION_CALL_MENU) return;
+  void openCallConfirmation(info.selectionText).catch(async error => {
+    await chrome.storage.local.set({ lastTelLinkError: String(error?.message || error), lastTelLinkErrorAt: new Date().toISOString() });
+  });
+});
+
 chrome.windows.onRemoved.addListener(async windowId => {
   const config = await settings();
-  if (config.callPopupWindowId === windowId) await chrome.storage.local.remove('callPopupWindowId');
+  if (config.callPopupWindowId !== windowId) return;
+  if (programmaticPopupClosures.delete(windowId)) {
+    await chrome.storage.local.remove('callPopupWindowId');
+    return;
+  }
+  await chrome.storage.local.set({ dismissedCallPopupId: String(config.lastCallId || '') });
+  await chrome.storage.local.remove('callPopupWindowId');
 });
 
 chrome.notifications.onClicked.addListener(id => {
@@ -246,6 +340,36 @@ chrome.notifications.onClicked.addListener(id => {
       ? `${config.baseUrl}/?tab=marketing&marketingTab=site-forms&leadId=${match[1]}`
       : (/^call:/.test(id) ? buildDirectorySearchUrl(config.baseUrl, callTarget) : config.baseUrl);
     void chrome.tabs.create({ url });
+  });
+});
+
+chrome.notifications.onButtonClicked.addListener((notificationId, buttonIndex) => {
+  if (buttonIndex !== 0 || !/^call:/.test(notificationId)) return;
+  void chrome.storage.local.get('callNotificationTargets').then(async stored => {
+    const action = stored.callNotificationTargets?.[notificationId]?.action;
+    if (action?.type !== 'blacklist-hangup' || !action.linkedid || !action.operatorExt) return;
+    const path = `/api/live-calls/${encodeURIComponent(action.linkedid)}/blacklist-hangup`;
+    try {
+      await chrome.notifications.update(notificationId, { buttons: [] });
+      const preview = await api(`${path}/preview`, {
+        method: 'POST', body: JSON.stringify({ operatorExt: action.operatorExt })
+      });
+      if (!preview?.success || !preview.previewId) throw new Error(preview?.error || 'Не удалось проверить звонок');
+      const result = await api(`${path}/apply`, {
+        method: 'POST', body: JSON.stringify({ previewId: preview.previewId })
+      });
+      if (!result?.success) throw new Error(result?.error || 'Не удалось заблокировать звонок');
+      await chrome.notifications.clear(notificationId).catch(() => undefined);
+      await chrome.notifications.create(`blacklist:${Date.now()}`, {
+        type: 'basic', iconUrl: 'icon128.png', title: 'Номер добавлен в ЧС',
+        message: `${result.callerNumber || action.callerNumber} · звонок завершён`, priority: 1
+      });
+    } catch (error) {
+      await chrome.notifications.create(`blacklist-error:${Date.now()}`, {
+        type: 'basic', iconUrl: 'icon128.png', title: 'Не удалось добавить в ЧС',
+        message: String(error?.message || error || 'Неизвестная ошибка'), priority: 1
+      });
+    }
   });
 });
 

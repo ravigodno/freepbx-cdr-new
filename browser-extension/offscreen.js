@@ -8,7 +8,7 @@ async function pollCall() {
     if (!token || !baseUrl || !extension) return;
     const query = new URLSearchParams({ operatorExt: extension });
     const response = await fetch(`${baseUrl.replace(/\/$/, '')}/api/live/call-banner?${query}`, { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' });
-    if (response.status === 401) { await chrome.storage.local.set({ authExpired: true, lastPollError: 'HTTP 401', lastPollAt: new Date().toISOString() }); return; }
+    if (response.status === 401) { const refreshed=await chrome.runtime.sendMessage({type:'api',path:`/api/live/call-banner?${query}`});if(refreshed?.ok)return;await chrome.storage.local.set({ authExpired: true, lastPollError: 'HTTP 401', lastPollAt: new Date().toISOString() }); return; }
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const call = await response.json();
     await chrome.storage.local.set({

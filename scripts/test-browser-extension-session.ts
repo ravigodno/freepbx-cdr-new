@@ -1,0 +1,4 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+const server=fs.readFileSync('server.ts','utf8'),sessions=fs.readFileSync('server/browserExtensionSessions.ts','utf8'),worker=fs.readFileSync('browser-extension/service-worker.js','utf8'),options=fs.readFileSync('browser-extension/options.js','utf8'),migration=fs.readFileSync('server/pbxpulsMigrations.ts','utf8');
+assert.match(server,/browser-extension\/refresh/);assert.match(server,/client==='browser_extension'/);assert.match(sessions,/DAYS=180/);assert.match(sessions,/sha256/);assert.match(sessions,/token_hash/);assert.match(migration,/browser_extension_sessions/);assert.match(worker,/refreshAccessToken/);assert.match(options,/client: 'browser_extension'/);assert.doesNotMatch([sessions,worker,options].join('\n'),/password\s*:/i);console.log('Browser extension 180-day session tests: OK');

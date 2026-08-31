@@ -2216,6 +2216,25 @@ const MIGRATIONS: Migration[] = [
         CONSTRAINT fk_gsm_ussd_followup_gateway FOREIGN KEY(gateway_id) REFERENCES gsm_gateways(id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
     ]
+  },
+  {
+    key:'20260824_090_browser_extension_sessions',description:'Add rotating 180 day browser extension sessions',statements:[
+      `CREATE TABLE IF NOT EXISTS browser_extension_sessions(id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,username VARCHAR(100) NOT NULL,token_hash CHAR(64) NOT NULL,auth_version CHAR(64) NOT NULL,user_agent_hash CHAR(64) NULL,expires_at DATETIME NOT NULL,last_used_at DATETIME NOT NULL,revoked_at DATETIME NULL,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,UNIQUE KEY uniq_browser_extension_token(token_hash),KEY idx_browser_extension_user(username,revoked_at,expires_at)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+    ]
+  },
+  {
+    key:'20260825_091_notification_bitrix24_channel',description:'Add encrypted Bitrix24 notification channel',statements:[
+      `INSERT IGNORE INTO notification_channels(channel,type,enabled,encrypted_config,destination,cooldown_minutes,minimum_balance,rules_json)
+       VALUES('bitrix24','bitrix24',0,NULL,NULL,60,1500,'{}')`
+    ]
+  },
+  {
+    key:'20260828_092_softphone_profiles',description:'Add encrypted browser softphone profiles and audit',statements:[
+      `CREATE TABLE IF NOT EXISTS softphone_profiles(id BIGINT AUTO_INCREMENT PRIMARY KEY,username VARCHAR(100) NOT NULL,extension VARCHAR(32) NULL,enabled TINYINT(1) NOT NULL DEFAULT 0,websocket_url VARCHAR(500) NULL,sip_uri VARCHAR(255) NULL,authorization_username VARCHAR(191) NULL,password_encrypted TEXT NULL,password_key_version VARCHAR(32) NULL,display_name VARCHAR(191) NULL,updated_by VARCHAR(100) NULL,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at DATETIME NULL,UNIQUE KEY uniq_softphone_profile_username(username),INDEX idx_softphone_profile_enabled(enabled,username)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS softphone_profile_audit(id BIGINT AUTO_INCREMENT PRIMARY KEY,username VARCHAR(100) NOT NULL,actor VARCHAR(100) NULL,event_type VARCHAR(64) NOT NULL,details_json LONGTEXT NOT NULL,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,INDEX idx_softphone_audit_username_time(username,created_at)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `INSERT IGNORE INTO permissions(permission_key,name,description,category)VALUES('manage_softphone_profiles','Manage softphone profiles','Preview and manage encrypted browser softphone profiles','telephony')`,
+      `INSERT IGNORE INTO role_permissions(role_id,permission_id)SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key='manage_softphone_profiles' WHERE r.role_key IN('su','admin')`
+    ],seed:async()=>seedLegacyAiPlatformPermissions(['manage_softphone_profiles'])
   }
 ];
 

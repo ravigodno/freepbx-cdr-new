@@ -36,6 +36,7 @@ import{validateDirectoryPhone as validateSharedDirectoryPhone}from'./shared/dire
 import { resolveCdrCallerExtension } from './shared/cdrCallerExtension.js';
 import { resolveMissedCallCallbackSlaMinutes } from './shared/missedCallCallbackSla.js';
 import { resolveClickToCallContext } from './server/clickToCallContext.js';
+import { resolveClickToCallOriginChannel, type ClickToCallChannelTechnology } from './server/clickToCallOrigin.js';
 import { clearClickToCallLiveIntent, getClickToCallLiveIntent, markClickToCallLiveIntentActive, rememberClickToCallLiveIntent } from './server/clickToCallLiveIntent.js';
 import os from 'os';
 import { registerManagementRoutes } from './server-management.js';
@@ -54,13 +55,16 @@ import {
 } from './server/consultTransferService.js';
 import { runPBXPulsMigrations } from './server/pbxpulsMigrations.js';
 import { registerPBXPulsSqlStatusRoutes } from './server/pbxpulsSqlStatus.js';
-import { authenticatePBXPulsSqlUser, compareLegacyUserWithSql, getAuthStorageMode, getPBXPulsUsers } from './server/pbxpulsAuthDb.js';
+import { authenticatePBXPulsSqlUser, compareLegacyUserWithSql, getAuthStorageMode, getPBXPulsUser, getPBXPulsUserPermissions, getPBXPulsUserRoles, getPBXPulsUsers } from './server/pbxpulsAuthDb.js';
+import { browserExtensionAuthVersion, createBrowserExtensionSession, revokeBrowserExtensionSession, rotateBrowserExtensionSession } from './server/browserExtensionSessions.js';
 import { getPBXPulsDbRuntimeStatus, isPBXPulsDbAvailable, queryPBXPulsDb, sanitizePBXPulsDbError } from './server/pbxpulsDb.js';
 import { getPBXPulsDbConfigLogFields } from './server/pbxpulsDbConfig.js';
 import { writePBXPulsSystemEvent } from './server/pbxpulsEvents.js';
 import { registerCdrEncodingRepairRoutes } from './server/cdrEncodingRepair.js';
 import { findLatestDtmfEndByLinkedId, recordDtmfEventSql } from './server/dtmfEventStorage.js';
 import { registerSiteFormRoutes } from './server/siteForms/router.js';
+import { registerSoftphoneRoutes } from './server/softphone/router.js';
+import { resolveSoftphonePbxHost } from './server/softphone/autoConfig.js';
 import { SiteFormPullService } from './server/siteForms/pullService.js';
 import { upsertPBXPulsSetting } from './server/pbxpulsSettings.js';
 import { buildLegacySettingsSeedRows } from './server/pbxpulsLegacySettings.js';
@@ -171,6 +175,8 @@ import {
 } from './server/liveTransferSearch.js';
 import { isExternalDirectoryTransferAllowed } from './server/liveTransferSettings.js';
 import { buildLiveCallBannerDisplay, rankLiveCallBanners, stabilizeLiveCallBannerPayload } from './src/utils/liveCallBanner.js';
+import { getLiveCallBlacklistNumber } from './src/utils/liveCallBlacklist.js';
+import { runAmiHangupChannels } from './server/amiHangup.js';
 import {
   buildCallRouteSummaryFromLivePayload,
   buildCallRouteSummaryFromTimeline,
@@ -197,6 +203,8 @@ import { registerGsmGatewayRoutes } from './server/gsmGateways/router.js';
 import { registerNotificationRoutes } from './server/notifications/router.js';
 import { findUnreturnedMissedCalls } from './server/notifications/missedCallDetector.js';
 import { calculateAnsweredIncomingMetrics } from './server/reportIncomingMetrics.js';
+import { buildCdrLogicalNumberScope } from './server/reportCdrScope.js';
+import { buildAnsweredContactLookup, findFirstAnsweredContactAfter } from './server/cdrAnsweredLookup.js';
 import { writePBXPulsAuditLog } from './server/pbxpulsEvents.js';
 import { registerDirectoryCustomFieldRoutes } from './server/directoryCustomFields/router.js';
 import { mergeDeviceNetworkIdentity, readIpNeighborMacs } from './server/deviceNetworkIdentity.js';
@@ -2854,6 +2862,16 @@ const buildLostCallAnalytics = (calls: any[], options: { startMs: number; endMs:
 
   outboundByNumber.forEach(list => list.sort((a, b) => getCallDateMs(a.calldate) - getCallDateMs(b.calldate)));
   inboundByNumber.forEach(list => list.sort((a, b) => getCallDateMs(a.calldate) - getCallDateMs(b.calldate)));
+  const firstCallIndexAfter = (items: any[], afterMs: number): number => {
+    let low = 0;
+    let high = items.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (getCallDateMs(items[middle].calldate) <= afterMs) low = middle + 1;
+      else high = middle;
+    }
+    return low;
+  };
 
   let callbackAfterMissed = 0;
   let callbackRecoveredWithinSla = 0;
@@ -2862,16 +2880,12 @@ const buildLostCallAnalytics = (calls: any[], options: { startMs: number; endMs:
   let pendingCallback = 0;
   const items: LostCallAnalyticsItem[] = missedCalls.map(({ call, normalizedNumber, missedMs }) => {
     const deadline = missedMs + callbackWindowMs;
-    const outbound = (outboundByNumber.get(normalizedNumber) || []).filter(candidate => {
-      const candidateMs = getCallDateMs(candidate.calldate);
-      return candidateMs > missedMs;
-    });
-    const repeatedInbound = (inboundByNumber.get(normalizedNumber) || []).filter(candidate => {
-      const candidateMs = getCallDateMs(candidate.calldate);
-      return candidate.uniqueid !== call.uniqueid && candidateMs > missedMs;
-    });
-    const firstOutbound = outbound[0] || null;
-    const firstInboundContact = repeatedInbound[0] || null;
+    const outbound = outboundByNumber.get(normalizedNumber) || [];
+    const repeatedInbound = inboundByNumber.get(normalizedNumber) || [];
+    const outboundIndex = firstCallIndexAfter(outbound, missedMs);
+    const inboundIndex = firstCallIndexAfter(repeatedInbound, missedMs);
+    const firstOutbound = outbound[outboundIndex] || null;
+    const firstInboundContact = repeatedInbound[inboundIndex] || null;
     const firstRelatedContact = [firstOutbound, firstInboundContact]
       .filter(Boolean)
       .sort((a, b) => getCallDateMs(a.calldate) - getCallDateMs(b.calldate))[0] || null;
@@ -2911,7 +2925,7 @@ const buildLostCallAnalytics = (calls: any[], options: { startMs: number; endMs:
       department: owner?.department || null,
       responsibleExtension,
       responsibleName: owner?.employeeName || getDirectoryNameByExtension(directory, responsibleExtension),
-      attempts: outbound.length,
+      attempts: Math.max(0, outbound.length - outboundIndex),
       callbackStatus,
       processingStatus: callbackStatus,
       processingStatusLabel: resolution.processingStatusLabel,
@@ -10644,6 +10658,9 @@ function buildAuthLoginResponse(user: LoginAuthenticatedUser): { token: string; 
   };
 }
 
+async function currentExtensionUser(username:string):Promise<{user:LoginAuthenticatedUser;authVersion:string}|null>{const mode=await getAuthStorageMode();if(mode!=='legacy'){const item=await getPBXPulsUser(username);if(item?.is_active&&item.password_hash){const roles=await getPBXPulsUserRoles(item.id),role=roles.map(x=>x.role_key).find(x=>['su','admin','manager','operator'].includes(x)) as UserRole|undefined;if(role){const permissions:Record<string,boolean>={};for(const p of await getPBXPulsUserPermissions(item.id))permissions[p.permission_key]=true;return{user:{id:String(item.id),username:item.username,role,extension:'',disabled:false,permissions},authVersion:browserExtensionAuthVersion(item.password_hash)};}}}const db=await readLocalDb(),item=(db.users||[]).find((x:any)=>String(x.username).toLowerCase()===username.toLowerCase());if(!item||item.disabled||!item.passwordHash)return null;const role=(db.roles||getDefaultAccessRoles()).find((x:any)=>x.id===item.role);return{user:{id:String(item.id),username:item.username,role:item.role,extension:item.extension||'',disabled:false,permissions:{...(role?.permissions||{}),...(item.permissions||{})}},authVersion:browserExtensionAuthVersion(item.passwordHash)};}
+async function extensionLoginResponse(user:LoginAuthenticatedUser,userAgent:string){const current=await currentExtensionUser(user.username);if(!current)throw new Error('extension_session_user_unavailable');const session=await createBrowserExtensionSession(user.username,current.authVersion,userAgent);return{...buildAuthLoginResponse(user),refreshToken:session.refreshToken,sessionExpiresAt:session.expiresAt};}
+
 function logLegacyAuthFailure(username: string, reason: string): void {
   console.warn(`[AUTH] Login failed username=${String(username || '').trim()} reason=${reason}`);
 }
@@ -10730,6 +10747,7 @@ function sanitizeAuthComparisonError(error: any): string {
 // Auth endpoint
 app.post('/api/auth/login', async (req, res) => {
   const { username, password } = req.body;
+  const extensionClient=req.body?.client==='browser_extension';
   const safeUsername = String(username || '').trim().slice(0, 100);
 
   console.log(`[AUTH] Login attempt username=${safeUsername} ip=${req.ip || req.socket.remoteAddress || ''}`);
@@ -10764,7 +10782,7 @@ app.post('/api/auth/login', async (req, res) => {
           message: 'SQL auth login succeeded',
           details: { username: user.username, role: user.role }
         });
-        res.json(buildAuthLoginResponse(user));
+        res.json(extensionClient?await extensionLoginResponse(user,String(req.headers['user-agent']||'')):buildAuthLoginResponse(user));
         return;
       }
     } catch (error: any) {
@@ -10782,7 +10800,7 @@ app.post('/api/auth/login', async (req, res) => {
         message: 'SQL auth failed, legacy fallback succeeded',
         details: { username: legacyAuth.user.username, reason: sqlFailureReason }
       });
-      res.json(buildAuthLoginResponse(legacyAuth.user));
+      res.json(extensionClient?await extensionLoginResponse(legacyAuth.user,String(req.headers['user-agent']||'')):buildAuthLoginResponse(legacyAuth.user));
       return;
     }
 
@@ -10811,8 +10829,11 @@ app.post('/api/auth/login', async (req, res) => {
     scheduleLegacySqlAuthComparison(legacyAuth.user.username);
   }
 
-  res.json(buildAuthLoginResponse(legacyAuth.user));
+  res.json(extensionClient?await extensionLoginResponse(legacyAuth.user,String(req.headers['user-agent']||'')):buildAuthLoginResponse(legacyAuth.user));
 });
+
+app.post('/api/auth/browser-extension/refresh',async(req,res)=>{try{const session=await rotateBrowserExtensionSession(String(req.body?.refreshToken||''),String(req.headers['user-agent']||''));if(!session)return res.status(401).json({error:'Сессия расширения истекла'});const current=await currentExtensionUser(session.username);if(!current||current.authVersion!==session.authVersion){await revokeBrowserExtensionSession(session.refreshToken);return res.status(401).json({error:'Сессия расширения отозвана'});}return res.json({...buildAuthLoginResponse(current.user),refreshToken:session.refreshToken,sessionExpiresAt:session.expiresAt});}catch{return res.status(503).json({error:'Не удалось обновить сессию расширения'});}});
+app.post('/api/auth/browser-extension/logout',async(req,res)=>{await revokeBrowserExtensionSession(String(req.body?.refreshToken||'')).catch(()=>undefined);res.json({success:true});});
 
 
 
@@ -11266,7 +11287,7 @@ app.get('/api/settings/public', async (req, res) => {
   }
 });
 
-const BROWSER_EXTENSION_VERSION = '0.1.16';
+const BROWSER_EXTENSION_VERSION = '0.1.25';
 const BROWSER_EXTENSION_ARCHIVE = `PBXPuls-Desktop-Alerts-${BROWSER_EXTENSION_VERSION}.zip`;
 
 app.get('/api/browser-extension/download', requireAuth(), (req, res) => {
@@ -13296,8 +13317,6 @@ app.delete('/api/directory/:id', requireAuth(), async (req, res) => {
 
 // --- ASTERISK AMI CLICK TO CALL SERVICES ---
 
-type ClickToCallChannelTechnology = 'PJSIP' | 'SIP';
-
 async function resolveClickToCallChannelTechnology(extension: string): Promise<ClickToCallChannelTechnology | null> {
   const safeExtension = String(extension || '').replace(/\D/g, '');
   if (!safeExtension) return null;
@@ -13315,9 +13334,9 @@ async function resolveClickToCallChannelTechnology(extension: string): Promise<C
   return null;
 }
 
-function runAMICallSimulate(log: string[], fromExtension: string, toPhoneNumber: string, context: string, channelTechnology: ClickToCallChannelTechnology, resolve: Function) {
+function runAMICallSimulate(log: string[], fromExtension: string, toPhoneNumber: string, context: string, channelTechnology: ClickToCallChannelTechnology, speakerphone: boolean, resolve: Function) {
   const clickToCallContext = resolveClickToCallContext(context);
-  const origChannel = `${channelTechnology}/${fromExtension}`;
+  const origChannel = resolveClickToCallOriginChannel(channelTechnology, fromExtension, speakerphone);
 
   log.push(`[AMI-SIMULATOR] Начат имитационный вызов из внутреннего номера [${fromExtension}] на номер [${toPhoneNumber}]...`);
   log.push(`[AMI-SIMULATOR] Имитируем: подключение к Asterisk AMI...`);
@@ -13331,7 +13350,7 @@ function runAMICallSimulate(log: string[], fromExtension: string, toPhoneNumber:
   resolve({ success: true, log, simulated: true });
 }
 
-function triggerAMICall(settings: AppSettings, fromExtension: string, toPhoneNumber: string, channelTechnology: ClickToCallChannelTechnology): Promise<{ success: boolean; log: string[]; simulated?: boolean; error?: string }> {
+function triggerAMICall(settings: AppSettings, fromExtension: string, toPhoneNumber: string, channelTechnology: ClickToCallChannelTechnology, speakerphone = false): Promise<{ success: boolean; log: string[]; simulated?: boolean; error?: string }> {
   return new Promise((resolve) => {
     const log: string[] = [];
     const host = settings.amiHost || 'localhost';
@@ -13348,7 +13367,7 @@ function triggerAMICall(settings: AppSettings, fromExtension: string, toPhoneNum
     // Fall back to simulation if credentials or host aren't supplied logically (e.g. default localhost)
     if (!host || host === 'localhost' || !pass || !user) {
       log.push(`[AMI] Сведения о подключении отсутствуют или установлен localhost без пароля. Переключение в режим симуляции.`);
-      runAMICallSimulate(log, fromExtension, toPhoneNumber, context, channelTechnology, resolve);
+      runAMICallSimulate(log, fromExtension, toPhoneNumber, context, channelTechnology, speakerphone, resolve);
       return;
     }
     
@@ -13383,7 +13402,7 @@ function triggerAMICall(settings: AppSettings, fromExtension: string, toPhoneNum
             log.push(`[AMI] Авторизация успешно подтверждена.`);
             buffer = '';
             
-            const origChannel = `${channelTechnology}/${safeFromExtension}`;
+            const origChannel = resolveClickToCallOriginChannel(channelTechnology, safeFromExtension, speakerphone);
             log.push(`[AMI] Отправляем Originate: [${origChannel}] -> [${safeToPhoneNumber}] по контексту [${clickToCallContext}]...`);
             
             socket.write(
@@ -13423,14 +13442,14 @@ function triggerAMICall(settings: AppSettings, fromExtension: string, toPhoneNum
     socket.on('error', (err) => {
       log.push(`[AMI] Ошибка подключения: ${err.message}`);
       log.push(`[AMI] Не удалось провести настоящее AMI подключение. Автоматическая симуляция звонка для теста.`);
-      runAMICallSimulate(log, fromExtension, toPhoneNumber, context, channelTechnology, resolve);
+      runAMICallSimulate(log, fromExtension, toPhoneNumber, context, channelTechnology, speakerphone, resolve);
     });
     
     socket.on('timeout', () => {
       log.push(`[AMI] Превышено время ожидания соединения (6.5 сек).`);
       socket.destroy();
       log.push(`[AMI] Переход в режим симуляции.`);
-      runAMICallSimulate(log, fromExtension, toPhoneNumber, context, channelTechnology, resolve);
+      runAMICallSimulate(log, fromExtension, toPhoneNumber, context, channelTechnology, speakerphone, resolve);
     });
   });
 }
@@ -14558,6 +14577,117 @@ app.get('/api/live/call-banner', requireAuth(), async (req, res) => {
   }
 });
 
+type LiveCallBlacklistPreview = {
+  id: string;
+  username: string;
+  linkedid: string;
+  operatorExt: string;
+  callerNumber: string;
+  expiresAt: number;
+};
+
+const liveCallBlacklistPreviews = new Map<string, LiveCallBlacklistPreview>();
+
+async function resolveLiveIncomingCallForBlacklist(localDb: any, req: Request, linkedid: string, requestedOperatorExt: string) {
+  const operatorExt = getEffectiveOperatorExt(localDb, req, requestedOperatorExt);
+  if (!operatorExt) throw new Error('Не определён внутренний номер оператора');
+  const channels = await runAmiCoreShowChannels(localDb.settings);
+  const group = groupLiveChannelsForOperator(channels, operatorExt).find(rows => rows.some(row => (
+    String(row.Linkedid || '') === linkedid || String(row.Uniqueid || '') === linkedid
+  )));
+  if (!group) throw new Error('Активный звонок не найден');
+  const directoryRuntime = await getLiveDirectoryRuntimeSnapshot(localDb, req);
+  const banner = synchronizeIncomingCallerIdentity(
+    await buildLiveCallBannerPayload(group, operatorExt, directoryRuntime.contacts, localDb.settings, localDb.phoneMeetings || []),
+    number => resolveLiveContact(number, directoryRuntime.contacts, localDb.settings)
+  );
+  const callerNumber = getLiveCallBlacklistNumber(banner);
+  if (!callerNumber) throw new Error('Действие доступно только для внешнего входящего звонка');
+  const channelNames = Array.from(new Set(group.map(row => String(row.Channel || '').trim()).filter(channel => (
+    channel && /^[A-Za-z0-9_@;:/.+\-]+$/.test(channel)
+  ))));
+  if (!channelNames.length) throw new Error('Каналы активного звонка не найдены');
+  return { operatorExt, callerNumber, channelNames, directory: directoryRuntime.contacts || [] };
+}
+
+app.post('/api/live-calls/:linkedid/blacklist-hangup/preview', requireAuth(), async (req, res) => {
+  try {
+    const authUser = (req as any).user || {};
+    if (authUser.role !== 'su' && authUser.role !== 'admin' && authUser.permissions?.manage_blacklist !== true) {
+      return res.status(403).json({ error: 'Нет прав на управление черным списком' });
+    }
+    const linkedid = String(req.params.linkedid || '').trim();
+    if (!/^[A-Za-z0-9_.:-]{1,96}$/.test(linkedid)) return res.status(400).json({ error: 'Некорректный идентификатор звонка' });
+    const localDb = await readLocalDb();
+    const call = await resolveLiveIncomingCallForBlacklist(localDb, req, linkedid, String(req.body?.operatorExt || ''));
+    const preview: LiveCallBlacklistPreview = {
+      id: crypto.randomUUID(),
+      username: String(authUser.username || ''),
+      linkedid,
+      operatorExt: call.operatorExt,
+      callerNumber: call.callerNumber,
+      expiresAt: Date.now() + 30_000
+    };
+    for (const [id, item] of liveCallBlacklistPreviews) if (item.expiresAt <= Date.now()) liveCallBlacklistPreviews.delete(id);
+    liveCallBlacklistPreviews.set(preview.id, preview);
+    res.json({
+      success: true,
+      previewId: preview.id,
+      callerNumber: preview.callerNumber,
+      message: `Завершить входящий звонок и добавить ${preview.callerNumber} в черный список?`
+    });
+  } catch (error: any) {
+    res.status(409).json({ error: error.message || 'Не удалось подготовить блокировку звонка' });
+  }
+});
+
+app.post('/api/live-calls/:linkedid/blacklist-hangup/apply', requireAuth(), async (req, res) => {
+  try {
+    const authUser = (req as any).user || {};
+    if (authUser.role !== 'su' && authUser.role !== 'admin' && authUser.permissions?.manage_blacklist !== true) {
+      return res.status(403).json({ error: 'Нет прав на управление черным списком' });
+    }
+    const previewId = String(req.body?.previewId || '').trim();
+    const preview = liveCallBlacklistPreviews.get(previewId);
+    liveCallBlacklistPreviews.delete(previewId);
+    if (!preview || preview.expiresAt <= Date.now() || preview.username !== String(authUser.username || '') || preview.linkedid !== String(req.params.linkedid || '')) {
+      return res.status(409).json({ error: 'Предпросмотр устарел. Повторите действие.' });
+    }
+    const localDb = await readLocalDb();
+    const call = await resolveLiveIncomingCallForBlacklist(localDb, req, preview.linkedid, preview.operatorExt);
+    if (call.callerNumber !== preview.callerNumber) return res.status(409).json({ error: 'Участники звонка изменились. Повторите действие.' });
+
+    const existing = call.directory.find((entry: any) => directoryEntryMatchesNumber(entry, call.callerNumber)) || null;
+    const actor = getDirectoryStorageModeActor(req);
+    const writeDecision = await getDirectoryWriteRuntimeDecision(existing ? 'update' : 'create', actor);
+    if (writeDecision.useSql !== true || writeDecision.blocked === true) {
+      return res.status(409).json({ error: writeDecision.reason || 'Запись черного списка в MariaDB недоступна' });
+    }
+    const writeResult = existing
+      ? await updateDirectoryContactSql(String(existing.id), { ...existing, isBlacklisted: true }, actor)
+      : await createDirectoryContactSql({
+          name: `Заблокированный номер ${call.callerNumber.slice(-4)}`,
+          phone: call.callerNumber,
+          contactType: 'common',
+          type: 'client',
+          isBlacklisted: true,
+          comment: 'Добавлено из popup входящего звонка'
+        }, actor);
+    liveDirectorySnapshotCache.clear();
+
+    const astDb = await runAMICommand(localDb.settings, `database put blacklist ${call.callerNumber} 1`);
+    if (!astDb.success) throw new Error(`Номер сохранён в MariaDB, но не добавлен в Asterisk blacklist: ${astDb.message}`);
+    const hangupResults = await runAmiHangupChannels(localDb.settings, call.channelNames);
+    const hangupFailed = hangupResults.filter(result => !result.success);
+    if (hangupFailed.length === hangupResults.length) {
+      throw new Error('Номер добавлен в черный список, но завершить звонок не удалось');
+    }
+    res.json({ success: true, callerNumber: call.callerNumber, contactId: writeResult.contactId, channelsEnded: hangupResults.length - hangupFailed.length });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Не удалось заблокировать звонок' });
+  }
+});
+
 app.get('/api/debug/live-call-payload', requireAuth(), async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store');
@@ -15145,6 +15275,7 @@ app.post('/api/click-to-call', requireAuth(), async (req, res) => {
     }
 
     const { fromExtension, toPhoneNumber } = req.body;
+    const speakerphone = req.body?.speakerphone === true;
     if (!fromExtension || !toPhoneNumber) {
       res.status(400).json({ error: 'Поля Внутренний номер (fromExtension) и Телефон назначения (toPhoneNumber) обязательны' });
       return;
@@ -15164,7 +15295,7 @@ app.post('/api/click-to-call', requireAuth(), async (req, res) => {
       });
       return;
     }
-    const result = await triggerAMICall(localDb.settings, effectiveFromExtension, toPhoneNumber.trim(), channelTechnology);
+    const result = await triggerAMICall(localDb.settings, effectiveFromExtension, toPhoneNumber.trim(), channelTechnology, speakerphone);
     if (result.success) rememberClickToCallLiveIntent(effectiveFromExtension, toPhoneNumber);
     res.json(result);
   } catch (error: any) {
@@ -15902,20 +16033,23 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
     } else {
       // Connect to Asterisk DB & Fetch records
       // Constructing SQL Query to read records
-      let sql = 'SELECT uniqueid, calldate, clid, src, dst, dcontext, channel, dstchannel, lastapp, lastdata, duration, billsec, disposition, recordingfile, did, cnum, cnam, outbound_cnum, linkedid FROM cdr WHERE 1=1';
-      const sqlParams: any[] = [];
+      const selectSql = 'SELECT uniqueid, calldate, clid, src, dst, dcontext, channel, dstchannel, lastapp, lastdata, duration, billsec, disposition, recordingfile, did, cnum, cnam, outbound_cnum, linkedid FROM cdr WHERE ';
+      const whereParts = ['1=1'];
+      const baseParams: any[] = [];
 
       if (startDate) {
-        sql += ' AND calldate >= ?';
-        sqlParams.push(buildDateTimeFilter(startDate, startTime));
+        whereParts.push('calldate >= ?');
+        baseParams.push(buildDateTimeFilter(startDate, startTime));
       }
       if (endDate) {
-        sql += ' AND calldate <= DATE_ADD(?, INTERVAL ? MINUTE)';
-        sqlParams.push(buildDateTimeFilter(endDate, endTime, true));
-        sqlParams.push(callbackWindowMinutes);
+        whereParts.push('calldate <= DATE_ADD(?, INTERVAL ? MINUTE)');
+        baseParams.push(buildDateTimeFilter(endDate, endTime, true));
+        baseParams.push(callbackWindowMinutes);
       }
 
-      sql += ' ORDER BY calldate DESC';
+      const cdrScope = buildCdrLogicalNumberScope(whereParts.join(' AND '), baseParams, numberFilter);
+      const sql = selectSql + cdrScope.whereSql + ' ORDER BY calldate DESC';
+      const sqlParams = cdrScope.params;
       
       try {
         calls = await queryFreePBXCDR(settings, false, sql, sqlParams);
@@ -16261,9 +16395,10 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
     // 2. Identify phone callbacks and resolutions
     // Sort calls ascending to run chronological analysis of callbacks
     const chronologicalCalls = [...calls].sort((a, b) => new Date(a.calldate).getTime() - new Date(b.calldate).getTime());
+    const answeredContactLookup = buildAnsweredContactLookup(chronologicalCalls);
     
     // For every unanswered call, look for subsequent conversations (either in or out) with this client
-    chronologicalCalls.forEach((call, index) => {
+    chronologicalCalls.forEach((call) => {
       const disposition = call.disposition?.toUpperCase();
       const isMissedType = disposition === 'NO ANSWER' || disposition === 'BUSY' || disposition === 'FAILED';
       
@@ -16274,23 +16409,7 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
         const clientNum = call.src.trim();
         const callTime = new Date(call.calldate).getTime();
         
-        // Find if there's any subsequent answered call with this number in chronologicalCalls
-        const resolution = chronologicalCalls.find(c => {
-          const cTime = new Date(c.calldate).getTime();
-          // Must happen AFTER the missed call
-          if (cTime <= callTime) return false;
-          
-          const isAnswered = c.disposition === 'ANSWERED' && c.billsec > 0;
-          if (!isAnswered) return false;
-
-          // Outbound callback: operator (internal extension e.g. src < 1000) dialled the client (dst = clientNum)
-          const isOutboundResolved = c.dst === clientNum;
-          
-          // Inbound callback: client called back again (src = clientNum) and someone answered (dst is not missed)
-          const isInboundResolved = c.src === clientNum;
-
-          return isOutboundResolved || isInboundResolved;
-        });
+        const resolution = findFirstAnsweredContactAfter(answeredContactLookup, clientNum, callTime);
 
         if (resolution) {
           // Keep references in the original results array
@@ -16570,22 +16689,25 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
     if (isDemo) {
       calls = JSON.parse(JSON.stringify(mockCDRData));
     } else {
-      let sql = 'SELECT uniqueid, calldate, clid, src, dst, dcontext, channel, dstchannel, lastapp, lastdata, duration, billsec, disposition, recordingfile, did, cnum, cnam, outbound_cnum, linkedid FROM cdr WHERE 1=1';
-      const sqlParams: any[] = [];
+      const selectSql = 'SELECT uniqueid, calldate, clid, src, dst, dcontext, channel, dstchannel, lastapp, lastdata, duration, billsec, disposition, recordingfile, did, cnum, cnam, outbound_cnum, linkedid FROM cdr WHERE ';
+      const whereParts = ['1=1'];
+      const baseParams: any[] = [];
 
       if (startDate) {
-        sql += ' AND calldate >= ?';
-        sqlParams.push(buildDateTimeFilter(startDate, startTime));
+        whereParts.push('calldate >= ?');
+        baseParams.push(buildDateTimeFilter(startDate, startTime));
       } else {
-        sql += ' AND calldate >= DATE_SUB(NOW(), INTERVAL 7 DAY)';
+        whereParts.push('calldate >= DATE_SUB(NOW(), INTERVAL 7 DAY)');
       }
       if (endDate) {
-        sql += ' AND calldate <= DATE_ADD(?, INTERVAL ? MINUTE)';
-        sqlParams.push(buildDateTimeFilter(endDate, endTime, true));
-        sqlParams.push(callbackWindowMinutes);
+        whereParts.push('calldate <= DATE_ADD(?, INTERVAL ? MINUTE)');
+        baseParams.push(buildDateTimeFilter(endDate, endTime, true));
+        baseParams.push(callbackWindowMinutes);
       }
 
-      sql += ' ORDER BY calldate DESC';
+      const cdrScope = buildCdrLogicalNumberScope(whereParts.join(' AND '), baseParams, numberFilter);
+      const sql = selectSql + cdrScope.whereSql + ' ORDER BY calldate DESC';
+      const sqlParams = cdrScope.params;
       
       try {
         calls = await queryFreePBXCDR(localDb.settings, false, sql, sqlParams);
@@ -16697,6 +16819,7 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
     // Calculate callback/KPI statuses for /api/stats exactly like /api/calls.
     // Without this block processedCalls stays 0 even when table rows show "SLA OK".
     const chronologicalStatsCalls = [...calls].sort((a, b) => new Date(a.calldate).getTime() - new Date(b.calldate).getTime());
+    const answeredStatsLookup = buildAnsweredContactLookup(chronologicalStatsCalls);
 
     chronologicalStatsCalls.forEach((call) => {
       const disposition = call.disposition?.toUpperCase();
@@ -16707,18 +16830,7 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
         const clientNum = call.src.trim();
         const callTime = new Date(call.calldate).getTime();
 
-        const resolution = chronologicalStatsCalls.find(c => {
-          const cTime = new Date(c.calldate).getTime();
-          if (cTime <= callTime) return false;
-
-          const isAnswered = c.disposition === 'ANSWERED' && Number(c.billsec || 0) > 0;
-          if (!isAnswered) return false;
-
-          const isOutboundResolved = c.dst === clientNum;
-          const isInboundResolved = c.src === clientNum;
-
-          return isOutboundResolved || isInboundResolved;
-        });
+        const resolution = findFirstAnsweredContactAfter(answeredStatsLookup, clientNum, callTime);
 
         if (resolution) {
           const originalCall = callMap.get(call.uniqueid);
@@ -17023,6 +17135,7 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
       callMap.set(c.uniqueid, c);
     });
 
+    const answeredReportLookup = buildAnsweredContactLookup(chronologicalStatsCalls);
     chronologicalStatsCalls.forEach((call) => {
       const disposition = call.disposition?.toUpperCase();
       const isMissedType = disposition === 'NO ANSWER' || disposition === 'BUSY' || disposition === 'FAILED';
@@ -17032,18 +17145,7 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
         const clientNum = call.src.trim();
         const callTime = new Date(call.calldate).getTime();
 
-        const resolution = chronologicalStatsCalls.find(c => {
-          const cTime = new Date(c.calldate).getTime();
-          if (cTime <= callTime) return false;
-
-          const isAnswered = c.disposition === 'ANSWERED' && Number(c.billsec || 0) > 0;
-          if (!isAnswered) return false;
-
-          const isOutboundResolved = c.dst === clientNum;
-          const isInboundResolved = c.src === clientNum;
-
-          return isOutboundResolved || isInboundResolved;
-        });
+        const resolution = findFirstAnsweredContactAfter(answeredReportLookup, clientNum, callTime);
 
         if (resolution) {
           const originalCall = callMap.get(call.uniqueid);
@@ -23173,6 +23275,55 @@ const aiPbxTransferService=createPBXTransferService({
   getTransferStatus:async()=> 'unknown'
 });
 const aiPlatformRuntime=registerAiPlatformRoutes(app, { requireAuth, checkPermission: checkUserPermission, readLegacyDb: readLocalDb, pbxReadServices: aiPbxReadServices,pbxTransferService:aiPbxTransferService });
+async function resolveSoftphoneAutoConfigSource(req: Request) {
+  const username = String((req as any).user?.username || '').trim().toLowerCase();
+  const localDb = await readLocalDb();
+  const user = (localDb.users || []).find(item => String(item?.username || '').trim().toLowerCase() === username);
+  const extension = String(user?.extension || '').trim();
+  if (!extension) throw new Error('Пользователю не назначен внутренний номер');
+  if (!/^[0-9*#+]{1,32}$/.test(extension)) throw new Error('Пользователю назначен некорректный внутренний номер');
+
+  const settings = localDb.settings || ({} as AppSettings);
+  const identityRows = await queryFreePBXCDR(settings, false, `SELECT u.extension,u.name,d.tech,d.description
+    FROM asterisk.users u LEFT JOIN asterisk.devices d ON d.id=u.extension
+    WHERE u.extension=? LIMIT 1`, [extension]);
+  const identity = identityRows[0];
+  if (!identity) throw new Error(`Внутренний номер ${extension} не найден в настройках АТС`);
+
+  const pjsipRows = await queryFreePBXCDR(settings, false,
+    `SELECT keyword,data FROM asterisk.sip
+     WHERE id=? AND EXISTS (
+       SELECT 1 FROM asterisk.sip driver
+       WHERE driver.id=? AND driver.keyword='sipdriver' AND driver.data='chan_pjsip'
+     )`, [extension, extension]);
+  const pjsip: Record<string, string> = {};
+  for (const row of pjsipRows) {
+    const key = String(row?.keyword || '').trim().toLowerCase();
+    if (key) pjsip[key] = String(row?.data || '');
+  }
+
+  const pbxHost = resolveSoftphonePbxHost({
+    configuredHost: process.env.PBXPULS_SOFTPHONE_PBX_HOST,
+    apiUrl: settings.freepbxApiUrl,
+    requestHost: req.hostname
+  });
+
+  return {
+    username,
+    extension,
+    displayName: String(identity.name || identity.description || username),
+    pbxHost,
+    websocketUrl: String(process.env.PBXPULS_SOFTPHONE_WSS_URL || '').trim(),
+    deviceTech: String(identity.tech || ''),
+    pjsip
+  };
+}
+
+registerSoftphoneRoutes(app, {
+  requireAuth,
+  checkPermission: checkUserPermission,
+  resolveAutoConfigSource: resolveSoftphoneAutoConfigSource
+});
 
 // REGISTER SECURITY MONITORING CENTER ROUTES
 registerSecurityRoutes(app, requireAuth, checkUserPermission);

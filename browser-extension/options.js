@@ -18,12 +18,13 @@ $('connect').onclick = async () => {
   const baseUrl = $('baseUrl').value.trim().replace(/\/$/, ''), username = $('username').value.trim(), password = $('password').value;
   $('status').textContent = 'Подключение…';
   try {
-    const response = await fetch(baseUrl + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) });
+    const response = await fetch(baseUrl + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password, client: 'browser_extension' }) });
     const body = await response.json();
     if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
     const extension = String(body.user?.extension || '').trim();
     if (!extension) throw new Error('Пользователю не назначен внутренний номер');
-    await chrome.storage.local.set({ baseUrl, username, token: body.token, extension, authExpired: false, leadCursor: null, lastCallId: null });
+    if (!body.refreshToken) throw new Error('Сервер не выдал долгосрочную сессию расширения');
+    await chrome.storage.local.set({ baseUrl, username, token: body.token, refreshToken: body.refreshToken, sessionExpiresAt: body.sessionExpiresAt, extension, authExpired: false, leadCursor: null, lastCallId: null });
     $('password').value = '';
     $('status').textContent = `Подключено · внутренний ${extension}`;
     const background = await chrome.runtime.sendMessage({ type: 'settings-saved' });

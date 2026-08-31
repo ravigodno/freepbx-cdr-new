@@ -15,7 +15,14 @@
         <div id="inboundDid" class="inbound-did"></div>
       </div>
     </section>
-    <footer class="call-footer compact-footer"><span id="extension"></span><button id="open">Открыть в PBXPuls</button></footer>
+    <footer class="call-footer compact-footer">
+      <span id="extension"></span>
+      <div class="call-popup-actions">
+        <button id="open" class="compact-action">Открыть PBXPuls</button>
+        <button id="blacklist" class="compact-action danger-action" disabled>В ЧС</button>
+      </div>
+    </footer>
+    <div id="callActionStatus" class="call-action-status" role="status"></div>
   </main>
   <script src="call-popup.js"></script>
 </body>

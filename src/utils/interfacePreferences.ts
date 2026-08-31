@@ -1,6 +1,7 @@
 export type ThemePreference = 'light' | 'dark' | 'system';
 export type CdrDateTimeFormat = 'dmy-dash' | 'dmy-short-dash' | 'dmy-dot' | 'dmy-slash' | 'ymd-dash';
 export type SearchEnginePreference = 'yandex' | 'google';
+export type CallDeviceMode = 'desk_phone' | 'browser_headset' | 'ask';
 
 export interface InterfacePreferences {
   theme: ThemePreference;
@@ -32,6 +33,7 @@ export interface InterfacePreferences {
   livePopupRememberPosition: boolean;
   livePopupHideAfterEndSeconds: 0 | 3 | 5 | 10;
   searchEngine: SearchEnginePreference;
+  callDeviceMode: CallDeviceMode;
 }
 
 export const DEFAULT_INTERFACE_PREFERENCES: InterfacePreferences = {
@@ -43,7 +45,7 @@ export const DEFAULT_INTERFACE_PREFERENCES: InterfacePreferences = {
   livePopupEnabled: true, livePopupSize: 'standard', livePopupShowCompanyPosition: true,
   livePopupDirectoryFieldSlot1: 'company', livePopupDirectoryFieldSlot2: 'position',
   livePopupShowStartedAt: true, livePopupShowSearch: true, livePopupRememberPosition: true,
-  livePopupHideAfterEndSeconds: 0, searchEngine: 'yandex'
+  livePopupHideAfterEndSeconds: 0, searchEngine: 'yandex', callDeviceMode: 'desk_phone'
 };
 
 const STORAGE_KEY = 'pbxpuls_interface_preferences_v1';

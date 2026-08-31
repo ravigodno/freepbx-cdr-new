@@ -73,6 +73,8 @@ FREEPBX_API_REFERENCE_FULL.md.
 - DB outage occurrence is retained in memory while SQL is unavailable and written after recovery, because an SQL outbox cannot be updated during the outage itself.
 - Bot tokens are encrypted with an environment-derived installation key. APIs expose `hasToken`, never token fragments or plaintext.
 - Telegram Chat ID is a signed integer and is not restricted to the `-100` group prefix.
+- Bitrix24 is a separate outbox channel. It sends through `im.message.add` to a numeric employee ID or `chat{id}`, stores the incoming webhook only in encrypted channel configuration, and never exposes the saved URL through settings APIs.
+- Bitrix24 webhook calls require HTTPS, reject credentials/query fragments and private DNS targets, disable redirects, and use the same bounded retry and delivery journal contract as Telegram.
 - Package minutes, generic Asterisk/AMI health, disk and security events remain catalog-only until a reliable producer is explicitly connected.
 
 # Live call popup and desktop alert contract
@@ -87,6 +89,13 @@ The built-in PBXPuls popup and the Desktop Alerts extension must use the same no
 - `Куда звонит` shows the logical destination before answer: direct extension, queue or ring group number.
 - After answer, `Куда звонит` shows the extension that actually answered. Ringing or cancelled parallel members must never be shown as the answered extension.
 
+## Outgoing calls
+
+- `Кто звонит` is the internal extension that initiated the call. `Куда звонит` is the external number dialed by that extension.
+- The first confirmed outgoing identity is stable for the lifetime of `operatorExt + linkedid`. Answer-time trunk legs must not replace the internal caller or external destination.
+- Short technical route values such as a trunk suffix or `Exten=300` are not participants and must never be shown as an extension unless independently confirmed as a real internal endpoint.
+- The built-in popup, browser alerts and Desktop Alerts extension consume the same stabilized backend payload.
+
 ## Ring groups
 
 - FreePBX may assign different `Linkedid` values to the inbound trunk leg and each parallel member leg. They still form one logical incoming call when the trunk `Dial` targets the member and the member leg has the same ring-group destination in the same time window.
@@ -99,3 +108,9 @@ The built-in PBXPuls popup and the Desktop Alerts extension must use the same no
 
 - Changes to live-call grouping, direction detection, ranking or caller identity must run `test:live-popup-parallel-external`, `test:live-popup-route-summary`, `test:live-popup-priority` and `test:inbound-caller`.
 - The external parallel-call fixture must retain separate `Linkedid` values for the trunk and member branch; using one shared `Linkedid` does not reproduce production FreePBX behavior.
+
+## Live incoming blacklist action
+
+- The popup blacklist-and-hangup action is enabled only for an active external incoming call.
+- The backend resolves the caller and channel group again from the authenticated operator and current AMI snapshot; client-provided phone numbers and channel names are never trusted.
+- Apply requires a short-lived preview, persists the blacklist flag in PBXPuls MariaDB, synchronizes the normalized number to Asterisk AstDB and then requests hangup only for channels in the resolved logical call.

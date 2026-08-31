@@ -1,5 +1,11 @@
 type LiveBannerDirection = 'incoming' | 'outgoing' | 'internal';
 
+export type LiveCallEndPolicy =
+  | { action: 'close'; delayMs: 0 }
+  | { action: 'close'; delayMs: number }
+  | { action: 'keep'; delayMs: null }
+  | { action: 'configured'; delayMs: number };
+
 const cleanLiveValue = (value: unknown): string => String(value ?? '').trim();
 const liveDigits = (value: unknown): string => cleanLiveValue(value).replace(/\D/g, '');
 const isExternalLiveNumber = (value: unknown): boolean => liveDigits(value).length >= 7;
@@ -166,6 +172,22 @@ export function getLiveCallPopupTitle(direction: unknown, phoneMeeting = false):
   if (direction === 'incoming') return 'Входящий звонок';
   if (direction === 'outgoing') return 'Исходящий звонок';
   return 'Внутренний звонок';
+}
+
+export function resolveLiveCallEndPolicy(
+  direction: unknown,
+  wasConnected: boolean,
+  configuredDelaySeconds = 0,
+  isOutgoingForOperator = direction === 'outgoing'
+): LiveCallEndPolicy {
+  if (isOutgoingForOperator || direction === 'outgoing') return { action: 'close', delayMs: 0 };
+  if (direction === 'incoming' || direction === 'internal') {
+    return wasConnected
+      ? { action: 'close', delayMs: 60_000 }
+      : { action: 'keep', delayMs: null };
+  }
+  const delayMs = Math.max(0, Number(configuredDelaySeconds) || 0) * 1000;
+  return { action: 'configured', delayMs };
 }
 
 export function rankLiveCallBanners<T extends Record<string, any>>(calls: T[]): T[] {

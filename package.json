@@ -1,7 +1,7 @@
 {
   "name": "freepbx-cdr-new",
   "private": true,
-  "version": "5.8.20",
+  "version": "5.8.21",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
@@ -21,6 +21,8 @@
     "test:notification-center": "tsx scripts/test-notification-center.ts",
     "test:live-popup-route-summary": "tsx scripts/test-live-popup-route-summary.ts",
     "test:live-popup-priority": "tsx scripts/test-live-popup-priority.ts",
+    "test:live-call-blacklist": "tsx scripts/test-live-call-blacklist.ts",
+    "test:ami-hangup": "tsx scripts/test-ami-hangup.ts",
     "test:live-popup-parallel-internal": "tsx scripts/test-live-popup-parallel-internal.ts",
     "test:live-popup-parallel-external": "tsx scripts/test-live-popup-parallel-external.ts",
     "test:live-snapshot-cache": "tsx scripts/test-live-snapshot-cache.ts",
@@ -82,12 +84,16 @@
     "directory:search:projection-preview": "tsx scripts/preview-directory-search-projection.ts",
     "test:directory-bulk-delete": "tsx scripts/test-directory-bulk-delete.ts",
     "test:reports-analytics-enhancements": "tsx scripts/test-reports-analytics-enhancements.ts",
+    "test:report-cdr-scope": "tsx scripts/test-report-cdr-scope.ts",
+    "test:cdr-answered-lookup": "tsx scripts/test-cdr-answered-lookup.ts",
+    "test:gsm-gateways": "tsx scripts/test-gsm-gateways.ts",
     "test:site-form-leads": "tsx scripts/test-site-form-leads.ts",
     "package:bitrix-connector": "bash scripts/package-bitrix-connector.sh",
     "test:ai-platform-simple-ux": "tsx scripts/test-ai-platform-simple-ux.ts",
     "test:ai-agent-creation-wizard": "tsx scripts/test-ai-agent-creation-wizard.ts",
     "test:ai-agent-deletion": "tsx scripts/test-ai-agent-deletion.ts",
-    "test:call-registry-ai-handoff": "tsx scripts/test-call-registry-ai-handoff.ts"
+    "test:call-registry-ai-handoff": "tsx scripts/test-call-registry-ai-handoff.ts",
+    "test:softphone-auto-config": "tsx scripts/test-softphone-auto-config.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -105,6 +111,7 @@
     "react-dom": "^19.0.1",
     "react-is": "^19.0.0",
     "recharts": "^3.8.1",
+    "sip.js": "^0.21.2",
     "ws": "^8.21.0",
     "xlsx": "^0.18.5"
   },

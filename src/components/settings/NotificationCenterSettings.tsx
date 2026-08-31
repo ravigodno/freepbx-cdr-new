@@ -20,6 +20,14 @@ const STATUS_LABELS: Record<string, string> = {
   filtered_by_severity: "Отфильтровано по важности",
   cooldown: "Cooldown",
   duplicate: "Дубликат",
+  invalid_bitrix24_webhook: "Некорректный webhook Битрикс24",
+  invalid_bitrix24_dialog: "Некорректный DIALOG_ID",
+  bitrix24_not_configured: "Битрикс24 не настроен",
+  bitrix24_auth_failed: "Ошибка авторизации Битрикс24",
+  bitrix24_rate_limited: "Лимит запросов Битрикс24",
+  bitrix24_timeout: "Битрикс24 не ответил вовремя",
+  bitrix24_rejected: "Битрикс24 отклонил сообщение",
+  bitrix24_network_error: "Битрикс24 недоступен",
 };
 export default function NotificationCenterSettings({
   token,
@@ -33,6 +41,8 @@ export default function NotificationCenterSettings({
   const [data, setData] = useState<any>(null),
     [secret, setSecret] = useState(""),
     [replace, setReplace] = useState(false),
+    [bitrixWebhook, setBitrixWebhook] = useState(""),
+    [replaceBitrixWebhook, setReplaceBitrixWebhook] = useState(false),
     [preview, setPreview] = useState<any>(null),
     [bot, setBot] = useState<any>(null),
     [telegramChats, setTelegramChats] = useState<any[]>([]),
@@ -92,6 +102,7 @@ export default function NotificationCenterSettings({
   }, [data, loadLog]);
   const global = data?.global || {},
     channel = data?.channel || {},
+    bitrix24 = data?.bitrix24 || {},
     rules = data?.rules || [],
     catalog = data?.catalog || [];
   const updateGlobal = (key: string, value: any) =>
@@ -103,6 +114,11 @@ export default function NotificationCenterSettings({
     setData((old: any) => ({
       ...old,
       channel: { ...old.channel, [key]: value },
+    }));
+  const updateBitrix24 = (key: string, value: any) =>
+    setData((old: any) => ({
+      ...old,
+      bitrix24: { ...old.bitrix24, [key]: value },
     }));
   const updateRule = (eventType: string, patch: any) =>
     setData((old: any) => ({
@@ -126,12 +142,39 @@ export default function NotificationCenterSettings({
             botToken: secret,
             replaceToken: replace,
           },
+          bitrix24: {
+            enabled: bitrix24.enabled,
+            dialogId: bitrix24.dialogId,
+            webhookUrl: bitrixWebhook,
+            replaceWebhook: replaceBitrixWebhook,
+          },
         }),
       });
       setData(body);
       setSecret("");
       setReplace(false);
+      setBitrixWebhook("");
+      setReplaceBitrixWebhook(false);
       setMessage({ text: "Настройки сохранены" });
+    } catch (error: any) {
+      setMessage({ error: true, text: error.message });
+    } finally {
+      setBusy("");
+    }
+  };
+  const bitrixAction = async (kind: "test" | "check" | "clear") => {
+    setBusy(`bitrix-${kind}`);
+    setMessage(null);
+    try {
+      if (kind === "clear") {
+        const body = await request("/api/notifications/bitrix24/webhook", { method: "DELETE" });
+        setData((old: any) => ({ ...old, bitrix24: body.bitrix24 }));
+        setBitrixWebhook("");
+        setMessage({ text: "Webhook удалён, канал Битрикс24 выключен" });
+      } else {
+        const body = await request(`/api/notifications/bitrix24/${kind}`, { method: "POST" });
+        setMessage({ text: kind === "test" ? "Тестовое сообщение доставлено в Битрикс24" : `Webhook доступен${body.profile?.name ? ` · ${body.profile.name}` : ""}` });
+      }
     } catch (error: any) {
       setMessage({ error: true, text: error.message });
     } finally {
@@ -287,6 +330,36 @@ export default function NotificationCenterSettings({
               className="mt-1 w-full rounded-lg border bg-white px-3 py-2"
             />
           </label>
+        </div>
+      </section>
+      <section className="rounded-2xl border p-5">
+        <h4 className="text-sm font-black">Битрикс24</h4>
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          <label className="flex items-center gap-2 text-xs font-bold">
+            <input disabled={!canManage} type="checkbox" checked={bitrix24.enabled === true} onChange={(e) => updateBitrix24("enabled", e.target.checked)} />
+            Канал включён
+          </label>
+          <div className="text-xs text-slate-500">
+            Последняя доставка: {bitrix24.lastSuccessAt || "—"}<br />
+            Последняя ошибка: {bitrix24.lastError ? STATUS_LABELS[bitrix24.lastError] || bitrix24.lastError : "—"}
+          </div>
+          <label className="text-xs font-bold">
+            URL входящего webhook
+            <input disabled={!canManage} type="password" autoComplete="new-password" value={bitrixWebhook} onChange={(e) => setBitrixWebhook(e.target.value)} placeholder={bitrix24.hasWebhook ? "Webhook сохранён · оставьте пустым без изменения" : "https://portal.bitrix24.ru/rest/1/секрет/"} className="mt-1 w-full rounded-lg border px-3 py-2 font-mono" />
+          </label>
+          <label className="text-xs font-bold">
+            DIALOG_ID
+            <input disabled={!canManage} value={bitrix24.dialogId || ""} onChange={(e) => updateBitrix24("dialogId", e.target.value)} placeholder="ID сотрудника или chat123" className="mt-1 w-full rounded-lg border px-3 py-2 font-mono" />
+          </label>
+          {bitrix24.hasWebhook && <label className="flex items-center gap-2 text-xs"><input disabled={!canManage} type="checkbox" checked={replaceBitrixWebhook} onChange={(e) => setReplaceBitrixWebhook(e.target.checked)} />Разрешить замену сохранённого webhook</label>}
+        </div>
+        <div className="mt-4 rounded-xl border border-cyan-100 bg-cyan-50 p-4 text-[11px] text-slate-600">
+          Создайте входящий webhook в Битрикс24 с правом доступа к чатам. Для сотрудника укажите его числовой ID, для группового чата — значение вида <code>chat123</code>. Секретный URL хранится зашифрованно и после сохранения не показывается.
+        </div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button type="button" disabled={!canManage || !bitrix24.hasWebhook || !!busy} onClick={() => void bitrixAction("check")} className="rounded-lg border px-3 py-2 text-xs font-bold">Проверить webhook</button>
+          <button type="button" disabled={!canManage || !bitrix24.hasWebhook || !!busy} onClick={() => void bitrixAction("test")} className="flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-bold"><Send className="h-4 w-4" />Тестовое сообщение</button>
+          {bitrix24.hasWebhook && <button type="button" disabled={!canManage || !!busy} onClick={() => window.confirm("Удалить сохранённый webhook Битрикс24?") && void bitrixAction("clear")} className="flex items-center gap-2 rounded-lg border border-rose-200 px-3 py-2 text-xs font-bold text-rose-700"><Trash2 className="h-4 w-4" />Удалить webhook</button>}
         </div>
       </section>
       <section className="rounded-2xl border p-5">

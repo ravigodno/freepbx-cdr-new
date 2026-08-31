@@ -85,9 +85,16 @@ import { type LiveTransferResult, type LiveTransferSearchTarget } from './compon
 import { CallTargetSelector, type ConferenceBackendStatus, type ConsultTransferCapabilities } from './components/CallTargetSelector';
 import ActiveCallsTab from './modules/monitoring/tabs/monitoring/ActiveCallsTab';
 import { getLiveCallPopupTitle, normalizeLiveCallBannerPayload, stabilizeLiveCallBannerPayload } from './utils/liveCallBanner';
+import { canBlacklistLiveIncomingCall, getLiveCallBlacklistNumber } from './utils/liveCallBlacklist';
 import { useServerClock } from './hooks/useServerClock';
 import { getServerNow } from './utils/serverClock';
 import { loadInterfacePreferences, saveInterfacePreferences, type InterfacePreferences } from './utils/interfacePreferences';
+import UnifiedDialer from './modules/softphone/components/UnifiedDialer';
+import AudioDeviceSettings from './modules/softphone/components/AudioDeviceSettings';
+import SoftphoneCallPanel from './modules/softphone/components/SoftphoneCallPanel';
+import SoftphoneAutoConfig from './modules/softphone/components/SoftphoneAutoConfig';
+import { PbxPulsSipClient, type SoftphoneSnapshot } from './modules/softphone/sip/sipClient';
+import { loadAudioDevicePreferences } from './modules/softphone/audio/audioDevicePreferences';
 import CommandCenterTab from './modules/monitoring/tabs/monitoring/CommandCenterTab';
 const DbExplorerTab = lazy(() => import('./modules/monitoring/tabs/monitoring/DbExplorerTab'));
 const SecurityTab = lazy(() => import('./modules/monitoring/tabs/monitoring/SecurityTab'));
@@ -721,6 +728,29 @@ export default function App() {
   const [browserExtensionMessage, setBrowserExtensionMessage] = useState('');
   const [settingsTab, setSettingsTab] = useState<'pbx' | 'integrations' | 'directory' | 'access' | 'permissions' | 'notifications' | 'design' | 'appearance'>('pbx');
 
+  const copyBrowserExtensionsAddress = async () => {
+    const address = /Edg\//i.test(navigator.userAgent) ? 'edge://extensions' : 'chrome://extensions';
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(address);
+      } else {
+        const input = document.createElement('textarea');
+        input.value = address;
+        input.setAttribute('readonly', '');
+        input.style.position = 'fixed';
+        input.style.opacity = '0';
+        document.body.appendChild(input);
+        input.select();
+        const copied = document.execCommand('copy');
+        input.remove();
+        if (!copied) throw new Error('copy_failed');
+      }
+      setBrowserExtensionMessage(`Адрес ${address} скопирован. Вставьте его в адресную строку браузера и нажмите Enter.`);
+    } catch {
+      setBrowserExtensionMessage(`Скопируйте адрес вручную: ${address}`);
+    }
+  };
+
   const downloadBrowserExtension = async () => {
     if (!session?.token || isDownloadingBrowserExtension) return;
     setIsDownloadingBrowserExtension(true);
@@ -737,7 +767,7 @@ export default function App() {
       const url = URL.createObjectURL(await response.blob());
       const anchor = document.createElement('a');
       anchor.href = url;
-      anchor.download = 'PBXPuls-Desktop-Alerts-0.1.16.zip';
+      anchor.download = 'PBXPuls-Desktop-Alerts-0.1.25.zip';
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
@@ -2401,6 +2431,7 @@ export default function App() {
   const livePopupEndTimerRef = useRef<number | null>(null);
   const [isLiveTransferLoading, setIsLiveTransferLoading] = useState(false);
   const [isLiveMonitorLoading, setIsLiveMonitorLoading] = useState(false);
+  const [isLiveBlacklistLoading, setIsLiveBlacklistLoading] = useState(false);
   const [liveTransferStatus, setLiveTransferStatus] = useState('');
   const [liveCallBannerPos, setLiveCallBannerPos] = useState(() => {
     try {
@@ -2418,6 +2449,33 @@ export default function App() {
   const [callingLog, setCallingLog] = useState<string[]>([]);
   const [callingTarget, setCallingTarget] = useState('');
   const [isC2CLoading, setIsC2CLoading] = useState(false);
+  const softphoneClientRef = useRef<PbxPulsSipClient | null>(null);
+  const [softphoneSnapshot, setSoftphoneSnapshot] = useState<SoftphoneSnapshot>({ registration: 'offline', call: 'idle', remoteNumber: '', direction: null, muted: false, error: '' });
+  const [softphoneMessage, setSoftphoneMessage] = useState('');
+
+  useEffect(() => {
+    const client = new PbxPulsSipClient();
+    client.setAudioPreferences(loadAudioDevicePreferences());
+    softphoneClientRef.current = client;
+    const unsubscribe = client.subscribe(setSoftphoneSnapshot);
+    return () => { unsubscribe(); void client.disconnect(); softphoneClientRef.current = null; };
+  }, [session?.username]);
+
+  const connectBrowserHeadset = async () => {
+    if (!session?.token || !softphoneClientRef.current) return;
+    setSoftphoneMessage('Подключаем гарнитуру к АТС…');
+    try {
+      const response = await fetch('/api/softphone/runtime-config', { method: 'POST', headers: { Authorization: `Bearer ${session.token}`, 'Content-Type': 'application/json' }, cache: 'no-store' });
+      if (response.status === 401) { handleAuthError(response); return; }
+      const configuration = await response.json();
+      if (!response.ok) throw new Error(configuration.error || 'WebRTC-профиль недоступен');
+      softphoneClientRef.current.setAudioPreferences(loadAudioDevicePreferences());
+      await softphoneClientRef.current.connect(configuration);
+      setSoftphoneMessage('Гарнитура зарегистрирована на АТС');
+    } catch (error: any) {
+      setSoftphoneMessage(error?.message || 'Не удалось подключить гарнитуру');
+    }
+  };
 
   useEffect(() => {
     if (session?.extension) {
@@ -2556,17 +2614,10 @@ export default function App() {
         : null;
       if (!normalized) {
         dismissedLiveCallIdRef.current = '';
-        const delaySeconds = interfacePreferences.livePopupHideAfterEndSeconds;
-        if (delaySeconds > 0 && liveCallBannerRef.current?.active && livePopupEndTimerRef.current === null) {
-          livePopupEndTimerRef.current = window.setTimeout(() => {
-            liveCallBannerRef.current = null;
-            setLiveCallBanner(null);
-            livePopupEndTimerRef.current = null;
-          }, delaySeconds * 1000);
-        } else if (delaySeconds === 0) {
-          liveCallBannerRef.current = null;
-          setLiveCallBanner(null);
-        }
+        if (livePopupEndTimerRef.current !== null) window.clearTimeout(livePopupEndTimerRef.current);
+        livePopupEndTimerRef.current = null;
+        liveCallBannerRef.current = null;
+        setLiveCallBanner(null);
         return;
       }
       if (livePopupEndTimerRef.current !== null) {
@@ -2771,6 +2822,52 @@ export default function App() {
       setLiveTransferStatus('Ошибка сети при подключении к звонку');
     } finally {
       setIsLiveMonitorLoading(false);
+    }
+  };
+
+  const handleLiveCallBlacklistAndHangup = async () => {
+    if (!session || !liveCallBanner?.active || !liveCallBanner.linkedid || isLiveBlacklistLoading) return;
+    if (!canBlacklistLiveIncomingCall(liveCallBanner)) {
+      setLiveTransferStatus('Блокировка доступна только для внешнего входящего звонка');
+      return;
+    }
+    setIsLiveBlacklistLoading(true);
+    setLiveTransferStatus('Проверяем входящий звонок…');
+    try {
+      const path = `/api/live-calls/${encodeURIComponent(liveCallBanner.linkedid)}/blacklist-hangup`;
+      const previewResponse = await fetch(`${path}/preview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.token}` },
+        body: JSON.stringify({ operatorExt: liveCallBanner.operatorExt || myExt })
+      });
+      if (previewResponse.status === 401) {
+        handleAuthError(previewResponse);
+        return;
+      }
+      const preview = await previewResponse.json().catch(() => ({}));
+      if (!previewResponse.ok || !preview.success) throw new Error(preview.error || 'Не удалось проверить звонок');
+      if (!window.confirm(preview.message || `Завершить звонок и добавить ${preview.callerNumber} в черный список?`)) {
+        setLiveTransferStatus('Блокировка отменена');
+        return;
+      }
+      setLiveTransferStatus('Завершаем звонок и добавляем номер в ЧС…');
+      const applyResponse = await fetch(`${path}/apply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.token}` },
+        body: JSON.stringify({ previewId: preview.previewId })
+      });
+      if (applyResponse.status === 401) {
+        handleAuthError(applyResponse);
+        return;
+      }
+      const result = await applyResponse.json().catch(() => ({}));
+      if (!applyResponse.ok || !result.success) throw new Error(result.error || 'Не удалось заблокировать звонок');
+      setLiveTransferStatus(`Номер ${result.callerNumber} добавлен в ЧС, звонок завершён`);
+      setTimeout(() => setLiveTransferStatus(''), 5000);
+    } catch (error: any) {
+      setLiveTransferStatus(error?.message || 'Не удалось заблокировать звонок');
+    } finally {
+      setIsLiveBlacklistLoading(false);
     }
   };
 
@@ -6382,6 +6479,17 @@ export default function App() {
                   title={session.extension ? 'SIP-номер закреплён администратором' : 'Введите ваш внутренний добавочный номер. С этого телефона Asterisk начнет дозвон.'}
                 /></div>
 
+              <UnifiedDialer
+                extension={effectiveMySip}
+                mode={interfacePreferences.callDeviceMode}
+                canCall={hasPermission('make_calls')}
+                isCalling={isC2CLoading}
+                headsetReady={softphoneSnapshot.registration === 'registered'}
+                onModeChange={callDeviceMode => updateInterfacePreferences({ callDeviceMode })}
+                onDeskPhoneCall={number => triggerClickToCall(number)}
+                onHeadsetCall={number => softphoneClientRef.current?.call(number)}
+              />
+
               <label className="flex items-center gap-1.5 cursor-pointer select-none">
                 <input
                   type="checkbox"
@@ -6494,6 +6602,8 @@ export default function App() {
         const position = String(liveCallBanner.position || '').trim();
         const durationText = liveCallBanner.durationText || `${Math.floor((liveCallBanner.durationSec || 0) / 60)}:${String((liveCallBanner.durationSec || 0) % 60).padStart(2, '0')}`;
         const canUseLiveMonitorActions = session?.role === 'su' || session?.role === 'admin' || session?.role === 'manager';
+        const canManageLiveBlacklist = session?.role === 'su' || session?.role === 'admin' || session?.permissions?.manage_blacklist === true;
+        const liveBlacklistNumber = getLiveCallBlacklistNumber(liveCallBanner);
         const liveActionButtonClass = 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60';
         const callerNumber = String(liveCallBanner.callerNumber || liveCallBanner.sourceNumber || '').trim();
         const destinationNumber = String(liveCallBanner.destinationNumber || liveCallBanner.targetNumber || '').trim();
@@ -6511,6 +6621,10 @@ export default function App() {
         const destinationDirectoryFieldsText = selectedLivePopupDirectoryFields.map(field => formatLivePopupDirectoryValue(destinationDirectoryFields[field.key], field.fieldType)).join(' / ');
         const closeLiveCallBanner = () => {
           dismissedLiveCallIdRef.current = String(liveCallBanner.linkedid || '');
+          if (livePopupEndTimerRef.current !== null) {
+            window.clearTimeout(livePopupEndTimerRef.current);
+            livePopupEndTimerRef.current = null;
+          }
           liveCallBannerRef.current = null;
           setLiveCallBanner(null);
         };
@@ -6666,6 +6780,21 @@ export default function App() {
                           </button>
                         </>
                       )}
+                      <button
+                        type="button"
+                        onMouseDown={event => event.stopPropagation()}
+                        onClick={() => void handleLiveCallBlacklistAndHangup()}
+                        disabled={!liveBlacklistNumber || !canManageLiveBlacklist || isLiveBlacklistLoading}
+                        className={`${liveActionButtonClass} enabled:border-red-200 enabled:text-red-600 enabled:hover:border-red-300 enabled:hover:bg-red-50 enabled:hover:text-red-700`}
+                        title={!liveBlacklistNumber
+                          ? 'Доступно только для внешнего входящего звонка'
+                          : !canManageLiveBlacklist
+                            ? 'Нет прав на управление черным списком'
+                            : `Завершить звонок и добавить ${liveBlacklistNumber} в черный список`}
+                        aria-label="Завершить входящий звонок и добавить номер в черный список"
+                      >
+                        {isLiveBlacklistLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Ban className="h-4 w-4" />}
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -6966,6 +7095,17 @@ export default function App() {
                   />
                   <span className="text-[11px] font-bold text-slate-705 dark:text-slate-300">Мои звонки</span>
                 </label></div>
+
+              <UnifiedDialer
+                extension={effectiveMySip}
+                mode={interfacePreferences.callDeviceMode}
+                canCall={hasPermission('make_calls')}
+                isCalling={isC2CLoading}
+                headsetReady={softphoneSnapshot.registration === 'registered'}
+                onModeChange={callDeviceMode => updateInterfacePreferences({ callDeviceMode })}
+                onDeskPhoneCall={number => triggerClickToCall(number)}
+                onHeadsetCall={number => softphoneClientRef.current?.call(number)}
+              />
 
 
               <div className="flex flex-wrap items-center gap-1.5 bg-slate-50 dark:bg-[#0f172a]/60 border border-slate-200 dark:border-[#334155]/80 p-1 rounded-lg">
@@ -8703,11 +8843,36 @@ export default function App() {
                         {session?.extension && <span className="mt-2 block text-[10px] font-semibold text-blue-600">Назначено администратором в разделе «Доступ и пользователи».</span>}
                       </label>
 
+                      <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
+                        <div>
+                          <h5 className="flex items-center gap-2 text-xs font-black text-slate-900"><Headphones className="h-4 w-4 text-blue-600" />Устройство для звонков</h5>
+                          <p className="mt-1 text-[11px] text-slate-500">Номеронабиратель доступен в верхней панели. Режим гарнитуры начнёт совершать звонки после настройки WebRTC на АТС.</p>
+                        </div>
+                        <select value={interfacePreferences.callDeviceMode} onChange={event => updateInterfacePreferences({callDeviceMode:event.target.value as InterfacePreferences['callDeviceMode']})} className="w-full max-w-sm rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs font-bold text-slate-800">
+                          <option value="desk_phone">Телефонный аппарат</option>
+                          <option value="browser_headset">Гарнитура в браузере</option>
+                          <option value="ask">Спрашивать перед звонком</option>
+                        </select>
+                        {interfacePreferences.callDeviceMode === 'browser_headset' && softphoneSnapshot.registration !== 'registered' && <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[10px] leading-relaxed text-amber-800">WebRTC-профиль пока не подключён. Проверьте настройки АТС ниже.</div>}
+                      </div>
+
+                      <AudioDeviceSettings />
+
+                      {session?.token && <SoftphoneAutoConfig token={session.token} onConfigured={connectBrowserHeadset} />}
+
+                      <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div><h5 className="text-xs font-black text-slate-900">Подключение WebRTC</h5><p className="mt-1 text-[10px] text-slate-500">Статус: <span className="font-bold">{softphoneSnapshot.registration === 'registered' ? 'гарнитура готова' : softphoneSnapshot.registration === 'connecting' ? 'подключение' : softphoneSnapshot.registration === 'failed' ? 'ошибка' : 'отключена'}</span></p></div>
+                          {softphoneSnapshot.registration === 'registered' ? <button type="button" onClick={() => void softphoneClientRef.current?.disconnect()} className="rounded-lg border border-rose-200 px-3 py-2 text-[10px] font-bold text-rose-600">Отключить</button> : <button type="button" onClick={() => void connectBrowserHeadset()} disabled={softphoneSnapshot.registration === 'connecting'} className="rounded-lg bg-blue-600 px-3 py-2 text-[10px] font-bold text-white disabled:opacity-50">Подключить гарнитуру</button>}
+                        </div>
+                        {(softphoneMessage || softphoneSnapshot.error) && <div className="text-[10px] font-semibold text-slate-600">{softphoneSnapshot.error || softphoneMessage}</div>}
+                      </div>
+
                       <div className="rounded-xl border border-blue-200 bg-white p-4">
                         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                           <div className="min-w-0">
                             <h5 className="flex items-center gap-2 text-xs font-black text-slate-900"><Download className="h-4 w-4 text-blue-600" />Расширение PBXPuls для браузера</h5>
-                            <p className="mt-1 text-[11px] leading-relaxed text-slate-500">Версия 0.1.16 · клик по алерту открывает справочник с фильтром по ФИО, доступны отдельное окно звонка и безопасный click-to-call для ссылок <code className="rounded bg-slate-100 px-1 py-0.5">tel:</code>.</p>
+                            <p className="mt-1 text-[11px] leading-relaxed text-slate-500">Версия 0.1.25 · закрытый крестиком большой алерт не открывается повторно для того же звонка, доступны кнопки blacklist и click-to-call.</p>
                           </div>
                           <button type="button" onClick={()=>void downloadBrowserExtension()} disabled={isDownloadingBrowserExtension} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-xs font-bold text-white hover:bg-blue-700 disabled:opacity-50">
                             {isDownloadingBrowserExtension ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
@@ -8715,7 +8880,7 @@ export default function App() {
                           </button>
                         </div>
                         <div className="mt-3 rounded-lg bg-blue-50 px-3 py-2 text-[10px] leading-relaxed text-blue-800">
-                          Chrome/Edge: распакуйте ZIP → <a href="chrome://extensions" target="_blank" rel="noreferrer" onClick={()=>void navigator.clipboard?.writeText('chrome://extensions')} className="font-black text-blue-700 underline decoration-blue-300 underline-offset-2 hover:text-blue-900">откройте chrome://extensions</a> → включите режим разработчика → «Загрузить распакованное». Если Chrome заблокирует переход, адрес уже скопирован — вставьте его в адресную строку. Автоматическая установка одним кликом доступна только после публикации в Chrome Web Store или через корпоративную policy.
+                          Chrome/Edge: распакуйте ZIP → <button type="button" onClick={()=>void copyBrowserExtensionsAddress()} className="font-black text-blue-700 underline decoration-blue-300 underline-offset-2 hover:text-blue-900">скопировать адрес расширений</button> → вставьте адрес в адресную строку браузера → включите режим разработчика → «Загрузить распакованное». Служебные страницы браузер запрещает открывать напрямую с сайта.
                         </div>
                         {browserExtensionMessage && <div className="mt-2 text-[10px] font-semibold text-slate-600">{browserExtensionMessage}</div>}
                       </div>
@@ -9002,6 +9167,14 @@ export default function App() {
 
 
       {/* CLICK-TO-CALL AMI STATUS LOGS DIALOG */}
+      <SoftphoneCallPanel
+        snapshot={softphoneSnapshot}
+        onAnswer={() => softphoneClientRef.current?.answer() || Promise.resolve()}
+        onReject={() => softphoneClientRef.current?.reject() || Promise.resolve()}
+        onHangup={() => softphoneClientRef.current?.hangup() || Promise.resolve()}
+        onMute={muted => softphoneClientRef.current?.setMuted(muted)}
+        onDtmf={tone => softphoneClientRef.current?.sendDtmf(tone) || Promise.resolve()}
+      />
       {isCallingModalOpen && session?.role !== 'operator' && (
         <div className="fixed inset-0 bg-slate-950/80 -xs flex items-center justify-center p-4 z-50">
           <div className="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl relative">

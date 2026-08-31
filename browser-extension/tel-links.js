@@ -7,7 +7,7 @@ if (!globalThis.__pbxpulsTelInterceptor) {
     if (!link) return;
     const href = String(link.getAttribute('href') || '').trim();
     if (!/^tel:/i.test(href)) return;
-    const number = decodeURIComponent(href.replace(/^tel:/i, '')).split(/[?;]/, 1)[0].trim();
+    const number = PBXPulsPhoneNumber.normalizePhoneNumber(decodeURIComponent(href));
     if (!number) return;
     event.preventDefault();
     event.stopPropagation();
