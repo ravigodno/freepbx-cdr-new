@@ -63,7 +63,6 @@ import {
   Cpu,
   Wrench,
   ShieldCheck,
-  Palette,
   Bot,
   Star
 } from 'lucide-react';
@@ -727,7 +726,7 @@ export default function App() {
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [isDownloadingBrowserExtension, setIsDownloadingBrowserExtension] = useState(false);
   const [browserExtensionMessage, setBrowserExtensionMessage] = useState('');
-  const [settingsTab, setSettingsTab] = useState<'pbx' | 'integrations' | 'directory' | 'access' | 'permissions' | 'notifications' | 'design' | 'appearance'>('pbx');
+  const [settingsTab, setSettingsTab] = useState<'pbx' | 'integrations' | 'directory' | 'access' | 'permissions' | 'notifications' | 'appearance'>('pbx');
 
   const copyBrowserExtensionsAddress = async () => {
     const address = /Edg\//i.test(navigator.userAgent) ? 'edge://extensions' : 'chrome://extensions';
@@ -8347,9 +8346,6 @@ export default function App() {
                     permissions: 'Права доступа',
                     ...(hasPermission('view_notification_center') ? { notifications: 'Центр уведомлений' } : {}),
                   } : {}),
-                  ...(session?.role === 'su' ? {
-                    design: 'Дизайн',
-                  } : {}),
                   appearance: 'Интерфейс'
                 }).map(([tab, label]) => (
                   <button
@@ -8773,57 +8769,6 @@ export default function App() {
                       allowAdminEditSuPermissions={settings?.allowAdminEditSuPermissions === true}
                     />
                   )}
-                  {settingsTab === 'design' && session?.role === 'su' && draftSettings && (
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 space-y-4">
-                      <h4 className="flex min-w-0 items-center gap-2 break-words text-sm font-black text-slate-900">
-                        <Palette className="h-4 w-4 text-blue-600" />
-                        Брендирование и дизайн системы
-                      </h4>
-                      <p className="text-xs text-slate-500">
-                        Настройте логотип и копирайт для всей системы (доступно только пользователю su).
-                      </p>
-
-                      <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-4">
-                        <div>
-                          <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                            Ссылка на логотип (изображение или SVG)
-                          </label>
-                          <div className="flex gap-3 items-center">
-                            <input
-                              type="text"
-                              value={draftSettings.customLogoUrl || ''}
-                              onChange={(e) => setDraftSettings({ ...draftSettings, customLogoUrl: e.target.value })}
-                              placeholder="Например: /freepbx-cdr-logo.svg или URL"
-                              className="flex-1 min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900 focus:border-blue-500 focus:outline-none"
-                            />
-                            <div className="h-10 w-10 flex items-center justify-center bg-white border border-slate-200 rounded-lg p-1 shrink-0 overflow-hidden">
-                              <Logo3D className="h-8 w-8 max-h-full max-w-full object-contain" logoUrl={draftSettings.customLogoUrl || '/freepbx-cdr-logo.svg'} />
-                            </div>
-                          </div>
-                          <span className="text-[10px] text-slate-500 mt-1 block">
-                            Оставьте пустым, чтобы использовать стандартный логотип PBXPULS.
-                          </span>
-                        </div>
-
-                        <div>
-                          <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                            Копирайт в подвале (footer)
-                          </label>
-                          <textarea
-                            value={draftSettings.customCopyright || ''}
-                            onChange={(e) => setDraftSettings({ ...draftSettings, customCopyright: e.target.value })}
-                            placeholder="Например: © 2026 МояКомпания. Все права защищены."
-                            rows={2}
-                            className="w-full min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 font-sans focus:border-blue-500 focus:outline-none"
-                          />
-                          <span className="text-[10px] text-slate-500 mt-1 block">
-                            Оставьте пустым для отображения стандартного копирайта ИП Грунин К.В.
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
                   {settingsTab === 'appearance' && (
                     <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 space-y-4">
                       <h4 className="flex min-w-0 items-center gap-2 break-words text-sm font-black text-slate-900">
