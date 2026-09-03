@@ -7,6 +7,7 @@ type Dependencies = {
   readLocalDb: () => Promise<any>;
   queryCdr: QueryCdr;
   isDemoMode: (settings: any) => boolean;
+  getVisibilityExtensions: (req: Request, localDb: any) => Promise<string[] | null>;
 };
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -120,6 +121,13 @@ export function registerOutgoingReportRoutes(app: Express, deps: Dependencies) {
       const extensionRows = await deps.queryCdr(db.settings, false, `SELECT id AS extension, description AS name FROM asterisk.devices WHERE tech IN ('sip','pjsip') UNION SELECT extension, name FROM asterisk.users`, []);
       const extensionMap = new Map<string, string>();
       extensionRows.forEach((row: any) => { const ext=String(row.extension||'').trim(); if (/^\d{2,8}$/.test(ext) && !extensionMap.has(ext)) extensionMap.set(ext, String(row.name||ext)); });
+      const visibilityExtensions = await deps.getVisibilityExtensions(req, db);
+      if (visibilityExtensions !== null) {
+        filters.extensions = filters.extensions.length
+          ? filters.extensions.filter(extension => visibilityExtensions.includes(extension))
+          : visibilityExtensions;
+        if (!filters.extensions.length) filters.emptySelection = true;
+      }
       const built = buildOutgoingAttemptsSql(filters, [...extensionMap.keys()]);
       const scoped = scopedSql(built.sql, filters, built.params);
       const groupExpr: Record<string,string> = { hour: `DATE_FORMAT(calldate,'%Y-%m-%d %H:00')`, day: `DATE(calldate)`, week: `DATE_FORMAT(calldate,'%x-W%v')`, month: `DATE_FORMAT(calldate,'%Y-%m-01')`, weekday: `WEEKDAY(calldate)`, year: `DATE_FORMAT(calldate,'%Y-01-01')` };
@@ -143,7 +151,7 @@ export function registerOutgoingReportRoutes(app: Express, deps: Dependencies) {
       const retryBuckets: Record<string,{numbers:number;answered:number;attempts:number}>={first:{numbers:0,answered:0,attempts:0},second:{numbers:0,answered:0,attempts:0},third:{numbers:0,answered:0,attempts:0},fourth:{numbers:0,answered:0,attempts:0},fifthPlus:{numbers:0,answered:0,attempts:0},never:{numbers:0,answered:0,attempts:0}};
       retryRows.forEach((r:any)=>{ const a=String(r.outcomes||'').split(',').map(Number); const first=a.indexOf(1); const key=first<0?'never':first===0?'first':first===1?'second':first===2?'third':first===3?'fourth':'fifthPlus'; retryBuckets[key].numbers++; a.forEach((v:number,i:number)=>{const k=i===0?'first':i===1?'second':i===2?'third':i===3?'fourth':'fifthPlus'; retryBuckets[k].attempts++; if(v) retryBuckets[k].answered++;}); });
       res.json({ appliedFilters:filters, metadata:{timezone:'PBX database local time',waitTimeSource:'duration_minus_billsec',limitations:['CDR does not contain answer/end timestamps','ANSWERED may include voicemail or an answering machine','retry sequences are limited to the selected period']},
-        options:{extensions:[...extensionMap].map(([extension,name])=>({extension,name})),trunks:trunks.map((r:any)=>r.trunk)},
+        options:{extensions:[...extensionMap].filter(([extension])=>visibilityExtensions===null||visibilityExtensions.includes(extension)).map(([extension,name])=>({extension,name})),trunks:trunks.map((r:any)=>r.trunk)},
         kpis:{totalAttempts:total,uniqueNumbers:num(summary.unique_numbers),answered:num(summary.answered),unanswered:num(summary.missed),answerRate:total?100*num(summary.answered)/total:0,averageWaitSeconds:summary.avg_wait==null?null:num(summary.avg_wait),medianWaitSeconds:medianWait,averageTalkSeconds:summary.avg_talk==null?null:num(summary.avg_talk),totalTalkSeconds:num(summary.talk_total),firstAttemptRate:retryRows.length?100*retryBuckets.first.answered/retryRows.length:0},
         timeline,results,heatmap,extensions:extensions.map((r:any)=>({...r,name:extensionMap.get(String(r.internal_extension))||r.internal_extension})),trunks,waitBuckets,durationBuckets,retries:retryBuckets,
         details:{page:filters.page,pageSize:filters.pageSize,total:num(totalRows[0]?.total),rows:detailRows.map((r:any)=>({...normalizeRow(r),user:extensionMap.get(String(r.internal_extension))||null,attemptsForNumber:num(r.attempts_for_number)}))}

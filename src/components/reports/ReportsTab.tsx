@@ -279,6 +279,7 @@ export default function ReportsTab({
   const [slaSummary, setSlaSummary] = useState<SlaSummary | null>(null);
   const [usedSettings, setUsedSettings] = useState<UsedCallQualitySettings | null>(null);
   const [departmentSummary, setDepartmentSummary] = useState<DepartmentSummaryRow[]>([]);
+  const [departmentOptions, setDepartmentOptions] = useState<string[]>([]);
   const [employeeSummary, setEmployeeSummary] = useState<EmployeeSummaryRow[]>([]);
   const [inboundCallDetails, setInboundCallDetails] = useState<InboundCallDetail[]>([]);
   const [trunkSummary, setTrunkSummary] = useState<TrunkSummaryRow[]>([]);
@@ -333,6 +334,9 @@ export default function ReportsTab({
         setLostCallSummary(json.lostCallSummary || null);
         setSlaSummary(json.slaSummary || null);
         setDepartmentSummary(Array.isArray(json.departmentSummary) ? json.departmentSummary : []);
+        const nextDepartmentOptions = Array.isArray(json.departmentOptions) ? json.departmentOptions : [];
+        setDepartmentOptions(nextDepartmentOptions);
+        if (department !== 'all' && !nextDepartmentOptions.includes(department)) setDepartment('all');
         setEmployeeSummary(Array.isArray(json.employeeSummary) ? json.employeeSummary : []);
         setInboundCallDetails(Array.isArray(json.inboundCallDetails) ? json.inboundCallDetails : []);
         setTrunkSummary(Array.isArray(json.trunkSummary) ? json.trunkSummary : []);
@@ -379,7 +383,6 @@ export default function ReportsTab({
   }, [visibleData]);
 
   const departments = departmentSummary.length ? departmentSummary : (detailingData?.queues?.length ? detailingData.queues : (detailingData?.groups || []));
-  const departmentOptions = useMemo(() => Array.from(new Set(departmentSummary.map(item => String(item.department || '').trim()).filter(Boolean))), [departmentSummary]);
   const legacyTrunks = detailingData?.trunks || [];
   const trunks: TrunkSummaryRow[] = trunkSummary.length ? trunkSummary : legacyTrunks.map(item => ({
     trunkName: item.name,
@@ -467,7 +470,7 @@ export default function ReportsTab({
               <ChevronRight className="h-4 w-4" />
             </button>
             <div className="w-[92px]"><select value={groupType} onChange={e => setGroupType(e.target.value as typeof groupType)} className={controlClass()} aria-label="Шаг группировки"><option value="day">День</option><option value="week">Неделя</option><option value="month">Месяц</option><option value="hour">Час</option><option value="weekday">День недели</option><option value="year">Год</option></select></div>
-            <div className="w-[128px]"><select value={department} onChange={e => setDepartment(e.target.value)} className={controlClass()} aria-label="Отдел"><option value="all">Все отделы</option>{departmentOptions.map(item => <option key={item} value={item}>{item}</option>)}<option value="sales">Продажи</option><option value="support">Поддержка</option><option value="accounting">Бухгалтерия</option><option value="logistics">Логистика</option></select></div>
+            <div className="w-[128px]"><select value={department} onChange={e => setDepartment(e.target.value)} className={controlClass()} aria-label="Отдел"><option value="all">Все отделы</option>{departmentOptions.map(item => <option key={item} value={item}>{item}</option>)}</select></div>
             <div className="w-[166px]"><select value={employee} onChange={e => setEmployee(e.target.value)} className={controlClass()} aria-label="Сотрудник"><option value="all">Все сотрудники</option>{employees.map(item => <option key={item.value + item.label} value={item.value}>{item.label}</option>)}</select></div>
             <div className="w-[132px]"><input value={internalExt} onChange={e => setInternalExt(e.target.value.replace(/[^0-9]/g, ''))} placeholder="Все номера" className={controlClass()} aria-label="Внутренний номер" /></div>
             <button onClick={() => setRefreshes(v => v + 1)} className="ml-auto inline-flex h-8 items-center gap-2 rounded-lg bg-blue-600 px-3.5 text-xs font-black text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-60" disabled={loading}>

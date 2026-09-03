@@ -19,6 +19,7 @@ export interface AccessUser {
   extension?: string;
   disabled?: boolean;
   permissions?: UserPermissions;
+  managedDepartments?: string[];
 }
 
 export interface UserFormState {
@@ -29,4 +30,5 @@ export interface UserFormState {
   extension: string;
   disabled: boolean;
   permissions?: UserPermissions;
+  managedDepartments: string[];
 }

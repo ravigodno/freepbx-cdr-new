@@ -61,7 +61,7 @@ import { getPBXPulsDbRuntimeStatus, isPBXPulsDbAvailable, queryPBXPulsDb, saniti
 import { getPBXPulsDbConfigLogFields } from './server/pbxpulsDbConfig.js';
 import { writePBXPulsSystemEvent } from './server/pbxpulsEvents.js';
 import { registerCdrEncodingRepairRoutes } from './server/cdrEncodingRepair.js';
-import { findLatestDtmfEndByLinkedId, recordDtmfEventSql } from './server/dtmfEventStorage.js';
+import { buildOutboundDtmfSequences, findDtmfEndEventsByLinkedId, findLatestDtmfEndByLinkedId, recordDtmfEventSql } from './server/dtmfEventStorage.js';
 import { registerSiteFormRoutes } from './server/siteForms/router.js';
 import { registerSoftphoneRoutes } from './server/softphone/router.js';
 import { resolveSoftphonePbxHost } from './server/softphone/autoConfig.js';
@@ -204,6 +204,15 @@ import { registerNotificationRoutes } from './server/notifications/router.js';
 import { findUnreturnedMissedCalls } from './server/notifications/missedCallDetector.js';
 import { calculateAnsweredIncomingMetrics } from './server/reportIncomingMetrics.js';
 import { buildCdrLogicalNumberScope } from './server/reportCdrScope.js';
+import { getDirectoryEmployeeDepartments } from './server/reportDepartments.js';
+import {
+  callMatchesExtensions,
+  deleteUserDepartmentScopes,
+  getDepartmentExtensions,
+  getUserDepartmentScopes,
+  renameUserDepartmentScopes,
+  setUserDepartmentScopes
+} from './server/departmentCallAccess.js';
 import { buildAnsweredContactLookup, findFirstAnsweredContactAfter } from './server/cdrAnsweredLookup.js';
 import { writePBXPulsAuditLog } from './server/pbxpulsEvents.js';
 import { registerDirectoryCustomFieldRoutes } from './server/directoryCustomFields/router.js';
@@ -402,7 +411,7 @@ async function startDtmfAmiListener(settings: AppSettings) {
               event: eventName,
             }).catch((error: any) => console.error('[DTMF] MariaDB write failed:', sanitizePBXPulsDbError(error)));
 
-            console.log(`[DTMF] ${eventName} digit=${digit} linkedid=${linkedid} channel=${channel}`);
+            console.log(`[DTMF] ${eventName} received linkedid=${linkedid} channel=${channel}`);
           }
         }
       }
@@ -4025,6 +4034,7 @@ function getDefaultAccessRoles() {
       hidden: true,
       permissions: {
         view_calls: true,
+        view_call_dtmf: true,
         process_calls: true,
         view_directory: true,
         edit_directory: true,
@@ -4084,6 +4094,7 @@ function getDefaultAccessRoles() {
       system: true,
       permissions: {
         view_calls: true,
+        view_call_dtmf: true,
         view_directory: true,
         view_reports: true,
         view_marketing: true,
@@ -5497,6 +5508,26 @@ function isOperatorForcedOwnCalls(localDb: any, req: Request): boolean {
     ...(dbUser.permissions || {})
   };
   return dbUser.role === 'operator' || permissions.own_calls_only === true;
+}
+
+async function getCallVisibilityExtensions(localDb: any, req: Request, directory?: any[]): Promise<string[] | null> {
+  const dbUser = getAuthenticatedDbUser(localDb, req);
+  if (!dbUser || dbUser.role === 'su' || dbUser.role === 'admin') return null;
+  const roleConfig = (localDb.roles || getDefaultAccessRoles()).find((item: any) => item.id === dbUser.role);
+  const permissions = { ...(roleConfig?.permissions || {}), ...(dbUser.permissions || {}) };
+  if (dbUser.role === 'operator' || permissions.own_calls_only === true) {
+    const extension = String(dbUser.extension || '').replace(/\D/g, '');
+    return extension ? [extension] : [];
+  }
+  if (permissions.department_calls_only !== true) return null;
+  const departments = await getUserDepartmentScopes(dbUser.username);
+  const contacts = directory || (await getDirectoryRuntimeSnapshotForRequest(localDb, req)).contacts;
+  return getDepartmentExtensions(contacts, departments);
+}
+
+async function canAccessCallRows(localDb: any, req: Request, rows: any[]): Promise<boolean> {
+  const extensions = await getCallVisibilityExtensions(localDb, req);
+  return extensions === null || rows.some(row => callMatchesExtensions(row, extensions));
 }
 
 const CALLTRACKING_ALLOWED_EVENT_TYPES = new Set([
@@ -11081,9 +11112,27 @@ app.get('/api/users', requireAuth(), async (req, res) => {
     const visibleUsers = (localDb.users || []).filter((user: any) => {
       return authUser?.role === 'su' || user.role !== 'su';
     });
-    res.json(visibleUsers.map(sanitizeUser));
+    const users = await Promise.all(visibleUsers.map(async (user: any) => ({
+      ...sanitizeUser(user),
+      managedDepartments: await getUserDepartmentScopes(user.username)
+    })));
+    res.json(users);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/users/department-options', requireAuth(), async (req, res) => {
+  const authUser = (req as any).user;
+  if (authUser?.role !== 'su' && authUser?.permissions?.manage_users !== true) {
+    return res.status(403).json({ error: 'Access denied: manage_users permission required' });
+  }
+  try {
+    const localDb = await readLocalDb();
+    const runtime = await getDirectoryRuntimeSnapshotForRequest(localDb, req);
+    res.json({ departments: getDirectoryEmployeeDepartments(runtime.contacts) });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Не удалось загрузить отделы сотрудников' });
   }
 });
 
@@ -11095,7 +11144,7 @@ app.post('/api/users', requireAuth(), async (req, res) => {
 
   try {
     const authUser = (req as any).user;
-    const { fullName, username, password, role, extension, disabled, permissions } = req.body;
+    const { fullName, username, password, role, extension, disabled, permissions, managedDepartments } = req.body;
 
     if (role === 'su' && authUser?.role !== 'su') {
       return res.status(403).json({ error: 'Доступ запрещен' });
@@ -11132,7 +11181,8 @@ app.post('/api/users', requireAuth(), async (req, res) => {
 
     localDb.users.push(user as any);
     await writeLocalDb(localDb);
-    res.json({ success: true, user: sanitizeUser(user) });
+    const savedDepartments = await setUserDepartmentScopes(user.username, managedDepartments);
+    res.json({ success: true, user: { ...sanitizeUser(user), managedDepartments: savedDepartments } });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -11198,7 +11248,7 @@ app.put('/api/users/:id', requireAuth(), async (req, res) => {
   try {
     const authUser = (req as any).user;
     const { id } = req.params;
-    const { fullName, username, password, role, extension, disabled, permissions } = req.body;
+    const { fullName, username, password, role, extension, disabled, permissions, managedDepartments } = req.body;
 
     if (role === 'su' && authUser?.role !== 'su') {
       return res.status(403).json({ error: 'Доступ запрещен' });
@@ -11227,6 +11277,7 @@ app.put('/api/users/:id', requireAuth(), async (req, res) => {
       return;
     }
 
+    const previousUsername = String(localDb.users[idx]?.username || '');
     const nextUser = {
       ...localDb.users[idx],
       fullName: normalizeAccessUserFullName(fullName),
@@ -11242,7 +11293,9 @@ app.put('/api/users/:id', requireAuth(), async (req, res) => {
     }
     localDb.users[idx] = nextUser;
     await writeLocalDb(localDb);
-    res.json({ success: true, user: sanitizeUser(nextUser) });
+    await renameUserDepartmentScopes(previousUsername, nextUser.username);
+    const savedDepartments = await setUserDepartmentScopes(nextUser.username, managedDepartments);
+    res.json({ success: true, user: { ...sanitizeUser(nextUser), managedDepartments: savedDepartments } });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -11268,6 +11321,7 @@ app.delete('/api/users/:id', requireAuth(), async (req, res) => {
     }
     localDb.users = (localDb.users || []).filter((u: any) => u.id !== id);
     await writeLocalDb(localDb);
+    await deleteUserDepartmentScopes(target.username);
     res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -15317,6 +15371,12 @@ app.post('/api/calls/:uniqueid/process', requireAuth(), async (req, res) => {
   const operator = authUser.username;
 
   const localDb = await readLocalDb();
+  const scopedRows = isDemoMode(localDb.settings)
+    ? mockCDRData.filter(call => call.uniqueid === uniqueid || call.linkedid === uniqueid)
+    : await queryFreePBXCDR(localDb.settings, false,
+      'SELECT uniqueid,linkedid,src,dst,cnum,outbound_cnum,channel,dstchannel,lastdata,did FROM cdr WHERE uniqueid=? OR linkedid=?',
+      [uniqueid, uniqueid]);
+  if (!(await canAccessCallRows(localDb, req, scopedRows))) return res.status(403).json({ error: 'Звонок не входит в доступные отделы' });
   let statusIdx = localDb.missedCallStatuses.findIndex(s => s.uniqueid === uniqueid);
 
   const statusItem: MissedCallStatus = {
@@ -15717,6 +15777,9 @@ app.get('/api/calls/:uniqueid/chronology', requireAuth(), async (req, res) => {
           [...channelIds, ...channelIds]
         );
       }
+      if (!(await canAccessCallRows(localDb, req, meetingLegs.length ? meetingLegs : invitations.map((item: any) => ({ dst: item.targetNumber }))))) {
+        return res.status(403).json({ error: 'Звонок не входит в доступные отделы' });
+      }
       const participantStatuses = invitations.map((invitation: any) => {
         const participantNumber = String(invitation.targetNumber || '').replace(/\D/g, '');
         const internalChannelPattern = /^\d{2,5}$/.test(participantNumber)
@@ -15788,6 +15851,8 @@ app.get('/api/calls/:uniqueid/chronology', requireAuth(), async (req, res) => {
       const legsSql = 'SELECT uniqueid, calldate, clid, src, dst, dcontext, channel, dstchannel, lastapp, lastdata, duration, billsec, disposition, recordingfile, did, cnum, cnam, outbound_cnum, linkedid FROM cdr WHERE uniqueid = ? OR linkedid = ? ORDER BY calldate ASC';
       legs = await queryFreePBXCDR(settings, false, legsSql, [targetLinkedId, targetLinkedId]);
     }
+
+    if (!(await canAccessCallRows(localDb, req, legs))) return res.status(403).json({ error: 'Звонок не входит в доступные отделы' });
 
     // Sort legs by calldate ASC to ensure proper chronological order
     legs.sort((a, b) => new Date(a.calldate).getTime() - new Date(b.calldate).getTime());
@@ -15903,6 +15968,32 @@ app.get('/api/calls/:uniqueid/chronology', requireAuth(), async (req, res) => {
     }
 
     const routeAnalysis = isDemo ? null : await enrichFreePBXRoute(settings, legs);
+    let dtmfSequences: ReturnType<typeof buildOutboundDtmfSequences> = [];
+    if (!isDemo && routeAnalysis?.direction === 'outbound' && await checkUserPermission(req, 'view_call_dtmf')) {
+      const answeredLegs = legs.filter((leg: any) =>
+        String(leg.disposition || '').toUpperCase() === 'ANSWERED' && Number(leg.billsec || 0) > 0
+      );
+      const answeredTimes = answeredLegs.map((leg: any) => {
+        const startedAt = new Date(leg.calldate).getTime();
+        return startedAt + Math.max(0, Number(leg.duration || 0) - Number(leg.billsec || 0)) * 1000;
+      }).filter(Number.isFinite);
+      const endedTimes = legs.map((leg: any) =>
+        new Date(leg.calldate).getTime() + Math.max(0, Number(leg.duration || 0)) * 1000
+      ).filter(Number.isFinite);
+      const employeeExtension = resolveCdrCallerExtension(legs);
+      if (answeredTimes.length && endedTimes.length && employeeExtension) {
+        const dtmfEvents = await findDtmfEndEventsByLinkedId(targetLinkedId).catch((error: any) => {
+          console.error('[DTMF] MariaDB read failed:', sanitizePBXPulsDbError(error));
+          return [];
+        });
+        dtmfSequences = buildOutboundDtmfSequences(
+          dtmfEvents,
+          employeeExtension,
+          new Date(Math.min(...answeredTimes)),
+          new Date(Math.max(...endedTimes))
+        );
+      }
+    }
 
     res.json({
       success: true,
@@ -15921,6 +16012,7 @@ app.get('/api/calls/:uniqueid/chronology', requireAuth(), async (req, res) => {
       logicalCall: chronologyHandoff ? aggregateAiHandoffLogicalCall(legs, chronologyHandoff) : null,
       logicalTimeline: handoffTimeline?.events || null,
       technicalTimeline: handoffTimeline?.technicalEvents || null,
+      dtmfSequences,
       routeAnalysis
     });
 
@@ -16350,6 +16442,9 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
         recordingfile: answered?.recordingfile || sorted.find(c => c.recordingfile)?.recordingfile || "",
       };
     });
+
+    const visibilityExtensions = await getCallVisibilityExtensions(localDb, req);
+    if (visibilityExtensions !== null) calls = calls.filter(call => callMatchesExtensions(call, visibilityExtensions));
 
     await enrichCallsWithDirectoryBulk(calls, localDb, req);
     const directory = getEnrichedDirectoryContacts(calls);
@@ -16797,6 +16892,9 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
         recordingfile: answered?.recordingfile || sorted.find(c => c.recordingfile)?.recordingfile || "",
       };
     });
+
+    const visibilityExtensions = await getCallVisibilityExtensions(localDb, req);
+    if (visibilityExtensions !== null) calls = calls.filter(call => callMatchesExtensions(call, visibilityExtensions));
 
     await enrichCallsWithDirectoryBulk(calls, localDb, req);
     const directory = getEnrichedDirectoryContacts(calls);
@@ -17307,7 +17405,10 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
 
     const directoryRuntime = await getDirectoryRuntimeSnapshotForRequest(localDb, req);
     const directory = directoryRuntime.contacts;
+    const departmentOptions = getDirectoryEmployeeDepartments(directory);
     const ownerMap = buildExtensionOwnerMap(directory, localDb.users || []);
+    const visibilityExtensions = await getCallVisibilityExtensions(localDb, req, directory);
+    if (visibilityExtensions !== null) calls = calls.filter(call => callMatchesExtensions(call, visibilityExtensions));
 
     const checkCallDepartmentMatch = (c: any, dept: string, directory: any[]): boolean => {
       const normalizedDept = String(dept || '').trim().toLowerCase();
@@ -17759,6 +17860,7 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
       inboundCallDetails,
       slaSummary,
       departmentSummary,
+      departmentOptions,
       employeeSummary,
       trunkSummary,
       heatmap,
@@ -17792,6 +17894,13 @@ app.get('/api/recordings/:filename', (req, _res, next) => {
   const localDb = await readLocalDb();
   const recordingsDir = localDb.settings.recordingsPath;
   const isDemo = isDemoMode(localDb.settings);
+
+  if (!isDemo) {
+    const rows = await queryFreePBXCDR(localDb.settings, false,
+      'SELECT uniqueid,linkedid,src,dst,cnum,outbound_cnum,channel,dstchannel,lastdata,did FROM cdr WHERE recordingfile=?',
+      [path.basename(filename)]);
+    if (!(await canAccessCallRows(localDb, req, rows))) return res.status(403).json({ error: 'Запись не входит в доступные отделы' });
+  }
 
   if (isDemo || !filename || filename.includes('..')) {
     // Return sample visual synthesized test audio context for Demo mode live playback 
@@ -23357,7 +23466,8 @@ registerOutgoingReportRoutes(app, {
   checkPermission: checkUserPermission,
   readLocalDb,
   queryCdr: queryFreePBXCDR,
-  isDemoMode
+  isDemoMode,
+  getVisibilityExtensions: (req, localDb) => getCallVisibilityExtensions(localDb, req)
 });
 registerUniqueNumberExportRoutes(app, {
   requireAuth,
@@ -23365,6 +23475,7 @@ registerUniqueNumberExportRoutes(app, {
   readLocalDb,
   queryCdr: queryFreePBXCDR,
   isDemoMode,
+  getVisibilityExtensions: (req, localDb) => getCallVisibilityExtensions(localDb, req),
   bulkLookup: async (phones, req, localDb) => bulkLookupDirectoryPhonesSql(phones, getDirectorySqlAccessContext(localDb, req), 20_000),
   audit: async (req, details) => {
     const user: any = (req as any).user || {};

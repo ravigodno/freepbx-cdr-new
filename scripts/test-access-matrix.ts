@@ -34,6 +34,8 @@ for (const role of ['admin', 'manager', 'operator', 'directory_only', 'custom'] 
 }
 
 assert.match(serverSource, /permissions\.own_calls_only === true/, 'own_calls_only must be enforced by the server');
+assert.match(serverSource, /permissions\.department_calls_only !== true/, 'department_calls_only must be enforced by the server');
+assert.ok(serverSource.includes("checkUserPermission(req, 'view_call_dtmf')"), 'view_call_dtmf must protect DTMF chronology data');
 assert.doesNotMatch(
   serverSource,
   /app\.(?:post|put|patch|delete)\('\/api\/ai-[^'\n]*'[^ \n]*[\s\S]{0,100}?requirePermission\('view_ai_pbx_admin'\)/,

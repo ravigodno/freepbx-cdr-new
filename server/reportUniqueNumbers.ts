@@ -12,6 +12,7 @@ type Dependencies = {
   isDemoMode: (settings: any) => boolean;
   bulkLookup: (phones: string[], req: Request, localDb: any) => Promise<{ matches: Record<string, any>; lookupMs: number; sqlQueryCount: number }>;
   audit: (req: Request, details: Record<string, unknown>) => Promise<void>;
+  getVisibilityExtensions: (req: Request, localDb: any) => Promise<string[] | null>;
 };
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -126,6 +127,13 @@ export function registerUniqueNumberExportRoutes(app: Express, deps: Dependencie
     try {
       const localDb = await deps.readLocalDb();
       if (deps.isDemoMode(localDb.settings)) return res.status(503).json({ error: 'Экспорт требует доступной CDR АТС' });
+      const visibilityExtensions = await deps.getVisibilityExtensions(req, localDb);
+      if (visibilityExtensions !== null) {
+        filters.extensions = filters.extensions.length
+          ? filters.extensions.filter(extension => visibilityExtensions.includes(extension))
+          : visibilityExtensions;
+        if (!filters.extensions.length) return res.status(404).json({ error: 'В назначенных отделах нет доступных внутренних номеров' });
+      }
       const plan = buildUniqueNumbersSql(direction, filters);
       const rawRows = await deps.queryCdr(localDb.settings, false, plan.sql, plan.params);
       const rows = rawRows.map(row => ({ ...row, phone_normalized: normalizeReportExternalPhone(row.external_number) }))

@@ -217,6 +217,19 @@ export function buildCallRouteView(chronologyData: any): RouteView {
     } as any);
   }
 
+  if (direction === 'outbound' && Array.isArray(chronologyData?.dtmfSequences)) {
+    for (const sequence of chronologyData.dtmfSequences) {
+      routeSteps.push({
+        label: 'DTMF',
+        title: `Набран добавочный номер: ${sequence.digits}`,
+        pattern: `Через ${sequence.offsetSeconds} сек. после ответа`,
+        destination: '',
+        number: sequence.digits,
+        members: [],
+      });
+    }
+  }
+
   const ivrStepForResult = routeSteps.find((step: any) => step.label === 'IVR' || step.type === 'ivr');
 
   const ivrOnlyNoDigit =

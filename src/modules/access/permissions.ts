@@ -4,6 +4,8 @@ import { roleHasPermission } from './roleMatrix';
 export type PermissionKey =
   | 'view_calls'
   | 'own_calls_only'
+  | 'department_calls_only'
+  | 'view_call_dtmf'
   | 'view_directory'
   | 'view_reports'
   | 'view_marketing'

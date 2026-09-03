@@ -126,6 +126,7 @@ import {
 } from './modules/access/types';
 import {
   fetchAccessUsers,
+  fetchAccessDepartmentOptions,
   saveAccessUserApi,
   deleteAccessUserApi
 } from './modules/access/services/accessApi';
@@ -836,6 +837,7 @@ export default function App() {
   }, []);
 
   const [accessUsers, setAccessUsers] = useState<AccessUser[]>([]);
+  const [accessDepartmentOptions, setAccessDepartmentOptions] = useState<string[]>([]);
   const [isLoadingUsers, setIsLoadingUsers] = useState(false);
   const [isSavingUser, setIsSavingUser] = useState(false);
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
@@ -851,7 +853,8 @@ export default function App() {
     role: 'operator' as UserRole,
     extension: '',
     disabled: false,
-    permissions: {}
+    permissions: {},
+    managedDepartments: [] as string[]
   });
   const [isDemoClearing, setIsDemoClearing] = useState(false);
   const [isDemoGenerating, setIsDemoGenerating] = useState(false);
@@ -3647,8 +3650,12 @@ export default function App() {
     if (!session || !isAdminRole(session.role)) return;
     setIsLoadingUsers(true);
     try {
-      const data = await fetchAccessUsers(session.token);
+      const [data, departmentOptions] = await Promise.all([
+        fetchAccessUsers(session.token),
+        fetchAccessDepartmentOptions(session.token)
+      ]);
       setAccessUsers(data);
+      setAccessDepartmentOptions(departmentOptions);
     } catch (e) {
       console.error('Error loading users:', e);
     } finally {
@@ -3704,13 +3711,13 @@ export default function App() {
 
   const resetUserForm = () => {
     setEditingUserId(null);
-    setUserForm({ fullName: '', username: '', password: '', role: 'operator', extension: '', disabled: false, permissions: {} });
+    setUserForm({ fullName: '', username: '', password: '', role: 'operator', extension: '', disabled: false, permissions: {}, managedDepartments: [] });
     setAccessError('');
   };
 
   const openEditUser = (user: AccessUser) => {
     setEditingUserId(user.id);
-    setUserForm({ fullName: user.fullName || '', username: user.username, password: '', role: user.role as UserRole, extension: user.extension || '', disabled: !!user.disabled, permissions: user.permissions || {} });
+    setUserForm({ fullName: user.fullName || '', username: user.username, password: '', role: user.role as UserRole, extension: user.extension || '', disabled: !!user.disabled, permissions: user.permissions || {}, managedDepartments: user.managedDepartments || [] });
     setAccessError('');
     setSettingsTab('access');
   };
@@ -8711,6 +8718,7 @@ export default function App() {
                       roles={roles}
                       token={session.token}
                       onBulkCreated={loadAccessUsers}
+                      departmentOptions={accessDepartmentOptions}
                     />
                   )}
                   

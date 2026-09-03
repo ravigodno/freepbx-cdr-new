@@ -5,6 +5,7 @@ export const ROLE_PERMISSIONS: Partial<Record<UserRole, PermissionKey[]>> = {
   su: [],
   admin: [
     'view_calls',
+    'view_call_dtmf',
     'view_directory',
     'view_reports',
     'listen_recordings',

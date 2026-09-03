@@ -21,6 +21,7 @@ interface AccessUsersTabProps {
   roles: AccessRole[];
   token: string;
   onBulkCreated: () => Promise<void>;
+  departmentOptions: string[];
 }
 
 export default function AccessUsersTab({
@@ -36,10 +37,13 @@ export default function AccessUsersTab({
   resetUserForm,
   roles,
   token,
-  onBulkCreated
+  onBulkCreated,
+  departmentOptions
 }: AccessUsersTabProps) {
   const permissionRows: Array<{ key: PermissionKey; label: string; description: string }> = [
     { key: 'view_calls', label: 'Просмотр звонков', description: 'Доступ к журналу CDR и списку вызовов' },
+    { key: 'department_calls_only', label: 'Звонки подчинённых отделов', description: 'Показывать только звонки назначенных руководителю отделов' },
+    { key: 'view_call_dtmf', label: 'Введённые добавочные номера', description: 'Показывать DTMF-цифры, введённые сотрудником после ответа на исходящий звонок' },
     { key: 'view_directory', label: 'Просмотр справочника', description: 'Доступ к телефонному справочнику' },
     { key: 'view_reports', label: 'Просмотр отчетов', description: 'Доступ к отчетам и статистике' },
     { key: 'view_marketing', label: 'Просмотр маркетинга', description: 'Доступ к вкладке Маркетинг' },
@@ -236,6 +240,30 @@ export default function AccessUsersTab({
           />
           <span className="mt-1 block text-[10px] font-normal text-slate-500">Используется как внутренний номер пользователя для звонков, live-действий и телефонных совещаний.</span>
         </label>
+
+        <fieldset className="rounded-xl border border-slate-200 bg-white p-3">
+          <legend className="px-1 text-xs font-black text-slate-800">Подчинённые отделы</legend>
+          <p className="mb-2 text-[11px] text-slate-500">Используются правом «Только звонки подчинённых отделов».</p>
+          <div className="max-h-40 space-y-1 overflow-y-auto">
+            {departmentOptions.map(department => (
+              <label key={department} className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-slate-50">
+                <input
+                  type="checkbox"
+                  checked={(userForm.managedDepartments || []).includes(department)}
+                  onChange={event => setUserForm({
+                    ...userForm,
+                    managedDepartments: event.target.checked
+                      ? [...(userForm.managedDepartments || []), department]
+                      : (userForm.managedDepartments || []).filter(item => item !== department)
+                  })}
+                  className="rounded border-slate-300 text-blue-600"
+                />
+                <span>{department}</span>
+              </label>
+            ))}
+            {!departmentOptions.length && <div className="text-[11px] text-slate-400">В справочнике нет сотрудников с указанным отделом.</div>}
+          </div>
+        </fieldset>
 
         <label className="flex items-center gap-2 text-xs text-slate-700 font-bold">
           <input

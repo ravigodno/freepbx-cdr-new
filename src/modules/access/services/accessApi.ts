@@ -14,6 +14,15 @@ export async function fetchAccessUsers(token: string): Promise<AccessUser[]> {
   return resp.json();
 }
 
+export async function fetchAccessDepartmentOptions(token: string): Promise<string[]> {
+  const resp = await fetch('/api/users/department-options', {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.error || 'Не удалось загрузить отделы сотрудников.');
+  return Array.isArray(data.departments) ? data.departments : [];
+}
+
 export async function saveAccessUserApi(
   token: string,
   userForm: UserFormState,

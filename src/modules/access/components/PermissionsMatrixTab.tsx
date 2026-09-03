@@ -53,6 +53,8 @@ const GROUPS: PermissionGroup[] = [
     rows: [
       { key: 'view_calls', label: 'Открыть вкладку звонков', kind: 'tab', hint: 'Показывает раздел Реестр звонков' },
       { key: 'own_calls_only', label: 'Только мои звонки', kind: 'feature', hint: 'Ограничивает журнал и отчеты добавочным номером пользователя' },
+      { key: 'department_calls_only', label: 'Только звонки подчинённых отделов', kind: 'feature', hint: 'Ограничивает звонки отделами, назначенными руководителю в настройках пользователя' },
+      { key: 'view_call_dtmf', label: 'Введённые добавочные номера', kind: 'feature', hint: 'Показывает DTMF-цифры, введённые сотрудником после ответа на исходящий звонок' },
       { key: 'process_calls', label: 'Обработка звонков', kind: 'feature', hint: 'Разрешает менять статус/обработку звонка' },
       { key: 'listen_recordings', label: 'Прослушивание записей', kind: 'feature', hint: 'Разрешает слушать записи разговоров' },
       { key: 'make_calls', label: 'Click2Call', kind: 'feature', hint: 'Разрешает звонить из интерфейса' },

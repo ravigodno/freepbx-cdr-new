@@ -4,6 +4,7 @@ import { calculateAnsweredIncomingMetrics } from '../server/reportIncomingMetric
 import { buildUniqueNumbersSql, escapeReportCsv, normalizeReportExternalPhone } from '../server/reportUniqueNumbers.js';
 import { isWithinCompanyWorkingHours, normalizeCompanyWorkingHours } from '../shared/companyWorkingHours.js';
 import { buildOverviewData, buildOverviewTicks } from '../src/components/reports/dashboard/OverviewCallDynamicsChart.js';
+import { getDirectoryEmployeeDepartments } from '../server/reportDepartments.js';
 
 const workingHours = normalizeCompanyWorkingHours({ companyWorkStart: '08:30', companyWorkEnd: '18:15' });
 assert.deepEqual(workingHours, { start: '08:30', end: '18:15' });
@@ -12,6 +13,15 @@ assert.equal(isWithinCompanyWorkingHours(new Date(2026, 6, 1, 8, 30), workingHou
 assert.equal(isWithinCompanyWorkingHours(new Date(2026, 6, 1, 18, 14), workingHours), true);
 assert.equal(isWithinCompanyWorkingHours(new Date(2026, 6, 1, 18, 15), workingHours), false);
 assert.deepEqual(normalizeCompanyWorkingHours({ companyWorkStart: '19:00', companyWorkEnd: '08:00' }), { start: '08:00', end: '19:00' });
+
+assert.deepEqual(getDirectoryEmployeeDepartments([
+  { type: 'internal', department: ' Продажи ' },
+  { type: 'internal', department: 'продажи' },
+  { type: 'internal', department: 'Бухгалтерия' },
+  { type: 'internal', department: '' },
+  { type: 'client', department: 'Клиенты' },
+  { type: 'supplier', department: 'Поставщики' }
+]), ['Бухгалтерия', 'Продажи']);
 
 const rows = [
   { direction: 'incoming', disposition: 'ANSWERED', duration: 20, billsec: 10 },

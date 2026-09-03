@@ -2235,6 +2235,28 @@ const MIGRATIONS: Migration[] = [
       `INSERT IGNORE INTO permissions(permission_key,name,description,category)VALUES('manage_softphone_profiles','Manage softphone profiles','Preview and manage encrypted browser softphone profiles','telephony')`,
       `INSERT IGNORE INTO role_permissions(role_id,permission_id)SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key='manage_softphone_profiles' WHERE r.role_key IN('su','admin')`
     ],seed:async()=>seedLegacyAiPlatformPermissions(['manage_softphone_profiles'])
+  },
+  {
+    key:'20260903_093_department_call_scopes',description:'Add department-scoped call visibility for supervisors',statements:[
+      `CREATE TABLE IF NOT EXISTS user_department_call_scopes(
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,username VARCHAR(100) NOT NULL,
+        department_name VARCHAR(191) NOT NULL,department_key VARCHAR(191) NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at DATETIME NULL,
+        UNIQUE KEY uniq_user_department_call_scope(username,department_key),
+        KEY idx_user_department_call_scope_username(username)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `INSERT IGNORE INTO permissions(permission_key,name,description,category)
+       VALUES('department_calls_only','Department calls only','Restrict call access to assigned directory departments','calls')`
+    ]
+  },
+  {
+    key:'20260903_094_call_dtmf_permission',description:'Add permission to view outbound call DTMF sequences',statements:[
+      `INSERT IGNORE INTO permissions(permission_key,name,description,category)
+       VALUES('view_call_dtmf','View call DTMF','View DTMF digits entered after outbound calls are answered','calls')`,
+      `INSERT IGNORE INTO role_permissions(role_id,permission_id)
+       SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key='view_call_dtmf'
+       WHERE r.role_key IN('su','admin')`
+    ]
   }
 ];
 
