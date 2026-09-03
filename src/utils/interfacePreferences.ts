@@ -1,7 +1,7 @@
 export type ThemePreference = 'light' | 'dark' | 'system';
 export type CdrDateTimeFormat = 'dmy-dash' | 'dmy-short-dash' | 'dmy-dot' | 'dmy-slash' | 'ymd-dash';
 export type SearchEnginePreference = 'yandex' | 'google';
-export type CallDeviceMode = 'desk_phone' | 'browser_headset' | 'ask';
+export type CallDeviceMode = 'desk_phone' | 'browser_headset';
 
 export interface InterfacePreferences {
   theme: ThemePreference;
@@ -55,12 +55,16 @@ export function loadInterfacePreferences(): InterfacePreferences {
     const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
     const legacyTheme = localStorage.getItem('asterisk_cdr_dark_mode') === 'true' ? 'dark' : 'light';
     const legacyDate = localStorage.getItem('pbxpuls_cdr_date_time_format');
-    return {
+    const next = {
       ...DEFAULT_INTERFACE_PREFERENCES,
       theme: legacyTheme,
       sidebarExpanded: localStorage.getItem('asterisk_cdr_sidebar_expanded') === 'true',
       ...(legacyDate === 'dmy-dot' || legacyDate === 'ymd-dash' ? { cdrDateTimeFormat: legacyDate } : {}),
       ...(stored && typeof stored === 'object' ? stored : {})
+    };
+    return {
+      ...next,
+      callDeviceMode: next.callDeviceMode === 'browser_headset' ? 'browser_headset' : 'desk_phone'
     };
   } catch {
     return { ...DEFAULT_INTERFACE_PREFERENCES };

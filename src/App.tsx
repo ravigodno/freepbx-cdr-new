@@ -6492,7 +6492,6 @@ export default function App() {
                 canCall={hasPermission('make_calls')}
                 isCalling={isC2CLoading}
                 headsetReady={softphoneSnapshot.registration === 'registered'}
-                onModeChange={callDeviceMode => updateInterfacePreferences({ callDeviceMode })}
                 onDeskPhoneCall={number => triggerClickToCall(number)}
                 onHeadsetCall={number => softphoneClientRef.current?.call(number)}
               />
@@ -7109,7 +7108,6 @@ export default function App() {
                 canCall={hasPermission('make_calls')}
                 isCalling={isC2CLoading}
                 headsetReady={softphoneSnapshot.registration === 'registered'}
-                onModeChange={callDeviceMode => updateInterfacePreferences({ callDeviceMode })}
                 onDeskPhoneCall={number => triggerClickToCall(number)}
                 onHeadsetCall={number => softphoneClientRef.current?.call(number)}
               />
@@ -8859,7 +8857,6 @@ export default function App() {
                         <select value={interfacePreferences.callDeviceMode} onChange={event => updateInterfacePreferences({callDeviceMode:event.target.value as InterfacePreferences['callDeviceMode']})} className="w-full max-w-sm rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs font-bold text-slate-800">
                           <option value="desk_phone">Телефонный аппарат</option>
                           <option value="browser_headset">Гарнитура в браузере</option>
-                          <option value="ask">Спрашивать перед звонком</option>
                         </select>
                         {interfacePreferences.callDeviceMode === 'browser_headset' && softphoneSnapshot.registration !== 'registered' && <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[10px] leading-relaxed text-amber-800">WebRTC-профиль пока не подключён. Проверьте настройки АТС ниже.</div>}
                       </div>

@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Delete, Headphones, Loader2, Phone, PhoneCall, X } from 'lucide-react';
 
-export type CallDeviceMode = 'desk_phone' | 'browser_headset' | 'ask';
+export type CallDeviceMode = 'desk_phone' | 'browser_headset';
 
 interface UnifiedDialerProps {
   extension: string;
@@ -9,7 +9,6 @@ interface UnifiedDialerProps {
   canCall: boolean;
   isCalling: boolean;
   headsetReady: boolean;
-  onModeChange: (mode: CallDeviceMode) => void;
   onDeskPhoneCall: (number: string) => Promise<void> | void;
   onHeadsetCall: (number: string) => Promise<void> | void;
 }
@@ -22,17 +21,12 @@ const normalizeDialInput = (value: string) => {
   return prefix + trimmed.replace(/\D/g, '');
 };
 
-export default function UnifiedDialer({ extension, mode, canCall, isCalling, headsetReady, onModeChange, onDeskPhoneCall, onHeadsetCall }: UnifiedDialerProps) {
+export default function UnifiedDialer({ extension, mode, canCall, isCalling, headsetReady, onDeskPhoneCall, onHeadsetCall }: UnifiedDialerProps) {
   const [open, setOpen] = useState(false);
   const [number, setNumber] = useState('');
-  const [route, setRoute] = useState<Exclude<CallDeviceMode, 'ask'>>(mode === 'browser_headset' ? 'browser_headset' : 'desk_phone');
-
-  useEffect(() => {
-    if (mode !== 'ask') setRoute(mode);
-  }, [mode]);
 
   const cleaned = normalizeDialInput(number);
-  const headsetSelected = route === 'browser_headset';
+  const headsetSelected = mode === 'browser_headset';
   const callDisabled = !canCall || !extension || !cleaned || isCalling || (headsetSelected && !headsetReady);
 
   const startCall = async () => {
@@ -63,27 +57,6 @@ export default function UnifiedDialer({ extension, mode, canCall, isCalling, hea
         </div>
 
         <div className="space-y-4 p-4">
-          <div className="grid grid-cols-3 gap-2">
-            {([
-              ['desk_phone', 'Телефон', Phone],
-              ['browser_headset', 'Гарнитура', Headphones],
-              ['ask', 'Спрашивать', PhoneCall]
-            ] as const).map(([value, label, Icon]) => <button
-              key={value}
-              type="button"
-              onClick={() => {
-                onModeChange(value);
-                if (value !== 'ask') setRoute(value);
-              }}
-              className={`flex min-w-0 flex-col items-center gap-1 rounded-xl border px-2 py-2 text-[10px] font-bold ${mode === value ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300' : 'border-slate-200 text-slate-600 dark:border-slate-700 dark:text-slate-300'}`}
-            ><Icon className="h-4 w-4" />{label}</button>)}
-          </div>
-
-          {mode === 'ask' && <div className="grid grid-cols-2 gap-2 rounded-xl bg-slate-100 p-1 dark:bg-slate-800">
-            <button type="button" onClick={() => setRoute('desk_phone')} className={`rounded-lg px-3 py-2 text-xs font-bold ${route === 'desk_phone' ? 'bg-white text-emerald-700 shadow-sm dark:bg-slate-700 dark:text-emerald-300' : 'text-slate-500'}`}>Телефон</button>
-            <button type="button" onClick={() => setRoute('browser_headset')} className={`rounded-lg px-3 py-2 text-xs font-bold ${route === 'browser_headset' ? 'bg-white text-blue-700 shadow-sm dark:bg-slate-700 dark:text-blue-300' : 'text-slate-500'}`}>Гарнитура</button>
-          </div>}
-
           <div className="flex items-center gap-2">
             <input
               autoFocus
