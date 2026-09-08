@@ -1,3 +1,4 @@
+import BalancePackageCells from './BalancePackageCells';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Activity, CheckCircle, KeyRound, Play, RefreshCw, Save, ShieldAlert } from 'lucide-react';
 
@@ -63,12 +64,14 @@ export default function NovofonBalancePanel({ token, canManage, canViewAnalytics
       : status === 'updating' ? 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-300'
         : status === 'error' ? 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-300'
           : 'border-slate-200 bg-slate-100 text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300';
-    return <div className="grid gap-4 border-t border-slate-200 px-4 py-3 sm:grid-cols-2 lg:grid-cols-[minmax(260px,1.4fr)_minmax(170px,1fr)_minmax(180px,0.8fr)_minmax(175px,auto)] lg:items-center dark:border-slate-700">
+    return <div className="grid gap-4 border-t border-slate-200 px-4 py-3 sm:grid-cols-2 2xl:grid-cols-[minmax(200px,1.4fr)_minmax(130px,1fr)_minmax(150px,1fr)_minmax(120px,1fr)_minmax(120px,1fr)_minmax(150px,1fr)] 2xl:items-center dark:border-slate-700">
     <div><div className="text-[10px] uppercase text-slate-400">Оператор</div><div className="mt-1 font-black">Novofon</div><div className={`mt-1 inline-flex items-center rounded-lg border px-2 py-0.5 text-[10px] font-bold ${statusTone}`}>{statusLabels[status] || 'Ошибка'}</div></div>
     <div><div className="text-[10px] uppercase text-slate-400">Источник данных</div><div className="mt-1 text-xs font-bold">Novofon API v1 · Data API 2.0</div></div>
-    <div className="min-w-[180px]"><div className="text-[10px] uppercase text-slate-400">Текущий баланс</div><div className="mt-1 whitespace-nowrap font-mono text-lg font-black">{summary?.balance == null ? summary?.balanceStatus || 'Нет данных' : amount(summary.balance, summary.currency)}</div></div>
-    <div className="min-w-[175px] border-slate-200 text-[10px] text-slate-500 sm:text-right lg:border-l lg:pl-4 dark:border-slate-700">Обновлено:<br /><span className="whitespace-nowrap font-medium text-slate-700 dark:text-slate-300">{summary?.lastSyncAt ? new Date(summary.lastSyncAt).toLocaleString('ru-RU') : 'Нет данных'}</span></div>
-    {message && <div className="text-[11px] text-slate-500 lg:col-span-4">{message}</div>}
+    <div className="min-w-0"><div className="text-[10px] uppercase text-slate-400">Текущий баланс</div><div className="mt-1 whitespace-nowrap font-mono text-lg font-black">{summary?.balance == null ? 'Нет данных' : amount(summary.balance, summary.currency)}</div></div>
+    <BalancePackageCells purchased={summary?.package?.purchasedMinutes} labels={summary?.package?.name ? [summary.package.name] : []}
+      note={summary?.package ? 'Пакет задан вручную' : undefined} />
+    <div className="min-w-0 border-slate-200 text-[10px] text-slate-500 sm:text-right 2xl:border-l 2xl:pl-4 dark:border-slate-700">Обновлено:<br /><span className="whitespace-nowrap font-medium text-slate-700 dark:text-slate-300">{summary?.lastSyncAt ? new Date(summary.lastSyncAt).toLocaleString('ru-RU') : 'Нет данных'}</span></div>
+    {message && <div className="text-[11px] text-slate-500 sm:col-span-2 2xl:col-span-6">{message}</div>}
   </div>;
   }
 

@@ -1,7 +1,8 @@
+import BalancePackageCells from './BalancePackageCells';
 import React, { useEffect, useState } from 'react';
 import {
-  AlertCircle, Check, CircleDollarSign, Clock3, Copy,
-  CreditCard, FileText, Gauge, Globe, Layers, PhoneCall, RefreshCw, Settings, Wallet
+  AlertCircle, Check, CircleDollarSign, Copy,
+  FileText, Globe, Layers, PhoneCall, RefreshCw, Settings
 } from 'lucide-react';
 import {
   Line, LineChart, Legend, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis
@@ -53,7 +54,6 @@ type OverviewHistory = {
 const money = (value: number | null) => value === null
   ? 'Нет данных'
   : `${value.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽`;
-const integer = (value: number | null) => value === null ? 'Не определён' : `${value.toLocaleString('ru-RU')} мин`;
 const timestamp = (value: string | null) => value ? new Date(value).toLocaleString('ru-RU') : 'Нет данных';
 const shortDate = (value: string) => new Date(`${value}T00:00:00Z`).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
 
@@ -155,7 +155,7 @@ export default function MtsBalanceWorkspace({ token, canManage, canViewAnalytics
         setError(`Часть данных не обновилась: ${failures.join(' · ')}`);
         setNotice('Обновление завершено с предупреждениями');
       } else {
-        setNotice('МТС Бизнес и Novofon успешно обновлены');
+        setNotice('МТС Бизнес, Novofon и MCN Telecom успешно обновлены');
       }
     } catch (reason: any) {
       setError(`Данные не обновились: ${reason.message || 'ошибка подключения'}`);
@@ -170,10 +170,6 @@ export default function MtsBalanceWorkspace({ token, canManage, canViewAnalytics
     const timer = window.setTimeout(() => setNotice(''), 2500);
     return () => window.clearTimeout(timer);
   }, [notice]);
-
-  const remainingText = provider?.remainingPackageMinutes === null || provider?.remainingPackageMinutes === undefined
-    ? 'Не определён'
-    : `${provider.remainingPackageMinutes.toLocaleString('ru-RU')} из ${(provider.purchasedPackageMinutes || 0).toLocaleString('ru-RU')} мин`;
 
   return (
     <div className="space-y-4">
@@ -195,31 +191,6 @@ export default function MtsBalanceWorkspace({ token, canManage, canViewAnalytics
       {notice && <div className="fixed right-5 top-5 z-50 flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-xs font-bold text-white shadow-xl">
         <Check className="h-4 w-4 text-emerald-400" />{notice}
       </div>}
-
-      <div className="grid gap-3 md:grid-cols-3">
-        <div className="flex min-h-[118px] flex-col justify-between rounded-2xl border border-blue-200 bg-white p-4 shadow-sm dark:border-blue-900 dark:bg-slate-900">
-          <div className="flex items-center justify-between text-xs font-bold text-slate-500"><span>Текущий баланс</span><Wallet className="h-4 w-4 text-blue-600" /></div>
-          <div className="font-mono text-2xl font-black text-slate-900 dark:text-white">{loading && !provider ? 'Загрузка…' : money(provider?.balance ?? null)}</div>
-          <div className="flex flex-wrap items-center justify-between gap-1 text-[10px] text-slate-500">
-            <span>Баланс на текущий момент</span><span><Clock3 className="mr-1 inline h-3 w-3" />{timestamp(provider?.lastSuccessAt || null)}</span>
-          </div>
-        </div>
-        <div className="flex min-h-[118px] flex-col justify-between rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
-          <div className="flex items-center justify-between text-xs font-bold text-slate-500"><span>Купленный пакет минут</span><CreditCard className="h-4 w-4 text-violet-600" /></div>
-          <div className="font-mono text-2xl font-black text-slate-900 dark:text-white">{integer(provider?.purchasedPackageMinutes ?? null)}</div>
-          <div className="truncate text-[10px] text-slate-500" title={provider?.packageLabels.join(', ') || ''}>
-            {provider?.packageLabels.length ? provider.packageLabels.join(' · ') : 'Действующий пакет в детализации не найден'}
-          </div>
-        </div>
-        <div className="flex min-h-[118px] flex-col justify-between rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
-          <div className="flex items-center justify-between text-xs font-bold text-slate-500"><span>Осталось минут</span><Gauge className="h-4 w-4 text-emerald-600" /></div>
-          <div className="font-mono text-2xl font-black text-slate-900 dark:text-white">{remainingText}</div>
-          {provider?.remainingPackagePercent !== null && provider?.remainingPackagePercent !== undefined
-            ? <div><div className="mb-1 flex justify-between text-[10px] text-slate-500"><span>Остаток</span><span>{provider.remainingPackagePercent.toFixed(0)}%</span></div>
-                <div className="h-1.5 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700"><div className="h-full bg-emerald-500" style={{ width: `${Math.max(0, Math.min(100, provider.remainingPackagePercent))}%` }} /></div></div>
-            : <div className="text-[10px] text-slate-500">API не возвращает единый остаток пакета; приблизительное значение не рассчитывается</div>}
-        </div>
-      </div>
 
       <div className="flex w-fit max-w-full gap-1 overflow-x-auto rounded-xl bg-slate-100 p-1 dark:bg-slate-800">
         {([
@@ -244,10 +215,11 @@ export default function MtsBalanceWorkspace({ token, canManage, canViewAnalytics
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3 dark:border-slate-700">
             <div>
               <h2 className="text-sm font-black">Контролируемые балансы и провайдеры IP-телефонии</h2>
-              <p className="text-[10px] text-slate-500">Только реальные источники финансовых данных</p>
+              <p className="text-[10px] text-slate-500">Балансы и пакеты минут по операторам · если источник не передаёт значение — «Нет данных»</p>
             </div>
           </div>
-          {provider && <div className="grid gap-4 px-4 py-3 sm:grid-cols-2 lg:grid-cols-[minmax(260px,1.4fr)_minmax(170px,1fr)_minmax(180px,0.8fr)_minmax(175px,auto)] lg:items-center">
+          {loading && !provider && <div className="px-4 py-3 text-xs text-slate-500">Загрузка МТС Бизнес…</div>}
+          {provider && <div className="grid gap-4 px-4 py-3 sm:grid-cols-2 2xl:grid-cols-[minmax(200px,1.4fr)_minmax(130px,1fr)_minmax(150px,1fr)_minmax(120px,1fr)_minmax(120px,1fr)_minmax(150px,1fr)] 2xl:items-center">
             <div>
               <div className="text-[10px] uppercase text-slate-400">Оператор</div>
               <div className="mt-1 font-black">{provider.displayName}</div>
@@ -259,18 +231,20 @@ export default function MtsBalanceWorkspace({ token, canManage, canViewAnalytics
               </div>}
             </div>
             <div><div className="text-[10px] uppercase text-slate-400">Источник данных</div><div className="mt-1 text-xs font-bold">МТС Бизнес API</div></div>
-            <div className="min-w-[180px]">
+            <div className="min-w-0">
               <div className="text-[10px] uppercase text-slate-400">Текущий баланс</div>
               <div className="mt-1 whitespace-nowrap font-mono text-lg font-black">{money(provider.balance)}</div>
             </div>
-            <div className="min-w-[175px] border-slate-200 text-[10px] text-slate-500 sm:text-right lg:border-l lg:pl-4 dark:border-slate-700">
+            <BalancePackageCells purchased={provider.purchasedPackageMinutes} remaining={provider.remainingPackageMinutes}
+              labels={provider.packageLabels} calculated={provider.packageCalculationStatus === 'calculated'} />
+            <div className="min-w-0 border-slate-200 text-[10px] text-slate-500 sm:text-right 2xl:border-l 2xl:pl-4 dark:border-slate-700">
               Обновлено:<br /><span className="whitespace-nowrap font-medium text-slate-700 dark:text-slate-300">{timestamp(provider.lastSuccessAt)}</span>
             </div>
-            {provider.linkedTrunks.length > 0 && <div className="lg:col-span-4">
+            {provider.linkedTrunks.length > 0 && <div className="sm:col-span-2 2xl:col-span-6">
               <span className="text-[10px] uppercase text-slate-400">Связанные транки: </span>
               <span className="text-xs font-mono">{provider.linkedTrunks.join(', ')}</span>
             </div>}
-            {provider.status.reason && <div className="text-[11px] text-slate-500 lg:col-span-4">{provider.status.reason}</div>}
+            {provider.status.reason && <div className="text-[11px] text-slate-500 sm:col-span-2 2xl:col-span-6">{provider.status.reason}</div>}
           </div>}
           <NovofonBalancePanel token={token} canManage={canManage} canViewAnalytics={canViewAnalytics} canListenRecordings={canListenRecordings} mode="summary" refreshKey={novofonRefreshKey} refreshing={syncing} />
           <McnTelecomBalancePanel token={token} canManage={canManageProviders} canSync={canManage} mode="summary" refreshKey={novofonRefreshKey}/>
