@@ -134,7 +134,7 @@ export async function buildCallIntelligenceSecurity(deps: CallIntelligenceDeps, 
   const core = await buildCoreCallTrace(deps, { ...input, mode: 'core' } as any);
   if (!core.window) return { rows: [], total: 0 };
   const result = await listLogEvents({ from: core.window.from, to: core.window.to, grouped: 'false', page: 1, pageSize: 100 });
-  const identifiers = new Set((core.cdr || []).flatMap((row: any) => [row.src,row.dst,row.cnum,row.did,channelEndpoint(row.channel),channelEndpoint(row.dstchannel)]).map(safeText).filter(Boolean));
+  const identifiers = new Set<string>((core.cdr || []).flatMap((row: any) => [row.src,row.dst,row.cnum,row.did,channelEndpoint(row.channel),channelEndpoint(row.dstchannel)]).map(safeText).filter(Boolean));
   const rows = result.rows.filter((row: any) => {
     const security = ['security','fail2ban'].includes(String(row.category)) || /auth|ban|firewall|security/i.test(`${row.eventType} ${row.sourceName}`);
     const related = [row.extension,row.phone,row.sipPeer,row.trunk].some((value: any) => identifiers.has(safeText(value)))

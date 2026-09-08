@@ -19,6 +19,7 @@ import BitrixPullSetup from "./BitrixPullSetup";
 import BitrixPullEditor from "./BitrixPullEditor";
 import SiteFormsLeadTable from "./SiteFormsLeadTable";
 import SiteFormsSetupGuide from "./SiteFormsSetupGuide";
+import SiteFormLeadTranscript from './SiteFormLeadTranscript';
 
 type Tab = "leads" | "reports" | "integrations";
 const statusLabels: Record<string, string> = {
@@ -1066,7 +1067,8 @@ export default function SiteFormsWorkspace({
                   ))}
                 </div>
                 <div>
-                  <h3 className="font-black">Хронология</h3>
+                  <SiteFormLeadTranscript leadId={Number(details.lead.id)} request={api}/>
+                  <h3 className="mt-4 font-black">Хронология</h3>
                   {details.history.map((h: any) => (
                     <div
                       key={h.id}

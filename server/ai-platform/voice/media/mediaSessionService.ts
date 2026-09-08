@@ -184,10 +184,9 @@ export class MediaSessionService {
       },
     );
     runtime.egressProcessor = new BoundedSerialProcessor(
-      (frame) =>
-        adapter instanceof AudioSocketAdapter
-          ? adapter.sendFrame(frame)
-          : Promise.resolve(),
+      async (frame) => {
+        if (adapter instanceof AudioSocketAdapter) await adapter.sendFrame(frame);
+      },
       {
         capacity: EGRESS_PLAYOUT_CAPACITY_FRAMES,
         batchSize: 8,
@@ -925,7 +924,7 @@ export class MediaSessionService {
   }
   async bargeIn(tenantId: number, id: number, traceId: string) {
     const runtime = this.runtimes.get(id);
-    if (!runtime || runtime.tenantId !== tenantId)
+    if (!runtime || runtime.tenantId !== tenantId || !(runtime.adapter instanceof SyntheticMediaAdapter))
       throw new MediaError(
         "not_found",
         404,

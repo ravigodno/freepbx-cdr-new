@@ -1,9 +1,11 @@
 import React from 'react';
-import { Bot, FileText, Settings } from 'lucide-react';
+import { BookOpen, Bot, FileText, Settings, Sparkles } from 'lucide-react';
 
 export type AiPlatformSection='agents'|'scripts'|'assistant'|'settings'|'skills'|'knowledge'|'conversations';
 const items:Array<{key:AiPlatformSection;label:string;icon:any;href:string}>=[
   {key:'agents',label:'AI-сотрудники',icon:Bot,href:'/ai-platform/agents'},
+  {key:'skills',label:'Навыки',icon:Sparkles,href:'/ai-platform/skills'},
+  {key:'knowledge',label:'Базы знаний',icon:BookOpen,href:'/ai-platform/knowledge'},
   {key:'scripts',label:'AI-скрипты',icon:FileText,href:'/ai-platform/scripts'},
   {key:'assistant',label:'AI-автоответчик',icon:Bot,href:'/ai-platform/assistant'},
   {key:'settings',label:'Настройки платформы',icon:Settings,href:'/ai-platform/settings'},

@@ -28,10 +28,13 @@ export function delayedStreamingPolicy(config: unknown) {
     config && typeof config === "object" && (config as any).voice
       ? (config as any).voice
       : {};
+  const profile = config && typeof config === "object" && (config as any).voiceProfile
+    ? (config as any).voiceProfile
+    : {};
   return {
     startupBufferMs: clamp(voice.delayedPlayoutStartupMs, 500, 400, 600),
     warningMs: clamp(Number(voice.softResponseSeconds) * 1000, 5000, 4000, 8000),
-    hardMs: clamp(Number(voice.maxResponseAudioSeconds) * 1000, 9000, 8000, 12000),
+    hardMs: clamp(Number(profile.maxResponseAudioSeconds ?? voice.maxResponseAudioSeconds) * 1000, 15000, 8000, 30000),
   };
 }
 

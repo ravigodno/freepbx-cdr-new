@@ -26,10 +26,10 @@ function redactIpAddresses(text: string, counters: RedactionStats) {
   });
 }
 
-export function redactAiPlatformText(value: unknown, stats?: RedactionStats): string {
+export function redactAiPlatformText(value: unknown, stats?: RedactionStats, maxLength = MAX_STRING): string {
   const counters = stats || { secrets: 0, emails: 0, ips: 0, phones: 0, paths: 0, truncated: 0 };
   let text = String(value ?? '').normalize('NFKC');
-  if (text.length > MAX_STRING) { text = text.slice(0, MAX_STRING); counters.truncated++; }
+  if (text.length > maxLength) { text = text.slice(0, maxLength); counters.truncated++; }
   text = text.replace(/(authorization\s*[:=]\s*bearer\s+)[^\s,;)]+/gi, (_m, p) => { counters.secrets++; return `${p}********`; });
   text = text.replace(/(\bbearer\s+)[A-Za-z0-9._~+/-]{8,}/gi, (_m, p) => { counters.secrets++; return `${p}********`; });
   text = text.replace(/((?:api.?key|password|passwd|secret|token|ami.?pass|ari.?pass|sip.?secret)\s*[:=]\s*)[^\s,;)]+/gi, (_m, p) => { counters.secrets++; return `${p}********`; });
@@ -42,6 +42,12 @@ export function redactAiPlatformText(value: unknown, stats?: RedactionStats): st
 
 export function prepareAiExtractionText(value: unknown): string {
   return String(value ?? "").normalize("NFKC").slice(0, 1000);
+}
+
+// Operational prompts are not log previews. Retain all instructions while
+// applying exactly the same secret/PII masking as ordinary diagnostic text.
+export function redactAiPlatformPrompt(value: unknown): string {
+  return redactAiPlatformText(value, undefined, Number.POSITIVE_INFINITY);
 }
 
 export function redactAiPlatformValue(value: unknown): { value: unknown; stats: RedactionStats } {

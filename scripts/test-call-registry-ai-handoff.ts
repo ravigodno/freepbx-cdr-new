@@ -6,6 +6,8 @@ import {
   isAiHandoffTechnicalLeg,
   type AiHandoffMetadata
 } from '../server/calls/aiHandoffLogicalCall.js';
+import { selectAiVoiceCallerLeg, selectAiVoiceEvaluationLeg } from '../shared/cdrAiVoice.js';
+import { resolveCdrCallerExtension } from '../shared/cdrCallerExtension.js';
 
 const linkedid = '1784882549.46';
 const legs = [
@@ -14,6 +16,30 @@ const legs = [
   { uniqueid: linkedid, linkedid, calldate: '2026-07-24 11:42:51', src: '200', dst: 'handoff-d6b5915c4605', dcontext: 'pbxpuls-ai-handoff', channel: 'PJSIP/200-a', dstchannel: 'Local/handoff-d6b5915c4605@pbxpuls-ai-handoff-target-x;1', lastapp: 'Dial', lastdata: 'Local/handoff-d6b5915c4605@pbxpuls-ai-handoff-target/n,20', duration: 7, billsec: 7, disposition: 'ANSWERED', recordingfile: '' },
   { uniqueid: 'target-1', linkedid, calldate: '2026-07-24 11:42:51', src: '200', dst: '299', dcontext: 'from-did-direct', channel: 'Local/handoff-d6b5915c4605@pbxpuls-ai-handoff-target-x;2', dstchannel: 'PJSIP/299-b', lastapp: 'Dial', lastdata: 'PJSIP/299', duration: 7, billsec: 3, disposition: 'ANSWERED', recordingfile: 'internal-299-200.wav' }
 ];
+
+const aiMediaOnlyLegs = [legs[0], legs[1]];
+assert.equal(selectAiVoiceCallerLeg(aiMediaOnlyLegs), legs[0]);
+assert.equal(selectAiVoiceCallerLeg(aiMediaOnlyLegs)?.src, '200');
+assert.equal(selectAiVoiceCallerLeg(aiMediaOnlyLegs)?.dst, '205');
+assert.equal(resolveCdrCallerExtension(aiMediaOnlyLegs), '200');
+assert.equal(selectAiVoiceCallerLeg(legs), null, 'группа с переводом не должна схлопываться как простой AI-звонок');
+
+const evaluationLegs = [
+  { uniqueid: 'eval-1', linkedid: 'eval-1', src: '', dst: '205', dcontext: 'pbxpuls-ai', channel: 'Local/205@pbxpuls-ai-00000027;1', lastdata: 'pbxpuls-dima-evaluator-1234' },
+  { uniqueid: 'eval-2', linkedid: 'eval-1', src: '', dst: '205', dcontext: 'pbxpuls-ai', channel: 'Local/205@pbxpuls-ai-00000027;2', lastdata: 'pbxpuls-ai-control,ai_extension:205' },
+  { uniqueid: 'eval-3', linkedid: 'eval-1', src: '', dst: 's', dcontext: 'default', channel: 'AudioSocket/127.0.0.1:8092-agent', lastdata: 'pbxpuls-ai-control,agent' },
+  { uniqueid: 'eval-4', linkedid: 'eval-1', src: '', dst: 's', dcontext: 'default', channel: 'AudioSocket/127.0.0.1:8093-client', lastdata: 'pbxpuls-dima-evaluator-1234,client' },
+];
+assert.equal(selectAiVoiceEvaluationLeg(evaluationLegs)?.src, '998');
+assert.equal(selectAiVoiceEvaluationLeg(evaluationLegs)?.dst, '205');
+const isolatedYandexLegs=evaluationLegs.map(leg=>({...leg,
+  dcontext:leg.dcontext==='pbxpuls-ai'?'pbxpuls-ai-evaluation':leg.dcontext,
+  channel:leg.channel.replace('Local/205@pbxpuls-ai-','Local/206@pbxpuls-ai-evaluation-'),
+  dst:leg.dst==='205'?'206':leg.dst,
+  lastdata:leg.lastdata.replace('ai_extension:205','ai_extension:206'),
+}));
+assert.equal(selectAiVoiceEvaluationLeg(isolatedYandexLegs)?.src,'998');
+assert.equal(selectAiVoiceEvaluationLeg(isolatedYandexLegs)?.dst,'206');
 
 const metadata = (patch: Partial<AiHandoffMetadata> = {}): AiHandoffMetadata => ({
   handoffId: 3,

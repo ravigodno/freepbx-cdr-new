@@ -19,9 +19,18 @@ const profile=normalizeVoiceProfile({
 assert.deepEqual(profile,{
   schemaVersion:1,provider:'openai_realtime',voiceId:'marin',language:'ru',locale:'ru-RU',
   pronunciationStyle:'native_neutral',speakingRate:'slightly_fast',pauseStyle:'short_natural',
-  expressiveness:'warm_moderate',pitchStyle:'neutral',pronunciationDictionaryId:null,
+  expressiveness:'warm_moderate',pitchStyle:'neutral',role:'neutral',speechRate:1,
+  sttLanguage:'ru-RU',eouSensitivity:.9,endOfUtteranceSilenceMs:700,
+  realtimeModel:'gpt-realtime-2.1',transcriptionModel:'gpt-live-transcribe',
+  openaiMaxOutputTokens:240,reasoningEffort:'low',noiseReduction:'near_field',
+  turnDetection:'local',responseEagerness:'high',responseLength:'normal',maxResponseAudioSeconds:15,pronunciationDictionaryId:null,
   pronunciationInstructions:'',
 });
+const tunedOpenAiProfile=normalizeVoiceProfile({provider:'openai_realtime',voiceId:'cedar',realtimeModel:'gpt-realtime-2.1-mini',transcriptionModel:'gpt-realtime-whisper',openaiMaxOutputTokens:'inf',reasoningEffort:'medium',noiseReduction:'far_field',turnDetection:'semantic_vad',responseEagerness:'medium'});
+assert.equal(tunedOpenAiProfile.realtimeModel,'gpt-realtime-2.1-mini');
+assert.equal(tunedOpenAiProfile.openaiMaxOutputTokens,'inf');
+assert.equal(tunedOpenAiProfile.turnDetection,'semantic_vad');
+assert.equal(normalizeVoiceProfile({responseLength:'detailed',maxResponseAudioSeconds:45}).maxResponseAudioSeconds,30);
 assert.equal(JSON.stringify(profile).includes('previewUrl'),false);
 assert.equal(JSON.stringify(profile).includes('cacheKey'),false);
 assert.equal(JSON.stringify(profile).includes('headers'),false);
@@ -49,7 +58,8 @@ assert.equal(draftConfig.voiceProfile.voiceId,'marin');
 assert.equal((publishedConfig as any).voiceProfile,undefined);
 assert.equal(containsAiConfigSecrets(draftConfig),false);
 const voiceInstructions=compileVoiceProfileInstructions(profile);
-assert.match(voiceInstructions,/Говори по-русски естественно, спокойно, доброжелательно и разборчиво\. Используй короткие естественные паузы\./);
+assert.match(voiceInstructions,/Говори как носитель русского языка.*нормативное русское произношение.*русскую интонацию и ударения/);
+assert.match(voiceInstructions,/двух-трёх предложений/);
 assert.doesNotMatch(voiceInstructions,/иностранн|прибалтийск|не растягивай/);
 const personalityInstructions=compilePersonalityInstructions(undefined);
 assert.doesNotMatch(personalityInstructions,/speaking_rate|pause_style|короткими естественными паузами/);

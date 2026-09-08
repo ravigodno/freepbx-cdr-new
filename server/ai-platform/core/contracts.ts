@@ -50,6 +50,7 @@ export interface ProviderRequest {
   temperature: number;
   maxOutput: number;
   responseFormat: 'text' | 'json';
+  responseSchema?: Record<string, unknown>;
   traceId: string;
   timeoutMs: number;
   tools?: ProviderToolDefinition[];

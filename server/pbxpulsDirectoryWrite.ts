@@ -413,7 +413,7 @@ async function createPBXPulsConnection(): Promise<Connection> {
   return mysql.createConnection(getPBXPulsDbConnectionOptions());
 }
 
-function contactSqlParams(contact: NormalizedDirectorySqlContact): unknown[] {
+function contactSqlParams(contact: NormalizedDirectorySqlContact) {
   return [
     contact.id,
     contact.name,

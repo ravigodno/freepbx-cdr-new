@@ -76,6 +76,18 @@ export class ClosingCoordinator {
     return true;
   }
 
+  adoptPlayingFarewell(intentRef: string, responseId?: string) {
+    if (this.state !== "active" || !responseId) return false;
+    const key = `${this.sessionRef}:${crypto.createHash("sha256").update(intentRef).digest("hex")}`;
+    if (this.intentKeys.has(key)) return false;
+    this.intentKeys.add(key);
+    this.closingIntentCount++;
+    this.farewellResponseCount++;
+    this.farewellResponseId = responseId;
+    this.state = "farewell_playing";
+    return true;
+  }
+
   playoutStarted(responseId?: string) {
     if (
       this.state === "farewell_generating" &&

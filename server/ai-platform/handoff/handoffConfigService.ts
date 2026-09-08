@@ -6,11 +6,20 @@ export class HandoffConfigService{
  private async command(args:string[]){try{const{stdout}=await run("php",[helper,...args],{timeout:15000,maxBuffer:512*1024});return JSON.parse(String(stdout||"{}"))}catch(e:any){let code="handoff_adapter_failed";try{code=JSON.parse(String(e?.stdout||"{}")).code||code}catch{}throw new AiPlatformError("conflict",409,code)}}
  async destinations(){const result=await this.command(["list"]);return result.rows||[]}
  async inspect(type:string,ref:string){if(!types.has(type)||!/^[A-Za-z0-9_.:+-]{1,100}$/.test(ref))throw new AiPlatformError("invalid_request",400,"Invalid handoff destination");return this.command(["inspect",type,ref])}
- async activeForAgent(tenantId:number,agentId:number,versionId:number){return(await this.store.query("SELECT * FROM ai_handoff_configs WHERE tenant_id=? AND agent_id=? AND agent_version_id=? AND status='active' AND enabled=1 LIMIT 1",[tenantId,agentId,versionId]))[0]||null}
+ async activeForAgent(tenantId:number,agentId:number,versionId:number){
+  // A published voice revision does not change the already approved destination
+  // of its managed extension. Drafts and unrelated extensions cannot inherit it.
+  return(await this.store.query(`SELECT h.* FROM ai_handoff_configs h
+    WHERE h.tenant_id=? AND h.agent_id=? AND h.status='active' AND h.enabled=1
+      AND (h.agent_version_id=? OR EXISTS (
+        SELECT 1 FROM ai_extensions e WHERE e.id=h.ai_extension_id AND e.tenant_id=h.tenant_id
+          AND e.agent_id=h.agent_id AND e.status='active' AND e.enabled=1
+          AND e.published_agent_version_id=?)) LIMIT 1`,[tenantId,agentId,versionId,versionId]))[0]||null;
+ }
  async forExtension(tenantId:number,aiExtensionId:number){
-  const row=(await this.store.query("SELECT id,primary_destination_type,primary_destination_ref,primary_destination_safe,answer_timeout_seconds,confirmation_required,direct_request_requires_confirmation,ai_offer_requires_confirmation,announcement_template,unavailable_template,intent_phrases_json,status,enabled,sync_status FROM ai_handoff_configs WHERE tenant_id=? AND ai_extension_id=? LIMIT 1",[tenantId,aiExtensionId]))[0];if(!row)return null;
+  const row=(await this.store.query("SELECT id,primary_destination_type,primary_destination_ref,primary_destination_safe,answer_timeout_seconds,offer_before_transfer,confirmation_required,direct_request_requires_confirmation,ai_offer_requires_confirmation,announcement_template,unavailable_template,intent_phrases_json,status,enabled,sync_status FROM ai_handoff_configs WHERE tenant_id=? AND ai_extension_id=? LIMIT 1",[tenantId,aiExtensionId]))[0];if(!row)return null;
   let intentPhrases:string[]=[];try{const parsed=JSON.parse(String(row.intent_phrases_json||"[]"));if(Array.isArray(parsed))intentPhrases=parsed.map(String).slice(0,50)}catch{}
-  return{id:Number(row.id),primaryDestinationType:row.primary_destination_type,primaryDestinationId:row.primary_destination_ref,primaryDestinationName:row.primary_destination_safe,answerTimeoutSeconds:Number(row.answer_timeout_seconds),directRequestRequiresConfirmation:Boolean(row.direct_request_requires_confirmation),aiOfferRequiresConfirmation:Boolean(row.ai_offer_requires_confirmation),announcementTemplate:row.announcement_template,unavailableTemplate:row.unavailable_template,intentPhrases,status:row.status,enabled:Boolean(row.enabled),syncStatus:row.sync_status};
+  return{id:Number(row.id),primaryDestinationType:row.primary_destination_type,primaryDestinationId:row.primary_destination_ref,primaryDestinationName:row.primary_destination_safe,answerTimeoutSeconds:Number(row.answer_timeout_seconds),offerBeforeTransfer:Boolean(row.offer_before_transfer),directRequestRequiresConfirmation:Boolean(row.direct_request_requires_confirmation),aiOfferRequiresConfirmation:Boolean(row.ai_offer_requires_confirmation),announcementTemplate:row.announcement_template,unavailableTemplate:row.unavailable_template,intentPhrases,status:row.status,enabled:Boolean(row.enabled),syncStatus:row.sync_status};
  }
  async preview(tenantId:number,input:any,actor:any){
   const key=String(input.idempotencyKey||"");if(!/^[A-Za-z0-9_.:-]{8,100}$/.test(key))throw new AiPlatformError("invalid_request",400,"Valid idempotencyKey required");
@@ -36,13 +45,12 @@ export class HandoffConfigService{
   const c=(await this.store.query("SELECT * FROM ai_handoff_configs WHERE tenant_id=? AND id=?",[tenantId,p.config_id]))[0],preview=JSON.parse(p.preview_json),candidate=preview.configCandidate||{},wasActive=c.status==="active"&&Boolean(c.enabled);try{
    await this.store.query("UPDATE ai_handoff_configs SET primary_destination_type=?,primary_destination_ref=?,primary_destination_safe=?,answer_timeout_seconds=?,on_no_answer=?,on_busy=?,on_congestion=?,offer_before_transfer=?,confirmation_required=?,direct_request_requires_confirmation=?,ai_offer_requires_confirmation=?,announcement_template=?,unavailable_template=?,intent_phrases_json=?,status='applying',enabled=0,sync_status='applying',sync_error_code=NULL WHERE tenant_id=? AND id=?",[candidate.primaryDestinationType,candidate.primaryDestinationRef,candidate.primaryDestinationSafe,candidate.answerTimeoutSeconds,candidate.onNoAnswer,candidate.onBusy,candidate.onCongestion,candidate.offerBeforeTransfer,candidate.directRequestRequiresConfirmation,candidate.directRequestRequiresConfirmation,candidate.aiOfferRequiresConfirmation,candidate.announcementTemplate,candidate.unavailableTemplate,candidate.intentPhrasesJson,tenantId,c.id]);
    await this.store.query("UPDATE ai_handoff_configs SET status='verifying',sync_status='verifying' WHERE id=?",[c.id]);
-   if(preview.dialplanAffected){
-    await this.command(["apply",c.dialplan_token,candidate.primaryDestinationType,candidate.primaryDestinationRef,String(candidate.answerTimeoutSeconds)]);
-    await run("fwconsole",["reload"],{timeout:120000});const{stdout}=await run("asterisk",["-rx",`dialplan show ${c.dialplan_token}@pbxpuls-ai-handoff`],{timeout:10000});if(!String(stdout).includes("Dial(Local/")||!String(stdout).includes("Stasis(pbxpuls-ai-control,handoff_return:"))throw new Error("HANDOFF_DIALPLAN_NOT_LOADED");
-   }else{
-    const verified=(await this.store.query("SELECT direct_request_requires_confirmation,ai_offer_requires_confirmation,announcement_template FROM ai_handoff_configs WHERE tenant_id=? AND id=?",[tenantId,c.id]))[0];
-    if(Boolean(verified?.direct_request_requires_confirmation)!==Boolean(candidate.directRequestRequiresConfirmation)||Boolean(verified?.ai_offer_requires_confirmation)!==Boolean(candidate.aiOfferRequiresConfirmation)||String(verified?.announcement_template||"")!==String(candidate.announcementTemplate||""))throw new Error("HANDOFF_CONFIG_VERIFICATION_FAILED");
-   }
+   // Always materialize and verify the managed dialplan. A preview can report
+   // no diff while the include/block is absent on the running PBX.
+   await this.command(["apply",c.dialplan_token,candidate.primaryDestinationType,candidate.primaryDestinationRef,String(candidate.answerTimeoutSeconds)]);
+   await run("fwconsole",["reload"],{timeout:120000});const{stdout}=await run("asterisk",["-rx",`dialplan show ${c.dialplan_token}@pbxpuls-ai-handoff`],{timeout:10000});if(!String(stdout).includes("Dial(Local/")||!String(stdout).includes("Stasis(pbxpuls-ai-control,handoff_return:"))throw new Error("HANDOFF_DIALPLAN_NOT_LOADED");
+   const verified=(await this.store.query("SELECT direct_request_requires_confirmation,ai_offer_requires_confirmation,announcement_template FROM ai_handoff_configs WHERE tenant_id=? AND id=?",[tenantId,c.id]))[0];
+   if(Boolean(verified?.direct_request_requires_confirmation)!==Boolean(candidate.directRequestRequiresConfirmation)||Boolean(verified?.ai_offer_requires_confirmation)!==Boolean(candidate.aiOfferRequiresConfirmation)||String(verified?.announcement_template||"")!==String(candidate.announcementTemplate||""))throw new Error("HANDOFF_CONFIG_VERIFICATION_FAILED");
    await this.store.query("UPDATE ai_handoff_configs SET status='active',enabled=1,sync_status='synced',sync_error_code=NULL,last_synced_at=NOW() WHERE id=?",[c.id]);await this.store.query("UPDATE ai_handoff_previews SET status='applied',applied_at=NOW() WHERE id=?",[previewId]);return{...preview,applied:true,verified:true}
   }catch(e:any){
    const errorCode=cleanText(e?.message||"HANDOFF_APPLY_FAILED",64).replace(/[^A-Za-z0-9_.-]/g,"_");

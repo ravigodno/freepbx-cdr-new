@@ -2,6 +2,7 @@ import { AiPlatformError } from '../core/errors.js';
 import { parseJsonObject } from '../core/redaction.js';
 import type { AiPlatformStore } from '../storage/aiPlatformStore.js';
 import { validatePersonalityProfile } from './agentPersonalityProfile.js';
+import { validateAgentPromptVariables } from './agentPromptVariables.js';
 
 export interface AgentValidationResult { valid:boolean; errors:string[] }
 const FORBIDDEN_CONFIG_KEYS=new Set([
@@ -55,6 +56,7 @@ export class AgentConfigurationValidator {
     try{config=parseJsonObject(input.config,'config')}catch{errors.push('invalid_config')}
     if(containsAiConfigSecrets(config))errors.push('secrets_not_allowed');
     errors.push(...validatePersonalityProfile(config.personality));
+    errors.push(...validateAgentPromptVariables(input.prompt,config.promptVariables));
     if(!String(input.prompt||'').trim())errors.push('prompt_required');
     if(input.requireChecksum&&!String(input.checksum||'').trim())errors.push('checksum_required');
     if(input.templateId){const rows=await this.store.query('SELECT id FROM ai_agent_templates WHERE id=? AND (tenant_id=? OR tenant_id IS NULL) AND status=? LIMIT 1',[input.templateId,tenantId,'active']);if(!rows.length)errors.push('template_not_found')}

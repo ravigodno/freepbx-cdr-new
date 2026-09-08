@@ -14,6 +14,17 @@ import { AiPlatformError } from "../../core/errors.js";
 import { readOpenAIRealtimeConfig } from "../providers/adapters/openaiRealtimeAdapter.js";
 import type { VoiceRecordingReconciliationService } from "../recordings/voiceRecordingReconciliationService.js";
 import type { PBXTransferService } from "../../../services/pbxTransferService.js";
+import { ProviderConfigService } from "../../providers/providerConfigService.js";
+import { lookupDirectoryPhoneSql } from "../../../directoryPerformance.js";
+import { redactAiPlatformText } from "../../core/redaction.js";
+
+function directoryGreetingName(value: unknown) {
+  const parts = String(value || "").trim().split(/\s+/u).filter(Boolean).slice(0, 4);
+  if (!parts.length) return "";
+  const patronymic = parts.findIndex((part) => /(?:вич|вна|ична|оглы|кызы)$/iu.test(part));
+  if (patronymic > 0) return `${parts[patronymic - 1]} ${parts[patronymic]}`.slice(0, 100);
+  return (parts.length >= 3 ? parts[1] : parts[0]).slice(0, 100);
+}
 
 export class ControlledLiveVoiceService {
   private handoffCleanupTimers = new Map<number, NodeJS.Timeout>();
@@ -173,18 +184,30 @@ export class ControlledLiveVoiceService {
     };
   }
   async guard(input: any) {
-    const config = await readLiveVoiceConfig(this.store),
-      readiness = await this.readiness(input.tenantId),
-      caller = String(
+    const caller = String(
         input.raw?.channel?.caller?.number || input.raw?.caller || "",
       ).replace(/\D/g, "");
-    if (!config.enabled || !readiness.ready)
-      throw new AiPlatformError(
-        "feature_disabled",
-        503,
-        "Controlled live voice test is not ready",
-      );
-    if (input.binding.matchType!=="ai_extension"&&!config.allowedCallers.includes(caller)) {
+    if (input.binding.matchType === "ai_extension") {
+      const flags = await this.store.query("SELECT setting_key,setting_value FROM settings WHERE setting_key IN('ai.platform_core_enabled','ai.voice_control_plane_enabled','ai.voice_media_transport_enabled','ai.realtime_voice_enabled')"),
+        values = new Map(flags.map((row:any)=>[String(row.setting_key),String(row.setting_value)])),
+        provider = String(input.binding.providerKey || "");
+      const providerReady = provider === "openai_realtime"
+        ? readOpenAIRealtimeConfig().configured
+        : provider === "yandex_speechkit"
+          ? Boolean(await new ProviderConfigService(this.store,this.audit).configuredProvider(input.tenantId,"yandex"))
+          : provider === "synthetic";
+      if (!["ai.platform_core_enabled","ai.voice_control_plane_enabled","ai.voice_media_transport_enabled","ai.realtime_voice_enabled"].every(key=>values.get(key)==="true") || this.manager.status().state!=="connected" || !new VoiceEncryptionService().ready() || readAudioSocketServerConfig().port<=0 || !providerReady)
+        throw new AiPlatformError("feature_disabled",503,"Production AI voice route is not ready");
+    } else {
+      const config = await readLiveVoiceConfig(this.store),
+        readiness = await this.readiness(input.tenantId);
+      if (!config.enabled || !readiness.ready)
+        throw new AiPlatformError(
+          "feature_disabled",
+          503,
+          "Controlled live voice test is not ready",
+        );
+      if (!config.allowedCallers.includes(caller)) {
       await this.audit.append({
         tenantId: input.tenantId,
         traceId: input.traceId,
@@ -201,8 +224,9 @@ export class ControlledLiveVoiceService {
         403,
         "Caller is not allowed for controlled live test",
       );
+      }
     }
-    await this.audit.append({
+    void this.audit.append({
       tenantId: input.tenantId,
       traceId: input.traceId,
       actorType: "service",
@@ -210,11 +234,19 @@ export class ControlledLiveVoiceService {
       entityType: "voice_live_test",
       decision: "matched",
       details: { bindingId: input.binding.id },
-    });
+    }).catch(()=>{});
   }
   async start(input: any) {
     const started = Date.now(),
-      config = await readLiveVoiceConfig(this.store),
+      callerNumber = String(input.raw?.channel?.caller?.number || input.raw?.caller || ""),
+      [config, directoryMatch] = await Promise.all([
+        readLiveVoiceConfig(this.store),
+        callerNumber
+          ? lookupDirectoryPhoneSql(callerNumber, { privileged: true, internal: true, userId: "voice-live" }).catch(() => null)
+          : Promise.resolve(null),
+      ]),
+      callerName = directoryMatch?.matched ? directoryGreetingName(directoryMatch.contact?.name) : "",
+      provider = input.binding.matchType === "ai_extension" ? String(input.binding.providerKey) : config.provider,
       callerChannel = input.event.trustedChannelRef;
     if (!callerChannel)
       throw new AiPlatformError(
@@ -222,7 +254,7 @@ export class ControlledLiveVoiceService {
         409,
         "Trusted caller channel is unavailable",
       );
-    await this.audit.append({
+    void this.audit.append({
       tenantId: input.tenantId,
       traceId: input.traceId,
       actorType: "service",
@@ -230,8 +262,8 @@ export class ControlledLiveVoiceService {
       entityType: "voice_session",
       entityId: String(input.session.id),
       decision: "starting",
-      details: { transport: "audiosocket", provider: config.provider },
-    });
+      details: { transport: "audiosocket", provider },
+    }).catch(()=>{});
     let mediaSessionId = 0,
       ready = false;
     try {
@@ -247,8 +279,8 @@ export class ControlledLiveVoiceService {
           prepared.endpoint.externalHost,
           prepared.endpoint.connectionId,
           config.stasisApplication,
-        ),
-        encryption = new VoiceEncryptionService();
+        );
+      const encryption = new VoiceEncryptionService();
       await this.store.query(
         "UPDATE ai_voice_sessions SET ari_bridge_id_encrypted=?,ari_bridge_id_hash=?,metadata_json=? WHERE tenant_id=? AND id=?",
         [
@@ -267,12 +299,14 @@ export class ControlledLiveVoiceService {
       const realtime = await this.realtime.start({
         tenantId: input.tenantId,
         mediaSessionId,
-        providerKey: config.provider,
+        providerKey: provider,
         traceId: input.traceId,
         actorId: "voice-live",
         restoreTaskState:Boolean(input.resumeHandoff),
+        callerDirectoryName: callerName || undefined,
+        callerNumberAvailable: Boolean(callerNumber),
+        callerPhone: callerNumber,
       });
-      if(!input.resumeHandoff)await this.bridges.answer(input.session.id, callerChannel);
       const metrics = {
         startupMs: Date.now() - started,
         firstAudioMs: null,
@@ -289,6 +323,26 @@ export class ControlledLiveVoiceService {
         callerChannel,
         metrics,
       });
+      ready = true;
+      // Keep ringback audible while the provider is connecting. Once the
+      // realtime session is ready, answer immediately before requesting the
+      // greeting so the caller does not hear startup silence.
+      if(!input.resumeHandoff)
+        await this.bridges.answer(input.session.id, callerChannel);
+      metrics.greetingStartDelayMs = Date.now() - started;
+      // Start audio before non-critical audit persistence. On a loaded database
+      // that write can take seconds, during which caller speech may otherwise
+      // create a competing response and make greeting frames stale.
+      await this.realtime.startInitialGreeting(
+        input.tenantId,
+        realtime.id,
+        input.traceId,
+        input.resumeHandoff
+          ? String(input.returnMessage||"Сотрудник сейчас не ответил. Чем ещё могу помочь?")
+          : callerName
+            ? `Здравствуйте, ${callerName}! Какая у вас задача?`
+            : "Здравствуйте. Чем могу помочь?",
+      );
       await this.audit.append({
         tenantId: input.tenantId,
         traceId: input.traceId,
@@ -299,17 +353,10 @@ export class ControlledLiveVoiceService {
         decision: "ready",
         details: { startupMs: metrics.startupMs, transport: "audiosocket" },
       });
-      ready = true;
-      metrics.greetingStartDelayMs = Date.now() - started;
-      await this.realtime.startInitialGreeting(
-        input.tenantId,
-        realtime.id,
-        input.traceId,
-        input.resumeHandoff
-          ? String(input.returnMessage||"Сотрудник сейчас не ответил. Чем ещё могу помочь?")
-          : "Здравствуйте. Чем могу помочь?",
-      );
     } catch (error) {
+      const startupErrorCode=String((error as any)?.code||(error as any)?.errorCode||"unknown").slice(0,100),
+        startupErrorMessage=redactAiPlatformText(String((error as any)?.message||error||"unknown")).slice(0,500);
+      console.warn("[AI_VOICE] controlled live startup failed",{sessionId:input.session.id,ready,errorCode:startupErrorCode,errorMessage:startupErrorMessage});
       if (mediaSessionId)
         await this.media
           .stop(input.tenantId, mediaSessionId, input.traceId, "cancelled")
@@ -335,6 +382,8 @@ export class ControlledLiveVoiceService {
         decision: "failed",
         details: {
           errorCode: ready ? "media_runtime_failed" : "live_startup_failed",
+          causeCode: startupErrorCode,
+          causeMessage: startupErrorMessage,
         },
       });
       throw new AiPlatformError(
@@ -482,22 +531,18 @@ export class ControlledLiveVoiceService {
     const created:any=await this.store.query("INSERT INTO ai_handoff_events(tenant_id,config_id,voice_session_id,linkedid_hash,state,destination_type,destination_ref_safe,requested_at,announcement_finished_at,dialing_at,metadata_json)VALUES(?,?,?,?,?,?,?,NOW(3),NOW(3),NOW(3),'{}') ON DUPLICATE KEY UPDATE announcement_finished_at=VALUES(announcement_finished_at),dialing_at=VALUES(dialing_at),state='transferring'",[input.tenantId,input.config.id,input.voiceSessionId,voice.ari_channel_id_hash,"transferring",input.config.primary_destination_type,input.config.primary_destination_safe]);
     void created;
     try{
-      if(!this.pbxTransfer)throw new Error("blind_transfer_unavailable");
-      const destination=await this.pbxTransfer.resolveDestination(input.config.primary_destination_type,String(input.config.primary_destination_ref));
-      const transferAnchor=this.bridges.transferAnchor(input.voiceSessionId);
-      if(!destination||!transferAnchor)throw new Error("blind_transfer_context_unavailable");
+      if(!/^handoff-[a-f0-9]{12}$/.test(String(input.config.dialplan_token||"")))
+        throw new Error("handoff_dialplan_context_unavailable");
       await this.realtime.stop(input.tenantId,active.realtimeSessionId,input.traceId,"completed");
-      const transferred=await this.pbxTransfer.executeBlindTransfer(
-        {liveCallId:String(input.voiceSessionId),active:true,channelRef:transferAnchor},
-        destination,
+      // Replaces the legacy executeBlindTransfer/transferAnchor path; the old
+      // scheduleHandoffAnchorCleanup could not propagate caller hangup.
+      // Continue the original caller into Dial(). Transferring the AudioSocket
+      // anchor left an independent destination call ringing after caller hangup.
+      await this.bridges.continueCaller(
+        input.voiceSessionId,
+        active.callerChannel,
+        String(input.config.dialplan_token),
       );
-      if(!transferred.ok)throw new Error("blind_transfer_failed");
-      this.scheduleHandoffAnchorCleanup({
-        tenantId:input.tenantId,
-        voiceSessionId:input.voiceSessionId,
-        traceId:input.traceId,
-        timeoutSeconds:Number(input.config.answer_timeout_seconds)||20,
-      });
       input.coordinator.ringing();
       await this.store.query("UPDATE ai_voice_sessions SET transfer_state='ringing',completion_reason='human_handoff_requested' WHERE tenant_id=? AND id=?",[input.tenantId,input.voiceSessionId]);
       await this.store.query("UPDATE ai_handoff_events SET state='ringing',dial_status='RINGING' WHERE tenant_id=? AND config_id=? AND voice_session_id=?",[input.tenantId,input.config.id,input.voiceSessionId]);

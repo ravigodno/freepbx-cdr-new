@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import {createVoiceIntentClassifier} from '../voice/providers/contextualVoiceIntent.js';
 import type { Express, NextFunction, Request, Response } from 'express';
 import { AiPlatformError, toSafeAiPlatformError } from '../core/errors.js';
 import { isAiPlatformCoreEnabled } from '../core/featureFlag.js';
@@ -10,6 +11,8 @@ import { AgentLifecycleService } from '../agents/agentLifecycleService.js';
 import { AgentBuilderService } from '../agents/agentBuilderService.js';
 import { getAIProviderRegistry } from '../providers/providerRegistry.js';
 import { publicLegacyProviderConfig, readLegacyProviderConfig } from '../providers/legacyConfigReader.js';
+import { ProviderConfigService } from '../providers/providerConfigService.js';
+import { synthesizeYandexSpeech } from '../voice/providers/yandexSpeechKitService.js';
 import { getToolRegistry } from '../tools/toolRegistry.js';
 import { AgentContextBuilder } from '../core/agentContextBuilder.js';
 import { registerKnowledgeRoutes } from '../knowledge/api/registerKnowledgeRoutes.js';
@@ -28,6 +31,8 @@ import{registerActionRoutes}from'../actions/api/registerActionRoutes.js';
 import{getActionDefinitionRegistry}from'../actions/actionDefinitionRegistry.js';
 import{ActionExecutorRegistry}from'../actions/actionExecutorRegistry.js';
 import{CreateCallbackRequestExecutor}from'../actions/executors/createCallbackRequestExecutor.js';
+import { SiteFormCallbackExecutor } from '../actions/executors/siteFormCallbackExecutor.js';
+import { AgentTaskService } from '../conversations/agentTaskService.js';
 import{BusinessActionService}from'../actions/businessActionService.js';
 import{VoiceGatewayService}from'../voice/voiceGatewayService.js';
 import{ObserverAriClientAdapter}from'../voice/ari/ariClientAdapter.js';
@@ -45,6 +50,7 @@ import{registerVoiceMediaRoutes}from'../voice/media/api/mediaRouter.js';
 import{RealtimeVoiceProviderRegistry}from'../voice/providers/realtimeVoiceProviderRegistry.js';
 import{SyntheticRealtimeVoiceAdapter}from'../voice/providers/adapters/syntheticRealtimeVoiceAdapter.js';
 import{OpenAIRealtimeAdapter,readOpenAIRealtimeConfig}from'../voice/providers/adapters/openaiRealtimeAdapter.js';
+import{YandexRealtimeAdapter}from'../voice/providers/adapters/yandexRealtimeAdapter.js';
 import{RealtimeVoiceSessionService}from'../voice/providers/realtimeVoiceSessionService.js';
 import{readRealtimeVoiceSettings}from'../voice/providers/realtimeVoiceControl.js';
 import{registerRealtimeVoiceRoutes}from'../voice/providers/api/realtimeVoiceRouter.js';
@@ -63,6 +69,7 @@ import{registerSkillRoutes}from'../skills/api/registerSkillRoutes.js';
 import{OPENAI_REALTIME_VOICES,DEFAULT_RUSSIAN_TEST_PHRASE,normalizeVoiceProfile,compileVoiceProfileInstructions}from'../voice/profiles/voiceProfile.js';
 import{RUSSIAN_VOICE_COMPARISON_TEXTS,buildRussianVoiceComparisonRequest}from'../voice/profiles/voiceComparison.js';
 import{VoiceCatalogService,VoicePreviewCache}from'../voice/profiles/voiceCatalogService.js';
+import{PersistentVoicePreviewCache}from'../voice/profiles/persistentVoicePreviewCache.js';
 import{findAiConfigSecretField}from'../agents/agentConfigurationValidator.js';
 import{normalizePronunciationEntries}from'../voice/profiles/voiceProfile.js';
 import{AiExtensionService}from'../extensions/aiExtensionService.js';
@@ -88,12 +95,19 @@ const safeVoiceSettings=(body:any)=>{
   const input={voiceProfile:body?.voiceProfile||{},pronunciationEntries:body?.pronunciationEntries||[]};
   const forbidden=findAiConfigSecretField(input);
   if(forbidden)throw new AiPlatformError('invalid_request',400,`Настройки не сохранены: обнаружено запрещённое поле ${forbidden}.`);
-  return{profile:normalizeVoiceProfile(input.voiceProfile),entries:normalizePronunciationEntries(input.pronunciationEntries),vad:Math.max(300,Math.min(Number(body?.endOfTurnSilenceMs)||350,600))};
+  const profile=normalizeVoiceProfile(input.voiceProfile);
+  const runtimePrompts:any=Object.fromEntries(Object.entries(body?.runtimePrompts||{}).filter(([key])=>['actionIntentRules','actionIntentClarify','conversationRules','responseRules','knowledgeResponseRules','knowledgePriceNotFoundResponse','knowledgeFrequencyMismatchResponse','fileSearchRules','knownNumber','retryResponse','salesValueResponse','salesNextStepKnownCity','salesNextStepUnknownCity','leadRequestPhrases','leadConfirm','leadPhone','leadPhoneConfirm','leadSuccess','leadFailure','leadDeclined'].includes(key)).map(([key,value])=>[key,String(value||'').trim().slice(0,4000)]));
+  if(body?.runtimePrompts?.leadCaptureEnabled!==undefined)runtimePrompts.leadCaptureEnabled=body.runtimePrompts.leadCaptureEnabled===true;
+  if(body?.runtimePrompts?.agenticEnabled!==undefined)runtimePrompts.agenticEnabled=body.runtimePrompts.agenticEnabled===true;
+  if(body?.runtimePrompts?.agenticModel!==undefined)runtimePrompts.agenticModel=String(body.runtimePrompts.agenticModel||'').trim().slice(0,191);
+  if(body?.runtimePrompts?.agenticProvider!==undefined){const key=String(body.runtimePrompts.agenticProvider||'');if(!['','openai','yandex','openai_compatible'].includes(key))throw new AiPlatformError('invalid_request',400,'Unsupported task provider');runtimePrompts.agenticProvider=key;}
+  if(body?.runtimePrompts?.maxOutputTokens!==undefined)runtimePrompts.maxOutputTokens=Math.max(64,Math.min(1024,Number(body.runtimePrompts.maxOutputTokens)||240));
+  return{profile,entries:normalizePronunciationEntries(input.pronunciationEntries),vad:profile.endOfUtteranceSilenceMs,runtimePrompts};
 };
 
 export function registerAiPlatformRoutes(app:Express,deps:AiPlatformRouterDeps){
   startMainEventLoopDiagnostics();
-  const store=deps.store||sqlAiPlatformStore,audit=new AiAuditService(store),lifecycle=new AgentLifecycleService(store,audit),builder=new AgentBuilderService(store,audit),contextBuilder=new AgentContextBuilder(store),skills=new SkillService(store,audit),voiceCatalog=new VoiceCatalogService(store,audit),voicePreviewCache=new VoicePreviewCache();
+  const store=deps.store||sqlAiPlatformStore,audit=new AiAuditService(store),providerConfigs=new ProviderConfigService(store,audit),lifecycle=new AgentLifecycleService(store,audit),builder=new AgentBuilderService(store,audit),contextBuilder=new AgentContextBuilder(store),skills=new SkillService(store,audit),voiceCatalog=new VoiceCatalogService(store,audit),voicePreviewCache=new VoicePreviewCache(),persistentVoicePreviewCache=new PersistentVoicePreviewCache(store);
   const aiExtensions=new AiExtensionService(store,audit);
   const handoffConfigs=new HandoffConfigService(store,audit);
   const agentCreation=new AgentCreationService(store,audit,aiExtensions,voiceCatalog);
@@ -123,21 +137,38 @@ export function registerAiPlatformRoutes(app:Express,deps:AiPlatformRouterDeps){
   const mediaSessions=new MediaSessionService(store,audit,mediaRegistry,async()=>{const settings=await readVoiceMediaSettings(store);return(await readEnabled())&&settings.enabled});
   const transferAdapter=deps.pbxTransferService?new PBXTransferExecutionAdapter(deps.pbxTransferService,voiceGateway.sessions):null;
   const humanTransfer=deps.pbxTransferService?new HumanTransferService(store,audit,new TransferDestinationResolver(deps.pbxTransferService),transferAdapter,{isEnabled:readEnabled,hooks:{onTransferRequested:async({conversationId,traceId})=>{if(!conversationId)return;const rows=await store.query("SELECT id,tenant_id FROM ai_voice_sessions WHERE conversation_id=? AND state IN('active','waiting_for_media','transferring') ORDER BY id DESC LIMIT 1",[conversationId]);if(rows[0])await mediaSessions.closeForVoiceSession(Number(rows[0].tenant_id),Number(rows[0].id),traceId)}}}):null;
-  const actionExecutors=new ActionExecutorRegistry();actionExecutors.register('create_callback_request',new CreateCallbackRequestExecutor(store));
+  const actionExecutors=new ActionExecutorRegistry();actionExecutors.register('create_callback_request',new SiteFormCallbackExecutor(new CreateCallbackRequestExecutor(store)));
   const businessActions=new BusinessActionService(store,audit,getActionDefinitionRegistry(),actionExecutors,readEnabled);
-  const realtimeRegistry=new RealtimeVoiceProviderRegistry();realtimeRegistry.register('synthetic',()=>new SyntheticRealtimeVoiceAdapter());realtimeRegistry.register('openai_realtime',()=>new OpenAIRealtimeAdapter());
+  const realtimeRegistry=new RealtimeVoiceProviderRegistry();realtimeRegistry.register('synthetic',()=>new SyntheticRealtimeVoiceAdapter());realtimeRegistry.register('openai_realtime',()=>new OpenAIRealtimeAdapter());realtimeRegistry.register('yandex_speechkit',()=>new YandexRealtimeAdapter());
   const transcriptService=new VoiceTranscriptService(store),realtimeSessions=new RealtimeVoiceSessionService(store,audit,realtimeRegistry,mediaSessions,async()=>{const media=await readVoiceMediaSettings(store),realtime=await readRealtimeVoiceSettings(store);return(await readEnabled())&&media.enabled&&realtime.enabled},toolExecutor,humanTransfer,businessActions,transcriptService);
   mediaSessions.setProviderCloser((tenantId,mediaSessionId,traceId)=>realtimeSessions.closeForMediaSession(tenantId,mediaSessionId,traceId));
-  const installationTenantId=async()=>(await getInstallationTenant(store)).id,ariAdapter=new ObserverAriClientAdapter(readAriConfig()),ariEvents=new AriEventRouter(voiceGateway,installationTenantId),ariManager=new AriConnectionManager(ariAdapter,audit,installationTenantId,ariEvents.handle);
+  const installationTenantId=async()=>(await getInstallationTenant(store)).id,ariAdapter=new ObserverAriClientAdapter(readAriConfig()),ariEvents=new AriEventRouter(voiceGateway,installationTenantId),ariManager=new AriConnectionManager(ariAdapter,audit,installationTenantId,async event=>{await ariEvents.handle(event)});
   const recordingService=new VoiceRecordingReconciliationService(store,audit),liveVoice=new ControlledLiveVoiceService(store,audit,voiceGateway,ariManager,mediaSessions,realtimeSessions,new LiveBridgeService(ariAdapter),recordingService,deps.pbxTransferService||null);recordingService.setHandoffCompletionHandler((tenantId,voiceSessionId,traceId)=>liveVoice.completeTransferredCaller(tenantId,voiceSessionId,traceId));mediaSessions.setDurationCloser((tenantId,mediaSessionId,traceId)=>liveVoice.durationLimit(tenantId,mediaSessionId,traceId));realtimeSessions.setLiveObserver(event=>liveVoice.observe(event));realtimeSessions.setControlledHangupHandler(event=>liveVoice.deterministicHangup(event.tenantId,event.voiceSessionId,event.traceId));voiceGateway.setLiveHooks({guard:input=>liveVoice.guard(input),start:input=>liveVoice.start(input),handoffReturn:input=>liveVoice.resumeHandoff(input),handoffComplete:input=>liveVoice.completeHandoff(input)});voiceGateway.setMediaCloser(async(tenantId,voiceSessionId,traceId)=>{await liveVoice.cleanup(tenantId,voiceSessionId,traceId);return mediaSessions.closeForVoiceSession(tenantId,voiceSessionId,traceId)});
   realtimeSessions.setHandoffHandlers(input=>handoffConfigs.activeForAgent(input.tenantId,input.agentId,input.agentVersionId),input=>liveVoice.humanHandoff(input));
   const voiceAgentRoutes=new VoiceAgentRouteService(store,audit,ariManager);
-  const sandboxProvider:ProviderExecutor=deps.sandboxProvider||(async input=>{const legacy=readLegacyProviderConfig(await deps.readLegacyDb()),config=legacy.config,adapter=getAIProviderRegistry().get(config.providerKey);let last:any;for(let attempt=0;attempt<2;attempt++)try{return await adapter.generate({messages:input.messages,model:config.model,temperature:.3,maxOutput:300,responseFormat:input.responseFormat||'text',traceId:input.traceId,timeoutMs:input.timeoutMs||15000,signal:input.signal,tools:input.tools},config)}catch(error){last=error;if(attempt||!/429|502|503|timeout|unavailable/i.test(String((error as any)?.message)))break}throw last});
+  const resolveProviderConfig=async()=>{const tenant=await getInstallationTenant(store),sql=await providerConfigs.runtime(tenant.id);return sql||readLegacyProviderConfig(await deps.readLegacyDb()).config};
+  const sandboxProvider:ProviderExecutor=deps.sandboxProvider||(async input=>{const config=await resolveProviderConfig(),adapter=getAIProviderRegistry().get(config.providerKey);let last:any;for(let attempt=0;attempt<2;attempt++)try{return await adapter.generate({messages:input.messages,model:config.model,temperature:.3,maxOutput:300,responseFormat:input.responseFormat||'text',traceId:input.traceId,timeoutMs:input.timeoutMs||15000,signal:input.signal,tools:input.tools},config)}catch(error){last=error;if(attempt||!/429|502|503|timeout|unavailable/i.test(String((error as any)?.message)))break}throw last});
   const skillClassifier=async(input:any)=>{const response=await sandboxProvider({traceId:`skill-route-${Date.now()}`,responseFormat:'json',timeoutMs:8000,messages:[{role:'system',content:'Classify the caller request using only the supplied published skill list. Return strict JSON: {\"skill_id\": number|null, \"confidence\": number, \"reason_safe\": string}. Never invent a skill.'},{role:'user',content:JSON.stringify({text:String(input.text||'').slice(0,1000),skills:(input.skills||[]).map((skill:any)=>({id:skill.id,name:skill.name,description:skill.description,intent_examples:skill.intentExamples}))})}]});try{const parsed=JSON.parse(response.content);return{skillId:Number.isInteger(parsed.skill_id)?Number(parsed.skill_id):null,confidence:Math.max(0,Math.min(1,Number(parsed.confidence)||0)),reasonSafe:String(parsed.reason_safe||'structured_classifier').replace(/[^\p{L}\p{N} _.-]/gu,'').slice(0,160)}}catch{return{skillId:null,confidence:0,reasonSafe:'classifier_invalid_response'}}};
   realtimeSessions.setSkillClassifier(skillClassifier);
+  const voiceIntentProvider:ProviderExecutor=deps.sandboxProvider||(async input=>{
+    const config=await resolveProviderConfig();
+    if(input.signal?.aborted)throw new Error('voice_intent_cancelled');
+    return getAIProviderRegistry().get(config.providerKey).generate({...input,model:config.model,
+      temperature:0,maxOutput:300,responseFormat:'json',timeoutMs:3500},config);
+  });
+  realtimeSessions.setVoiceIntentClassifier(createVoiceIntentClassifier(voiceIntentProvider));
   transcriptService.setAnalyzer(async({voiceSessionId,turns})=>{const response=await sandboxProvider({traceId:`post-call-${voiceSessionId}`,responseFormat:'json',timeoutMs:15000,messages:[{role:'system',content:'Return strict JSON with summary, topic, outcome, next_action, transferred, callback_requested, unresolved_issue, evidence_turn_ids. Use only supplied redacted transcript; do not infer unsupported facts.'},{role:'user',content:JSON.stringify(turns)}]});try{return JSON.parse(response.content)}catch{return{}}});
-  if(!sandboxProvider.getCapabilities)sandboxProvider.getCapabilities=async()=>{const legacy=readLegacyProviderConfig(await deps.readLegacyDb());return getAIProviderRegistry().get(legacy.config.providerKey).getCapabilities()};
+  if(!sandboxProvider.getCapabilities)sandboxProvider.getCapabilities=async()=>getAIProviderRegistry().get((await resolveProviderConfig()).providerKey).getCapabilities();
   const sandboxRuntime=new ConversationRuntime(store,audit,sandboxProvider,toolExecutor,humanTransfer,businessActions),conversationService=new ConversationService(store);
+  const taskProvider:ProviderExecutor=deps.sandboxProvider||(async input=>{
+    const tenantId=input.tenantId||(await getInstallationTenant(store)).id;
+    const config=input.providerKey?await providerConfigs.configuredProvider(tenantId,input.providerKey):await providerConfigs.runtime(tenantId);
+    if(!config)throw new AiPlatformError('provider_not_configured',503,'Task provider is not active for this company');
+    return getAIProviderRegistry().get(config.providerKey).generate({...input,model:input.model||config.model,temperature:.2,maxOutput:1400,
+      responseFormat:'json',timeoutMs:input.timeoutMs||15000},config);
+  });
+  const agentTasks=new AgentTaskService(store,audit,taskProvider,toolExecutor,businessActions);
+  sandboxRuntime.setAgentTaskService(agentTasks);realtimeSessions.setAgentTaskService(agentTasks);
   const sandboxHits=new Map<string,number[]>(),sandboxActive=new Set<string>();
   const transferHits=new Map<string,number[]>();
   const sandboxGuard=(req:Request,res:Response,next:NextFunction)=>{const user=String((req as any).user?.username||'authenticated'),session=String(req.params.sessionId||''),key=`${user}:${session}`,now=Date.now();if(sandboxHits.size>1000)for(const[entry,values]of sandboxHits)if(!values.some(value=>now-value<60000))sandboxHits.delete(entry);const hits=(sandboxHits.get(user)||[]).filter(value=>now-value<60000);if(hits.length>=5)return res.status(429).json({success:false,error:'Sandbox rate limit exceeded',code:'rate_limited'});if(sandboxActive.has(key))return res.status(429).json({success:false,error:'Sandbox session turn already active',code:'concurrency_limited'});hits.push(now);sandboxHits.set(user,hits);sandboxActive.add(key);let released=false;const release=()=>{if(!released){released=true;sandboxActive.delete(key)}};res.once('finish',release);res.once('close',release);next()};
@@ -161,13 +192,14 @@ export function registerAiPlatformRoutes(app:Express,deps:AiPlatformRouterDeps){
     const created=await lifecycle.createAgentDraft(tenant.id,{agentKey:req.body?.agentKey,name:req.body?.name,agentType:req.body?.agentType,config:parseJsonObject(req.body?.config||{},'config'),systemPrompt:String(req.body?.systemPrompt||'')},actor(req));res.status(201).json({success:true,data:created});}));
   app.get('/api/ai-platform/agents/:id',...authenticated,permit('view_ai_platform'),enabled,wrap(async(req,res)=>{const tenant=await getInstallationTenant(store),id=positiveInt(req.params.id,'agent id');
     const rows=await store.query('SELECT id,agent_key,name,agent_type,status,current_version_id,created_by,created_at,updated_at FROM ai_agents WHERE id=? AND tenant_id=? LIMIT 1',[id,tenant.id]);if(!rows.length)throw new AiPlatformError('not_found',404,'Agent not found');res.json({success:true,data:rows[0]});}));
+  app.put('/api/ai-platform/agents/:id',...authenticated,permit('manage_ai_agents'),enabled,wrap(async(req,res)=>{const tenant=await getInstallationTenant(store),id=positiveInt(req.params.id,'agent id'),name=String(req.body?.name||'').replace(/[<>]/g,'').replace(/\s+/g,' ').trim();if(name.length<2||name.length>191)throw new AiPlatformError('invalid_request',400,'Agent name must contain 2 to 191 characters');const result:any=await store.query("UPDATE ai_agents SET name=?,updated_at=NOW() WHERE id=? AND tenant_id=? AND status<>'archived'",[name,id,tenant.id]);if(!Number(result?.affectedRows||0)){const rows=await store.query('SELECT id FROM ai_agents WHERE id=? AND tenant_id=? LIMIT 1',[id,tenant.id]);if(!rows[0])throw new AiPlatformError('not_found',404,'Agent not found')}await audit.append({tenantId:tenant.id,...actor(req),eventType:'agent_updated' as any,entityType:'agent',entityId:String(id),decision:'updated',details:{fields:['name']}});res.json({success:true,data:{id,name}})}));
   app.get('/api/ai-platform/agents/:id/versions',...authenticated,permit('view_ai_platform'),enabled,wrap(async(req,res)=>{const tenant=await getInstallationTenant(store),id=positiveInt(req.params.id,'agent id'),p=page(req);
     const rows=await store.query('SELECT id,version_number,lifecycle_status,config_json,system_prompt,checksum,created_by,created_at,published_at FROM ai_agent_versions WHERE tenant_id=? AND agent_id=? ORDER BY version_number DESC LIMIT ? OFFSET ?',[tenant.id,id,p.limit,p.offset]);res.json({success:true,rows:rows.map(row=>({...row,config:parseJsonObject(row.config_json,'config_json'),config_json:undefined})),page:Math.floor(p.offset/p.limit)+1,limit:p.limit});}));
   app.post('/api/ai-platform/agents/:id/versions',...authenticated,permit('manage_ai_agents'),enabled,wrap(async(req,res)=>{const tenant=await getInstallationTenant(store),id=positiveInt(req.params.id,'agent id');const data=await builder.createDraftVersion(tenant.id,id,{config:parseJsonObject(req.body?.config||{},'config'),systemPrompt:String(req.body?.systemPrompt||''),changeReason:String(req.body?.changeReason||'')},actor(req));res.status(201).json({success:true,data});}));
   app.post('/api/ai-platform/agents/:id/versions/:versionId/publish',...authenticated,permit('publish_ai_agents'),enabled,wrap(async(req,res)=>{const tenant=await getInstallationTenant(store);res.json({success:true,data:await lifecycle.publishVersion(tenant.id,positiveInt(req.params.id,'agent id'),positiveInt(req.params.versionId,'version id'),actor(req))});}));
   app.post('/api/ai-platform/agents/:id/versions/:versionId/archive',...authenticated,permit('manage_ai_agents'),enabled,wrap(async(req,res)=>{const tenant=await getInstallationTenant(store);res.json({success:true,data:await lifecycle.archiveVersion(tenant.id,positiveInt(req.params.id,'agent id'),positiveInt(req.params.versionId,'version id'),actor(req))});}));
   app.get('/api/ai-platform/voice-profiles/options',...authenticated,permit('view_ai_platform'),enabled,wrap(async(_req,res)=>{
-    res.json({success:true,data:{provider:'openai_realtime',voices:OPENAI_REALTIME_VOICES,comparisonTexts:RUSSIAN_VOICE_COMPARISON_TEXTS,testPhrase:DEFAULT_RUSSIAN_TEST_PHRASE,providerApiFields:['voice','instructions'],auditoryReviewRequired:true}});
+    res.json({success:true,data:{providers:['openai_realtime','yandex_speechkit'],provider:'openai_realtime',voices:OPENAI_REALTIME_VOICES,comparisonTexts:RUSSIAN_VOICE_COMPARISON_TEXTS,testPhrase:DEFAULT_RUSSIAN_TEST_PHRASE,providerApiFields:['voice','instructions'],auditoryReviewRequired:true}});
   }));
   app.get('/api/ai-platform/voice-catalog',...authenticated,permit('view_ai_voice_catalog'),enabled,wrap(async(req,res)=>{
     const tenant=await getInstallationTenant(store),rows=await voiceCatalog.list(tenant.id,{provider:req.query.provider,active:req.query.active,gender:req.query.gender,newOnly:req.query.newOnly==='true'});
@@ -181,10 +213,21 @@ export function registerAiPlatformRoutes(app:Express,deps:AiPlatformRouterDeps){
   app.post('/api/ai-platform/voice-profiles/preview-audio',...authenticated,permit('generate_ai_voice_preview'),enabled,wrap(async(req,res)=>{
     const tenant=await getInstallationTenant(store),current=actor(req),comparison=buildRussianVoiceComparisonRequest({...req.body?.voiceProfile,textKey:req.body?.textKey,text:req.body?.text}),profile=comparison.profile,external=readOpenAIRealtimeConfig();
     await voiceCatalog.requireAvailable(tenant.id,profile.provider,profile.voiceId);
+    if(profile.provider==='yandex_speechkit'){
+      const config=await providerConfigs.configuredProvider(tenant.id,'yandex');
+      if(!config)throw new AiPlatformError('conflict',409,'Yandex Cloud не настроен во вкладке «Провайдеры»');
+      const textHash=crypto.createHash('sha256').update(comparison.text).digest('hex'),configHash=voicePreviewCache.key({providerKey:config.providerKey,model:config.model,baseUrl:config.baseUrl,options:config.options,secret:config.secret}),cacheKey=voicePreviewCache.key({provider:profile.provider,voiceId:profile.voiceId,textHash,profile,configHash,apiVersion:'v3'});
+      if(req.body?.force===true){voicePreviewCache.delete(cacheKey);await persistentVoicePreviewCache.delete(tenant.id,cacheKey)}
+      const memoryCached=voicePreviewCache.get(cacheKey),persistentCached=memoryCached?null:await persistentVoicePreviewCache.get(tenant.id,cacheKey),cached=memoryCached||persistentCached,audio=cached||await synthesizeYandexSpeech(config,comparison.text,profile.voiceId,{role:profile.role,speechRate:profile.speechRate});
+      if(!memoryCached)voicePreviewCache.set(cacheKey,audio);if(!cached)await persistentVoicePreviewCache.set(tenant.id,cacheKey,{provider:profile.provider,voiceId:profile.voiceId,configHash,textHash,audio});
+      await audit.append({tenantId:tenant.id,...current,eventType:'voice_preview_generated' as any,entityType:'voice_catalog',entityId:`${profile.provider}:${profile.voiceId}`,decision:'generated',details:{provider:profile.provider,voiceId:profile.voiceId,textHash,cacheHit:Boolean(cached),cacheSource:memoryCached?'memory':persistentCached?'mariadb':'provider'}});
+      res.set('Cache-Control','private, max-age=60').set('X-Voice-Preview-Cache',cached?'hit':'miss').set('X-Voice-Preview-Text',comparison.textKey).type('audio/wav').send(audio);return;
+    }
     if(!external.configured)throw new AiPlatformError('conflict',409,'Realtime voice provider is not configured');
-    const cacheKey=voicePreviewCache.key({provider:profile.provider,model:external.model,voiceId:profile.voiceId,textHash:crypto.createHash('sha256').update(comparison.text).digest('hex'),profile,output:comparison.output});
-    if(req.body?.force===true)voicePreviewCache.delete(cacheKey);
-    const cached=voicePreviewCache.get(cacheKey);
+    const textHash=crypto.createHash('sha256').update(comparison.text).digest('hex'),configHash=voicePreviewCache.key({model:external.model,url:external.url,apiKey:external.apiKey}),cacheKey=voicePreviewCache.key({provider:profile.provider,model:external.model,voiceId:profile.voiceId,textHash,profile,output:comparison.output,configHash});
+    if(req.body?.force===true){voicePreviewCache.delete(cacheKey);await persistentVoicePreviewCache.delete(tenant.id,cacheKey)}
+    const memoryCached=voicePreviewCache.get(cacheKey),persistentCached=memoryCached?null:await persistentVoicePreviewCache.get(tenant.id,cacheKey),cached=memoryCached||persistentCached;
+    if(persistentCached)voicePreviewCache.set(cacheKey,persistentCached);
     if(cached){res.set('Cache-Control','private, max-age=60').set('X-Voice-Preview-Cache','hit').type('audio/wav').send(cached);return}
     const adapter=new OpenAIRealtimeAdapter(),chunks:Buffer[]=[];
     const completed=new Promise<void>((resolve,reject)=>{
@@ -201,7 +244,7 @@ export function registerAiPlatformRoutes(app:Express,deps:AiPlatformRouterDeps){
     finally{await adapter.close()}
     const pcm=Buffer.concat(chunks),wav=Buffer.alloc(44+pcm.length);
     wav.write('RIFF',0);wav.writeUInt32LE(36+pcm.length,4);wav.write('WAVEfmt ',8);wav.writeUInt32LE(16,16);wav.writeUInt16LE(1,20);wav.writeUInt16LE(1,22);wav.writeUInt32LE(16000,24);wav.writeUInt32LE(32000,28);wav.writeUInt16LE(2,32);wav.writeUInt16LE(16,34);wav.write('data',36);wav.writeUInt32LE(pcm.length,40);pcm.copy(wav,44);
-    voicePreviewCache.set(cacheKey,wav);
+    voicePreviewCache.set(cacheKey,wav);await persistentVoicePreviewCache.set(tenant.id,cacheKey,{provider:profile.provider,voiceId:profile.voiceId,configHash,textHash,audio:wav});
     await audit.append({tenantId:tenant.id,...current,eventType:'voice_preview_generated' as any,entityType:'voice_catalog',entityId:`${profile.provider}:${profile.voiceId}`,decision:'generated',details:{provider:profile.provider,voiceId:profile.voiceId,textHash:crypto.createHash('sha256').update(comparison.text).digest('hex'),cacheHit:false}});
     res.set('Cache-Control','private, max-age=60').set('X-Voice-Preview-Cache','miss').set('X-Voice-Preview-Text',comparison.textKey).type('audio/wav').send(wav);
   }));
@@ -210,7 +253,8 @@ export function registerAiPlatformRoutes(app:Express,deps:AiPlatformRouterDeps){
     const rows=await store.query(`SELECT v.id version_id,v.version_number,v.lifecycle_status,v.config_json FROM ai_agent_versions v JOIN ai_agents a ON a.id=v.agent_id WHERE a.id=? AND a.tenant_id=? ORDER BY v.version_number DESC LIMIT 1`,[id,tenant.id]);
     if(!rows.length)throw new AiPlatformError('not_found',404,'Agent not found');
     const config:any=parseJsonObject(rows[0].config_json||{},'config_json');
-    res.json({success:true,data:{versionId:rows[0].version_id,versionNumber:rows[0].version_number,lifecycleStatus:rows[0].lifecycle_status,voiceProfile:config.voiceProfile||null,endOfTurnSilenceMs:Number(config.voice?.endOfTurnSilenceMs||450),pronunciationEntries:config.pronunciationEntries||[]}});
+    const privileged=['su','admin'].includes(String((req as any).user?.role||'').toLowerCase());
+    res.json({success:true,data:{versionId:rows[0].version_id,versionNumber:rows[0].version_number,lifecycleStatus:rows[0].lifecycle_status,voiceProfile:config.voiceProfile||null,endOfTurnSilenceMs:Number(config.voice?.endOfTurnSilenceMs||450),pronunciationEntries:config.pronunciationEntries||[],...(privileged?{runtimePrompts:config.runtimePrompts||{}}:{})}});
   }));
   app.post('/api/ai-platform/agents/:id/voice-settings/preview',...authenticated,permit('manage_ai_agents'),enabled,wrap(async(req,res)=>{
     positiveInt(req.params.id,'agent id');
@@ -218,7 +262,9 @@ export function registerAiPlatformRoutes(app:Express,deps:AiPlatformRouterDeps){
     res.json({success:true,data:{voiceProfile:profile,endOfTurnSilenceMs:vad,compiledInstructions:compileVoiceProfileInstructions(profile,entries),testPhrase:DEFAULT_RUSSIAN_TEST_PHRASE,latencyEstimate:{vadMs:vad,startupBufferMs:500,providerDependent:true},changesApplied:false,auditoryReviewRequired:true}});
   }));
   app.post('/api/ai-platform/agents/:id/voice-settings/draft',...authenticated,permit('manage_ai_voice_profiles'),permit('manage_ai_agents'),enabled,wrap(async(req,res)=>{
-    const tenant=await getInstallationTenant(store),id=positiveInt(req.params.id,'agent id'),{profile,vad,entries}=safeVoiceSettings(req.body);
+    const tenant=await getInstallationTenant(store),id=positiveInt(req.params.id,'agent id'),{profile,vad,entries,runtimePrompts}=safeVoiceSettings(req.body);
+    const privileged=['su','admin'].includes(String((req as any).user?.role||'').toLowerCase());
+    if(Object.keys(runtimePrompts).length&&!privileged)throw new AiPlatformError('permission_denied',403,'Only admin or SU may edit runtime prompts');
     const rows=await store.query(`SELECT v.id, v.config_json,v.system_prompt FROM ai_agents a JOIN ai_agent_versions v ON v.id=a.current_version_id
       WHERE a.tenant_id=? AND a.id=? AND v.lifecycle_status='published' LIMIT 1`,[tenant.id,id]);
     if(!rows.length)throw new AiPlatformError('not_found',404,'Agent not found');
@@ -228,6 +274,7 @@ export function registerAiPlatformRoutes(app:Express,deps:AiPlatformRouterDeps){
     config.voiceProfile=profile;config.voice={...(config.voice||{}),endOfTurnSilenceMs:vad};
     delete config.voice.speakingRate;delete config.voice.pauseStyle;
     config.pronunciationEntries=entries;
+    if(privileged)config.runtimePrompts=runtimePrompts;
     const data=await builder.createDraftVersion(tenant.id,id,{config,systemPrompt:String(rows[0].system_prompt||''),changeReason:'Voice profile settings'},actor(req));
     await store.query(`INSERT INTO ai_agent_tools(tenant_id,agent_version_id,tool_id,enabled,config_json)
       SELECT tenant_id,?,tool_id,enabled,config_json FROM ai_agent_tools WHERE tenant_id=? AND agent_version_id=?`,[data.id,tenant.id,rows[0].id]);
@@ -267,7 +314,7 @@ export function registerAiPlatformRoutes(app:Express,deps:AiPlatformRouterDeps){
   registerAgentDeletionRoutes(app,domainRuntime,agentDeletion);
   registerIntegrationRoutes(app,{...domainRuntime,checkPermission:deps.checkPermission},integrations,connectorExecutor);
   app.post('/api/ai-platform/agents/:id/sandbox/start',...authenticated,permit('execute_ai_sandbox'),enabled,wrap(async(req,res)=>{const tenant=await getInstallationTenant(store),agentId=positiveInt(req.params.id,'agent id'),versionId=positiveInt(req.body?.versionId,'version id'),a=actor(req);const versions=await store.query('SELECT id,lifecycle_status FROM ai_agent_versions WHERE id=? AND agent_id=? AND tenant_id=? LIMIT 1',[versionId,agentId,tenant.id]);if(!versions.length)throw new AiPlatformError('not_found',404,'Agent version not found');if(versions[0].lifecycle_status!=='published'&&!req.body?.allowDraft)throw new AiPlatformError('conflict',409,'Draft version requires explicit sandbox mode');const conversationId=await conversationService.start(tenant.id,agentId,versionId,a.actorId);const result:any=await store.query("INSERT INTO ai_agent_test_sessions(tenant_id,agent_id,agent_version_id,started_by,status,transcript_json,result_json,conversation_id) VALUES (?,?,?,?,'active','[]','{}',?)",[tenant.id,agentId,versionId,a.actorId,conversationId]);const sessionId=Number(result.insertId);await audit.append({tenantId:tenant.id,...a,eventType:'sandbox_session_started',entityType:'sandbox_session',entityId:String(sessionId),decision:'started',details:{agentId,versionId,draft:versions[0].lifecycle_status==='draft'}});res.status(201).json({success:true,data:{sessionId,conversationId,agentVersionId:versionId,status:'active'}})}));
-  app.post('/api/ai-platform/sandbox/:sessionId/message',...authenticated,permit('execute_ai_sandbox'),enabled,sandboxGuard,wrap(async(req,res)=>{const tenant=await getInstallationTenant(store),a=actor(req),controller=new AbortController(),canExecuteTools=await deps.checkPermission(req,'execute_ai_read_tools');req.once('aborted',()=>controller.abort());res.json({success:true,data:await sandboxRuntime.message(tenant.id,positiveInt(req.params.sessionId,'session id'),req.body?.message,{...a,permissions:canExecuteTools?['execute_ai_read_tools']:[]},controller.signal)})}));
+  app.post('/api/ai-platform/sandbox/:sessionId/message',...authenticated,permit('execute_ai_sandbox'),enabled,sandboxGuard,wrap(async(req,res)=>{const tenant=await getInstallationTenant(store),a=actor(req),controller=new AbortController(),permissions:string[]=[];for(const permission of ['execute_ai_read_tools','execute_ai_low_risk_actions'])if(await deps.checkPermission(req,permission))permissions.push(permission);req.once('aborted',()=>controller.abort());res.json({success:true,data:await sandboxRuntime.message(tenant.id,positiveInt(req.params.sessionId,'session id'),req.body?.message,{...a,permissions},controller.signal)})}));
   app.get('/api/ai-platform/sandbox/:sessionId',...authenticated,permit('execute_ai_sandbox'),enabled,wrap(async(req,res)=>{const tenant=await getInstallationTenant(store),a=actor(req),id=positiveInt(req.params.sessionId,'session id');const rows=await store.query('SELECT id,agent_id,agent_version_id,conversation_id,status,result_json,created_at FROM ai_agent_test_sessions WHERE id=? AND tenant_id=? AND started_by=? LIMIT 1',[id,tenant.id,a.actorId]);if(!rows.length)throw new AiPlatformError('not_found',404,'Sandbox session not found');const messages=await store.query('SELECT sequence_no,role,content,provider_message_id,token_json,latency_ms,created_at FROM ai_conversation_messages WHERE conversation_id=? AND tenant_id=? ORDER BY sequence_no',[rows[0].conversation_id,tenant.id]);res.json({success:true,data:{...rows[0],result:parseJsonObject(rows[0].result_json||{},'result_json'),result_json:undefined,messages}})}));
   for(const action of ['complete','cancel'] as const)app.post(`/api/ai-platform/sandbox/:sessionId/${action}`,...authenticated,permit('execute_ai_sandbox'),enabled,wrap(async(req,res)=>{const tenant=await getInstallationTenant(store),a=actor(req),id=positiveInt(req.params.sessionId,'session id'),rows=await store.query("SELECT conversation_id FROM ai_agent_test_sessions WHERE id=? AND tenant_id=? AND started_by=? AND status='active' LIMIT 1",[id,tenant.id,a.actorId]);if(!rows.length)throw new AiPlatformError('not_found',404,'Active sandbox session not found');const status=action==='complete'?'completed':'cancelled';await conversationService.finish(tenant.id,rows[0].conversation_id,status);await store.query('UPDATE ai_agent_test_sessions SET status=?,result_json=? WHERE id=? AND tenant_id=?',[status,JSON.stringify({status}),id,tenant.id]);await audit.append({tenantId:tenant.id,...a,eventType:action==='complete'?'sandbox_session_completed':'sandbox_session_cancelled',entityType:'sandbox_session',entityId:String(id),decision:status});res.json({success:true,data:{id,status}})}));
 
@@ -281,10 +328,16 @@ export function registerAiPlatformRoutes(app:Express,deps:AiPlatformRouterDeps){
   app.put('/api/ai-platform/agents/:id/versions/:versionId/tools',...authenticated,permit('manage_ai_tools'),permit('manage_ai_agents'),enabled,wrap(async(req,res)=>{const tenant=await getInstallationTenant(store),agentId=positiveInt(req.params.id,'agent id'),versionId=positiveInt(req.params.versionId,'version id'),versions=await store.query('SELECT lifecycle_status FROM ai_agent_versions WHERE id=? AND agent_id=? AND tenant_id=? LIMIT 1',[versionId,agentId,tenant.id]);if(!versions.length)throw new AiPlatformError('not_found',404,'Agent version not found');if(versions[0].lifecycle_status!=='draft')throw new AiPlatformError('conflict',409,'Published agent version tools are immutable');const toolIds=Array.isArray(req.body?.toolIds)?[...new Set(req.body.toolIds.map((value:unknown)=>positiveInt(value,'tool id')))]:[];const allowed=toolIds.length?await store.query(`SELECT id FROM ai_tools WHERE id IN (${toolIds.map(()=>'?').join(',')}) AND (tenant_id=? OR tenant_id IS NULL) AND enabled=1 AND risk_level='read'`,[...toolIds,tenant.id]):[];if(allowed.length!==toolIds.length)throw new AiPlatformError('invalid_request',400,'Unknown or non-read tool');await store.query('UPDATE ai_agent_tools SET enabled=0 WHERE tenant_id=? AND agent_version_id=?',[tenant.id,versionId]);for(const toolId of toolIds)await store.query('INSERT INTO ai_agent_tools(tenant_id,agent_version_id,tool_id,enabled,config_json) VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE enabled=VALUES(enabled)',[tenant.id,versionId,toolId,1,'{}']);await audit.append({tenantId:tenant.id,...actor(req),eventType:'tool_assignment_changed',entityType:'agent_version',entityId:String(versionId),decision:'updated',details:{agentId,toolCount:toolIds.length}});res.json({success:true,data:{agentId,versionId,toolIds}})}));
 
   app.get('/api/ai-platform/providers',...authenticated,permit('view_ai_platform'),enabled,wrap(async(_req,res)=>{const tenant=await getInstallationTenant(store),legacy=publicLegacyProviderConfig(readLegacyProviderConfig(await deps.readLegacyDb()));
-    const rows=await store.query(`SELECT id,provider_key,purpose,model,status,created_at,updated_at,
-      CASE WHEN base_url IS NOT NULL AND base_url<>'' THEN 1 ELSE 0 END base_url_configured,
-      CASE WHEN secret_ref IS NOT NULL OR encrypted_secret IS NOT NULL THEN 1 ELSE 0 END secret_configured FROM ai_provider_configs WHERE tenant_id=? ORDER BY provider_key,purpose`,[tenant.id]);
-    res.json({success:true,rows,legacyCompatibility:legacy});}));
+    res.json({success:true,rows:await providerConfigs.list(tenant.id),legacyCompatibility:legacy});}));
+  app.put('/api/ai-platform/providers/:providerKey',...authenticated,permit('manage_ai_providers'),enabled,wrap(async(req,res)=>{const tenant=await getInstallationTenant(store);
+    const current=actor(req),data=await providerConfigs.save(tenant.id,{...req.body,providerKey:req.params.providerKey},current);
+    if(req.params.providerKey==='yandex')await voiceCatalog.refresh(tenant.id,'yandex_speechkit',current);
+    res.json({success:true,data});}));
+  app.get('/api/ai-platform/providers/:providerKey/secret',...authenticated,permit('manage_ai_providers'),enabled,wrap(async(req,res)=>{const tenant=await getInstallationTenant(store);
+    res.setHeader('Cache-Control','no-store');
+    res.json({success:true,data:{apiKey:await providerConfigs.revealSecret(tenant.id,req.params.providerKey,actor(req))}});}));
+  app.post('/api/ai-platform/providers/:providerKey/test',...authenticated,permit('manage_ai_providers'),enabled,wrap(async(req,res)=>{const tenant=await getInstallationTenant(store);
+    res.json({success:true,data:await providerConfigs.test(tenant.id,{...req.body,providerKey:req.params.providerKey})});}));
   app.get('/api/ai-platform/providers/capabilities',...authenticated,permit('view_ai_platform'),enabled,wrap(async(_req,res)=>res.json({success:true,rows:getAIProviderRegistry().list()})));
   app.get('/api/ai-platform/tools',...authenticated,permit('view_ai_tools'),enabled,wrap(async(_req,res)=>{const tenant=await getInstallationTenant(store);
     const rows=await store.query('SELECT id,tenant_id,tool_key,version,description,risk_level,input_schema_json,output_schema_json,executor_key,enabled,created_at,updated_at FROM ai_tools WHERE tenant_id=? OR tenant_id IS NULL ORDER BY tool_key,version',[tenant.id]);

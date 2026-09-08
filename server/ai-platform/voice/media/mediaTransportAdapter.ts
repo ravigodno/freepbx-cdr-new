@@ -11,9 +11,9 @@ export interface MediaTransportAdapter {
   createTransport(context: MediaTransportContext): Promise<void>;
   start(): Promise<void>;
   stop(): Promise<void>;
-  sendFrame(frame: AudioFrame): Promise<void>;
+  sendFrame(frame: AudioFrame): Promise<void | { accepted: boolean; dropped?: boolean }>;
   subscribeFrames(handler: (frame: AudioFrame) => void): () => void;
   getHealth(): { state: string; failureCode: string | null };
   getFormat?(): AudioFormat | null;
-  getProtocolMetrics?(): AudioSocketProtocolMetrics;
+  getProtocolMetrics?(): Partial<AudioSocketProtocolMetrics>;
 }

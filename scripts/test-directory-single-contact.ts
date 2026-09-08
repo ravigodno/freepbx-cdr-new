@@ -14,8 +14,6 @@ import { fetchDirectoryContact, saveDirectoryEntry } from '../src/modules/direct
 
 dotenv.config({ path: path.join(process.cwd(), '.env'), quiet: true });
 
-const LIVE_CONTACT_ID = 'dir_4d41e4fa-419c-4824-b7b8-388be3278814';
-
 async function main() {
   const appSource = fs.readFileSync(path.join(process.cwd(), 'src/App.tsx'), 'utf8');
   const serverSource = fs.readFileSync(path.join(process.cwd(), 'server.ts'), 'utf8');
@@ -36,6 +34,12 @@ async function main() {
   assert(appSource.includes('directoryContactLoadAbortRef.current !== controller'));
   assert(writeSource.includes("invalidateDirectoryPerformanceCaches('contact_update')"));
 
+  // Use an existing read-only fixture, not a contact ID from a past installation.
+  const fixtures = await queryPBXPulsDb(
+    'SELECT c.id FROM directory_contacts c WHERE EXISTS (SELECT 1 FROM directory_contact_metadata m WHERE m.contact_id=c.id) ORDER BY c.id LIMIT 1'
+  );
+  assert.equal(fixtures.length, 1, 'Read-only integration test requires a contact with metadata');
+  const LIVE_CONTACT_ID = String(fixtures[0].id);
   const rows = await queryPBXPulsDb(
     'SELECT id,name,phone,phone_normalized FROM directory_contacts WHERE id=?',
     [LIVE_CONTACT_ID]
@@ -69,7 +73,7 @@ async function main() {
         status: 200,
         headers: { 'Content-Type': 'application/json' }
       });
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
     const loaded = await fetchDirectoryContact('test-token', LIVE_CONTACT_ID);
     assert.equal(loaded.id, LIVE_CONTACT_ID);
     assert(requestedUrl.endsWith(`/api/directory/contacts/${LIVE_CONTACT_ID}`));
@@ -77,7 +81,7 @@ async function main() {
     globalThis.fetch = (async () => new Response(JSON.stringify({ error: 'Контакт не найден' }), {
       status: 404,
       headers: { 'Content-Type': 'application/json' }
-    })) as typeof fetch;
+    })) as unknown as typeof fetch;
     await assert.rejects(
       () => fetchDirectoryContact('test-token', 'unknown'),
       (error: any) => error.code === 'DIRECTORY_CONTACT_NOT_FOUND' && error.status === 404
@@ -86,7 +90,7 @@ async function main() {
     globalThis.fetch = (async () => new Response(JSON.stringify({
       ...detail,
       loadWarnings: ['Дополнительные поля временно недоступны.']
-    }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as typeof fetch;
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as unknown as typeof fetch;
     const partial = await fetchDirectoryContact('test-token', LIVE_CONTACT_ID);
     assert.equal(partial.id, LIVE_CONTACT_ID);
     assert.equal((partial as any).loadWarnings.length, 1);
@@ -99,7 +103,7 @@ async function main() {
         status: 200,
         headers: { 'Content-Type': 'application/json' }
       });
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
     const saved = await saveDirectoryEntry('test-token', { name: detail?.name }, LIVE_CONTACT_ID);
     assert.equal(saved.success, true);
     assert.equal(saveMethod, 'PUT');
@@ -108,7 +112,7 @@ async function main() {
     globalThis.fetch = (async () => new Response(JSON.stringify({
       ...detail,
       name: 'Updated test projection'
-    }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as typeof fetch;
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as unknown as typeof fetch;
     const reopened = await fetchDirectoryContact('test-token', LIVE_CONTACT_ID);
     assert.equal(reopened.name, 'Updated test projection');
   } finally {
@@ -148,5 +152,5 @@ async function main() {
 
 main().catch(error => {
   console.error(error);
-  process.exitCode = 1;
+  process.exit(1);
 });

@@ -86,7 +86,7 @@ export function classifyCallerSpeech(text: string): CallerSpeechCategory {
   if (COUGH.test(normalized)) return "cough";
   if (BREATH.test(normalized)) return "breath";
   if (NOISE.test(normalized)) return "noise";
-  return (normalized.match(WORD) || []).length >= 2
+  return (normalized.match(WORD) || []).length >= 1
     ? "substantive_speech"
     : "unknown";
 }
@@ -143,10 +143,10 @@ export class VoiceTurnCoordinator {
   constructor(options: VoiceTurnCoordinatorOptions = {}) {
     this.options = {
       sessionRef: options.sessionRef || "session",
-      substantiveSpeechMs: options.substantiveSpeechMs ?? 500,
-      minimumSubstantiveWords: options.minimumSubstantiveWords ?? 2,
+      substantiveSpeechMs: options.substantiveSpeechMs ?? 300,
+      minimumSubstantiveWords: options.minimumSubstantiveWords ?? 1,
       remainingAudioCancelThresholdMs:
-        options.remainingAudioCancelThresholdMs ?? 1500,
+        options.remainingAudioCancelThresholdMs ?? 250,
       playoutCooldownMs: options.playoutCooldownMs ?? 250,
       cancelCooldownMs: options.cancelCooldownMs ?? 300,
     };

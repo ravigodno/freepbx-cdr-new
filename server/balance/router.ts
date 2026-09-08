@@ -4,6 +4,8 @@ import { MtsUsageService } from './mtsUsageService.js';
 import { MtsAutoSecretaryService, safeMtsAutoSecretaryError } from './mtsAutoSecretaryService.js';
 import { MtsPackagesService } from './mtsPackagesService.js';
 import { NOVOFON_SOURCE_ID, NovofonService, safeNovofonError } from './novofonService.js';
+import {McnTelecomService} from './mcnTelecomService.js';
+import {safeMcnError} from './providers/mcnTelecom.js';
 
 type Dependencies = {
   requireAuth: any;
@@ -18,13 +20,25 @@ export function registerBalanceRoutes(app: Express, deps: Dependencies): Pick<Mt
   const packages = new MtsPackagesService(() => service.getUsageProvider());
   const autoSecretary = new MtsAutoSecretaryService(deps.hashSecret);
   const novofon = new NovofonService(deps.hashSecret, deps.queryCdr);
+  const mcn=new McnTelecomService(deps.hashSecret);
+  const mcnRoute=(method:'get'|'put'|'post',path:string,permission:string,run:(req:Request)=>Promise<any>)=>{
+    app[method](path,deps.requireAuth(),async(req:Request,res:Response)=>{
+      if(!await deps.checkPermission(req,permission))return res.status(403).json({success:false,safeErrorCode:'access_denied'});
+      try{return res.json({success:true,data:await run(req)})}catch(e){return res.status(503).json({success:false,...safeMcnError(e)})}
+    });
+  };
+  mcnRoute('get','/api/balance/providers/mcn-telecom/settings','manage_balance_providers',()=>mcn.settings());
+  mcnRoute('put','/api/balance/providers/mcn-telecom/settings','manage_balance_providers',req=>mcn.save(req.body||{}));
+  mcnRoute('post','/api/balance/providers/mcn-telecom/diagnose','manage_balance_providers',()=>mcn.diagnose());
+  mcnRoute('post','/api/balance/providers/mcn-telecom/sync','manage_balance_sources',()=>mcn.sync());
+  mcnRoute('get','/api/balance/providers/mcn-telecom/summary','view_balance',()=>mcn.source());
 
   app.get('/api/balance/sources', deps.requireAuth(), async (req: Request, res: Response) => {
     if (!(await deps.checkPermission(req, 'view_balance'))) {
       return res.status(403).json({ error: 'Access denied: view_balance permission required' });
     }
     try {
-      return res.json({ success: true, sources: [...await service.listSources(), await novofon.source()] });
+      return res.json({ success: true, sources: [...await service.listSources(), await novofon.source(),await mcn.source()] });
     } catch (error) {
       return res.status(503).json({ success: false, error: 'Balance storage unavailable', safeErrorCode: sanitizeBalanceStorageError(error) });
     }
@@ -222,6 +236,10 @@ export function registerBalanceRoutes(app: Express, deps: Dependencies): Pick<Mt
       try { return res.json({ success: true, ...(await novofon.syncBalance()) }); }
       catch (error) { return res.status(503).json({ success: false, ...safeNovofonError(error) }); }
     }
+    if (String(req.params.id) === 'mcn_telecom') {
+      try { return res.json({ success: true, sourceId: 'mcn_telecom', ...(await mcn.sync()) }); }
+      catch (error) { return res.status(503).json({ success: false, ...safeMcnError(error) }); }
+    }
     if (String(req.params.id) !== MTS_BUSINESS_SOURCE_ID) {
       return res.status(404).json({ success: false, safeErrorCode: 'balance_source_not_found', safeMessage: 'Источник баланса не найден' });
     }
@@ -395,10 +413,12 @@ export function registerBalanceRoutes(app: Express, deps: Dependencies): Pick<Mt
   return {
     start() {
       service.start();
+      mcn.start();
       novofon.start();
       autoSecretary.start((from, to) => usage.sync(MTS_BUSINESS_SOURCE_ID, { from, to }));
     },
     stop() {
+      mcn.stop();
       autoSecretary.stop();
       novofon.stop();
       service.stop();

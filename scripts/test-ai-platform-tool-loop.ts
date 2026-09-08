@@ -122,7 +122,7 @@ for(const mode of ['denied','timeout'] as const){const store=new MemoryStore(),p
 const routerSource=fs.readFileSync(new URL('../server/ai-platform/api/router.ts',import.meta.url),'utf8');
 const uiSource=fs.readFileSync(new URL('../src/modules/aiPlatform/AgentSandboxPanel.tsx',import.meta.url),'utf8');
 assert.match(routerSource,/lifecycle_status!==['"]draft['"]/);assert.match(routerSource,/risk_level='read'/);assert.match(routerSource,/Unknown or non-read tool/);
-assert.match(routerSource,/permissions:canExecuteTools\?\['execute_ai_read_tools'\]:\[\]/);
+assert.match(routerSource,/for\(const permission of \['execute_ai_read_tools','execute_ai_low_risk_actions'\]\)if\(await deps.checkPermission\(req,permission\)\)permissions.push\(permission\)/);
 assert.doesNotMatch(uiSource,/executorKey|systemPrompt|plannerPrompt/);assert.match(uiSource,/finalResponseSource/);assert.match(uiSource,/toolResultsSummary/);
 
 // Assignment API enforces tenant scope, draft immutability and read-only selection at runtime.

@@ -5,6 +5,7 @@ import * as crypto from 'crypto';
 import fetch from 'node-fetch';
 import { runAiAgentCore, sanitizeAiProviderError } from './aiAgentCore.js';
 import { executeReadOnlyCommand, findAllowedDiagnosticCommand, getAllowedDiagnosticCommandSuggestions } from './aiAgentCapabilities.js';
+import { OPENAI_DEFAULT_TEXT_MODEL, OPENAI_TEXT_MODELS, usesOpenAIReasoningParameters } from '../shared/openAiModelCatalog.js';
 
 function maskAiApiKey(key?: string): string {
   const value = String(key || '').trim();
@@ -15,18 +16,7 @@ function maskAiApiKey(key?: string): string {
 
 function getDefaultAiModels(provider: string): string[] {
   if (provider === 'openai') {
-    return [
-      'gpt-5.5',
-      'gpt-5.5-mini',
-      'gpt-5.5-nano',
-      'gpt-5.4',
-      'gpt-5.4-mini',
-      'gpt-5.4-nano',
-      'gpt-4.1',
-      'gpt-4.1-mini',
-      'gpt-4o',
-      'gpt-4o-mini'
-    ];
+    return [...OPENAI_TEXT_MODELS];
   }
 
   if (provider === 'gemini') {
@@ -384,9 +374,10 @@ export async function generateAIResponse(params: {
 
     const endpoint = normalizeAiBaseUrl(baseUrl, 'https://api.openai.com/v1');
 
+    const selectedModel = model || OPENAI_DEFAULT_TEXT_MODEL;
     const payload = {
-      model: model || 'gpt-4o-mini',
-      temperature: Number(temperature),
+      model: selectedModel,
+      ...(usesOpenAIReasoningParameters(selectedModel) ? {} : { temperature: Number(temperature) }),
       messages: [
         { role: 'system', content: systemPrompt || '' },
         ...messages.map(m => ({

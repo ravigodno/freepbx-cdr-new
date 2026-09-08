@@ -49,7 +49,7 @@ export default function SiteFormLeadNotifier({ token, username, canManage, canCa
     const claimKey = `pbxpuls:site-lead:notified:${lead.id}`;
     if (localStorage.getItem(claimKey)) return;
     localStorage.setItem(claimKey, String(Date.now()));
-    const notice = new Notification('Новая заявка с сайта', {
+    const notice = new Notification(lead.form_name?.startsWith('AI-сотрудник · ') ? 'Новая заявка от AI-сотрудника' : 'Новая заявка с сайта', {
       body: [lead.customer_name || 'Без имени', lead.phone_raw || lead.phone_normalized, lead.form_name || lead.integration_name].filter(Boolean).join(' · '),
       tag: `pbxpuls-site-lead-${lead.id}`,
       requireInteraction: true
@@ -112,7 +112,7 @@ export default function SiteFormLeadNotifier({ token, username, canManage, canCa
 
   return <div className="fixed bottom-5 right-5 z-[180] w-[min(420px,calc(100vw-24px))] overflow-hidden rounded-2xl border border-blue-200 bg-white shadow-2xl dark:border-blue-800 dark:bg-slate-900">
     <div className="flex items-start justify-between bg-blue-600 px-4 py-3 text-white">
-      <div className="flex gap-3"><Bell className="mt-0.5 h-5 w-5"/><div><div className="text-sm font-black">Новая заявка с сайта</div><div className="text-[11px] text-blue-100">#{current.id} · {current.integration_name || current.form_name || 'Форма сайта'}</div></div></div>
+      <div className="flex gap-3"><Bell className="mt-0.5 h-5 w-5"/><div><div className="text-sm font-black">{current.form_name?.startsWith('AI-сотрудник · ') ? 'Новая заявка от AI-сотрудника' : 'Новая заявка с сайта'}</div><div className="text-[11px] text-blue-100">#{current.id} · {current.integration_name || current.form_name || 'Форма сайта'}</div></div></div>
       <button onClick={removeCurrent} className="rounded-lg p-1 hover:bg-white/15" aria-label="Закрыть"><X className="h-4 w-4"/></button>
     </div>
     <div className="space-y-3 p-4">

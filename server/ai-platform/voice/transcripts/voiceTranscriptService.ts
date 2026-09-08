@@ -14,6 +14,7 @@ const logicalRef = (...values: Array<string | number | null | undefined>) =>
 export class VoiceTranscriptService {
   private active = new Map<string, { id: number; sequence: number; isFinal: boolean }>();
   private queues = new Map<number, Promise<unknown>>();
+  private completedPlayout = new Map<string,number>();
   private subscribers = new Map<number, Set<LiveHandler>>();
   private analyzer:((input:{voiceSessionId:number;turns:Array<{id:number;speaker:string;text:string}>})=>Promise<any>)|null=null;
   constructor(private store: AiPlatformStore) {}
@@ -83,6 +84,10 @@ export class VoiceTranscriptService {
       await this.store.query(`UPDATE ai_voice_transcript_utterances SET provider_item_ref=?,provider_response_ref=?,current_partial_text_safe=?,final_text_safe=?,provider_audio_transcript_safe=?,spoken_text_safe=IF(?='caller',spoken_text_safe,NULL),logical_key=?,content_index=?,last_delta_at=? WHERE tenant_id=? AND id=?`,[itemRef,responseRef,isFinal?null:text,spokenFinal?text:null,spokenFinal?text:null,speaker,logicalKey,contentIndex,now,input.tenantId,Number(result.insertId)]);
       if (!spokenFinal) for(const key of keys)this.active.set(key,{id:Number(result.insertId),sequence,isFinal:false});
     }
+    if(speaker==='ai'&&spokenFinal&&responseRef){
+      const played=this.completedPlayout.get(`${input.tenantId}:${input.realtimeSessionId}:${responseRef}`);
+      if(played!==undefined)await this.finalizeResponse(input.tenantId,input.realtimeSessionId,input.responseId,played);
+    }
     this.emit(input.voiceSessionId,{type:"transcript",speaker,text,isFinal,confidence:Number.isFinite(input.confidence)?input.confidence:null});
   }
   async marker(input:{tenantId:number;voiceSessionId:number;mediaSessionId:number;realtimeSessionId:number;bindingId:number|null;agentId:number;agentVersionId:number;markerType:string;text?:string}) {
@@ -97,6 +102,11 @@ export class VoiceTranscriptService {
   }
   async finalizeResponse(tenantId:number,realtimeSessionId:number,responseId:string|undefined,playedAudioMs:number){
     const responseRef=eventRef(responseId);
+    if(responseRef){
+      const key=`${tenantId}:${realtimeSessionId}:${responseRef}`;
+      playedAudioMs=Math.max(playedAudioMs,this.completedPlayout.get(key)||0);
+      this.completedPlayout.set(key,playedAudioMs);
+    }
     await this.store.query(`UPDATE ai_voice_transcript_utterances SET played_audio_ms=?,generated_audio_ms=GREATEST(COALESCE(generated_audio_ms,0),?),spoken_text_safe=CASE WHEN interrupted=0 AND incomplete=0 THEN provider_audio_transcript_safe ELSE spoken_text_safe END,transcript_accuracy=CASE WHEN incomplete=1 THEN transcript_accuracy WHEN interrupted=0 AND provider_audio_transcript_safe IS NOT NULL THEN 'exact' WHEN interrupted=1 THEN 'approximate' ELSE transcript_accuracy END,updated_at=NOW() WHERE tenant_id=? AND realtime_session_id=? AND speaker='ai' AND (? IS NULL OR provider_response_ref=?) ORDER BY sequence_no DESC LIMIT 1`,[Math.max(0,Math.floor(playedAudioMs)),Math.max(0,Math.floor(playedAudioMs)),tenantId,realtimeSessionId,responseRef,responseRef]);
   }
   async controlledLimit(tenantId:number,realtimeSessionId:number,responseId?:string){
@@ -176,6 +186,8 @@ export class VoiceTranscriptService {
     );
   }
   async complete(tenantId:number,realtimeSessionId:number,voiceSessionId:number) {
+    await this.queues.get(realtimeSessionId)?.catch(()=>{});
+    for(const key of this.completedPlayout.keys())if(key.startsWith(`${tenantId}:${realtimeSessionId}:`))this.completedPlayout.delete(key);
     await this.store.query('UPDATE ai_voice_transcript_utterances SET incomplete=1,ended_at=COALESCE(last_delta_at,started_at),updated_at=NOW() WHERE tenant_id=? AND realtime_session_id=? AND is_final=0',[tenantId,realtimeSessionId]);
     for(const key of [...this.active.keys()])if(key.startsWith(`${realtimeSessionId}:`))this.active.delete(key); this.emit(voiceSessionId,{type:"completed"});this.scheduleAnalysis(tenantId,voiceSessionId);
   }

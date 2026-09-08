@@ -1,4 +1,8 @@
 import { createRequire } from "module";
+import crypto from "node:crypto";
+import fetch from "node-fetch";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { AudioFrame } from "../../media/mediaTypes.js";
 import { AudioPacketizer } from "../../media/audioPacketizer.js";
 import { AudioResampler } from "../../media/audioResampler.js";
@@ -11,6 +15,10 @@ import type {
 import { RealtimeVoiceError } from "../realtimeVoiceErrors.js";
 import { normalizeOpenAIRealtimeEvent } from "../realtimeVoiceEventNormalizer.js";
 import { ProviderSilenceTracker } from "../providerSilenceMetrics.js";
+import { synthesizeYandexSpeech, recognizeYandexSpeech, yandexPronunciationText } from "../yandexSpeechKitService.js";
+import { YandexTurnAudio } from '../yandexTurnAudio.js';
+import { Pcm16FrameStream } from '../yandexAudioStream.js';
+import { YandexInputTranscript } from "../yandexInputTranscript.js";
 
 const PROVIDER_SAMPLE_RATE = 24000;
 const INTERNAL_SAMPLE_RATE = 16000;
@@ -18,6 +26,7 @@ const GENERAL_MAX_OUTPUT_TOKENS = 4096;
 const MAX_PACKETIZER_CHUNK_MS = 200;
 const PCM16_BYTES_PER_SAMPLE = 2;
 const ULAW_FRAME_BYTES = 160;
+const PLANNED_SPEECH_CACHE_DIR = process.env.PBXPULS_AI_SPEECH_CACHE_DIR || "/var/cache/pbxpuls/ai-runtime-speech";
 
 export function splitOpenAIOutputAudio(payload: Buffer) {
   const maxChunkBytes =
@@ -39,6 +48,7 @@ export function readOpenAIRealtimeConfig() {
 }
 
 export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
+  constructor(private readonly providerKey = "openai_realtime") {}
   private socket: any = null;
   private handlers = new Set<
     (event: RealtimeVoiceEvent) => void | Promise<void>
@@ -58,8 +68,20 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
   private providerOutputGaps: number[] = [];
   private providerOutputBursts = 0;
   private providerEventSequence = 0;
+  private wireTrace: Array<Record<string, unknown>> = [];
+  private readonly yandexInputTranscript=new YandexInputTranscript();
+  private readonly yandexTurnAudio=new YandexTurnAudio();
+  private yandexRecognitionAbort:AbortController|null=null;
+  private traceWire(direction:string,value:any){
+    if(this.providerKey!=="yandex_speechkit"||String(value?.type||"").endsWith(".delta")||value?.type==="input_audio_buffer.append")return;
+    const entry={at:Date.now(),direction,type:value?.type,responseId:value?.response_id||value?.response?.id,itemId:value?.item_id||value?.item?.id,status:value?.response?.status,errorCode:value?.error?.code,errorParam:value?.error?.param};
+    this.wireTrace.push(entry);if(this.wireTrace.length>160)this.wireTrace.shift();
+  }
   private readonly providerSilence = new ProviderSilenceTracker();
   private eventChain: Promise<void> = Promise.resolve();
+  private eventQueueTimings=new Map<string,{count:number;waitMaxMs:number;handlerMaxMs:number}>();
+  private plannedSpeechTimings:Array<{firstAudioMs:number|null;totalMs:number;completed:boolean}>=[];
+  private plannedSpeech = new Map<string, AbortController>();
   private pendingConfiguration: {
     resolve: () => void;
     reject: (error: Error) => void;
@@ -67,7 +89,7 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
   } | null = null;
 
   getKey() {
-    return "openai_realtime";
+    return this.providerKey;
   }
   getCapabilities() {
     const pcm = {
@@ -83,7 +105,7 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
       serverVad: true,
       clientVad: true,
       interruption: true,
-      tools: false,
+      tools: true,
       transcripts: true,
       multilingual: true,
       emotionControl: false,
@@ -110,7 +132,10 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
         503,
         "Realtime provider is not configured",
       );
-    if (!/^wss:\/\/api\.openai\.com\//.test(String(config.url)))
+    const allowed = this.providerKey === "yandex_speechkit"
+      ? /^wss:\/\/ai\.api\.cloud\.yandex\.net\/v1\/realtime\/?(?:\?|$)/
+      : /^wss:\/\/api\.openai\.com\//;
+    if (!allowed.test(String(config.url)))
       throw new RealtimeVoiceError(
         "invalid_request",
         400,
@@ -134,6 +159,8 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
     this.providerOutputGaps = [];
     this.providerOutputBursts = 0;
     this.providerEventSequence = 0;
+    this.yandexInputTranscript.reset();
+    this.yandexTurnAudio.reset();
     this.eventChain = Promise.resolve();
     this.providerSilence.reset();
     this.health = { state: "connecting", failureCode: null, connectedAt: null };
@@ -142,10 +169,17 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
     await new Promise<void>((resolve, reject) => {
       let settled = false;
       const socket = new WebSocketClient(url, {
-        headers: { Authorization: `Bearer ${config.apiKey}` },
+        headers: { Authorization: `${this.providerKey === "yandex_speechkit" ? "Api-Key" : "Bearer"} ${config.apiKey}` },
+      });
+      const transportStarted=Date.now(),transportStages:Record<string,number>={};
+      socket._req?.on("socket",(transport:any)=>{
+        transportStages.socket=Date.now()-transportStarted;
+        for(const phase of ["lookup","connect","secureConnect"])
+          transport.once(phase,()=>{transportStages[phase]=Date.now()-transportStarted;});
       });
       this.socket = socket;
       const timer = setTimeout(() => {
+        console.warn("[AI_VOICE] realtime connection timeout",{provider:this.providerKey,elapsedMs:Date.now()-transportStarted,transportStages,requestPresent:!!socket._req,socketPresent:!!socket._req?.socket,readyState:socket.readyState,model:String(config.model||"").split("/").at(-1)});
         socket.close();
         reject(
           new RealtimeVoiceError(
@@ -198,6 +232,10 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
       socket.on("message", (data: unknown) => {
         try {
           const raw = JSON.parse(String(data));
+          const inputSnapshot=this.providerKey==="yandex_speechkit"&&raw.type==="conversation.item.input_audio_transcription.completed"&&typeof raw.transcript==="string"?raw.transcript:undefined;
+          if(this.providerKey==="yandex_speechkit"&&raw.type==="conversation.item.input_audio_transcription.completed"&&typeof raw.transcript==="string")
+            raw.transcript=this.yandexInputTranscript.preview(raw.transcript);
+          this.traceWire("received",raw);
           if (
             ["response.output_audio.delta", "response.audio.delta"].includes(
               String(raw?.type),
@@ -247,7 +285,7 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
                     channels: 1,
                     durationMs: 20,
                     payload,
-                    source: "openai_realtime",
+                    source: this.providerKey,
                     traceId: "provider",
                     voiceSessionId: 0,
                     mediaSessionId: 0,
@@ -274,7 +312,7 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
                 },
                 Date.now(),
                 {
-                  source: "openai_realtime",
+                  source: this.providerKey,
                   traceId: "provider",
                   voiceSessionId: 0,
                   mediaSessionId: 0,
@@ -312,21 +350,29 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
             channels: 1,
             durationMs: 20,
             payload,
-            source: "openai_realtime",
+            source: this.providerKey,
             traceId: "provider",
             voiceSessionId: 0,
             mediaSessionId: 0,
           }));
-          if (normalized?.type === "session_configured")
+          if (normalized?.type === "session_configured") {
             this.settleConfiguration();
-          if (normalized?.type === "error")
+          }
+          if (normalized?.type === "error") {
+            const wasConfiguring = Boolean(this.pendingConfiguration);
+            const providerMessage = String(raw?.error?.message || "")
+              .replace(/[\r\n\t]+/g, " ")
+              .slice(0, 500);
             this.settleConfiguration(
               new RealtimeVoiceError(
-                normalized.errorCode,
+                "provider_response_failed",
                 502,
-                "Realtime session configuration was rejected",
+                `Realtime session configuration was rejected (${normalized.errorCode})${providerMessage ? `: ${providerMessage}` : ""}`,
               ),
             );
+            if (wasConfiguring) return;
+          }
+          if(normalized?.type==="transcript"&&inputSnapshot!==undefined)normalized.inputSnapshot=inputSnapshot;
           if (normalized) this.queueEvent(normalized);
         } catch {}
       });
@@ -375,20 +421,50 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
         type: "realtime",
         model: config.model,
         instructions: config.instructions,
-        max_output_tokens:
-          config.maxOutputTokens || GENERAL_MAX_OUTPUT_TOKENS,
+        ...(this.providerKey === "openai_realtime" && /^gpt-realtime-2(?:\.|$)/.test(String(config.model)) && config.reasoningEffort
+          ? { reasoning: { effort: config.reasoningEffort } }
+          : {}),
+        ...(this.providerKey === "openai_realtime" && config.tools.length
+          ? {
+              tools: config.tools.map((tool) => ({
+                type: "function",
+                name: tool.key,
+                description: tool.description,
+                parameters: tool.inputSchema,
+              })),
+              tool_choice: "auto",
+            }
+          : {}),
+        ...(this.providerKey === "yandex_speechkit" && config.hostedFileSearch
+          ? {
+              tools: [
+                {
+                  type: "function",
+                  name: "file_search",
+                  description: config.hostedFileSearch.vectorStoreIds[0],
+                  parameters: {},
+                },
+              ],
+            }
+          : {}),
+        max_output_tokens: config.unlimitedOutputTokens ? "inf" : config.maxOutputTokens || GENERAL_MAX_OUTPUT_TOKENS,
         output_modalities: ["audio"],
         audio: {
           input: {
             format:
-              config.inputFormat.sampleRate === 8000
+              config.inputFormat.sampleRate === 8000 && this.providerKey !== "yandex_speechkit"
                 ? { type: "audio/pcmu" }
                 : { type: "audio/pcm", rate: PROVIDER_SAMPLE_RATE },
-            noise_reduction: { type: "near_field" },
-            transcription: {
-              model: "gpt-4o-transcribe",
-              language: config.language.split("-")[0] || "ru",
-            },
+            ...(this.providerKey === "openai_realtime" ? {
+              ...(config.noiseReduction === "off"
+                ? { noise_reduction: null }
+                : { noise_reduction: { type: config.noiseReduction || "near_field" } }),
+              transcription: {
+                model: config.transcriptionModel || "gpt-live-transcribe",
+                language: config.language.split("-")[0] || "ru",
+              },
+            } : {}),
+            ...(this.providerKey === "yandex_speechkit" ? { languages: [config.language] } : {}),
             turn_detection: config.semanticVad
               ? {
                   type: "semantic_vad",
@@ -399,6 +475,7 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
               : config.serverVad
                 ? {
                     type: "server_vad",
+                    ...(this.providerKey === "yandex_speechkit" ? { threshold: config.vadThreshold ?? 0.9 } : {}),
                     silence_duration_ms: config.endOfTurnSilenceMs || 500,
                     create_response: false,
                     interrupt_response: false,
@@ -411,6 +488,8 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
                 ? { type: "audio/pcmu" }
                 : { type: "audio/pcm", rate: PROVIDER_SAMPLE_RATE },
             voice: config.voice || "marin",
+            ...(this.providerKey === "yandex_speechkit" && config.voiceRole ? { role: config.voiceRole } : {}),
+            ...(this.providerKey === "yandex_speechkit" && config.speechRate ? { speed: config.speechRate } : {}),
           },
         },
       },
@@ -426,7 +505,7 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
       );
     const input = decodePcm16(frame.payload),
       providerAudio =
-        frame.sampleRate === 8000
+        frame.sampleRate === 8000 && this.providerKey !== "yandex_speechkit"
           ? Buffer.from(encodePcm16ToUlaw(input))
           : encodePcm16(
               this.resampler.resamplePcm16(
@@ -435,62 +514,207 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
                 PROVIDER_SAMPLE_RATE,
               ),
             );
+    if(this.providerKey==='yandex_speechkit')
+      this.yandexTurnAudio.append(encodePcm16(this.resampler.resamplePcm16(input,frame.sampleRate,16000)));
     this.send({
       type: "input_audio_buffer.append",
       audio: providerAudio.toString("base64"),
     });
   }
   async commitInput() {
+    if(this.providerKey==='yandex_speechkit')this.yandexTurnAudio.commit();
     this.send({ type: "input_audio_buffer.commit" });
   }
+  async requestInputTranscript() {
+    if(this.providerKey!=="yandex_speechkit"||!this.config)return;
+    // Internal recognition must not run the agent's sales/skill instructions.
+    await this.configureSession({...this.config,
+      instructions:"Служебная проверка распознавания: верни только одно слово «Готово».",
+      maxOutputTokens:8,
+    });
+    this.send({type:"response.create"});
+  }
+  acceptInputTranscript(snapshot:string) {
+    if(this.providerKey==="yandex_speechkit"){
+      this.yandexInputTranscript.accept(snapshot);
+      this.yandexTurnAudio.accept();
+    }
+  }
+  cancelInputRecognition(){this.yandexRecognitionAbort?.abort();}
+  resetInputRecognition(){this.cancelInputRecognition();this.yandexTurnAudio.reset();}
+  async recognizeCommittedInput():Promise<Extract<RealtimeVoiceEvent,{type:'transcript'}>|null>{
+    if(this.providerKey!=='yandex_speechkit'||!this.config)return null;
+    const pcm=this.yandexTurnAudio.snapshot();
+    if(!pcm)return null;
+    const controller=new AbortController();this.yandexRecognitionAbort=controller;
+    let deadline=false;
+    const timer=setTimeout(()=>{deadline=true;controller.abort();},5000);
+    try{
+      const folderId=/^gpt:\/\/([^/]+)\//u.exec(String(this.config.model||''))?.[1]||'';
+      const result=await recognizeYandexSpeech({providerKey:'yandex',model:'',secret:this.config.apiKey,options:{folderId,sttLanguage:this.config.language}},pcm,{signal:controller.signal});
+      const event=normalizeOpenAIRealtimeEvent({type:'conversation.item.input_audio_transcription.completed',transcript:result.text,item_id:`speechkit-${crypto.randomUUID()}`},()=>{throw new Error('Unexpected recognition audio')});
+      return event?.type==='transcript'?event:null;
+    }catch(error){if(deadline)throw Object.assign(new Error('Current-turn recognition deadline'),{code:'recognition_deadline'});throw error;}
+    finally{clearTimeout(timer);if(this.yandexRecognitionAbort===controller)this.yandexRecognitionAbort=null;}
+  }
   async createResponse(contextInstructions?:string) {
-    this.sendResponse(
+    return this.sendResponse(
       this.config?.maxOutputTokens,
       [
-        "Отвечай только на русском языке. Дай одно законченное короткое предложение и сразу замолчи.",
+        this.providerKey === "yandex_speechkit"
+          ? this.config?.responseInstructions || "Отвечай только на русском языке, кратко и по существу."
+          : "Отвечай только на русском языке. Дай одно законченное короткое предложение и сразу замолчи.",
         contextInstructions || "",
       ].filter(Boolean).join("\n"),
+      undefined,
     );
   }
   async createFarewellResponse() {
-    this.sendResponse(
-      this.config?.greetingOutputTokens || 192,
-      "Произнеси только одно короткое тёплое прощание: «Спасибо за звонок. До свидания!» Не добавляй, что звонок уже завершён.",
+    await this.createPlannedResponse(
+      "Спасибо за звонок. До свидания!",
+      "Произнеси короткое тёплое прощание",
     );
   }
   async createPlannedResponse(text:string,instructions:string) {
-    const safeText=String(text||"").trim().slice(0,500);
-    this.sendResponse(
+    const safeText=String(text||"").trim().slice(0,4000);
+    if(["openai_realtime","yandex_speechkit"].includes(this.providerKey)&&safeText&&this.config?.apiKey){
+      const responseId=`pbxpuls-tts-${crypto.randomUUID()}`,
+        itemId=`pbxpuls-tts-item-${crypto.randomUUID()}`,
+        aborter=new AbortController();
+      this.plannedSpeech.set(responseId,aborter);
+      this.queueEvent({type:"response_started",responseId});
+      this.queueEvent({type:"response_item",status:"added",responseId,itemId,role:"assistant"});
+      const rendering=this.providerKey==="yandex_speechkit"
+        ? this.renderYandexPlannedSpeech(responseId,itemId,safeText,aborter)
+        : this.renderPlannedSpeech(responseId,itemId,safeText,instructions,aborter);
+      void rendering.catch((error:any)=>{
+        console.warn("[AI_VOICE] planned speech rendering failed",{
+          provider:this.providerKey,
+          code:String(error?.code||error?.name||"unknown").slice(0,80),
+          message:String(error?.message||"rendering_failed").replace(/[\r\n\t]+/g," ").slice(0,300),
+        });
+        if(!aborter.signal.aborted)this.queueEvent({type:"error",errorCode:"provider_response_failed"});
+      });
+      return;
+    }
+    return this.sendResponse(
       this.config?.maxOutputTokens,
-      `${instructions}\nПроизнеси дословно и полностью, без дополнений: «${safeText}»`,
+      `${instructions}\nГовори как носитель русского языка: используй чистое нормативное русское произношение, естественную русскую интонацию и ударения. Произнеси дословно и полностью, без дополнений: «${safeText}»`,
+      "none",
     );
+  }
+  private async renderYandexPlannedSpeech(responseId:string,itemId:string,text:string,aborter:AbortController){
+    const started=performance.now(),timing={firstAudioMs:null as number|null,totalMs:0,completed:false};
+    this.plannedSpeechTimings.push(timing);if(this.plannedSpeechTimings.length>20)this.plannedSpeechTimings.shift();
+    try{
+      const folderId=/^gpt:\/\/([^/]+)\//u.exec(String(this.config?.model||""))?.[1]||"";
+      const frames=new Pcm16FrameStream(samples=>{
+        if(aborter.signal.aborted)return;
+        timing.firstAudioMs??=Math.round(performance.now()-started);
+        const payload=Buffer.from(encodePcm16ToUlaw(samples));
+        this.queueEvent({type:"output_audio",responseId,itemId,frame:{sequence:this.ulawOutputSequence++,timestampMs:Date.now(),direction:"egress",codec:"ulaw",sampleRate:8000,channels:1,durationMs:20,payload,source:this.providerKey,traceId:"provider",voiceSessionId:0,mediaSessionId:0,responseId,providerItemId:itemId,providerArrivedAtMs:Date.now(),providerEventSequence:this.providerEventSequence++,contentIndex:0}});
+      });
+      const synthesisText=this.config?.ownerControlTest?yandexPronunciationText(text,this.config.pronunciationEntries||[]):text;
+      await synthesizeYandexSpeech({providerKey:"yandex",model:"",secret:this.config?.apiKey,options:{folderId}},synthesisText,this.config?.voice,{role:this.config?.voiceRole,speechRate:this.config?.speechRate,signal:aborter.signal,onPcmChunk:audio=>frames.push(audio)});
+      if(aborter.signal.aborted)return;
+      frames.finish();
+      timing.completed=true;
+      this.queueEvent({type:"transcript",kind:"output_final",text,responseId,itemId,contentIndex:0});
+      this.queueEvent({type:"response_item",status:"done",responseId,itemId,role:"assistant"});
+      this.queueEvent({type:"response_completed",responseId,providerStatus:"completed",finishReason:"completed",outputTranscript:text});
+    }finally{timing.totalMs=Math.round(performance.now()-started);this.plannedSpeech.delete(responseId)}
+  }
+  private async renderPlannedSpeech(responseId:string,itemId:string,text:string,instructions:string,aborter:AbortController){
+    try{
+      const pronunciation=[
+        ...(this.config?.pronunciationEntries||[]).map(item=>
+          `«${item.source}» произноси как «${item.pronunciation}»${item.stress?`, ударение: ${item.stress}`:""}`,
+        ),
+        this.config?.pronunciationInstructions||"",
+      ].filter(Boolean).join(". ");
+      const cacheKey=crypto.createHash("sha256").update(JSON.stringify({model:"gpt-4o-mini-tts",voice:this.config?.voice||"marin",text,instructions,pronunciation})).digest("hex"),
+        cacheFile=path.join(PLANNED_SPEECH_CACHE_DIR,`${cacheKey}.ulaw`),
+        emitPayload=(payload:Buffer)=>this.queueEvent({type:"output_audio",responseId,itemId,frame:{sequence:this.ulawOutputSequence++,timestampMs:Date.now(),direction:"egress",codec:"ulaw",sampleRate:8000,channels:1,durationMs:20,payload,source:this.providerKey,traceId:"provider",voiceSessionId:0,mediaSessionId:0,responseId,providerItemId:itemId,providerArrivedAtMs:Date.now(),providerEventSequence:this.providerEventSequence++,contentIndex:0}}),
+        finish=()=>{
+          this.queueEvent({type:"transcript",kind:"output_final",text,responseId,itemId,contentIndex:0});
+          this.queueEvent({type:"response_item",status:"done",responseId,itemId,role:"assistant"});
+          this.queueEvent({type:"response_completed",responseId,providerStatus:"completed",finishReason:"completed",outputTranscript:text});
+        };
+      try{
+        const cached=await readFile(cacheFile);
+        if(cached.length&&cached.length%ULAW_FRAME_BYTES===0){
+          for(let offset=0;offset<cached.length;offset+=ULAW_FRAME_BYTES)emitPayload(cached.subarray(offset,offset+ULAW_FRAME_BYTES));
+          finish();return;
+        }
+      }catch{}
+      const response=await fetch("https://api.openai.com/v1/audio/speech",{
+        method:"POST",signal:aborter.signal,headers:{Authorization:`Bearer ${this.config?.apiKey}`,"Content-Type":"application/json"},
+        body:JSON.stringify({model:"gpt-4o-mini-tts",voice:this.config?.voice||"marin",input:text,response_format:"pcm",instructions:`${instructions}. Говори как носитель русского языка: чистое нормативное русское произношение, естественная русская интонация и ударения.${pronunciation?` Словарь произношения: ${pronunciation}.`:""}`}),
+      });
+      if(!response.ok)throw new RealtimeVoiceError("provider_response_failed",502,`Speech renderer returned HTTP ${response.status}`);
+      const outputRate=this.config?.outputFormat.sampleRate||8000;
+      if(outputRate!==8000||this.config?.outputFormat.codec!=="ulaw")
+        throw new RealtimeVoiceError("unsupported_codec",400,"Streaming speech renderer requires 8 kHz u-law output");
+      let byteRemainder=Buffer.alloc(0),inputSampleIndex=0;
+      const outputSamples:number[]=[],cacheFrames:Buffer[]=[];
+      const emitFrame=(values:number[])=>{
+        const padded=new Int16Array(160);padded.set(values.slice(0,160));
+        const payload=Buffer.from(encodePcm16ToUlaw(padded));
+        cacheFrames.push(payload);emitPayload(payload);
+      };
+      for await(const rawChunk of response.body as any){
+        if(aborter.signal.aborted)return;
+        const chunk=Buffer.concat([byteRemainder,Buffer.from(rawChunk)]),usable=chunk.length-(chunk.length%2);
+        byteRemainder=chunk.subarray(usable);
+        for(let offset=0;offset<usable;offset+=2,inputSampleIndex++)
+          if(inputSampleIndex%3===0)outputSamples.push(chunk.readInt16LE(offset));
+        while(outputSamples.length>=160)emitFrame(outputSamples.splice(0,160));
+      }
+      if(outputSamples.length)emitFrame(outputSamples);
+      if(cacheFrames.length&&!aborter.signal.aborted)void (async()=>{
+        await mkdir(PLANNED_SPEECH_CACHE_DIR,{recursive:true});
+        const temporary=`${cacheFile}.${process.pid}.${crypto.randomUUID()}.tmp`;
+        await writeFile(temporary,Buffer.concat(cacheFrames));await rename(temporary,cacheFile);
+      })().catch(()=>{});
+      finish();
+    }finally{this.plannedSpeech.delete(responseId)}
   }
   async retryResponse(itemId: string | undefined, maxOutputTokens: number) {
     if (itemId)
       this.send({ type: "conversation.item.delete", item_id: itemId });
-    this.sendResponse(
+    return this.sendResponse(
       maxOutputTokens,
-      "Предыдущий ответ не озвучивай. Ответь заново одним коротким, грамматически законченным предложением на русском языке.",
+      this.config?.retryInstructions || "Предыдущий ответ не озвучивай. Ответь заново одной короткой фразой на русском языке.",
     );
   }
   async createFallbackResponse(itemId: string | undefined) {
     if (itemId)
       this.send({ type: "conversation.item.delete", item_id: itemId });
-    this.sendResponse(
+    return this.sendResponse(
       this.config?.greetingOutputTokens || 160,
       "Произнеси дословно и полностью: «Повторите, пожалуйста, вопрос.»",
     );
   }
-  private sendResponse(maxOutputTokens: number | undefined, instructions: string) {
+  private async sendResponse(maxOutputTokens: number | undefined, instructions: string,toolChoice?:"none") {
+    if(this.providerKey==="yandex_speechkit"&&this.config){
+      // Verified against Yandex: per-response overrides are ignored. Apply the
+      // instructions to the session before requesting generation instead.
+      await this.configureSession({...this.config,
+        instructions:[this.config.instructions,instructions].filter(Boolean).join("\n"),
+        maxOutputTokens:maxOutputTokens||this.config.maxOutputTokens,
+      });
+      this.send({type:"response.create"});
+      return;
+    }
     this.send({
       type: "response.create",
       response: {
         output_modalities: ["audio"],
-        max_output_tokens:
-          maxOutputTokens ||
-          this.config?.maxOutputTokens ||
-          GENERAL_MAX_OUTPUT_TOKENS,
+        max_output_tokens: this.config?.unlimitedOutputTokens
+          ? "inf"
+          : maxOutputTokens || this.config?.maxOutputTokens || GENERAL_MAX_OUTPUT_TOKENS,
         instructions,
+        ...(toolChoice?{tool_choice:toolChoice}:{}),
       },
     });
   }
@@ -515,24 +739,40 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
       response: {
         output_modalities: ["audio"],
         instructions:
-          "Предыдущий ответ не озвучивай. Ответь заново естественно и только по-русски.",
+          "Предыдущий ответ не озвучивай. Ответь заново как носитель русского языка: используй чистое нормативное русское произношение, естественную русскую интонацию и ударения.",
       },
     });
   }
   async startInitialGreeting(text: string) {
+    if(this.providerKey==="openai_realtime"){
+      await this.createPlannedResponse(text,"Произнеси короткое приветствие");
+      return;
+    }
+    if(this.providerKey==="yandex_speechkit"){
+      return this.sendResponse(this.config?.greetingOutputTokens||160,
+        `Произнеси дословно и без дополнений: «${text}»`);
+    }
     this.send({
       type: "response.create",
       response: {
         output_modalities: ["audio"],
         max_output_tokens: this.config?.greetingOutputTokens || 160,
-        instructions: `Say exactly this greeting in Russian: ${text}`,
+        instructions: `Говори как носитель русского языка: используй чистое нормативное русское произношение, естественную русскую интонацию и ударения. Произнеси дословно и без дополнений: «${text}»`,
       },
     });
   }
   async cancelResponse(responseId?: string) {
+    if(responseId&&this.plannedSpeech.has(responseId)){
+      this.plannedSpeech.get(responseId)?.abort();
+      this.plannedSpeech.delete(responseId);
+      this.queueEvent({type:"response_cancelled",responseId,providerStatus:"cancelled",finishReason:"cancelled"});
+      return;
+    }
     this.send({
       type: "response.cancel",
-      ...(responseId ? { response_id: responseId } : {}),
+      // Yandex Realtime accepts cancellation of the current response, but its
+      // protocol rejects the OpenAI-specific response_id field.
+      ...(responseId && this.providerKey !== "yandex_speechkit" ? { response_id: responseId } : {}),
     });
   }
   async truncateResponse(itemId: string, audioEndMs: number) {
@@ -544,14 +784,20 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
       audio_end_ms: Math.max(0, Math.floor(audioEndMs)),
     });
   }
-  async sendToolResult() {
-    throw new RealtimeVoiceError(
-      "permission_denied",
-      403,
-      "External realtime tools are disabled",
-    );
+  async sendToolResult(callId: string, result: unknown) {
+    this.send({
+      type: "conversation.item.create",
+      item: {
+        type: "function_call_output",
+        call_id: callId,
+        output: JSON.stringify(result),
+      },
+    });
+    this.send({ type: "response.create", response: { output_modalities: ["audio"] } });
   }
   async close() {
+    this.yandexRecognitionAbort?.abort();
+    this.yandexTurnAudio.reset();
     this.settleConfiguration(
       new RealtimeVoiceError(
         "provider_connection_failed",
@@ -586,6 +832,9 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
       providerOutputPauses: sorted.filter((value) => value > 120).length,
       providerOutputBursts: this.providerOutputBursts,
       providerSilence: this.providerSilence.metrics(),
+      wireTrace:this.wireTrace,
+      eventQueueTimings:Object.fromEntries(this.eventQueueTimings),
+      plannedSpeechTimings:this.plannedSpeechTimings,
     };
   }
   subscribeEvents(
@@ -601,15 +850,22 @@ export class OpenAIRealtimeAdapter implements RealtimeVoiceProviderAdapter {
         503,
         "Realtime provider is not connected",
       );
+    this.traceWire("sent",value);
     this.socket.send(JSON.stringify(value));
   }
   private async emit(event: RealtimeVoiceEvent) {
     for (const handler of this.handlers) await handler(event);
   }
   private queueEvent(event: RealtimeVoiceEvent) {
+    const queued=performance.now();
     this.eventChain = this.eventChain
       .catch(() => {})
-      .then(() => this.emit(event));
+      .then(async()=>{
+        const started=performance.now(),timing=this.eventQueueTimings.get(event.type)||{count:0,waitMaxMs:0,handlerMaxMs:0};
+        timing.count++;timing.waitMaxMs=Math.max(timing.waitMaxMs,Math.round(started-queued));
+        this.eventQueueTimings.set(event.type,timing);
+        try{await this.emit(event);}finally{timing.handlerMaxMs=Math.max(timing.handlerMaxMs,Math.round(performance.now()-started));}
+      });
   }
   private settleConfiguration(error?: Error) {
     const pending = this.pendingConfiguration;

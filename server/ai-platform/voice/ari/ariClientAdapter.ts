@@ -99,7 +99,7 @@ export class ObserverAriClientAdapter implements AriClientAdapter {
   answerChannel(id: string) { return this.request(`/ari/channels/${encodeURIComponent(id)}/answer`, 'POST').then(() => {}); }
   hangupChannel(id: string) { return this.request(`/ari/channels/${encodeURIComponent(id)}`, 'DELETE').then(() => {}); }
   continueChannel(id: string,input?:{context:string;extension:string;priority:number}) { const query=input?`?${new URLSearchParams({context:input.context,extension:input.extension,priority:String(input.priority)})}`:"";return this.request(`/ari/channels/${encodeURIComponent(id)}/continue${query}`, 'POST').then(() => {}); }
-  createBridge(id: string) { return this.request(`/ari/bridges?type=mixing&bridgeId=${encodeURIComponent(id)}`, 'POST').then(() => {}); }
+  createBridge(id: string) { return this.request(`/ari/bridges?type=${encodeURIComponent('mixing,proxy_media')}&bridgeId=${encodeURIComponent(id)}`, 'POST').then(() => {}); }
   addChannelToBridge(bridgeId: string, channelId: string) { return this.request(`/ari/bridges/${encodeURIComponent(bridgeId)}/addChannel?channel=${encodeURIComponent(channelId)}`, 'POST').then(() => {}); }
   destroyBridge(id: string) { return this.request(`/ari/bridges/${encodeURIComponent(id)}`, 'DELETE').then(() => {}); }
   createAudioSocketChannel(input: { channelId: string; app: string; externalHost: string; connectionId: string }) {

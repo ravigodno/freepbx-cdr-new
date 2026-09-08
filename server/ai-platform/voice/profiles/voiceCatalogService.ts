@@ -6,6 +6,7 @@ import {
   OPENAI_REALTIME_VOICE_MANIFEST,
   OPENAI_REALTIME_VOICE_MANIFEST_VERSION,
 } from "../providers/manifests/openaiRealtimeVoiceManifest.js";
+import { YANDEX_SPEECHKIT_VOICE_MANIFEST, YANDEX_SPEECHKIT_VOICE_MANIFEST_VERSION } from "../providers/manifests/yandexSpeechKitVoiceManifest.js";
 
 export type VoiceCatalogEntry={
   id:number;provider:string;voiceId:string;displayName:string;description:string|null;
@@ -36,22 +37,24 @@ export class VoiceCatalogService{
     return Boolean(firstSeenAt&&now-new Date(firstSeenAt).getTime()<=30*24*60*60*1000);
   }
   async refresh(tenantId:number,provider:string,actor:any){
-    if(provider!=="openai_realtime")throw new AiPlatformError("not_found",404,"Provider voice manifest is unavailable");
+    if(!["openai_realtime","yandex_speechkit"].includes(provider))throw new AiPlatformError("not_found",404,"Provider voice manifest is unavailable");
+    const manifest=provider==="yandex_speechkit"?YANDEX_SPEECHKIT_VOICE_MANIFEST:OPENAI_REALTIME_VOICE_MANIFEST;
+    const manifestVersion=provider==="yandex_speechkit"?YANDEX_SPEECHKIT_VOICE_MANIFEST_VERSION:OPENAI_REALTIME_VOICE_MANIFEST_VERSION;
     const verifiedAt=new Date().toISOString().slice(0,19).replace("T"," ");
     const existing=await this.list(tenantId,{provider,active:"all"}),known=new Set(existing.map(item=>item.voiceId));
-    for(const item of OPENAI_REALTIME_VOICE_MANIFEST){
+    for(const item of manifest){
       const current=existing.find(row=>row.voiceId===item.voiceId);
-      if(current)await this.store.query(`UPDATE ai_voice_catalog SET display_name=?,description=?,supported=1,active=1,sort_order=?,model_compatibility_json=?,supported_output_formats_json=?,supported_sample_rates_json=?,preview_available=?,last_verified_at=? WHERE id=?`,[item.displayName,item.description,item.sortOrder,JSON.stringify(item.modelCompatibility),JSON.stringify(item.supportedOutputFormats),JSON.stringify(item.supportedSampleRates),item.previewAvailable?1:0,verifiedAt,current.id]);
+      if(current)await this.store.query(`UPDATE ai_voice_catalog SET display_name=?,description=?,supported=1,active=1,sort_order=?,metadata_json=?,model_compatibility_json=?,supported_output_formats_json=?,supported_sample_rates_json=?,preview_available=?,last_verified_at=? WHERE id=?`,[item.displayName,item.description,item.sortOrder,JSON.stringify('gender' in item?{gender:item.gender,roles:'roles' in item?item.roles:[],apiVersion:'apiVersion' in item?item.apiVersion:null}:{}),JSON.stringify(item.modelCompatibility),JSON.stringify(item.supportedOutputFormats),JSON.stringify(item.supportedSampleRates),item.previewAvailable?1:0,verifiedAt,current.id]);
       else await this.store.query(`INSERT INTO ai_voice_catalog
         (tenant_id,provider_key,voice_id,display_name,description,supported,active,sort_order,metadata_json,model_compatibility_json,supported_output_formats_json,supported_sample_rates_json,preview_available,first_seen_at,last_verified_at)
-        VALUES(NULL,?,?,?,?,1,1,?,'{}',?,?,?,?,?,?)`,
-        [provider,item.voiceId,item.displayName,item.description,item.sortOrder,JSON.stringify(item.modelCompatibility),JSON.stringify(item.supportedOutputFormats),JSON.stringify(item.supportedSampleRates),item.previewAvailable?1:0,verifiedAt,verifiedAt]);
+        VALUES(NULL,?,?,?,?,1,1,?,?,?,?,?,?,?,?)`,
+        [provider,item.voiceId,item.displayName,item.description,item.sortOrder,JSON.stringify('gender' in item?{gender:item.gender,roles:'roles' in item?item.roles:[],apiVersion:'apiVersion' in item?item.apiVersion:null}:{}),JSON.stringify(item.modelCompatibility),JSON.stringify(item.supportedOutputFormats),JSON.stringify(item.supportedSampleRates),item.previewAvailable?1:0,verifiedAt,verifiedAt]);
     }
-    const currentIds=OPENAI_REALTIME_VOICE_MANIFEST.map(item=>item.voiceId);
+    const currentIds=manifest.map(item=>item.voiceId);
     await this.store.query(`UPDATE ai_voice_catalog SET supported=0,active=0,last_verified_at=? WHERE (tenant_id=? OR tenant_id IS NULL) AND provider_key=? AND voice_id NOT IN (${currentIds.map(()=>"?").join(",")})`,[verifiedAt,tenantId,provider,...currentIds]);
     const added=currentIds.filter(id=>!known.has(id)),unavailable=existing.filter(item=>!currentIds.includes(item.voiceId)).map(item=>item.voiceId);
-    await this.audit.append({tenantId,...actor,eventType:"voice_catalog_refreshed" as any,entityType:"voice_catalog",entityId:provider,decision:"refreshed",details:{provider,manifestVersion:OPENAI_REALTIME_VOICE_MANIFEST_VERSION,added,unavailable,verifiedAt}});
-    return{provider,manifestVersion:OPENAI_REALTIME_VOICE_MANIFEST_VERSION,added,unavailable,lastVerifiedAt:verifiedAt};
+    await this.audit.append({tenantId,...actor,eventType:"voice_catalog_refreshed" as any,entityType:"voice_catalog",entityId:provider,decision:"refreshed",details:{provider,manifestVersion,added,unavailable,verifiedAt}});
+    return{provider,manifestVersion,added,unavailable,lastVerifiedAt:verifiedAt};
   }
   async requireAvailable(tenantId:number,provider:string,voiceId:string){
     const item=(await this.list(tenantId,{provider,active:"true"})).find(row=>row.voiceId===voiceId);

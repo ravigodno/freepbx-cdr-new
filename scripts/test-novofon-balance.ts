@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
+import fs from 'node:fs'; import type {RequestInit, Response} from 'node-fetch';
 import { NovofonDataApiClient, NovofonProviderError, novofonV1Signature, safeNovofonMetadata } from '../server/balance/providers/novofon.js';
 import { maskNovofonPhone, novofonAccountData, safeNovofonError } from '../server/balance/novofonService.js';
 import { reconcileNovofonLeg } from '../server/balance/reconciliation/novofonCdrReconciliation.js';

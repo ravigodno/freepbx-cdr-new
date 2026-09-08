@@ -3,6 +3,7 @@ import { AiPlatformError } from '../core/errors.js';
 import type { ProviderRequest, ProviderResponse } from '../core/contracts.js';
 import type { AIProviderAdapter, ProviderCapabilities, ProviderConfig, ProviderConfigValidation, ProviderHealth } from './providerAdapter.js';
 import { TEXT_ONLY_CAPABILITIES } from './providerAdapter.js';
+import { usesOpenAIReasoningParameters } from '../../../shared/openAiModelCatalog.js';
 
 function endpoint(baseUrl: string | null | undefined, fallback: string): string {
   const value = String(baseUrl || fallback).replace(/\/+$/, '');
@@ -27,7 +28,15 @@ async function requestJson(url: string, init: any, timeoutMs: number,externalSig
   try {
     const response = await fetch(url, { ...init, signal: controller.signal as any });
     const text = await response.text();
-    if (!response.ok) throw new AiPlatformError('internal_error', 502, `AI provider returned HTTP ${response.status}`);
+    if (!response.ok) {
+      let detail = '';
+      try { detail = String(JSON.parse(text)?.error?.message || '').trim(); } catch {}
+      throw new AiPlatformError(
+        'internal_error',
+        502,
+        `AI provider returned HTTP ${response.status}${detail ? `: ${detail.slice(0, 500)}` : ''}`,
+      );
+    }
     try { return { data: JSON.parse(text), latencyMs: Date.now() - started }; }
     catch { throw new AiPlatformError('internal_error', 502, 'AI provider returned invalid JSON'); }
   } catch (error: any) {
@@ -48,9 +57,12 @@ export class OpenAIHttpAdapter implements AIProviderAdapter {
   async generate(request: ProviderRequest, config: ProviderConfig): Promise<ProviderResponse> {
     const validation = this.validateConfig(config);
     if (!validation.valid) throw new AiPlatformError('provider_not_configured', 503, validation.errors.join('; '));
+    const selectedModel = request.model || config.model;
+    const reasoningModel = usesOpenAIReasoningParameters(selectedModel);
     const result = await requestJson(endpoint(config.baseUrl, 'https://api.openai.com/v1'), {
       method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.secret}` },
-      body: JSON.stringify({ model: request.model || config.model, temperature: request.temperature, max_tokens: request.maxOutput,
+      body: JSON.stringify({ model: selectedModel,
+        ...(reasoningModel ? { max_completion_tokens: request.maxOutput } : { temperature: request.temperature, max_tokens: request.maxOutput }),
         messages: request.messages, ...(request.responseFormat === 'json' ? { response_format: { type: 'json_object' } } : {}) })
     }, request.timeoutMs,request.signal);
     const usage = result.data?.usage || {};

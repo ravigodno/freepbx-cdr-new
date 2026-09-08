@@ -11,6 +11,7 @@ import {
 } from './providers/mtsBusiness.js';
 import { MtsBusinessSettingsStore, type MtsBusinessManagedSettings } from './mtsBusinessSettings.js';
 import { MtsPackagesService } from './mtsPackagesService.js';
+import {getEnabledBalanceHistory, type BalanceHistorySeries} from './balanceHistory.js';
 
 export const MTS_BUSINESS_SOURCE_ID = 'mts_business';
 
@@ -127,6 +128,7 @@ export interface MtsBusinessOverview {
 }
 
 export interface MtsBusinessOverviewHistory {
+  balanceSeries: BalanceHistorySeries[];
   balance: Array<{ date: string; balance: number }>;
   minutes: Array<{ date: string; usedMinutes: number }>;
   periodDays: number;
@@ -438,7 +440,7 @@ export class MtsBusinessBalanceService {
 
   async getOverviewHistory(periodDays = 31): Promise<MtsBusinessOverviewHistory> {
     const safePeriodDays = Math.max(7, Math.min(370, Math.trunc(periodDays) || 31));
-    const [snapshotRows, minuteRows] = await Promise.all([
+    const [snapshotRows, minuteRows, balanceSeries] = await Promise.all([
       queryPBXPulsDb(
         `SELECT balance_amount balanceAmount,measured_at measuredAt
          FROM balance_snapshots
@@ -457,7 +459,8 @@ export class MtsBusinessBalanceService {
          GROUP BY DATE(e.occurred_at)
          ORDER BY usageDate`,
         [MTS_BUSINESS_SOURCE_ID, safePeriodDays]
-      )
+      ),
+      getEnabledBalanceHistory(safePeriodDays)
     ]);
     const dailyBalance = new Map<string, number>();
     for (const row of snapshotRows) {
@@ -466,6 +469,7 @@ export class MtsBusinessBalanceService {
       if (date && Number.isFinite(balance)) dailyBalance.set(date, balance);
     }
     return {
+      balanceSeries,
       balance: [...dailyBalance.entries()].map(([date, balance]) => ({ date, balance })),
       minutes: minuteRows.map(row => ({
         date: String(row.usageDate || '').slice(0, 10),

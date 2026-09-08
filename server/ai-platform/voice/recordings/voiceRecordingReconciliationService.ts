@@ -55,12 +55,24 @@ export class VoiceRecordingReconciliationService {
     const db=await this.cdr();
     try{
       const [rows]=await db.query(
-        "SELECT uniqueid,linkedid,recordingfile,billsec,duration FROM cdr WHERE calldate BETWEEN DATE_SUB(?,INTERVAL 2 MINUTE) AND DATE_ADD(COALESCE(?,?),INTERVAL 5 MINUTE) ORDER BY calldate",
+        "SELECT uniqueid,linkedid,calldate,dst,recordingfile,billsec,duration FROM cdr WHERE calldate BETWEEN DATE_SUB(?,INTERVAL 2 MINUTE) AND DATE_ADD(COALESCE(?,?),INTERVAL 5 MINUTE) ORDER BY calldate",
         [voice.started_at,voice.ended_at,voice.started_at],
       );
-      const matched=(rows as any[]).filter(item=>
+      const hashedMatched=(rows as any[]).filter(item=>
         voiceHash(tenantId,String(item.uniqueid||""))===voice.external_call_id_hash||
         voiceHash(tenantId,String(item.linkedid||""))===voice.external_call_id_hash);
+      // Asterisk truncates long caller-supplied channel IDs in CDR. Older
+      // automated evaluator calls used UUID-based IDs, so their stored hash
+      // cannot equal the truncated uniqueid. Recover only the evaluator's
+      // unmistakable recording leg closest to this voice-session start.
+      const startedMs=new Date(String(voice.started_at||"").replace(" ","T")).getTime();
+      const evaluatorFallback=hashedMatched.length?[]:(rows as any[]).filter(item=>{
+        const rowMs=new Date(String(item.calldate||"").replace(" ","T")).getTime();
+        return /^dima-eval-caller-[A-Za-z0-9-]+$/i.test(String(item.uniqueid||""))
+          && Boolean(String(item.recordingfile||"").trim())
+          && Number.isFinite(startedMs)&&Number.isFinite(rowMs)&&Math.abs(rowMs-startedMs)<=10000;
+      }).sort((a,b)=>Math.abs(new Date(String(a.calldate).replace(" ","T")).getTime()-startedMs)-Math.abs(new Date(String(b.calldate).replace(" ","T")).getTime()-startedMs));
+      const matched=hashedMatched.length?hashedMatched:evaluatorFallback.slice(0,1);
       const root=monitorRoot();
       const candidate=matched
         .filter(item=>String(item.recordingfile||"").trim())
@@ -100,7 +112,7 @@ export class VoiceRecordingReconciliationService {
   }
   async reconcile(tenantId:number,voiceSessionId:number,traceId="recording-reconcile"){
     const voice=(await this.store.query("SELECT id,started_at,ended_at,external_call_id_hash,recording_ref_safe FROM ai_voice_sessions WHERE tenant_id=? AND id=? LIMIT 1",[tenantId,voiceSessionId]))[0];
-    if(!voice)return{available:false};
+    if(!voice)return{available:false,handoffPending:false};
     const result=await this.locate(tenantId,voice);
     await this.store.query(`UPDATE ai_voice_sessions SET recording_status=?,recording_ref_safe=?,recording_mime_type=?,recording_size_bytes=?,recording_duration_ms=?,cdr_billsec_seconds=?,cdr_duration_seconds=?,cdr_internal_ref=? WHERE tenant_id=? AND id=?`,[
       result.available?"available":"unavailable",result.ref,result.mimeType,result.sizeBytes,result.durationMs,result.billsecSeconds,result.durationSeconds,

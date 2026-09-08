@@ -32,6 +32,14 @@ export function normalizeOpenAIRealtimeEvent(
     return { type: "input_audio_stopped", itemId: String(raw?.item_id || "").slice(0,191) || undefined };
   if (type === "input_audio_buffer.committed")
     return { type: "input_audio_committed" };
+  if (
+    ["conversation.item.added", "conversation.item.created", "conversation.item.done"].includes(type) &&
+    String(raw?.item?.role || "") === "user"
+  )
+    return {
+      type: "input_item_ready",
+      itemId: String(raw?.item?.id || raw?.item_id || "").slice(0, 191) || undefined,
+    };
   if (type === "response.created")
     return {
       type: "response_started",
@@ -93,7 +101,7 @@ export function normalizeOpenAIRealtimeEvent(
     };
     }
   if (type === "response.output_item.added" || type === "response.output_item.done")
-    return {type:"response_item",status:type.endsWith("done")?"done":"added",eventId:String(raw?.event_id||"").slice(0,191)||undefined,itemId:String(raw?.item?.id||raw?.item_id||"").slice(0,191)||undefined,role:String(raw?.item?.role||"").slice(0,32)||undefined};
+    return {type:"response_item",status:type.endsWith("done")?"done":"added",eventId:String(raw?.event_id||"").slice(0,191)||undefined,responseId:String(raw?.response_id||"").slice(0,191)||undefined,itemId:String(raw?.item?.id||raw?.item_id||"").slice(0,191)||undefined,role:String(raw?.item?.role||"").slice(0,32)||undefined};
   if (type === "conversation.item.input_audio_transcription.failed")
     return {type:"transcript_unavailable",speaker:"caller",errorCode:safeErrorCode(raw?.error?.code||raw?.error?.type||"transcript_unavailable")};
   if (type === "response.function_call_arguments.done")

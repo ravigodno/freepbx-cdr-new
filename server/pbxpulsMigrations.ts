@@ -1180,7 +1180,7 @@ const MIGRATIONS: Migration[] = [
       `ALTER TABLE ai_voice_catalog ADD COLUMN supported_sample_rates_json LONGTEXT NOT NULL AFTER supported_output_formats_json`,
       `ALTER TABLE ai_voice_catalog ADD COLUMN preview_available TINYINT(1) NOT NULL DEFAULT 0 AFTER supported_sample_rates_json`,
       `ALTER TABLE ai_voice_catalog ADD COLUMN first_seen_at DATETIME NULL AFTER preview_available`,
-      `UPDATE ai_voice_catalog SET model_compatibility_json='["gpt-realtime-2.1"]',supported_output_formats_json='["slin16","ulaw"]',supported_sample_rates_json='[16000,8000]',preview_available=1,first_seen_at=NULL WHERE provider_key='openai_realtime'`,
+      `UPDATE ai_voice_catalog SET model_compatibility_json='["gpt-realtime-2.1","gpt-realtime-2.1-mini","gpt-realtime-2","gpt-realtime-1.5"]',supported_output_formats_json='["slin16","ulaw"]',supported_sample_rates_json='[16000,8000]',preview_available=1,first_seen_at=NULL WHERE provider_key='openai_realtime'`,
       `INSERT IGNORE INTO permissions(permission_key,name,description,category)VALUES('manage_ai_voice_catalog','Manage AI voice catalog','Refresh versioned provider voice manifests','ai_platform')`,
       `INSERT IGNORE INTO role_permissions(role_id,permission_id)SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key='manage_ai_voice_catalog' WHERE r.role_key IN('su','admin')`
     ]
@@ -2257,6 +2257,24 @@ const MIGRATIONS: Migration[] = [
        SELECT r.id,p.id FROM roles r JOIN permissions p ON p.permission_key='view_call_dtmf'
        WHERE r.role_key IN('su','admin')`
     ]
+  },
+  {
+    key:'20260904_095_ai_voice_preview_cache',description:'Persist generated AI voice previews across application restarts',statements:[
+      `CREATE TABLE IF NOT EXISTS ai_voice_preview_cache(
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,tenant_id BIGINT NOT NULL,cache_key CHAR(64) NOT NULL,
+        provider_key VARCHAR(64) NOT NULL,voice_id VARCHAR(100) NOT NULL,config_hash CHAR(64) NOT NULL,text_hash CHAR(64) NOT NULL,
+        mime_type VARCHAR(64) NOT NULL DEFAULT 'audio/wav',audio_data LONGBLOB NOT NULL,audio_bytes INT UNSIGNED NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,last_accessed_at DATETIME NOT NULL,expires_at DATETIME NOT NULL,
+        UNIQUE KEY uniq_ai_voice_preview_cache(tenant_id,cache_key),KEY idx_ai_voice_preview_expiry(tenant_id,expires_at),
+        CONSTRAINT fk_ai_voice_preview_tenant FOREIGN KEY(tenant_id) REFERENCES ai_tenants(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+    ]
+  }
+  ,{
+    key:'20260908_096_mcn_balance_source',description:'Add disabled MCN Telecom balance source using existing encrypted credentials and snapshots',statements:[
+      `INSERT IGNORE INTO balance_sources(id,provider,display_name,enabled,config_json,sync_interval_minutes,status)
+       VALUES('mcn_telecom','mcn_telecom','MCN Telecom',0,'{}',15,'disabled')`
+    ]
   }
 ];
 
@@ -2723,7 +2741,7 @@ async function markMigrationApplied(
   migrationKey: string,
   description: string
 ): Promise<void> {
-  const names = [columns.keyColumn];
+  const names: string[] = [columns.keyColumn];
   const placeholders = ['?'];
   const values: any[] = [migrationKey];
 
@@ -2750,7 +2768,7 @@ async function seedCoreTools(connection: Connection): Promise<void> {
     VALUES (?, ?, ?, ?, 1, 1, ?)`;
 
   for (const tool of CORE_TOOLS) {
-    await connection.execute(sql, tool);
+    await connection.execute(sql, [...tool]);
   }
 }
 
@@ -2760,7 +2778,7 @@ async function seedCoreSettings(connection: Connection): Promise<void> {
     VALUES (?, ?, ?, ?, 0, ?)`;
 
   for (const setting of CORE_SETTINGS) {
-    await connection.execute(sql, setting);
+    await connection.execute(sql, [...setting]);
   }
 }
 
@@ -2769,7 +2787,7 @@ async function seedAuthStorageMode(connection: Connection): Promise<void> {
     `INSERT IGNORE INTO settings
       (setting_key, setting_value, value_type, category, is_secret, description)
      VALUES (?, ?, ?, ?, 0, ?)`,
-    AUTH_STORAGE_MODE_SETTING
+    [...AUTH_STORAGE_MODE_SETTING]
   );
 }
 
@@ -2778,7 +2796,7 @@ async function seedSettingsStorageMode(connection: Connection): Promise<void> {
     `INSERT IGNORE INTO settings
       (setting_key, setting_value, value_type, category, is_secret, description)
      VALUES (?, ?, ?, ?, 0, ?)`,
-    SETTINGS_STORAGE_MODE_SETTING
+    [...SETTINGS_STORAGE_MODE_SETTING]
   );
 }
 
@@ -2787,7 +2805,7 @@ async function seedSettingsApiRuntimeSwitch(connection: Connection): Promise<voi
     `INSERT IGNORE INTO settings
       (setting_key, setting_value, value_type, category, is_secret, description)
      VALUES (?, ?, ?, ?, 0, ?)`,
-    SETTINGS_API_RUNTIME_SWITCH_SETTING
+    [...SETTINGS_API_RUNTIME_SWITCH_SETTING]
   );
 }
 
@@ -2796,7 +2814,7 @@ async function seedDirectoryStorageMode(connection: Connection): Promise<void> {
     `INSERT IGNORE INTO settings
       (setting_key, setting_value, value_type, category, is_secret, description)
      VALUES (?, ?, ?, ?, 0, ?)`,
-    DIRECTORY_STORAGE_MODE_SETTING
+    [...DIRECTORY_STORAGE_MODE_SETTING]
   );
 }
 
@@ -2805,7 +2823,7 @@ async function seedDirectoryWriteMode(connection: Connection): Promise<void> {
     `INSERT IGNORE INTO settings
       (setting_key, setting_value, value_type, category, is_secret, description)
      VALUES (?, ?, ?, ?, 0, ?)`,
-    DIRECTORY_WRITE_MODE_SETTING
+    [...DIRECTORY_WRITE_MODE_SETTING]
   );
 }
 
@@ -2814,7 +2832,7 @@ async function seedDirectorySqlWriteTestEnabled(connection: Connection): Promise
     `INSERT IGNORE INTO settings
       (setting_key, setting_value, value_type, category, is_secret, description)
      VALUES (?, ?, ?, ?, 0, ?)`,
-    DIRECTORY_SQL_WRITE_TEST_ENABLED_SETTING
+    [...DIRECTORY_SQL_WRITE_TEST_ENABLED_SETTING]
   );
 }
 
@@ -2823,7 +2841,7 @@ async function seedDirectoryProductionSqlWriteUnlock(connection: Connection): Pr
     `INSERT IGNORE INTO settings
       (setting_key, setting_value, value_type, category, is_secret, description)
      VALUES (?, ?, ?, ?, 0, ?)`,
-    DIRECTORY_PRODUCTION_SQL_WRITE_UNLOCK_SETTING
+    [...DIRECTORY_PRODUCTION_SQL_WRITE_UNLOCK_SETTING]
   );
 }
 
@@ -2832,7 +2850,7 @@ async function seedDirectorySqlSyncApplyEnabled(connection: Connection): Promise
     `INSERT IGNORE INTO settings
       (setting_key, setting_value, value_type, category, is_secret, description)
      VALUES (?, ?, ?, ?, 0, ?)`,
-    DIRECTORY_SQL_SYNC_APPLY_ENABLED_SETTING
+    [...DIRECTORY_SQL_SYNC_APPLY_ENABLED_SETTING]
   );
 }
 

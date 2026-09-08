@@ -1,6 +1,6 @@
 import { isAiPlatformCoreEnabled } from '../core/featureFlag.js';
 import { redactAiPlatformValue } from '../core/redaction.js';
-import type { AiAuditService } from '../audit/aiAuditService.js';
+import { AiAuditService } from '../audit/aiAuditService.js';
 import type { AiPlatformStore } from '../storage/aiPlatformStore.js';
 import { ActionRepository } from './actionRepository.js';
 import { ActionDefinitionRegistry } from './actionDefinitionRegistry.js';
@@ -17,9 +17,15 @@ export class BusinessActionService {
   private readonly repo: ActionRepository;
   private readonly limiter = new ActionRateLimiter();
   constructor(private readonly store: AiPlatformStore, private readonly audit: AiAuditService, private readonly definitions: ActionDefinitionRegistry, private readonly executors: ActionExecutorRegistry, private readonly enabled = isAiPlatformCoreEnabled) { this.repo = new ActionRepository(store); }
-  private async event(context: BusinessActionContext, id: number, eventType: any, decision: string, details: Record<string, unknown> = {}) { await this.audit.append({ tenantId: context.tenantId, traceId: context.traceId, actorType: context.actorType, actorId: context.actorId, eventType, entityType: 'business_action', entityId: String(id), decision, details: redactAiPlatformValue(details).value }); }
+  private async event(context: BusinessActionContext, id: number, eventType: any, decision: string, details: Record<string, unknown> = {},audit=this.audit) { await audit.append({ tenantId: context.tenantId, traceId: context.traceId, actorType: context.actorType, actorId: context.actorId, eventType, entityType: 'business_action', entityId: String(id), decision, details: redactAiPlatformValue(details).value }); }
+  private transaction<T>(work:(repo:ActionRepository,audit:AiAuditService)=>Promise<T>):Promise<T>{
+    return this.store.transaction
+      ? this.store.transaction(store=>work(new ActionRepository(store),new AiAuditService(store)))
+      : work(this.repo,this.audit);
+  }
   private limit(context: BusinessActionContext, phone: string) { if (context.sourceChannel !== 'sandbox') return; this.limiter.consume(`tenant:${context.tenantId}`, 10, 3600000); if (context.conversationId) this.limiter.consume(`conversation:${context.tenantId}:${context.conversationId}`, 3, 600000); this.limiter.consume(`phone:${context.tenantId}:${tenantPhoneHash(context.tenantId, normalizePhone(phone))}`, 5, 600000); }
   async executeCallback(context: BusinessActionContext, raw: unknown): Promise<BusinessActionResult> {
+    if((context as any).signal?.aborted)throw new BusinessActionError('conflict',409,'Action cancelled before execution');
     const definition = this.definitions.get('business.create_callback_request');
     const input = validateActionInput(definition.inputSchema, raw) as CallbackActionInput;
     const normalized = { ...input, phone: String(input.phone).trim(), reason: String(input.reason).trim() };
@@ -30,26 +36,43 @@ export class BusinessActionService {
     if (!assignment[0]) throw new BusinessActionError('permission_denied', 403, 'Business action is not assigned');
     let config: any = {}; try { config = JSON.parse(String(assignment[0].config_json || '{}')); } catch {}
     enforceActionPolicy(definition, context, config.autonomyLevel || 'SAFE'); this.limit(context, normalized.phone);
+    let retryActionId=0;
     if (context.idempotencyKey) {
       const row = (await this.repo.findReplay(context.tenantId, context.idempotencyKey))[0];
       if (row) { if (row.input_hash !== inputHash || row.action_key !== definition.key) throw new BusinessActionError('conflict', 409, 'Idempotency conflict'); if (row.status === 'completed') { const output = JSON.parse(String(row.output_json || '{}')); return { id: Number(row.id), status: 'completed', ok: true, callbackRequestId: Number(output.callbackRequestId), safeSummary: String(row.safe_summary), duplicate: true, errorCode: null }; } }
+      if(row){
+        if(row.status!=='failed')
+          throw new BusinessActionError('conflict',409,'Action is already in progress or cannot be retried');
+        retryActionId=Number(row.id);
+      }
     }
-    const actionId = await this.repo.create(context, Number(assignment[0].id), redactAiPlatformValue({ ...normalized, phone: '[PROTECTED]' }).value, inputHash);
-    await this.event(context, actionId, 'business_action_requested', 'requested', { actionKey: definition.key });
+    // Persist the complete approved startup phase once, including its audit.
+    // The actual executor runs after commit, without holding this transaction.
+    const actionId = await this.transaction(async(repo,audit)=>{
+      if(retryActionId&&!await repo.claimFailedRetry(context.tenantId,retryActionId))
+        throw new BusinessActionError('conflict',409,'Action is already in progress or cannot be retried');
+      const id=retryActionId||await repo.create(context,Number(assignment[0].id),redactAiPlatformValue({...normalized,phone:'[PROTECTED]'}).value,inputHash);
+      await this.event(context,id,'business_action_requested','requested',{actionKey:definition.key},audit);
+      await repo.update(id,'approved');await this.event(context,id,'business_action_approved','approved',{},audit);
+      await repo.update(id,'running');await this.event(context,id,'business_action_started','started',{},audit);
+      return id;
+    });
     try {
-      await this.repo.update(actionId, 'approved'); await this.event(context, actionId, 'business_action_approved', 'approved');
-      await this.repo.update(actionId, 'running'); await this.event(context, actionId, 'business_action_started', 'started');
       const controller = new AbortController(), sourceSignal = (context as any).signal as AbortSignal | undefined, cancel = () => controller.abort(); sourceSignal?.addEventListener('abort', cancel, { once: true }); let timer: ReturnType<typeof setTimeout> | undefined;
       try {
+        if(sourceSignal?.aborted)controller.abort();
         const output = await Promise.race([this.executors.get(definition.executorKey).execute({ ...context, actionId, signal: controller.signal }, normalized), new Promise<never>((_, reject) => timer = setTimeout(() => { controller.abort(); reject(new BusinessActionError('action_timeout', 504, 'Business action timed out')); }, definition.timeoutMs))]);
-        validateActionOutput(definition.outputSchema, output); await this.repo.update(actionId, 'completed', { output, summary: output.safeSummary });
-        await this.event(context, actionId, 'business_action_completed', 'completed', { actionKey: definition.key, callbackRequestId: output.callbackRequestId, duplicate: output.duplicate });
-        await this.event(context, actionId, output.duplicate ? 'callback_duplicate_suppressed' : 'callback_request_created', output.duplicate ? 'duplicate' : 'created', { callbackRequestId: output.callbackRequestId });
+        validateActionOutput(definition.outputSchema, output);
+        await this.transaction(async(repo,audit)=>{
+          await repo.update(actionId,'completed',{output,summary:output.safeSummary});
+          await this.event(context,actionId,'business_action_completed','completed',{actionKey:definition.key,callbackRequestId:output.callbackRequestId,duplicate:output.duplicate},audit);
+          await this.event(context,actionId,output.duplicate?'callback_duplicate_suppressed':'callback_request_created',output.duplicate?'duplicate':'created',{callbackRequestId:output.callbackRequestId},audit);
+        });
         return { id: actionId, status: 'completed', ok: true, callbackRequestId: output.callbackRequestId, safeSummary: output.safeSummary, duplicate: output.duplicate, errorCode: null };
       } finally { if (timer) clearTimeout(timer); sourceSignal?.removeEventListener('abort', cancel); }
     } catch (error) {
       const timed = error instanceof BusinessActionError && error.code === 'action_timeout', code = timed ? 'action_timeout' : error instanceof BusinessActionError ? error.code : 'action_failed';
-      await this.repo.update(actionId, timed ? 'timed_out' : 'failed', { errorCode: code }); await this.event(context, actionId, 'business_action_failed', 'failed', { errorCode: code });
+      await this.transaction(async(repo,audit)=>{await repo.update(actionId,timed?'timed_out':'failed',{errorCode:code});await this.event(context,actionId,'business_action_failed','failed',{errorCode:code},audit);});
       return { id: actionId, status: timed ? 'timed_out' : 'failed', ok: false, callbackRequestId: null, safeSummary: 'Не удалось сохранить просьбу о звонке', duplicate: false, errorCode: code };
     }
   }

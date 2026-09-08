@@ -4,12 +4,13 @@ import {
   CreditCard, FileText, Gauge, Globe, Layers, PhoneCall, RefreshCw, Settings, Wallet
 } from 'lucide-react';
 import {
-  Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis
+  Line, LineChart, Legend, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis
 } from 'recharts';
 import MtsAutoSecretaryPanel, { type MtsAutoSecretaryPanelTab } from './MtsAutoSecretaryPanel';
 import MtsBusinessSettingsForm from './MtsBusinessSettingsForm';
 import MtsPackagesPanel from './MtsPackagesPanel';
 import NovofonBalancePanel from './NovofonBalancePanel';
+import McnTelecomBalancePanel from './McnTelecomBalancePanel';
 
 type Props = {
   token: string;
@@ -43,6 +44,7 @@ type ProviderOverview = {
 
 type WorkspaceTab = MtsAutoSecretaryPanelTab;
 type OverviewHistory = {
+  balanceSeries?: Array<{sourceId:string;displayName:string;currency:string|null;points:Array<{date:string;balance:number|null}>}>;
   balance: Array<{ date: string; balance: number }>;
   minutes: Array<{ date: string; usedMinutes: number }>;
   periodDays: number;
@@ -88,6 +90,14 @@ export default function MtsBalanceWorkspace({ token, canManage, canViewAnalytics
   });
   const [provider, setProvider] = useState<ProviderOverview | null>(null);
   const [history, setHistory] = useState<OverviewHistory | null>(null);
+  const balanceSeries = history?.balanceSeries || [];
+  const balanceColors = ['#2563eb','#7c3aed','#059669','#ea580c','#db2777','#0891b2'];
+  const balanceChart = (balanceSeries[0]?.points || []).map((point, index) => {
+    const row: Record<string,string|number|null> = {date:point.date};
+    balanceSeries.forEach((series,i) => {row[`source${i}`] = series.points[index]?.balance ?? null});
+    return row;
+  });
+  const hasBalanceHistory = balanceSeries.some(series => series.points.some(point => point.balance !== null));
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [novofonRefreshKey, setNovofonRefreshKey] = useState(0);
@@ -135,7 +145,8 @@ export default function MtsBalanceWorkspace({ token, canManage, canViewAnalytics
       const results = await Promise.allSettled([
         request('МТС Бизнес', '/api/balance/sources/mts_business/sync'),
         request('Баланс Novofon', '/api/balance/providers/novofon/sync'),
-        request('Детализация Novofon', '/api/balance/providers/novofon/usage/sync')
+        request('Детализация Novofon', '/api/balance/providers/novofon/usage/sync'),
+        request('MCN Telecom', '/api/balance/providers/mcn-telecom/sync')
       ]);
       const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason?.message || 'Неизвестная ошибка'] : []);
       setNovofonRefreshKey(value => value + 1);
@@ -262,25 +273,26 @@ export default function MtsBalanceWorkspace({ token, canManage, canViewAnalytics
             {provider.status.reason && <div className="text-[11px] text-slate-500 lg:col-span-4">{provider.status.reason}</div>}
           </div>}
           <NovofonBalancePanel token={token} canManage={canManage} canViewAnalytics={canViewAnalytics} canListenRecordings={canListenRecordings} mode="summary" refreshKey={novofonRefreshKey} refreshing={syncing} />
+          <McnTelecomBalancePanel token={token} canManage={canManageProviders} canSync={canManage} mode="summary" refreshKey={novofonRefreshKey}/>
         </div>
         <div className="grid gap-3 xl:grid-cols-2">
           <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
             <div className="flex items-start justify-between gap-2">
-              <div><h3 className="text-sm font-black">Динамика баланса</h3><p className="text-[10px] text-slate-500">Остаток на конец дня · последние 31 день</p></div>
-              <span className="whitespace-nowrap font-mono text-xs font-bold text-blue-600">{money(provider?.balance ?? null)}</span>
+              <div><h3 className="text-sm font-black">Динамика баланса</h3><p className="text-[10px] text-slate-500">Все включённые источники · последний снимок дня (UTC) · 31 день</p></div>
             </div>
-            {history?.balance.length
+            {hasBalanceHistory
               ? <div className="mt-3 h-56"><ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={history.balance} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-                    <defs><linearGradient id="balanceOverviewFill" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#2563eb" stopOpacity={0.28} /><stop offset="95%" stopColor="#2563eb" stopOpacity={0.02} /></linearGradient></defs>
+                  <LineChart data={balanceChart} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#cbd5e1" opacity={0.45} />
                     <XAxis dataKey="date" tickFormatter={shortDate} tick={{ fontSize: 9 }} tickLine={false} axisLine={false} />
                     <YAxis width={58} tick={{ fontSize: 9 }} tickLine={false} axisLine={false} />
                     <Tooltip labelFormatter={shortDate} />
-                    <Area type="monotone" dataKey="balance" name="Баланс, ₽" stroke="#2563eb" strokeWidth={2} fill="url(#balanceOverviewFill)" />
-                  </AreaChart>
+                    <Legend wrapperStyle={{fontSize:11}} />
+                    {balanceSeries.map((series,i)=><Line key={`${series.sourceId}:${series.currency}`} type="linear" dataKey={`source${i}`} name={`${series.displayName}${series.currency?`, ${series.currency}`:''}`} stroke={balanceColors[i%balanceColors.length]} strokeWidth={2} dot={{r:2}} connectNulls={false} isAnimationActive={false}/>)}
+                  </LineChart>
                 </ResponsiveContainer></div>
               : <div className="flex h-56 items-center justify-center text-xs text-slate-500">История баланса ещё не накоплена</div>}
+            {balanceSeries.filter(series=>series.points.every(point=>point.balance===null)).map(series=><p key={`${series.sourceId}:${series.currency}`} className="mt-1 text-[10px] text-slate-500">{series.displayName}: нет снимков за этот период</p>)}
           </div>
           <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
             <div className="flex items-start justify-between gap-2">
@@ -319,6 +331,7 @@ export default function MtsBalanceWorkspace({ token, canManage, canViewAnalytics
         {canManage && <><MtsBusinessSettingsForm token={token} canManage={canManage} onSaved={() => void load()} />
           <MtsAutoSecretaryPanel token={token} canManage={canManage} canViewAnalytics={canViewAnalytics} activeTab="settings" showNavigation={false} /></>}
         <NovofonBalancePanel token={token} canManage={canManageProviders} canViewAnalytics={canViewAnalytics} canListenRecordings={canListenRecordings} mode="settings" />
+        <McnTelecomBalancePanel token={token} canManage={canManageProviders} canSync={canManage} mode="settings"/>
       </div>}
     </div>
   );

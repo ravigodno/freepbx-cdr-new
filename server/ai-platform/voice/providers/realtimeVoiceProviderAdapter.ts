@@ -15,6 +15,9 @@ export interface RealtimeVoiceProviderAdapter {
   configureSession(config: RealtimeVoiceConfig): Promise<void>;
   appendAudio(frame: AudioFrame): Promise<void>;
   commitInput(): Promise<void>;
+  requestInputTranscript?(): Promise<void>;
+  acceptInputTranscript?(snapshot:string): void;
+  recognizeCommittedInput?():Promise<Extract<RealtimeVoiceEvent,{type:'transcript'}>|null>;
   createResponse?(instructions?:string): Promise<void>;
   createFarewellResponse?(): Promise<void>;
   createPlannedResponse?(text:string,instructions:string):Promise<void>;

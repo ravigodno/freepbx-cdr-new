@@ -1,4 +1,5 @@
 type CdrLeg = {
+  dst?: unknown;
   uniqueid?: unknown;
   linkedid?: unknown;
   calldate?: unknown;

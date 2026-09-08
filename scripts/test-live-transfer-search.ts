@@ -10,7 +10,7 @@ import {
   validateConsultTransferTarget
 } from '../server/consultTransferService.js';
 
-const directory = Array.from({ length: 300 }, (_, index) => {
+const directory: import('../src/types.js').DirectoryEntry[] = Array.from({ length: 300 }, (_, index) => {
   const extension = String(100 + index);
   return {
     id: `internal-${extension}`,
@@ -171,12 +171,7 @@ assert.equal(validated.valid, true);
 assert.equal(validated.participants.length, 2);
 const rejectedCurrent = validateConferenceParticipants([internal201], [internal201], '201');
 assert.equal(rejectedCurrent.valid, false, 'backend validation must reject the current operator');
-const unavailableConference = await createConferenceFromActiveCall({
-  conferenceAvailable: false,
-  mechanism: 'confbridge',
-  reason: 'Безопасный executor не включён',
-  checked: []
-});
+const unavailableConference = await createConferenceFromActiveCall({} as import('../src/types.js').AppSettings, '', '', []);
 assert.equal(unavailableConference.success, false, 'unavailable backend must never report fake conference success');
 
 const consultSelection = addCallTarget('consult', [], internal201, '100');

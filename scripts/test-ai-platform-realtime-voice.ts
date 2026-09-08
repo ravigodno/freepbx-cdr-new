@@ -120,7 +120,7 @@ async function run() {
   assert.equal(voiceProfile.voiceId,'cedar');
   assert.ok(OPENAI_REALTIME_VOICES.includes('marin')&&OPENAI_REALTIME_VOICES.includes('cedar'));
   const voiceInstructions=compileVoiceProfileInstructions(voiceProfile,[{source:'PBXPuls',pronunciation:'Пи-Би-Икс Пульс'}]);
-  assert.match(voiceInstructions,/Говори по-русски естественно, спокойно, доброжелательно и разборчиво/iu);
+  assert.match(voiceInstructions,/Говори как носитель русского языка.*нормативное русское произношение/iu);
   assert.doesNotMatch(voiceInstructions,/иностранн|прибалтийск|не растягивай/iu);
   assert.match(voiceInstructions,/короткие естественные паузы/iu);
   assert.match(voiceInstructions,/Пи-Би-Икс Пульс/u);
@@ -217,7 +217,7 @@ async function run() {
     assert.doesNotMatch(redactAiPlatformText(utterance),/\[IP\]/u);
   assert.equal(redactAiPlatformText("адрес 192.168.1.8"),"адрес [IP]");
   assert.equal(redactAiPlatformText("адрес 2001:db8::1"),"адрес [IP]");
-  const normalizedTimeEvent=normalizeOpenAIRealtimeEvent({type:"conversation.item.input_audio_transcription.completed",transcript:"завтра на 12"},frame);
+  const normalizedTimeEvent=normalizeOpenAIRealtimeEvent({type:"conversation.item.input_audio_transcription.completed",transcript:"завтра на 12"},()=>frame("test"));
   assert.equal(normalizedTimeEvent?.type,"transcript");
   if(normalizedTimeEvent?.type==="transcript"){
     assert.equal(normalizedTimeEvent.text,"завтра на 12");
@@ -314,7 +314,7 @@ async function run() {
   assert.equal(substantive.status,"confirmed");
   assert.equal(substantive.cancelMode,"provider_and_playout");
   assert.equal(turn.counters.confirmedBargeInCount,1);
-  turn=audible("provider_done",1400);
+  turn=audible("provider_done",200);
   turn.beginCallerTurn();
   turn.callerSpeechStarted({energy:900},1300);
   assert.equal(
@@ -344,6 +344,7 @@ async function run() {
     {keyword:"стоп",semanticRemainder:"какой адрес?"},
   );
   assert.equal(classifyCallerSpeech("ага"),"acknowledgement");
+  assert.equal(classifyCallerSpeech("Дима"),"substantive_speech");
   assert.equal(classifyCallerSpeech("Мне нужен адрес"),"substantive_speech");
   for(const text of [
     "Здравствуйте. Чем могу",
@@ -602,12 +603,12 @@ async function run() {
     ),
     {type:"input_audio_stopped",itemId:"item-user"},
   );
-  assert.equal(
+  assert.deepEqual(
     normalizeOpenAIRealtimeEvent(
       {type:"response.created",response:{id:"resp-current"}},
       providerFrame,
-    )?.responseId,
-    "resp-current",
+    ),
+    {type:"response_started",responseId:"resp-current"},
   );
   assert.deepEqual(
     normalizeOpenAIRealtimeEvent(
@@ -667,16 +668,16 @@ async function run() {
   );
   assert.equal(
     registry.create("openai_realtime").getCapabilities().tools,
-    false,
+    true,
   );
   assert.throws(() => registry.create("unknown"), /Unknown/);
   const adapter = new SyntheticRealtimeVoiceAdapter(),
     events: any[] = [];
-  adapter.subscribeEvents((event) => events.push(event));
+  adapter.subscribeEvents((event) => { events.push(event); });
   const controller = new AbortController();
   assert.equal((await adapter.validateConfig(config)).valid, true);
   await adapter.connect(config, controller.signal);
-  await adapter.configureSession(config);
+  await adapter.configureSession();
   await adapter.appendAudio(frame("question"));
   await adapter.commitInput();
   await adapter.createResponse();
@@ -768,11 +769,12 @@ async function run() {
     "ru",
   );
   assert.equal(instructions.checksum.length, 64);
-  assert.match(instructions.instructions, /одним законченным/);
-  assert.match(instructions.instructions, /6–14 слов/);
+  assert.match(instructions.instructions, /соразмерно вопросу/);
+  assert.doesNotMatch(instructions.instructions, /20 слов|только следующий вопрос|только деловые templates/);
+  assert.doesNotMatch(instructions.instructions, /6–14 слов/);
   assert.match(instructions.instructions, /не обрывай/);
-  assert.match(instructions.instructions, /замолчи и слушай/);
-  assert.match(instructions.instructions,/templates активного skill/);
+  assert.match(instructions.instructions, /возможность ответить/);
+  assert.match(instructions.instructions,/навыки описывают возможности/);
   assert.doesNotMatch(instructions.instructions,/невролог|клиник|ветеринар/iu);
   assert.match(instructions.instructions,/выполняй молча/iu);
   assert.doesNotMatch(instructions.instructions,/пока безопасный backend/iu);
@@ -810,14 +812,16 @@ async function run() {
   assert.match(migration, /ai\.realtime_voice_enabled','false/);
   assert.match(migration, /ai\.realtime_voice_provider','synthetic/);
   assert.match(service, /transferRequired\s*=\s*true/);
-  assert.match(service, /toolCalls\s*>\s*2/);
+  assert.match(service, /toolCalls\s*>\s*20/);
   assert.match(service, /greetingStatus\s*!==\s*["']not_started["']/);
   assert.match(service,/event\.kind===["']input_partial["']/);
+  assert.match(service,/event\.kind===["']input_final["']&&!extractionText\.trim\(\)/);
+  assert.match(service,/contextualFollowUp/);
   assert.match(service,/createResponseForRemainder/);
   assert.match(openaiAdapter,/max_output_tokens/);
   assert.doesNotMatch(openaiAdapter,/max_response_output_tokens/);
   assert.match(openaiAdapter,/GENERAL_MAX_OUTPUT_TOKENS\s*=\s*4096/);
-  assert.doesNotMatch(openaiAdapter,/max_output_tokens:\s*[^,\n]*["']inf["']/);
+  assert.match(openaiAdapter,/unlimitedOutputTokens[\s\S]{0,120}["']inf["']/);
   assert.match(openaiAdapter,/greetingOutputTokens\s*\|\|\s*160/);
   assert.match(service,/retryPendingFromResponseId/);
   assert.match(service,/supersedeForRetry/);

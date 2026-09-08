@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import type { MediaTransportAdapter } from "../mediaTransportAdapter.js";
-import type { AudioFrame, MediaTransportContext } from "../mediaTypes.js";
+import type { AudioFrame, AudioSocketProtocolMetrics, MediaTransportContext } from "../mediaTypes.js";
 import { MediaError } from "../mediaErrors.js";
 import { decodeUlawToPcm16 } from "../g711.js";
 import { mediaWorkerClient } from "../../media-worker/mediaWorkerClient.js";
@@ -42,7 +42,7 @@ export class AudioSocketAdapter implements MediaTransportAdapter {
   private handlers = new Set<(frame: AudioFrame) => void>();
   private playoutHandlers = new Set<(frame: AudioFrame) => void>();
   private lifecycleHandlers = new Set<(event: PlayoutLifecycleEvent) => void>();
-  private metrics: Record<string, any> = {};
+  private metrics: Partial<AudioSocketProtocolMetrics> = {};
   private pending: Array<{response_ref:string;item_ref:string;sequence:number;pcm:Buffer}> = [];
   private flushScheduled = false;
   private ingressStartedAt: number | null = null;
@@ -89,16 +89,16 @@ export class AudioSocketAdapter implements MediaTransportAdapter {
       this.authenticated=true;for(const handler of this.connectedHandlers)handler({type:"connected"});
     } else if(event.type==="ingress_audio"&&this.context){
       if(this.ingressStartedAt===null)this.ingressStartedAt=Date.now()-Number(event.sequence||0)*20;
-      const frame:AudioFrame={codec:"slin16",sampleRate:Number(payload.sample_rate),channels:1,
+      const frame:AudioFrame={direction:"ingress",codec:"slin16",sampleRate:Number(payload.sample_rate),channels:1,
         durationMs:20,payload:new Uint8Array(payload.pcm),sequence:Number(event.sequence||0),
         timestampMs:this.ingressStartedAt+Number(event.sequence||0)*20,source:Number(payload.sample_rate)===8000?"audiosocket_ast18_slin8":"audiosocket_slin16",traceId:this.context.traceId,
         voiceSessionId:this.context.voiceSessionId,mediaSessionId:this.context.mediaSessionId};
       for(const handler of this.handlers)handler(frame);
     } else if(event.type==="frame_played"&&this.context){
-      const frame:AudioFrame={codec:"slin16",sampleRate:16000,channels:1,durationMs:20,
+      const frame:AudioFrame={direction:"egress",codec:"slin16",sampleRate:16000,channels:1,durationMs:20,
         payload:new Uint8Array(),sequence:Number(event.sequence||0),timestampMs:Date.now(),
         source:"audiosocket_worker",traceId:this.context.traceId,voiceSessionId:this.context.voiceSessionId,
-        mediaSessionId:this.context.mediaSessionId,responseId:event.response_ref,itemId:event.item_ref};
+        mediaSessionId:this.context.mediaSessionId,responseId:event.response_ref,providerItemId:event.item_ref};
       for(const handler of this.playoutHandlers)handler(frame);
     } else if(event.type==="response_playout_started"||event.type==="response_playout_completed"||event.type==="response_playout_interrupted"){
       const mapped:PlayoutLifecycleEvent={type:event.type==="response_playout_started"?"started":event.type==="response_playout_completed"?"completed":"interrupted",
@@ -121,10 +121,10 @@ export class AudioSocketAdapter implements MediaTransportAdapter {
       payload=pcm
         ?Buffer.from(pcm.buffer,pcm.byteOffset,pcm.byteLength)
         :Buffer.from(frame.payload);
-    this.pending.push({response_ref:frame.responseId||"unscoped",item_ref:frame.itemId||"",
+    this.pending.push({response_ref:frame.responseId||"unscoped",item_ref:frame.providerItemId||"",
       sequence:frame.sequence,pcm:payload});
     if(!this.flushScheduled){this.flushScheduled=true;setImmediate(()=>void this.flush())}
-    return {accepted:true as const};
+    return {accepted:true as const,dropped:false};
   }
   private async flush(){
     this.flushScheduled=false;

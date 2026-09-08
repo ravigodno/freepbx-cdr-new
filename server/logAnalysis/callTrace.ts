@@ -5,9 +5,9 @@ import { searchAllowedLogSource } from './reader.js';
 
 export type TraceQueryType='auto'|'phone'|'extension'|'endpoint'|'ip'|'uniqueid'|'linkedid'|'call_id'|'channel'|'text';
 export type TraceConfidence='exact'|'high'|'medium'|'low';
-export interface CallTraceDeps { queryCdr:(sql:string,params:any[])=>Promise<any[]>; searchLogs?:(input:any,cdr:any[],linkedid:string)=>Promise<{events:any[];bytesRead:number;from:string;to:string;searchedSources?:string[];rotatedFilesConsidered?:number}> }
+export interface CallTraceDeps { queryCdr:(sql:string,params:any[])=>Promise<any[]>; searchLogs?:(input:any,cdr:any[],linkedid:string)=>Promise<{events:any[];bytesRead:number;from:string;to:string;searchedSources?:string[];rotatedFilesConsidered?:number;rotatedFilesOpened?:number;filesScanned?:number;statuses?:Array<{sourceKey:string;status:string}>;profile?:{totalMs?:number}}> }
 export type TraceMode='core'|'logs'|'full';
-export interface TraceSearchInput { query:string;queryType?:TraceQueryType;from?:string;to?:string;limit?:number;includeRaw?:boolean;includeLowConfidence?:boolean;mode?:TraceMode;debug?:boolean;signal?:AbortSignal }
+export interface TraceSearchInput { query:string;queryType?:TraceQueryType;from?:string|Date;to?:string|Date;limit?:number;includeRaw?:boolean;includeLowConfidence?:boolean;mode?:TraceMode;debug?:boolean;signal?:AbortSignal }
 const CDR_FIELDS='calldate,clid,src,dst,dcontext,channel,dstchannel,lastapp,lastdata,duration,billsec,disposition,amaflags,accountcode,uniqueid,userfield,did,recordingfile,cnum,cnam,outbound_cnum,outbound_cnam,dst_cnam,linkedid,peeraccount,sequence';
 const CEL_FIELDS='id,eventtype,eventtime,cid_name,cid_num,cid_ani,cid_rdnis,cid_dnid,exten,context,channame,appname,appdata,amaflags,accountcode,uniqueid,linkedid,peer,userdeftype,extra';
 const ALGORITHM_VERSION='2',CORE_TTL=5*60000,LOG_TTL=2*60000,SOURCE_TTL=5*60000,MAX_RANGE=31*86400000,MAX_CDR=500,MAX_CEL=3000,MAX_LOG=600,MAX_CACHE=100;

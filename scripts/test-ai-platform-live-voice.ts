@@ -165,7 +165,9 @@ async function run() {
   const media = new AudioSocketAdapter(),
     provider = new SyntheticRealtimeVoiceAdapter(),
     received: any[] = [],
+    played: import('../server/ai-platform/voice/media/mediaTypes.js').AudioFrame[] = [],
     providerEvents: any[] = [];
+  media.subscribePlayout(frame => { played.push(frame); });
   await media.createTransport({
     tenantId: 1,
     traceId: "smoke",
@@ -207,7 +209,7 @@ async function run() {
     tools: [],
     timeoutMs: 1000,
   });
-  await provider.configureSession({} as any);
+  await provider.configureSession();
   const endpoint = media.getEndpoint(),
     client = net.connect(port, "127.0.0.1"),
     wire: Buffer[] = [];
@@ -231,6 +233,7 @@ async function run() {
     voiceSessionId: 7,
     mediaSessionId: 8,
     responseId: "ulaw-regression",
+    providerItemId: "ulaw-item-regression",
   });
   client.write(packet(0x10, Buffer.alloc(640, 1)));
   client.write(packet(0x12, Buffer.alloc(640, 1)));
@@ -239,6 +242,7 @@ async function run() {
   await new Promise((resolve) => setTimeout(resolve, 180));
   assert.equal(received.length, 3);
   assert.equal(received[0].sampleRate, 8000);
+  assert.equal(received[0].direction, "ingress");
   assert.equal(received[0].payload.byteLength, 320);
   assert.equal(received[0].durationMs, 20);
   assert.equal(received[0].source, "audiosocket_ast18_slin8");
@@ -265,6 +269,10 @@ async function run() {
   assert.equal(egressMetrics.audiosocketEgressPackets, 4);
   assert.equal(egressMetrics.egressResampledFrames, 3);
   assert.equal(egressMetrics.egressTargetSampleRate, 8000);
+  const playedProbe = played.find(frame => frame.responseId === "ulaw-regression");
+  assert.ok(playedProbe, "Worker must report the played probe frame");
+  assert.equal(playedProbe.direction, "egress");
+  assert.equal(playedProbe.providerItemId, "ulaw-item-regression", "Provider item ID must survive the worker round trip");
   await provider.cancelResponse();
   await media.stop();
   await provider.close();

@@ -37,7 +37,7 @@ assert.equal(externalGroup.length, 2);
 const externalDirection = detectLiveCallDirection(externalGroup, '200');
 assert.equal(externalDirection.direction, 'incoming');
 
-const raw = { active: true, linkedid: '1784215731.76', displayNumber: '74994907209', direction: 'incoming' };
+const raw: {active:boolean;linkedid?:string;displayNumber?:string;direction?:string;displayName?:string} = { active: true, linkedid: '1784215731.76', displayNumber: '74994907209', direction: 'incoming' };
 assert.deepEqual(preserveLiveCallCandidate(raw, { active: false }), raw);
 assert.deepEqual(preserveLiveCallCandidate(raw, null), raw);
 assert.equal(preserveLiveCallCandidate(raw, { active: true, displayName: 'Клиент' }).displayNumber, '74994907209');
@@ -51,7 +51,7 @@ const corrected = synchronizeIncomingCallerIdentity({
   displayNumber: '79788101210',
   displayName: 'Тукалова София',
   callerDisplayName: 'Случайный участник группы',
-  callerCompany: 'Старая компания',
+  callerCompany: 'Старая компания', callerPosition: '',
   did: '79885090300',
   trunkNumber: '79885090300'
 }, number => ({

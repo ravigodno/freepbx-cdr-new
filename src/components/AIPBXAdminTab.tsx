@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { getServerNow } from '../utils/serverClock';
+import { OPENAI_DEFAULT_TEXT_MODEL, OPENAI_TEXT_MODELS } from '../../shared/openAiModelCatalog.js';
 import { 
   Bot, Send, Sparkles, Terminal, BookOpen, Clock, Settings, FileText, 
   CheckCircle2, AlertTriangle, Play, RefreshCw, Plus, Trash2, HelpCircle, 
@@ -1646,7 +1647,7 @@ ${answersSummary}
                     const prov = e.target.value;
                     setAiProvider(prov);
                     if (prov === 'gemini') setAiModel('gemini-3.5-flash');
-                    else if (prov === 'openai') setAiModel('gpt-4o-mini');
+                    else if (prov === 'openai') setAiModel(OPENAI_DEFAULT_TEXT_MODEL);
                     else if (prov === 'anthropic') setAiModel('claude-3-5-haiku');
                     else if (prov === 'deepseek') setAiModel('deepseek-chat');
                   }}
@@ -1674,8 +1675,9 @@ ${answersSummary}
                   )}
                   {aiProvider === 'openai' && (
                     <>
-                      <option value="gpt-4o-mini">GPT-4o Mini (быстрая, экономичная)</option>
-                      <option value="gpt-4o">GPT-4o (высокая точность)</option>
+                      {OPENAI_TEXT_MODELS.map((modelId) => (
+                        <option key={modelId} value={modelId}>{modelId}</option>
+                      ))}
                     </>
                   )}
                   {aiProvider === 'anthropic' && (

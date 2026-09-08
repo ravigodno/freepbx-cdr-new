@@ -332,6 +332,11 @@ const vad = new VadDetector(500, 2, 40),
 assert.equal(vad.process(silence).type, "silence");
 vad.process(speech);
 assert.equal(vad.process(speech).type, "speech_started");
+
+const boundedVad=new VadDetector(700,1,300,60);
+assert.equal(boundedVad.process(speech,20).type,"speech_started");
+assert.equal(boundedVad.process(speech,20).type,"speech_continued");
+assert.equal(boundedVad.process(speech,20).type,"speech_ended");
 assert.equal(vad.state(), "speech");
 assert.equal(vad.process(silence).type, "silence");
 assert.equal(vad.state(), "speech");

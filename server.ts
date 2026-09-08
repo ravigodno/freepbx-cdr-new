@@ -34,6 +34,7 @@ import https from 'https';
 import { CallEntry, MissedCallStatus, AppSettings, DashboardStats, UserRole, WebUser } from './src/types.js';
 import{validateDirectoryPhone as validateSharedDirectoryPhone}from'./shared/directoryImportValidation.js';
 import { resolveCdrCallerExtension } from './shared/cdrCallerExtension.js';
+import { selectAiVoiceCallerLeg, selectAiVoiceEvaluationLeg } from './shared/cdrAiVoice.js';
 import { resolveMissedCallCallbackSlaMinutes } from './shared/missedCallCallbackSla.js';
 import { resolveClickToCallContext } from './server/clickToCallContext.js';
 import { resolveClickToCallOriginChannel, type ClickToCallChannelTechnology } from './server/clickToCallOrigin.js';
@@ -2075,6 +2076,26 @@ const normalizeInboundCallerForDisplay = (c: any): any => {
   }
 
   return c;
+};
+
+const collapseAiVoiceMediaGroup = (group: any[]): any | null => {
+  const evaluationLeg = selectAiVoiceEvaluationLeg(group);
+  const callerLeg = evaluationLeg || selectAiVoiceCallerLeg(group);
+  if (!callerLeg) return null;
+
+  // MixMonitor may put recordingfile on a sibling CDR row rather than on the
+  // row selected for the friendly caller/destination shown in the registry.
+  const recordingLeg = group.find(c => String(c?.recordingfile || '').trim());
+  const duration = Math.max(...group.map(c => Number(c?.duration || 0)), 0);
+  const billsec = Math.max(...group.map(c => Number(c?.billsec || 0)), 0);
+
+  return {
+    ...normalizeClickToCallForDisplay(normalizeInboundCallerForDisplay(callerLeg)),
+    callerExtension: evaluationLeg ? '998' : resolveCdrCallerExtension(group),
+    duration,
+    billsec,
+    recordingfile: String(recordingLeg?.recordingfile || callerLeg.recordingfile || '')
+  };
 };
 
 
@@ -7551,7 +7572,7 @@ async function buildSettingsApiRuntimeDecision(localDb: Record<string, unknown> 
 async function getSettingsForApiResponse(localDb: LocalDb): Promise<{ settings: Record<string, unknown>; decision: SettingsApiRuntimeDecision }> {
   const decision = await buildSettingsApiRuntimeDecision(localDb);
   return {
-    settings: decision.switched && decision.settings ? decision.settings : (localDb.settings || {}),
+    settings: decision.switched && decision.settings ? decision.settings : { ...localDb.settings },
     decision
   };
 }
@@ -7673,7 +7694,7 @@ async function readSettingsRuntimeAuditEvents(limit = 50): Promise<SettingsRunti
     );
 
     return (rows as any[]).map((row) => ({
-      event_type: String(row.event_type || ''),
+      event_type: SETTINGS_RUNTIME_AUDIT_EVENT_TYPES.find(type => type === row.event_type)!,
       created_at: String(row.created_at || '')
     }));
   } catch (error: any) {
@@ -10823,7 +10844,7 @@ app.post('/api/auth/login', async (req, res) => {
 
     const localDb = await readLocalDb();
     const legacyAuth = authenticateLegacyUser(localDb, String(username), String(password));
-    if (legacyAuth.ok) {
+    if (legacyAuth.ok === true) {
       console.warn(`[AUTH] SQL login fallback to legacy username=${legacyAuth.user.username} reason=${sqlFailureReason}`);
       await writeAuthRuntimeEvent({
         event_type: 'auth_sql_fallback_to_legacy',
@@ -10848,7 +10869,7 @@ app.post('/api/auth/login', async (req, res) => {
 
   const localDb = await readLocalDb();
   const legacyAuth = authenticateLegacyUser(localDb, String(username), String(password));
-  if (!legacyAuth.ok) {
+  if (legacyAuth.ok === false) {
     logLegacyAuthFailure(safeUsername, legacyAuth.reason);
     res.status(401).json({ error: 'Неверные имя пользователя или пароль' });
     return;
@@ -11357,7 +11378,7 @@ app.get('/api/browser-extension/download', requireAuth(), (req, res) => {
 // Settings endpoint
 app.get('/api/settings', requireAuth(), async (req, res) => {
   const localDb = await readLocalDb();
-  let runtimeSettings: Record<string, unknown> = localDb.settings || {};
+  let runtimeSettings: Record<string, unknown> = { ...localDb.settings };
 
   try {
     const runtime = await getSettingsForApiResponse(localDb);
@@ -13237,7 +13258,7 @@ app.post('/api/directory/bulk-delete/preview', requireAuth(), async (req, res) =
       })),
       confirmationPhrase: scope === 'all' ? 'ОЧИСТИТЬ СПРАВОЧНИК' : 'УДАЛИТЬ',
       expiresAt: preview.expiresAt,
-      storageSource: runtime.source || 'legacy',
+      storageSource: runtime.effectiveSource,
       liveChanges: false
     });
   } catch (error: any) {
@@ -16277,6 +16298,8 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
         const logicalCall = aggregateAiHandoffLogicalCall(group, handoff);
         if (logicalCall) return logicalCall as CallEntry;
       }
+      const aiVoiceCall = collapseAiVoiceMediaGroup(group);
+      if (aiVoiceCall) return aiVoiceCall as CallEntry;
       if (group.length === 1) {
         const normalized = normalizeClickToCallForDisplay(normalizeInboundCallerForDisplay(group[0]));
         return { ...normalized, callerExtension: resolveCdrCallerExtension(group) };
@@ -16372,6 +16395,8 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
         const logicalCall = aggregateAiHandoffLogicalCall(group, handoff);
         if (logicalCall) return logicalCall as CallEntry;
       }
+      const aiVoiceCall = collapseAiVoiceMediaGroup(group);
+      if (aiVoiceCall) return aiVoiceCall as CallEntry;
       if (group.length === 1) return normalizeClickToCallForDisplay(normalizeInboundCallerForDisplay(group[0]));
       const sorted = [...group].map(c => normalizeClickToCallForDisplay(c)).sort((a, b) => new Date(a.calldate).getTime() - new Date(b.calldate).getTime());
       const answered = sorted.find(c => (c.disposition || "").toUpperCase() === "ANSWERED" && Number(c.billsec || 0) > 0);
@@ -16821,6 +16846,8 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
     });
 
     calls = Array.from(statsLinkedGroups.values()).map(group => {
+      const aiVoiceCall = collapseAiVoiceMediaGroup(group);
+      if (aiVoiceCall) return aiVoiceCall as CallEntry;
       if (group.length === 1) return normalizeClickToCallForDisplay(normalizeInboundCallerForDisplay(group[0]));
       const sorted = [...group].map(c => normalizeClickToCallForDisplay(c)).sort((a, b) => new Date(a.calldate).getTime() - new Date(b.calldate).getTime());
       const answered = sorted.find(c => (c.disposition || "").toUpperCase() === "ANSWERED" && Number(c.billsec || 0) > 0);
@@ -17142,6 +17169,8 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
     });
 
     calls = Array.from(statsLinkedGroups.values()).map(group => {
+      const aiVoiceCall = collapseAiVoiceMediaGroup(group);
+      if (aiVoiceCall) return aiVoiceCall as CallEntry;
       if (group.length === 1) return normalizeClickToCallForDisplay(normalizeInboundCallerForDisplay(group[0]));
       const sorted = [...group].map(c => normalizeClickToCallForDisplay(c)).sort((a, b) => new Date(a.calldate).getTime() - new Date(b.calldate).getTime());
       const answered = sorted.find(c => (c.disposition || "").toUpperCase() === "ANSWERED" && Number(c.billsec || 0) > 0);
@@ -18141,7 +18170,7 @@ app.get('/api/health-report', requireAuth(), requirePermission('view_health'), a
     const asteriskVersion = await runAsteriskCliCommand('core show version', 5000);
 
     services.unshift({
-      name: 'asterisk',
+      name: 'asterisk', installed: true,
       active: asteriskVersion.success ? 'active' : 'inactive',
       enabled: 'fwconsole/asterisk-cli',
       ok: Boolean(asteriskVersion.success)
@@ -21982,7 +22011,7 @@ async function getRealVoIPDevices(settings: AppSettings, warnings?: string[]): P
     let pjsipRes = await runAsteriskCliCommand('pjsip show contacts');
     if (pjsipRes.timedOut && pjsipRes.warning) warnings?.push(pjsipRes.warning);
     if (!pjsipRes.success || !pjsipRes.message) {
-      pjsipRes = await runAMICommand(settings, 'pjsip show contacts');
+      pjsipRes = { ...pjsipRes, ...await runAMICommand(settings, 'pjsip show contacts') };
     }
     if (pjsipRes.success && pjsipRes.message) {
       const pjsipMap = parsePjsipContacts(pjsipRes.message);
@@ -22035,7 +22064,7 @@ async function getRealVoIPDevices(settings: AppSettings, warnings?: string[]): P
       warnings?.push('Команда sip show peers недоступна; используется PJSIP-only режим.');
     }
     if (!sipRes.success || !sipRes.message) {
-      sipRes = await runAMICommand(settings, 'sip show peers');
+      sipRes = { ...sipRes, ...await runAMICommand(settings, 'sip show peers') };
     }
     if (sipRes.success && sipRes.message) {
       const sipMap = parseSipPeers(sipRes.message);
@@ -23363,7 +23392,8 @@ const aiPbxReadServices = createPBXReadServices({
   },
   readDirectory: async context => {
     const localDb = await readLocalDb();
-    const authUser = (localDb.users || []).find((item: any) => String(item.username || item.id) === String(context.actorId || '')) || { username: context.actorId, role: 'admin' };
+    const authUser = (localDb.users || []).find((item: any) => String(item.username || item.id) === String(context.actorId || ''));
+    if (!authUser) return []; // Unknown/service identities never inherit admin directory access.
     return (await getDirectoryRuntimeSnapshot({ legacyDirectory: localDb.directory || [], settings: localDb.settings, authUser, dbUser: authUser })).contacts;
   },
   readAuthoritativeExtensions: async () => {

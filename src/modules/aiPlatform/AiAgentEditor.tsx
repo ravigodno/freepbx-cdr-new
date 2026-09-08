@@ -1,32 +1,509 @@
-import React,{useEffect,useMemo,useState}from'react';
-import{ArrowLeft,Check,ChevronLeft,ChevronRight,Phone,TestTube2}from'lucide-react';
-import AiExtensionPanel from'./AiExtensionPanel';
-import SkillBuilderPanel from'./SkillBuilderPanel';
-import AgentKnowledgeTrainingPage from'./AgentKnowledgeTrainingPage';
-import VoiceSettingsPanel from'./VoiceSettingsPanel';
-import LiveVoiceTestPanel from'./LiveVoiceTestPanel';
-import AgentIntegrationActionsPanel from'./AgentIntegrationActionsPanel';
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  ArrowLeft,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Phone,
+  TestTube2,
+} from "lucide-react";
+import AiExtensionPanel from "./AiExtensionPanel";
+import SkillBuilderPanel from "./SkillBuilderPanel";
+import AgentKnowledgeTrainingPage from "./AgentKnowledgeTrainingPage";
+import VoiceSettingsPanel from "./VoiceSettingsPanel";
+import LiveVoiceTestPanel from "./LiveVoiceTestPanel";
+import AgentIntegrationActionsPanel from "./AgentIntegrationActionsPanel";
 
-type Props={token:string;agentId:number;expertMode:boolean;permissions:any};
-const steps=['Основное','Телефония','Навыки и знания','Голос','Тестирование','Публикация'];
-const initialStep=()=>{const value=new URLSearchParams(location.search).get('step');return value==='test'?5:location.pathname.endsWith('/voice')?4:location.pathname.endsWith('/knowledge')?3:1};
+type Props = {
+  token: string;
+  agentId: number;
+  expertMode: boolean;
+  permissions: any;
+};
+const steps = [
+  "Основное",
+  "Телефония",
+  "Навыки и знания",
+  "Голос",
+  "Тестирование",
+  "Публикация",
+];
+const initialStep = () => {
+  const value = new URLSearchParams(location.search).get("step");
+  return value === "test"
+    ? 5
+    : location.pathname.endsWith("/voice")
+      ? 4
+      : location.pathname.endsWith("/knowledge")
+        ? 3
+        : 1;
+};
 
-export default function AiAgentEditor({token,agentId,expertMode,permissions:p}:Props){
- const headers=useMemo(()=>({Authorization:`Bearer ${token}`}),[token]),[step,setStep]=useState(initialStep),[agent,setAgent]=useState<any>(null),[dirty,setDirty]=useState(false);
- useEffect(()=>{void fetch('/api/ai-platform/voice-agents',{headers}).then(r=>r.json()).then(v=>setAgent((v.rows||[]).find((x:any)=>Number(x.id)===agentId)||null))},[agentId,headers]);
- const extension=String(agent?.telephony||'').split(',')[0]?.split(':')[0]||'—';
- return <section className="mx-auto max-w-[1120px] pb-20"><div className="mb-4 flex items-center gap-3"><a href="/ai-platform/agents" className="rounded-lg border p-2" aria-label="Назад"><ArrowLeft className="h-4 w-4"/></a><div><h1 className="text-2xl font-black">{agent?.name||'AI-сотрудник'}</h1><p className="text-sm text-slate-500">Настройка AI-сотрудника · номер {extension}</p></div></div>
-  <ol className="mb-5 grid grid-cols-2 gap-2 md:grid-cols-6">{steps.map((name,index)=><li key={name}><button onClick={()=>setStep(index+1)} className={`w-full rounded-xl px-2 py-2 text-xs font-bold ${step===index+1?'bg-blue-600 text-white':'border bg-white text-slate-600'}`}><span className="mr-1 opacity-70">{index+1}.</span>{name}</button></li>)}</ol>
-  <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
-   {step===1&&<div className="space-y-4"><header><h2 className="text-lg font-black">Основное</h2><p className="text-sm text-slate-500">Как AI-сотрудник представляется и общается.</p></header><div className="grid gap-4 md:grid-cols-2"><label className="text-sm font-bold">Имя<input defaultValue={agent?.name||''} onChange={()=>setDirty(true)} className="mt-1 w-full rounded-lg border p-2.5 font-normal"/></label><label className="text-sm font-bold">Роль<input defaultValue={agent?.agent_type||''} onChange={()=>setDirty(true)} className="mt-1 w-full rounded-lg border p-2.5 font-normal"/></label><label className="text-sm font-bold md:col-span-2">Краткое описание<textarea rows={3} onChange={()=>setDirty(true)} className="mt-1 w-full rounded-lg border p-2.5 font-normal" placeholder="Чем помогает этот AI-сотрудник"/></label><label className="text-sm font-bold">Язык<select className="mt-1 w-full rounded-lg border p-2.5 font-normal"><option>Русский</option></select></label><label className="text-sm font-bold">Стиль общения<select className="mt-1 w-full rounded-lg border p-2.5 font-normal"><option>Спокойный и доброжелательный</option></select></label><label className="text-sm font-bold md:col-span-2">Приветствие<input onChange={()=>setDirty(true)} className="mt-1 w-full rounded-lg border p-2.5 font-normal" placeholder="Здравствуйте. Чем могу помочь?"/></label></div>{expertMode&&<details className="rounded-xl border p-3"><summary className="cursor-pointer font-bold">Расширенный system prompt</summary><textarea rows={8} className="mt-3 w-full rounded-lg border p-3 font-mono text-xs"/></details>}</div>}
-   {step===2&&<div className="space-y-4"><header><h2 className="text-lg font-black">Телефония</h2><p className="text-sm text-slate-500">Внутренний номер и передача живому сотруднику.</p></header><div className="flex flex-wrap items-center gap-2 rounded-xl bg-blue-50 p-3 text-sm"><span className="font-black">Входящий маршрут / IVR</span><span>→</span><span className="rounded bg-white px-2 py-1 font-bold">{agent?.name||'AI Receptionist'} · {extension}</span><span>→</span><span className="rounded bg-white px-2 py-1 font-bold">{agent?.handoff_destination||'сотрудник'}</span></div><p className="text-sm text-slate-500">Виртуальный внутренний номер. SIP-регистрация не требуется.</p><AiExtensionPanel token={token} agentId={agentId} canView={p.canViewAiExtensions} canCreate={p.canCreateAiExtensions} canUpdate={p.canUpdateAiExtensions} canApply={p.canPublishAiExtensions} canViewHandoff={p.canViewHandoff} canConfigureHandoff={p.canConfigureHandoff} canPublishHandoff={p.canPublishHandoff} expertMode={expertMode}/></div>}
-   {step===3&&<div className="space-y-5"><header><h2 className="text-lg font-black">Навыки и знания</h2><p className="text-sm text-slate-500">Что AI умеет делать и какие данные использует.</p></header><SkillBuilderPanel token={token} agentId={agentId} enabled canManage={p.canEdit}/><AgentKnowledgeTrainingPage token={token} agentId={agentId} enabled canViewKnowledge={p.canViewKnowledge} canViewTraining={p.canViewTraining}/><AgentIntegrationActionsPanel token={token} agentId={agentId} canManage={Boolean(p.canEditIntegrations??p.canEdit)} expertMode={expertMode}/></div>}
-   {step===4&&<div className="space-y-4"><header><h2 className="text-lg font-black">Голос</h2><p className="text-sm text-slate-500">Выберите голос и проверьте произношение.</p></header><div className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Качество произношения зависит от голосовой модели и языка.</div><VoiceSettingsPanel token={token} agentId={agentId} canManage={p.canManageVoiceSettings} expertMode={expertMode}/></div>}
-   {step===5&&<div className="space-y-4"><header><h2 className="text-lg font-black">Тестирование</h2><p className="text-sm text-slate-500">Проверьте разговор перед публикацией.</p></header><button className="flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-3 font-bold text-white"><TestTube2 className="h-5 w-5"/>Начать тестовый звонок</button><div className="grid gap-2 text-sm sm:grid-cols-2">{['AI ответил','Понял запрос','Выполнил действие','Перевёл сотруднику','Корректно завершил звонок'].map(x=><div key={x} className="flex items-center gap-2 rounded-lg bg-slate-50 p-3"><span className="h-4 w-4 rounded border bg-white"/>{x}</div>)}</div>{expertMode&&<LiveVoiceTestPanel token={token} canView={p.canViewLive} canConfigure={p.canConfigureLive} canEnable={p.canEnableLive} canCheck={p.canCheckLive}/>}</div>}
-   {step===6&&<div className="space-y-4"><header><h2 className="text-lg font-black">Публикация</h2><p className="text-sm text-slate-500">Проверьте итоговые настройки перед применением.</p></header><div className="grid gap-3 sm:grid-cols-2"><Summary title="Опубликованная версия" value={String(agent?.version_number||'—')}/><Summary title="Внутренний номер" value={extension}/><Summary title="Голос" value={agent?.publishedVoice||agent?.voice||'—'}/><Summary title="Передача сотруднику" value={agent?.handoff_destination||'Не настроено'}/><Summary title="Навыки" value={`${Number(agent?.skill_count||0)} подключено`}/></div><div className="rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm">Перед live-операциями будет показано итоговое подтверждение: проверка → preview → публикация → применение к номеру → verification.</div><button disabled={!p.canPublishAgents} className="rounded-xl bg-blue-600 px-5 py-3 font-bold text-white disabled:opacity-40" onClick={()=>window.confirm('Подготовить безопасный preview публикации? Live-операции потребуют отдельного подтверждения.')}>Опубликовать изменения</button></div>}
-  </div>
-  <div className="mt-4 flex justify-between"><button disabled={step===1} onClick={()=>setStep(x=>x-1)} className="flex items-center gap-1 rounded-lg border px-3 py-2 text-sm font-bold disabled:opacity-30"><ChevronLeft className="h-4 w-4"/>Назад</button>{step<6&&<button onClick={()=>setStep(x=>x+1)} className="flex items-center gap-1 rounded-lg bg-blue-600 px-3 py-2 text-sm font-bold text-white">Далее<ChevronRight className="h-4 w-4"/></button>}</div>
-  {dirty&&<div className="fixed inset-x-0 bottom-0 z-40 border-t bg-white/95 p-3 shadow-lg backdrop-blur"><div className="mx-auto flex max-w-[1120px] items-center justify-between gap-3"><span className="text-sm font-bold">Есть несохранённые изменения</span><button className="flex items-center gap-1 rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white"><Check className="h-4 w-4"/>Сохранить черновик</button></div></div>}
- </section>
+export default function AiAgentEditor({
+  token,
+  agentId,
+  expertMode,
+  permissions: p,
+}: Props) {
+  const headers = useMemo(
+      () => ({
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      }),
+      [token],
+    ),
+    [step, setStep] = useState(initialStep),
+    [agent, setAgent] = useState<any>(null),
+    [configuration, setConfiguration] = useState<any>(null),
+    [agentName, setAgentName] = useState(""),
+    [systemPrompt, setSystemPrompt] = useState(""),
+    [dirty, setDirty] = useState(false),
+    [savingGeneral, setSavingGeneral] = useState(false),
+    [publishing, setPublishing] = useState(false),
+    [generalMessage, setGeneralMessage] = useState("");
+  useEffect(() => {
+    void Promise.all([
+      fetch("/api/ai-platform/voice-agents", { headers }).then((r) => r.json()),
+      fetch(`/api/ai-platform/agents/${agentId}/configuration`, {
+        headers,
+      }).then(async (r) => {
+        const value = await r.json();
+        if (!r.ok)
+          throw new Error(value.error || "Не удалось загрузить настройки");
+        return value;
+      }),
+    ])
+      .then(([agents, value]) => {
+        setAgent(
+          (agents.rows || []).find((x: any) => Number(x.id) === agentId) ||
+            null,
+        );
+        setConfiguration(value.data);
+        setAgentName(String(value.data?.name || ""));
+        setSystemPrompt(String(value.data?.system_prompt || ""));
+        setDirty(false);
+      })
+      .catch((error) => setGeneralMessage(error.message));
+  }, [agentId, headers]);
+  const saveGeneral = async () => {
+    if (!configuration || savingGeneral) return;
+    setSavingGeneral(true);
+    setGeneralMessage("");
+    try {
+      const nameResponse = await fetch(`/api/ai-platform/agents/${agentId}`, {
+          method: "PUT",
+          headers,
+          body: JSON.stringify({ name: agentName }),
+        }),
+        nameValue = await nameResponse.json();
+      if (!nameResponse.ok)
+        throw new Error(nameValue.error || "Не удалось сохранить имя");
+      const response = await fetch(
+          `/api/ai-platform/agents/${agentId}/versions`,
+          {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              config: configuration.config || {},
+              systemPrompt,
+              changeReason: "Основные настройки и system prompt",
+            }),
+          },
+        ),
+        value = await response.json();
+      if (!response.ok)
+        throw new Error(value.error || "Не удалось сохранить черновик");
+      setConfiguration((current: any) => ({
+        ...current,
+        version_id: value.data.id,
+        version_number: value.data.version,
+        lifecycle_status: "draft",
+        system_prompt: systemPrompt,
+      }));
+      setAgent((current: any) => ({ ...current, name: nameValue.data.name }));
+      setDirty(false);
+      setGeneralMessage(
+        `Черновик версии ${value.data.version} сохранён. Опубликованная версия не изменена.`,
+      );
+    } catch (error: any) {
+      setGeneralMessage(error.message);
+    } finally {
+      setSavingGeneral(false);
+    }
+  };
+  const extension =
+    String(agent?.telephony || "")
+      .split(",")[0]
+      ?.split(":")[0] || "—";
+  const promptVariables:any[] = Array.isArray(configuration?.config?.promptVariables) ? configuration.config.promptVariables : [];
+  const setPromptVariables = (items:any[]) => {
+    setConfiguration((current:any)=>({...current,config:{...(current?.config||{}),promptVariables:items}}));
+    setDirty(true);
+  };
+  const promptPreview = systemPrompt.replace(/\{\{\s*([a-z][a-z0-9_]*)\s*\}\}/gi,(source,key)=>String(promptVariables.find(item=>String(item.key).toLowerCase()===String(key).toLowerCase())?.value||source));
+  const publishChanges = async () => {
+    const versionId = Number(configuration?.version_id || 0);
+    if (!versionId || configuration?.lifecycle_status !== "draft") {
+      setGeneralMessage("Нет сохранённого черновика для публикации.");
+      return;
+    }
+    if (!window.confirm(`Опубликовать версию ${configuration.version_number}? Маршрут номера будет синхронизирован с выбранным провайдером и голосом.`)) return;
+    setPublishing(true);
+    setGeneralMessage("");
+    try {
+      const response = await fetch(`/api/ai-platform/agents/${agentId}/versions/${versionId}/publish`, { method: "POST", headers, body: "{}" }),
+        value = await response.json();
+      if (!response.ok) throw new Error(value.error || "Не удалось опубликовать версию");
+      setConfiguration((current: any) => ({ ...current, lifecycle_status: "published" }));
+      setAgent((current: any) => ({ ...current, version_number: configuration.version_number }));
+      setGeneralMessage(`Версия ${configuration.version_number} опубликована. Провайдер и голос номера синхронизированы.`);
+    } catch (error: any) {
+      setGeneralMessage(error.message);
+    } finally {
+      setPublishing(false);
+    }
+  };
+  return (
+    <section className="mx-auto max-w-[1120px] pb-20">
+      <div className="mb-4 flex items-center gap-3">
+        <a
+          href="/ai-platform/agents"
+          className="rounded-lg border p-2"
+          aria-label="Назад"
+        >
+          <ArrowLeft className="h-4 w-4" />
+        </a>
+        <div>
+          <h1 className="text-2xl font-black">
+            {agent?.name || "AI-сотрудник"}
+          </h1>
+          <p className="text-sm text-slate-500">
+            Настройка AI-сотрудника · номер {extension}
+          </p>
+        </div>
+      </div>
+      <ol className="mb-5 grid grid-cols-2 gap-2 md:grid-cols-6">
+        {steps.map((name, index) => (
+          <li key={name}>
+            <button
+              onClick={() => setStep(index + 1)}
+              className={`w-full rounded-xl px-2 py-2 text-xs font-bold ${step === index + 1 ? "bg-blue-600 text-white" : "border bg-white text-slate-600"}`}
+            >
+              <span className="mr-1 opacity-70">{index + 1}.</span>
+              {name}
+            </button>
+          </li>
+        ))}
+      </ol>
+      <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
+        {step === 1 && (
+          <div className="space-y-4">
+            <header>
+              <h2 className="text-lg font-black">Основное</h2>
+              <p className="text-sm text-slate-500">
+                Как AI-сотрудник представляется и общается.
+              </p>
+            </header>
+            <div className="grid gap-4 md:grid-cols-2">
+              <label className="text-sm font-bold">
+                Имя
+                <input
+                  value={agentName}
+                  onChange={(event) => {
+                    setAgentName(event.target.value);
+                    setDirty(true);
+                  }}
+                  className="mt-1 w-full rounded-lg border p-2.5 font-normal"
+                />
+              </label>
+              <label className="text-sm font-bold">
+                Роль
+                <input
+                  defaultValue={agent?.agent_type || ""}
+                  onChange={() => setDirty(true)}
+                  className="mt-1 w-full rounded-lg border p-2.5 font-normal"
+                />
+              </label>
+              <label className="text-sm font-bold md:col-span-2">
+                Краткое описание
+                <textarea
+                  rows={3}
+                  onChange={() => setDirty(true)}
+                  className="mt-1 w-full rounded-lg border p-2.5 font-normal"
+                  placeholder="Чем помогает этот AI-сотрудник"
+                />
+              </label>
+              <label className="text-sm font-bold">
+                Язык
+                <select className="mt-1 w-full rounded-lg border p-2.5 font-normal">
+                  <option>Русский</option>
+                </select>
+              </label>
+              <label className="text-sm font-bold">
+                Стиль общения
+                <select className="mt-1 w-full rounded-lg border p-2.5 font-normal">
+                  <option>Спокойный и доброжелательный</option>
+                </select>
+              </label>
+              <label className="text-sm font-bold md:col-span-2">
+                Приветствие
+                <input
+                  onChange={() => setDirty(true)}
+                  className="mt-1 w-full rounded-lg border p-2.5 font-normal"
+                  placeholder="Здравствуйте. Чем могу помочь?"
+                />
+              </label>
+            </div>
+            {expertMode && (
+              <details className="rounded-xl border p-3">
+                <summary className="cursor-pointer font-bold">
+                  Расширенный system prompt
+                </summary>
+                <textarea
+                  rows={8}
+                  value={systemPrompt}
+                  onChange={(event) => {
+                    setSystemPrompt(event.target.value);
+                    setDirty(true);
+                  }}
+                  className="mt-3 w-full rounded-lg border p-3 font-mono text-xs"
+                />
+              </details>
+            )}
+            <details className="rounded-xl border p-3">
+              <summary className="cursor-pointer font-bold">Переменные промпта</summary>
+              <p className="mt-2 text-xs text-slate-500">Используйте в тексте вид <code>{'{{company_name}}'}</code>. Значения попадут в разговор только после публикации версии.</p>
+              <div className="mt-3 space-y-2">
+                {promptVariables.map((item,index)=><div key={index} className="grid gap-2 md:grid-cols-[180px_1fr_44px]">
+                  <input value={item.key||''} placeholder="company_name" onChange={e=>setPromptVariables(promptVariables.map((row,i)=>i===index?{...row,key:e.target.value.toLowerCase().replace(/[^a-z0-9_]/g,'')}:row))} className="rounded-lg border p-2 font-mono text-xs" />
+                  <input value={item.value||''} placeholder="Название компании" onChange={e=>setPromptVariables(promptVariables.map((row,i)=>i===index?{...row,value:e.target.value}:row))} className="rounded-lg border p-2 text-sm" />
+                  <button type="button" aria-label="Удалить переменную" onClick={()=>setPromptVariables(promptVariables.filter((_,i)=>i!==index))} className="rounded-lg border text-rose-600">×</button>
+                </div>)}
+                <button type="button" disabled={promptVariables.length>=50} onClick={()=>setPromptVariables([...promptVariables,{key:'',value:'',description:''}])} className="rounded-lg border px-3 py-2 text-sm font-bold disabled:opacity-40">+ Добавить переменную</button>
+              </div>
+              {systemPrompt.includes('{{')&&<div className="mt-3 rounded-lg bg-slate-50 p-3"><div className="text-xs font-bold text-slate-500">Предпросмотр после подстановки</div><pre className="mt-1 whitespace-pre-wrap text-xs">{promptPreview}</pre></div>}
+            </details>
+            {generalMessage && (
+              <div className="rounded-lg bg-slate-100 p-3 text-sm">
+                {generalMessage}
+              </div>
+            )}
+          </div>
+        )}
+        {step === 2 && (
+          <div className="space-y-4">
+            <header>
+              <h2 className="text-lg font-black">Телефония</h2>
+              <p className="text-sm text-slate-500">
+                Внутренний номер и передача живому сотруднику.
+              </p>
+            </header>
+            <div className="flex flex-wrap items-center gap-2 rounded-xl bg-blue-50 p-3 text-sm">
+              <span className="font-black">Входящий маршрут / IVR</span>
+              <span>→</span>
+              <span className="rounded bg-white px-2 py-1 font-bold">
+                {agent?.name || "AI Receptionist"} · {extension}
+              </span>
+              <span>→</span>
+              <span className="rounded bg-white px-2 py-1 font-bold">
+                {agent?.handoff_destination || "сотрудник"}
+              </span>
+            </div>
+            <p className="text-sm text-slate-500">
+              Виртуальный внутренний номер. SIP-регистрация не требуется.
+            </p>
+            <AiExtensionPanel
+              token={token}
+              agentId={agentId}
+              canView={p.canViewAiExtensions}
+              canCreate={p.canCreateAiExtensions}
+              canUpdate={p.canUpdateAiExtensions}
+              canApply={p.canPublishAiExtensions}
+              canViewHandoff={p.canViewHandoff}
+              canConfigureHandoff={p.canConfigureHandoff}
+              canPublishHandoff={p.canPublishHandoff}
+              expertMode={expertMode}
+            />
+          </div>
+        )}
+        {step === 3 && (
+          <div className="space-y-5">
+            <header>
+              <h2 className="text-lg font-black">Навыки и знания</h2>
+              <p className="text-sm text-slate-500">
+                Что AI умеет делать и какие данные использует.
+              </p>
+            </header>
+            <SkillBuilderPanel
+              token={token}
+              agentId={agentId}
+              enabled
+              canManage={p.canEdit}
+            />
+            <AgentKnowledgeTrainingPage
+              token={token}
+              agentId={agentId}
+              enabled
+              canViewKnowledge={p.canViewKnowledge}
+              canViewTraining={p.canViewTraining}
+              canManageKnowledge={p.canManageKnowledge}
+              canPublishKnowledge={p.canPublishKnowledge}
+            />
+            <AgentIntegrationActionsPanel
+              token={token}
+              agentId={agentId}
+              canManage={Boolean(p.canEditIntegrations ?? p.canEdit)}
+              expertMode={expertMode}
+            />
+          </div>
+        )}
+        {step === 4 && (
+          <div className="space-y-4">
+            <header>
+              <h2 className="text-lg font-black">Голос</h2>
+              <p className="text-sm text-slate-500">
+                Выберите голос и проверьте произношение.
+              </p>
+            </header>
+            <div className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
+              Качество произношения зависит от голосовой модели и языка.
+            </div>
+            <VoiceSettingsPanel
+              token={token}
+              agentId={agentId}
+              canManage={p.canManageVoiceSettings}
+              expertMode={expertMode}
+              canManageRuntimePrompts={['su','admin'].includes(String(p.session?.role||'').toLowerCase())}
+            />
+          </div>
+        )}
+        {step === 5 && (
+          <div className="space-y-4">
+            <header>
+              <h2 className="text-lg font-black">Тестирование</h2>
+              <p className="text-sm text-slate-500">
+                Проверьте разговор перед публикацией.
+              </p>
+            </header>
+            <button className="flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-3 font-bold text-white">
+              <TestTube2 className="h-5 w-5" />
+              Начать тестовый звонок
+            </button>
+            <div className="grid gap-2 text-sm sm:grid-cols-2">
+              {[
+                "AI ответил",
+                "Понял запрос",
+                "Выполнил действие",
+                "Перевёл сотруднику",
+                "Корректно завершил звонок",
+              ].map((x) => (
+                <div
+                  key={x}
+                  className="flex items-center gap-2 rounded-lg bg-slate-50 p-3"
+                >
+                  <span className="h-4 w-4 rounded border bg-white" />
+                  {x}
+                </div>
+              ))}
+            </div>
+            {expertMode && (
+              <LiveVoiceTestPanel
+                token={token}
+                canView={p.canViewLive}
+                canConfigure={p.canConfigureLive}
+                canEnable={p.canEnableLive}
+                canCheck={p.canCheckLive}
+              />
+            )}
+          </div>
+        )}
+        {step === 6 && (
+          <div className="space-y-4">
+            <header>
+              <h2 className="text-lg font-black">Публикация</h2>
+              <p className="text-sm text-slate-500">
+                Проверьте итоговые настройки перед применением.
+              </p>
+            </header>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Summary
+                title="Опубликованная версия"
+                value={String(agent?.version_number || "—")}
+              />
+              <Summary title="Внутренний номер" value={extension} />
+              <Summary
+                title="Голос"
+                value={agent?.publishedVoice || agent?.voice || "—"}
+              />
+              <Summary
+                title="Передача сотруднику"
+                value={agent?.handoff_destination || "Не настроено"}
+              />
+              <Summary
+                title="Навыки"
+                value={`${Number(agent?.skill_count || 0)} подключено`}
+              />
+            </div>
+            <div className="rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm">
+              Перед live-операциями будет показано итоговое подтверждение:
+              проверка → preview → публикация → применение к номеру →
+              verification.
+            </div>
+            <button
+              disabled={!p.canPublishAgents || publishing || configuration?.lifecycle_status !== "draft"}
+              className="rounded-xl bg-blue-600 px-5 py-3 font-bold text-white disabled:opacity-40"
+              onClick={() => void publishChanges()}
+            >
+              {publishing ? "Публикация…" : configuration?.lifecycle_status === "draft" ? "Опубликовать изменения" : "Нет изменений для публикации"}
+            </button>
+            {generalMessage && <p className="text-sm text-slate-600">{generalMessage}</p>}
+          </div>
+        )}
+      </div>
+      <div className="mt-4 flex justify-between">
+        <button
+          disabled={step === 1}
+          onClick={() => setStep((x) => x - 1)}
+          className="flex items-center gap-1 rounded-lg border px-3 py-2 text-sm font-bold disabled:opacity-30"
+        >
+          <ChevronLeft className="h-4 w-4" />
+          Назад
+        </button>
+        {step < 6 && (
+          <button
+            onClick={() => setStep((x) => x + 1)}
+            className="flex items-center gap-1 rounded-lg bg-blue-600 px-3 py-2 text-sm font-bold text-white"
+          >
+            Далее
+            <ChevronRight className="h-4 w-4" />
+          </button>
+        )}
+      </div>
+      {dirty && (
+        <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-white/95 p-3 shadow-lg backdrop-blur">
+          <div className="mx-auto flex max-w-[1120px] items-center justify-between gap-3">
+            <span className="text-sm font-bold">
+              Есть несохранённые изменения
+            </span>
+            <button
+              disabled={!p.canEdit || savingGeneral || !configuration || agentName.trim().length < 2}
+              onClick={() => void saveGeneral()}
+              className="flex items-center gap-1 rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-40"
+            >
+              <Check className="h-4 w-4" />
+              {savingGeneral ? "Сохранение…" : "Сохранить черновик"}
+            </button>
+          </div>
+        </div>
+      )}
+    </section>
+  );
 }
-function Summary({title,value}:{title:string;value:string}){return <div className="rounded-xl bg-slate-50 p-3"><div className="text-xs text-slate-500">{title}</div><div className="font-black">{value}</div></div>}
+function Summary({ title, value }: { title: string; value: string }) {
+  return (
+    <div className="rounded-xl bg-slate-50 p-3">
+      <div className="text-xs text-slate-500">{title}</div>
+      <div className="font-black">{value}</div>
+    </div>
+  );
+}

@@ -52,7 +52,7 @@ export default function SecurityTab({ token, hasPermission }: Props) {
     try {
       let url = endpoint;
       if (tab === 'events') {
-        const params = new URLSearchParams(Object.entries(eventFilters).filter(([, value]) => value));
+        const params = new URLSearchParams(Object.entries(eventFilters).filter(([, value]) => value).map(([key,value]) => [key,String(value)]));
         url += `?${params}`;
       }
       if (tab === 'ports') {

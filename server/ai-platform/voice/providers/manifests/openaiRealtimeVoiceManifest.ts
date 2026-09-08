@@ -1,3 +1,5 @@
+import { OPENAI_REALTIME_MODELS } from "../../../../../shared/openAiModelCatalog.js";
+
 export const OPENAI_REALTIME_VOICE_MANIFEST_VERSION = "2026-07-24";
 
 const formats = [
@@ -13,7 +15,7 @@ export const OPENAI_REALTIME_VOICE_MANIFEST = [
   voiceId,
   displayName: voiceId.charAt(0).toUpperCase() + voiceId.slice(1),
   description: `OpenAI Realtime voice ${voiceId}`,
-  modelCompatibility: ["gpt-realtime-2.1"],
+  modelCompatibility: [...OPENAI_REALTIME_MODELS],
   supportedOutputFormats: formats.map(({ codec }) => codec),
   supportedSampleRates: [...new Set(formats.map(({ sampleRate }) => sampleRate))],
   previewAvailable: true,

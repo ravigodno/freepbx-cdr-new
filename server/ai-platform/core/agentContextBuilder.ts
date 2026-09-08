@@ -1,6 +1,7 @@
 import { AiPlatformError } from './errors.js';
-import { parseJsonObject, redactAiPlatformValue } from './redaction.js';
+import { parseJsonObject, redactAiPlatformValue, redactAiPlatformPrompt } from './redaction.js';
 import type { AiPlatformStore } from '../storage/aiPlatformStore.js';
+import { renderAgentPromptVariables } from '../agents/agentPromptVariables.js';
 const json=(value:unknown,field:string)=>parseJsonObject(value||{},field);
 export class AgentContextBuilder {
   constructor(private readonly store:AiPlatformStore){}
@@ -13,6 +14,8 @@ export class AgentContextBuilder {
     const training=await this.store.query("SELECT id,version_number,checksum,status,published_at FROM ai_training_versions WHERE agent_id=? AND tenant_id=? AND status='published' ORDER BY version_number DESC LIMIT 1",[version.agent_id,tenantId]);
     const tools=await this.store.query(`SELECT t.id,t.tool_key,t.version,t.description,t.risk_level,at.enabled FROM ai_agent_tools at JOIN ai_tools t ON t.id=at.tool_id WHERE at.agent_version_id=? AND at.tenant_id=? AND t.risk_level='read'`,[agentVersionId,tenantId]);
     const behaviorView=behavior?{id:behavior.id,profile_key:behavior.profile_key,name:behavior.name,language:behavior.language,responseStyle:json(behavior.response_style_json,'response_style_json'),emotionModel:json(behavior.emotion_model_json,'emotion_model_json'),voiceBehavior:json(behavior.voice_behavior_json,'voice_behavior_json'),conversationRules:json(behavior.conversation_rules_json,'conversation_rules_json'),transferPolicy:json(behavior.transfer_policy_json,'transfer_policy_json'),safetyPolicy:json(behavior.safety_policy_json,'safety_policy_json'),personalitySchemaVersion:Number(behavior.personality_schema_version||1),personality:json(behavior.personality_profile_json||'{}','personality_profile_json')}:null;
-    return redactAiPlatformValue({agent:{id:Number(version.agent_id),key:version.agent_key,name:version.name,type:version.agent_type,status:version.agent_status,systemPrompt:String(version.system_prompt||''),version:{id:Number(version.id),number:Number(version.version_number),status:version.lifecycle_status,config}},behavior:behaviorView,knowledge,training:training[0]||null,tools}).value;
+    const safe:any=redactAiPlatformValue({agent:{id:Number(version.agent_id),key:version.agent_key,name:version.name,type:version.agent_type,status:version.agent_status,systemPrompt:renderAgentPromptVariables(version.system_prompt,config.promptVariables),version:{id:Number(version.id),number:Number(version.version_number),status:version.lifecycle_status,config}},behavior:behaviorView,knowledge,training:training[0]||null,tools}).value;
+    safe.agent.systemPrompt=redactAiPlatformPrompt(renderAgentPromptVariables(version.system_prompt,config.promptVariables));
+    return safe;
   }
 }

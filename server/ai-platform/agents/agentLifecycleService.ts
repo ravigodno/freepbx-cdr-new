@@ -65,6 +65,9 @@ export class AgentLifecycleService {
     const digest=checksum(config,String(row.system_prompt||''));
     await this.store.query(`UPDATE ai_agent_versions SET lifecycle_status='published',checksum=?,published_at=NOW() WHERE id=? AND lifecycle_status='draft'`,[digest,versionId]);
     await this.store.query(`UPDATE ai_agents SET current_version_id=?,status='active',updated_at=NOW() WHERE id=? AND tenant_id=?`,[versionId,agentId,tenantId]);
+    const voiceProfile:any=config.voiceProfile||{},provider=String(voiceProfile.provider||'openai_realtime'),voice=String(voiceProfile.voiceId||(provider==='yandex_speechkit'?'marina':'marin'));
+    await this.store.query(`UPDATE ai_extensions SET published_agent_version_id=?,provider=?,sync_status=IF(enabled=1,'pending','previewed'),updated_at=NOW() WHERE tenant_id=? AND agent_id=? AND status<>'archived'`,[versionId,provider,tenantId,agentId]);
+    await this.store.query(`UPDATE ai_voice_route_bindings SET agent_version_id=?,provider_key=?,voice_key=?,updated_at=NOW() WHERE tenant_id=? AND agent_id=?`,[versionId,provider,voice,tenantId,agentId]);
     await this.audit.append({tenantId,...actor,eventType:'agent_version_published',entityType:'agent_version',entityId:String(versionId),decision:'published',details:{agentId,checksum:digest,versionId,voiceId:String((config.voiceProfile as any)?.voiceId||'')}});
     return {id:versionId,status:'published',checksum:digest};
   }

@@ -7,8 +7,12 @@ export class HumanHandoffCoordinator{
  readonly sessionRef:string;constructor(ref:string){this.sessionRef=crypto.createHash("sha256").update(ref).digest("hex").slice(0,16)}
  request(input:{trigger:HumanHandoffTrigger;confirmationRequired:boolean}){this.requestCount++;if(this.state!=="idle")return{accepted:false,duplicate:true};this.trigger=input.trigger;this.state="offered";if(input.confirmationRequired)this.state="awaiting_confirmation";else this.state="confirmed";return{accepted:true,needsConfirmation:input.confirmationRequired}}
  confirmation(text:string){if(this.state!=="awaiting_confirmation"){this.duplicateConfirmationCount++;return"ignored" as const}this.confirmationCount++;if(yes.test(text.trim())){this.state="confirmed";return"confirmed" as const}if(no.test(text.trim())){this.state="declined";return"declined" as const}this.clarificationCount++;return"ambiguous" as const}
+ // New task runtime supplies a server-verified semantic decision; transport
+ // transitions remain here. Legacy callers retain confirmation(text).
+ confirmFromDecision(decision:'granted'|'denied'|'unknown'){if(this.state!=="awaiting_confirmation")return"ignored" as const;this.confirmationCount++;if(decision==='granted'){this.state='confirmed';return'confirmed' as const}if(decision==='denied'){this.state='declined';return'declined' as const}this.clarificationCount++;return'ambiguous' as const}
  cancel(){if(["offered","awaiting_confirmation","confirmed"].includes(this.state)){this.state="cancelled";return true}return false}
  announcementRequested(){if(this.state!=="confirmed"||this.announcementResponseId)return false;this.state="announcement_generating";return true}
+ transferImmediately(){if(this.state!=="confirmed"||this.transferRequestCount)return false;this.transferRequestCount++;this.state="transferring";return true}
  bindAnnouncement(id?:string){if(this.state!=="announcement_generating"||!id||this.announcementResponseId)return false;this.announcementResponseId=id;return true}
  playoutStarted(id?:string){if(this.state==="announcement_generating"&&id===this.announcementResponseId){this.state="announcement_playing";return true}return false}
  playoutCompleted(id?:string){if(["announcement_generating","announcement_playing"].includes(this.state)&&Boolean(id)&&id===this.announcementResponseId){this.state="transfer_requested";return true}return false}

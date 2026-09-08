@@ -32,7 +32,8 @@ export function resolveCdrCallerExtension(rows: any[]): string {
   for (const row of ordered) {
     const explicit = String(row?.callerExtension ?? '').trim();
     if (explicit) return explicit;
-    if (!String(row?.dcontext ?? '').toLowerCase().startsWith('from-internal')) continue;
+    const context = String(row?.dcontext ?? '').toLowerCase();
+    if (!context.startsWith('from-internal') && context !== 'pbxpuls-ai') continue;
     if (isInternalCandidate(row?.src)) return digits(row.src);
     if (isInternalCandidate(row?.cnum)) return digits(row.cnum);
     const channelExtension = extensionFromChannel(row?.channel);

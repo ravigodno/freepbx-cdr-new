@@ -107,7 +107,7 @@ const outgoingWithFreePbxTrunkDialContext = detectLiveCallDirection([
 assert.deepEqual(outgoingWithFreePbxTrunkDialContext,{direction:'outgoing',internalCaller:'11',destinationNumber:'79788101210',trunkNumber:'79885090300'});
 
 const outgoingRinging={active:true,linkedid:'1787809616.176',scenario:'outgoing',direction:'outgoing',operatorExt:'11',callerNumber:'11',internalCaller:'11',sourceNumber:'11',destinationNumber:'79788101210',dialedNumber:'79788101210',targetNumber:'79788101210',displayNumber:'79788101210',number:'79788101210'};
-const answeredTechnical={active:true,linkedid:'1787809616.176',scenario:'internal',direction:'internal',operatorExt:'11',callerNumber:'300',internalCaller:'300',sourceNumber:'300',destinationNumber:'11',targetNumber:'11',displayNumber:'11',number:'11',connected:true};
+const answeredTechnical={dialedNumber:'',active:true,linkedid:'1787809616.176',scenario:'internal',direction:'internal',operatorExt:'11',callerNumber:'300',internalCaller:'300',sourceNumber:'300',destinationNumber:'11',targetNumber:'11',displayNumber:'11',number:'11',connected:true};
 const stableAnswered=stabilizeLiveCallBannerPayload(outgoingRinging,answeredTechnical);
 assert.equal(stableAnswered.direction,'outgoing');
 assert.equal(stableAnswered.callerNumber,'11');

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { getServerNow } from '../utils/serverClock';
+import { OPENAI_TEXT_MODELS } from '../../shared/openAiModelCatalog.js';
 import { 
   Bot, Plus, Search, Trash2, Play, Check, Copy, Settings, Layers, Clock, 
   Activity, Edit3, X, ChevronRight, HelpCircle, AlertCircle, Sparkles, User, 
@@ -1698,7 +1699,9 @@ export default function AiAssistantTab({ session, hasPermission }: AiAssistantTa
                         className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none font-mono"
                       >
                         <option value="gemini-2.5-flash">gemini-2.5-flash</option>
-                        <option value="gpt-4o-mini">gpt-4o-mini</option>
+                        {OPENAI_TEXT_MODELS.map((modelId) => (
+                          <option key={modelId} value={modelId}>{modelId}</option>
+                        ))}
                         <option value="llama-3-8b">llama-3-8b-instruct</option>
                       </select>
                     </div>
