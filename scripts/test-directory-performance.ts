@@ -142,7 +142,7 @@ async function main() {
   assert.equal(getDirectoryPerformanceCacheStats().lookupGeneration, generationBefore + 1);
 
   const bulk = await timed(30, () => bulkLookupDirectoryPhonesSql(samplePhones, internalAccess, 100));
-  assert.equal(bulk.value.sqlQueryCount, 1);
+  assert.equal(bulk.value.sqlQueryCount, 2); // Contacts plus batched phone metadata.
   assert.equal(bulk.value.requested, 100);
 
   const explain = await queryPBXPulsDb(

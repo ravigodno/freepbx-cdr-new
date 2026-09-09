@@ -601,12 +601,54 @@ export async function bulkLookupDirectoryPhonesSql(rawPhones: unknown[], access:
     `SELECT ${compactFields} FROM directory_contacts c WHERE ${accessSql} AND c.phone_normalized IN (${allVariants.map(() => '?').join(',')})`,
     params
   );
-  const byStoredPhone = new Map(rows.map(row => [String(row.phone_normalized || ''), rowToContact(row)]));
-  const matches: Record<string, CompactContact> = {};
-  for (const canonical of requested) {
-    const variants = normalizeDirectoryLookupPhone(canonical).variants;
-    const contact = variants.map(value => byStoredPhone.get(value)).find(Boolean);
-    if (contact) matches[canonical] = contact;
+  let sqlQueryCount = 1;
+  const candidates = new Map(rows.map(row => [String(row.id), row]));
+  const primaryKeys = new Set(rows.map(row => normalizeDirectoryLookupPhone(row.phone_normalized).canonical));
+  const missing = requested.filter(phone => !primaryKeys.has(phone));
+  if (missing.length) {
+    // Candidate search only: punctuation is allowed within a number, but digits
+    // cannot be skipped. Exact canonical comparison below rejects partial hits.
+    const patterns = Array.from(new Set(missing.flatMap(phone => normalizeDirectoryLookupPhone(phone).variants)))
+      .map(phone => phone.split('').join('[[:space:][:punct:]]*'));
+    const pattern = '(^|[^0-9])(' + patterns.join('|') + ')([^0-9]|$)';
+    const secondaryParams: any[] = [];
+    const secondaryAccess = accessClause(access, secondaryParams);
+    const secondaryRows = await queryPBXPulsDb(
+      `SELECT ${compactFields} FROM directory_contacts c WHERE ${secondaryAccess}
+       AND (c.phone2 REGEXP ? OR EXISTS (
+         SELECT 1 FROM directory_contact_metadata m WHERE m.contact_id=c.id
+         AND m.metadata_key IN ('phones','internalExtension','linkedExternalNumber')
+         AND COALESCE(m.metadata_json,m.metadata_value,m.value,'') REGEXP ?)) ORDER BY c.id`,
+      [...secondaryParams, pattern, pattern]
+    );
+    sqlQueryCount++;
+    for (const row of secondaryRows) candidates.set(String(row.id), row);
   }
-  return { matches, lookupMs: elapsed(started), requested: requested.length, matched: Object.keys(matches).length, sqlQueryCount: 1 };
+  const metadata = new Map<string, Record<string, any>>();
+  const ids = Array.from(candidates.keys());
+  for (let offset = 0; offset < ids.length; offset += 1000) {
+    const batch = ids.slice(offset, offset + 1000);
+    const data = await queryPBXPulsDb(
+      `SELECT contact_id,metadata_key,metadata_value,metadata_json,value FROM directory_contact_metadata
+       WHERE contact_id IN (${batch.map(() => '?').join(',')})
+       AND metadata_key IN ('phones','internalExtension','linkedExternalNumber')`, batch
+    );
+    sqlQueryCount++;
+    for (const [id, values] of parseMetadata(data)) metadata.set(id, values);
+  }
+  const contacts = Array.from(candidates.values())
+    .sort((a, b) => String(a.id).localeCompare(String(b.id)))
+    .map(row => rowToContact(row, metadata.get(String(row.id)) || {}));
+  const matches: Record<string, CompactContact> = {};
+  // Main numbers take precedence over additional numbers shared by contacts.
+  for (const primary of [true, false]) {
+    for (const contact of contacts) {
+      const phones = primary ? [contact.number] : [...contact.phones, contact.internalExtension, contact.linkedExternalNumber];
+      for (const phone of phones) {
+        const canonical = normalizeDirectoryLookupPhone(phone).canonical;
+        if (requested.includes(canonical) && !matches[canonical]) matches[canonical] = contact;
+      }
+    }
+  }
+  return { matches, lookupMs: elapsed(started), requested: requested.length, matched: Object.keys(matches).length, sqlQueryCount };
 }

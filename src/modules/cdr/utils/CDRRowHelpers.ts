@@ -80,6 +80,8 @@ export function getDirectoryPhones(entry: any): string[] {
 
   push(entry?.number);
   push(entry?.phone);
+  push(entry?.phone2);
+  push(entry?.linkedExternalNumber);
   push(entry?.phones);
   push(entry?.phoneNumbers);
   push(entry?.mobile);
@@ -304,7 +306,7 @@ export function buildCdrRowViewModel(call: any, directory: any[], relatedLegs: a
   const displayedDst = getCalleeNumber() || call.dst || 'Неизвестно';
 
   const callerExtensionMatch = callerExtension
-    ? directory.find(e => directoryEntryMatchesNumber(e, callerExtension))
+    ? (call.callerDirectoryContact || directory.find(e => directoryEntryMatchesNumber(e, callerExtension)))
     : null;
   const dMatch = callerExtension
     ? callerExtensionMatch

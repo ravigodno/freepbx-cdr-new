@@ -105,6 +105,7 @@ import {
   listDirectoryContactsForSyncSql,
   listDirectoryContactsSql,
   lookupDirectoryPhoneSql,
+  normalizeDirectoryLookupPhone,
   normalizeDirectorySearchText,
   normalizeDirectorySearchTokens,
   type DirectoryAccessContext
@@ -3602,8 +3603,15 @@ const findDirectoryContactByNumber = (directory: any[], num: any): any | null =>
 };
 
 const enrichCallsWithDirectoryBulk = async (calls: any[], localDb: any, req: Request): Promise<{ lookupMs: number; sqlQueryCount: number }> => {
-  const phones = Array.from(new Set((calls || []).flatMap(call => [call?.src, call?.dst]).map(value => String(value || '').trim()).filter(Boolean)));
-  const result = await bulkLookupDirectoryPhonesSql(phones, getDirectorySqlAccessContext(localDb, req, true), 2000);
+  const phones = Array.from(new Set((calls || []).flatMap(call => [call?.src, call?.dst, call?.callerExtension, call?.externalCallerNumber]).map(value => String(value || '').trim()).filter(Boolean)));
+  const result = { matches: {} as Record<string, any>, matched: 0, lookupMs: 0, sqlQueryCount: 0 };
+  for (let offset = 0; offset < phones.length; offset += 500) {
+    const batch = await bulkLookupDirectoryPhonesSql(phones.slice(offset, offset + 500), getDirectorySqlAccessContext(localDb, req, true), 500);
+    Object.assign(result.matches, batch.matches);
+    result.matched += batch.matched;
+    result.lookupMs += batch.lookupMs;
+    result.sqlQueryCount += batch.sqlQueryCount;
+  }
   const legacyMode = await getDirectoryStorageMode() !== 'sql';
   const authUser = (req as any).user;
   const dbUser = getAuthenticatedDbUser(localDb, req);
@@ -3613,15 +3621,14 @@ const enrichCallsWithDirectoryBulk = async (calls: any[], localDb: any, req: Req
         .map((entry: any) => normalizeDirectoryEntry(entry, localDb.settings))
     : [];
   for (const call of calls || []) {
-    const srcKey = onlyDigits(call.src);
-    const dstKey = onlyDigits(call.dst);
-    const srcCanonical = srcKey.length >= 10 ? `7${srcKey.slice(-10)}` : srcKey;
-    const dstCanonical = dstKey.length >= 10 ? `7${dstKey.slice(-10)}` : dstKey;
-    const srcContact = result.matches[srcCanonical] || findDirectoryContactByNumber(visibleLegacyDirectory, call.src);
-    const dstContact = result.matches[dstCanonical] || findDirectoryContactByNumber(visibleLegacyDirectory, call.dst);
+    const findContact = (phone: any) => result.matches[normalizeDirectoryLookupPhone(phone).canonical]
+      || findDirectoryContactByNumber(visibleLegacyDirectory, phone);
+    const srcContact = findContact(isIncoming(call) && call.externalCallerNumber ? call.externalCallerNumber : call.src);
+    const dstContact = findContact(call.dst);
     call.srcDirectoryContact = srcContact;
     call.dstDirectoryContact = dstContact;
-    const resolved = srcContact || dstContact;
+    call.callerDirectoryContact = call.callerExtension ? findContact(call.callerExtension) : null;
+    const resolved = call.callerDirectoryContact || srcContact || dstContact;
     if (resolved) {
       call.resolvedName = resolved.name;
       call.resolvedType = resolved.type;
@@ -3634,7 +3641,7 @@ const enrichCallsWithDirectoryBulk = async (calls: any[], localDb: any, req: Req
 const getEnrichedDirectoryContacts = (calls: any[]): any[] => Array.from(
   new Map(
     (calls || [])
-      .flatMap(call => [call?.srcDirectoryContact, call?.dstDirectoryContact])
+      .flatMap(call => [call?.srcDirectoryContact, call?.dstDirectoryContact, call?.callerDirectoryContact])
       .filter(Boolean)
       .map(contact => [String(contact.id || ''), contact])
   ).values()
