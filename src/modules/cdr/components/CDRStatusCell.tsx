@@ -10,6 +10,8 @@ interface CDRStatusCellProps {
   isMissed: boolean;
   callDisp: string;
   processed?: boolean;
+  isProcessed?: boolean;
+  isLostCall?: boolean;
   wasCallbacked?: boolean;
   wasKpiResolved?: boolean;
   callbackTime?: string;
@@ -22,6 +24,8 @@ export function CDRStatusCell({
   isMissed,
   callDisp,
   processed,
+  isProcessed,
+  isLostCall,
   wasCallbacked,
   wasKpiResolved,
   callbackTime,
@@ -29,13 +33,13 @@ export function CDRStatusCell({
   logicalStatus,
   onShowProcessingEvent,
 }: CDRStatusCellProps) {
-  const isLostBadge = isMissed && callbackStatus === 'not_called_back';
+  const isLostBadge = isMissed && (isLostCall ?? (callbackStatus === 'not_called_back'));
   const hasProcessedCallbackStatus = callbackStatus === 'processed'
     || callbackStatus === 'called_back'
     || callbackStatus === 'repeated_inbound'
     || callbackStatus === 'processed_in_sla'
     || callbackStatus === 'processed_late';
-  const showProcessedBadge = isMissed && (hasProcessedCallbackStatus || processed || wasCallbacked);
+  const showProcessedBadge = isMissed && (isProcessed ?? (hasProcessedCallbackStatus || processed || wasCallbacked));
   const processedInSla = callbackStatus === 'processed_in_sla' || wasKpiResolved === true;
 
   const handoffLabels: Record<string, string> = {
@@ -82,7 +86,7 @@ export function CDRStatusCell({
   ) : (
     <span className="inline-flex items-center gap-1.5 bg-amber-50/40 dark:bg-amber-950/10 text-amber-500 dark:text-amber-400 border border-amber-250/30 dark:border-amber-800/40 px-2.5 py-1 rounded-lg text-[11px] font-bold">
       <AlertTriangle className="h-3.5 w-3.5" />
-      Пропущен
+      {isMissed ? 'Пропущен' : callDisp === 'BUSY' ? 'Занято' : callDisp === 'FAILED' ? 'Ошибка вызова' : callDisp === 'NO ANSWER' ? 'Нет ответа' : 'Не определён'}
     </span>
   );
 

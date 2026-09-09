@@ -104,6 +104,19 @@ assert.equal(outboundRow.displayedDst, externalCaller);
 const internalRow = buildCdrRowViewModel({ src: '201', cnum: '201', dst: '200', dcontext: 'from-internal', disposition: 'ANSWERED' }, []);
 assert.equal(internalRow.displayedSrc, '201');
 assert.equal(internalRow.displayedDst, '200');
+assert.equal(internalRow.isOutgoing, false);
+assert.equal(outboundRow.isOutgoing, true);
+for (const extension of ['11', '12', '15']) {
+  const outbound = { src: '74950000000', cnum: extension, callerExtension: extension,
+    dst: '+74951111111', channel: `PJSIP/${extension}-00000001`,
+    dcontext: 'from-internal', disposition: 'ANSWERED' };
+  assert.equal(buildCdrRowViewModel(outbound, []).isOutgoing, true);
+  assert.equal(buildCdrRowViewModel({ ...outbound, registryOutboundEvidence: true }, []).isOutgoing, true);
+  assert.equal(buildCdrRowViewModel({ ...outbound, registryOutboundEvidence: false }, []).isOutgoing, false);
+  assert.equal(buildCdrRowViewModel({ ...outbound, callerExtension: '', dcontext: 'from-internal-xfer' }, []).isOutgoing, true);
+}
+assert.equal(buildCdrRowViewModel({ src: '74950000000', dst: '15', dcontext: 'from-trunk',
+  channel: 'PJSIP/trunk-00000001', disposition: 'ANSWERED', registryOutboundEvidence: true }, []).isOutgoing, false);
 
 const trunkCallerId = '74994907209';
 const cleanInstallOutboundLeg = {
@@ -656,3 +669,26 @@ assert.equal(outgoingCelDirection.internalCaller, '200');
 assert.equal(outgoingCelDirection.destinationNumber, outboundDestination);
 
 console.log('Inbound caller resolver fixtures passed');
+
+// Registry direction comes from the same server rules as KPI filters, including
+// calls whose displayed CallerID and destination hide the original call leg.
+for (const registryDirection of ['incoming', 'outgoing', 'internal', 'unknown']) {
+  for (const disposition of ['ANSWERED', 'NO ANSWER', 'BUSY', 'FAILED']) {
+    const row = buildCdrRowViewModel({ src: '74950000000', dst: '15', dcontext: 'from-trunk', registryDirection, disposition }, []);
+    assert.equal(row.isIncoming, registryDirection === 'incoming');
+    assert.equal(row.isOutgoing, registryDirection === 'outgoing');
+    assert.equal(row.isMissed, registryDirection === 'incoming' && disposition !== 'ANSWERED');
+    assert.equal(row.registryIconKind, row.isMissed ? 'missed' : registryDirection);
+  }
+}
+for (const [flags, expected] of [
+  [{ callbackStatus: 'pending_callback', isProcessed: false, isLostCall: false }, 'missed'],
+  [{ callbackStatus: 'processed_in_sla', isProcessed: true, isLostCall: false }, 'processed'],
+  [{ callbackStatus: 'processed_late', isProcessed: true, isLostCall: false }, 'processed'],
+  [{ callbackStatus: 'not_called_back', isProcessed: false, isLostCall: true }, 'lost'],
+  [{ processed: true, wasCallbacked: true, isProcessed: false, isLostCall: false }, 'missed'],
+  [{ callbackStatus: 'not_called_back', isProcessed: true, isLostCall: false }, 'processed'],
+] as const) {
+  assert.equal(buildCdrRowViewModel({ registryDirection: 'incoming', disposition: 'NO ANSWER', ...flags }, []).registryIconKind, expected);
+}
+console.log('Registry direction and status matrix passed');

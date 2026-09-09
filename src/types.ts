@@ -77,6 +77,7 @@ export interface CallEntry {
   callbackDeadlineExpired?: boolean;
   isPendingCallback?: boolean;
   isLostCall?: boolean;
+  registryDirection?: 'incoming' | 'outgoing' | 'internal' | 'unknown';
 
   // Transfer tracking
   blindTransfer?: boolean;

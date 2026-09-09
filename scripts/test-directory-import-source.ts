@@ -119,7 +119,7 @@ for (const marker of [
 assert.equal((app.match(/<h2 className="flex items-center gap-2 break-words text-lg font-black text-slate-900">[\s\S]*?Импорт контактов[\s\S]*?<\/h2>/g) || []).length, 1);
 assert.equal((app.match(/Импорт справочника по ссылке/g) || []).length, 1);
 assert.equal((app.match(/Панель администратора справочника/g) || []).length, 0);
-assert.ok(app.includes('Сервисные операции вынесены из списка контактов.'));
+assert.ok(app.includes('Импорт и экспорт контактов, шаблоны и обслуживание справочника.'));
 for (const marker of ['Описание столбцов CSV и Excel', 'responsibleUserId', 'linkedExternalNumber', 'visibility=shared', 'Пример CSV', 'Скачать пример CSV', 'pbxpuls_directory_import_example.csv', '\\uFEFF']) {
   assert.ok(csvHelp.includes(marker), `missing CSV columns help marker: ${marker}`);
 }

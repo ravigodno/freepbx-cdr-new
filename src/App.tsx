@@ -1023,7 +1023,7 @@ export default function App() {
   const [isSavingDir, setIsSavingDir] = useState(false);
   const [dirSearchQuery, setDirSearchQuery] = useState(() => new URLSearchParams(window.location.search).get('directorySearch') || '');
   const [dirTypeFilter, setDirTypeFilter] = useState<'all' | 'client' | 'supplier' | 'government' | 'internal'>('all');
-  const [dirSpamMode, setDirSpamMode] = useState<'all' | 'exclude_spam' | 'only_spam' | 'only_blacklisted' | 'exclude_blacklisted' | 'only_spam_or_blacklisted' | 'exclude_spam_and_blacklisted'>('exclude_spam');
+  const [dirSpamMode, setDirSpamMode] = useState<'all' | 'exclude_spam' | 'only_spam' | 'only_blacklisted' | 'exclude_blacklisted' | 'only_spam_or_blacklisted' | 'exclude_spam_and_blacklisted'>('exclude_spam_and_blacklisted');
   const [dirVisibilityMode, setDirVisibilityMode] = useState<'all' | 'shared_only' | 'private_only' | 'my_private_only' | 'exclude_private' | 'exclude_shared'>('all');
   const [dirPage, setDirPage] = useState(1);
   const [dirPageSize, setDirPageSize] = useState(DIRECTORY_PAGE_SIZE);
@@ -1095,6 +1095,7 @@ export default function App() {
   const [contactFilePreviewSummary, setContactFilePreviewSummary] = useState<ContactFilePreviewSummary | null>(null);
 
   // --- ADMIN DIRECTORY IMPORT / EXPORT & NORMALIZATION STATE ---
+  const directoryAdminExcelInputRef = useRef<HTMLInputElement | null>(null);
   const directoryImportFileInputRef = useRef<HTMLInputElement | null>(null);
   const directoryImportDigestRequestRef = useRef(0);
   const directoryOwnershipRequestRef = useRef(0);
@@ -7570,11 +7571,25 @@ export default function App() {
               <div className="flex flex-col gap-2 border-b border-slate-100 pb-4 sm:flex-row sm:items-start sm:justify-between">
                 <div>
                   <h3 className="flex items-center gap-2 text-base font-black text-slate-900"><Sliders className="h-5 w-5 text-blue-600" />Управление справочником</h3>
-                  <p className="mt-1 max-w-3xl text-xs leading-relaxed text-slate-500">Сервисные операции вынесены из списка контактов. Импорт выполняется в соответствующих вкладках выше.</p>
+                  <p className="mt-1 max-w-3xl text-xs leading-relaxed text-slate-500">Импорт и экспорт контактов, шаблоны и обслуживание справочника.</p>
                 </div>
                 <span className="w-fit rounded-full bg-blue-100 px-2.5 py-1 text-[10px] font-black uppercase tracking-wide text-blue-700">Администратор</span>
               </div>
               <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                {canOpenCompanyDirectoryImport() && <>
+                  <input ref={directoryAdminExcelInputRef} type="file" accept=".xlsx,.xls,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="hidden" onChange={event => {
+                    const file = event.target.files?.[0];
+                    event.target.value = '';
+                    if (!file) return;
+                    openDirectoryImportPage();
+                    setDirectoryImportSourceKind('file');
+                    handleDirectoryImportFile(file);
+                  }} />
+                  <button type="button" onClick={() => directoryAdminExcelInputRef.current?.click()} disabled={isImporting} className="flex min-h-24 flex-col items-start justify-between rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-left transition hover:bg-emerald-100 disabled:opacity-50">
+                    <Upload className="h-5 w-5 text-emerald-700" />
+                    <span><span className="block text-sm font-black text-slate-900">Импорт из Excel</span><span className="mt-1 block text-[11px] text-slate-500">XLSX и XLS с проверкой перед импортом</span></span>
+                  </button>
+                </>}
                 <button type="button" onClick={handleDownloadTemplate} className="flex min-h-24 flex-col items-start justify-between rounded-xl border border-blue-200 bg-blue-50 p-4 text-left transition hover:bg-blue-100">
                   <Download className="h-5 w-5 text-blue-600" />
                   <span><span className="block text-sm font-black text-slate-900">Скачать шаблон</span><span className="mt-1 block text-[11px] text-slate-500">CSV Excel для корпоративного импорта</span></span>

@@ -1,7 +1,8 @@
 import { CheckCircle, ExternalLink, Phone, PhoneIncoming, PhoneMissed, PhoneOutgoing, XCircle } from 'lucide-react';
 
-export type RegistryIconKind = 'incoming' | 'outgoing' | 'internal' | 'missed' | 'processed' | 'lost' | 'site-form';
+export type RegistryIconKind = 'incoming' | 'outgoing' | 'internal' | 'missed' | 'processed' | 'lost' | 'site-form' | 'unknown';
 const icons = {
+  unknown: [Phone, 'text-slate-400', 'Направление не определено'],
   incoming: [PhoneIncoming, 'text-cyan-500', 'Входящий'],
   outgoing: [PhoneOutgoing, 'text-indigo-500', 'Исходящий'],
   internal: [Phone, 'text-purple-500', 'Внутренний'],

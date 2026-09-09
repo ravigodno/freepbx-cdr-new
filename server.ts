@@ -1992,7 +1992,11 @@ const getCallerInternalExt = (c: any): string => {
   if (isInternalExt(c.cnum)) return onlyDigits(c.cnum);
 
   const fromChannel = getChannelInternalExt(c.channel);
-  if (fromChannel) return fromChannel;
+  // Local channels in incoming routes represent delivery to an extension,
+  // not the employee who initiated the call (e.g. Local/15@from-internal).
+  const localDelivery = /^Local\//i.test(String(c.channel || ''))
+    && (hasInboundTrunkSignal(c) || isIncomingRouteContext(c));
+  if (fromChannel && !localDelivery) return fromChannel;
 
   const fromClid = String(c.clid || '').match(/<([0-9]{2,5})>/);
   if (fromClid && isInternalExt(fromClid[1])) return fromClid[1];
@@ -16675,7 +16679,10 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
       }
     } catch(error:any){if(!String(error?.message||'').includes("doesn't exist"))console.warn('[SITE_FORMS] registry leads skipped:',sanitizePBXPulsDbError(error))}
     res.json({
-      calls: paginatedCalls,
+      calls: paginatedCalls.map(call => ({
+        ...call,
+        registryDirection: isIncoming(call) ? 'incoming' : isOutgoing(call) ? 'outgoing' : isInternal(call) ? 'internal' : 'unknown'
+      })),
       siteFormLeads,
       siteFormLeadsTotal,
       siteFormLeadsInSla,

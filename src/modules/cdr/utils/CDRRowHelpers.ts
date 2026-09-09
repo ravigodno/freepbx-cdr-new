@@ -152,7 +152,8 @@ export function buildCdrRowViewModel(call: any, directory: any[], relatedLegs: a
   const dstVal = (call.dst || '').trim();
   const callerExtension = String(call.callerExtension ?? '').trim();
 
-  const isIncoming = (() => {
+  const registryDirection = ['incoming', 'outgoing', 'internal', 'unknown'].includes(call.registryDirection) ? call.registryDirection : undefined;
+  const isIncoming = registryDirection ? registryDirection === 'incoming' : (() => {
     if (callerExtension) return false;
     if (isInternalExt(srcVal)) return false;
 
@@ -187,13 +188,24 @@ export function buildCdrRowViewModel(call: any, directory: any[], relatedLegs: a
 
   const isMissed =
     (callDisp === 'NO ANSWER' || callDisp === 'BUSY' || callDisp === 'FAILED') &&
-    (isIncoming || !call.dstchannel);
+    isIncoming;
 
-  const isOutgoing =
-    dctx === 'from-internal' &&
-    isInternalExt(srcVal) &&
-    !isInternalExt(dstVal) &&
-    dstVal.length >= 7;
+  // The registry API resolves direction across call legs. Outbound CallerID
+  // can replace src, so it must not hide the real internal initiator.
+  const isOutgoing = registryDirection ? registryDirection === 'outgoing' : !isIncoming && (typeof call.registryOutboundEvidence === 'boolean'
+    ? call.registryOutboundEvidence
+    : dctx.toLowerCase().startsWith('from-internal')
+      && Boolean(callerExtension || extractInternalExtFromChannel(ch) || (isInternalExt(srcVal) ? srcVal : ''))
+      && !isInternalExt(dstVal)
+      && dstVal.replace(/\D/g, '').length >= 7);
+
+  const direction = registryDirection || (isIncoming ? 'incoming' : isOutgoing ? 'outgoing'
+    : Boolean(callerExtension || (isInternalExt(srcVal) ? srcVal : '') || extractInternalExtFromChannel(ch))
+      && Boolean(isInternalExt(dstVal) || extractInternalExtFromChannel(call.dstchannel || '')) ? 'internal' : 'unknown');
+  const isProcessed = typeof call.isProcessed === 'boolean' ? call.isProcessed
+    : Boolean(call.processed || call.wasCallbacked || ['processed', 'called_back', 'repeated_inbound', 'processed_in_sla', 'processed_late'].includes(call.callbackStatus));
+  const isLost = typeof call.isLostCall === 'boolean' ? call.isLostCall : call.callbackStatus === 'not_called_back';
+  const registryIconKind = isMissed ? (isLost ? 'lost' : isProcessed ? 'processed' : 'missed') : direction;
 
   const getCallerNumber = () => {
     if (isIncoming) {
@@ -348,6 +360,7 @@ export function buildCdrRowViewModel(call: any, directory: any[], relatedLegs: a
     isIncoming,
     isMissed,
     isOutgoing,
+    registryIconKind,
     displayedSrc,
     displayedDst,
     callerName,

@@ -186,11 +186,7 @@ export default function LegacyCDRTable({
                 uniqueid={call.uniqueid}
                 isIncoming={isIncoming}
                 isOutgoing={isOutgoing}
-                iconKind={isMissed
-                  ? call.callbackStatus === 'not_called_back' ? 'lost'
-                    : call.processed || call.wasCallbacked || ['processed', 'called_back', 'repeated_inbound', 'processed_in_sla', 'processed_late'].includes(call.callbackStatus) ? 'processed'
-                    : 'missed'
-                  : undefined}
+                iconKind={rowVm.registryIconKind}
                 fetchChronology={fetchChronology}
                 dateTimeFormat={cdrDateTimeFormat}
                 showSeconds={cdrShowSeconds}
@@ -231,6 +227,8 @@ export default function LegacyCDRTable({
                 isMissed={isMissed}
                 callDisp={callDisp}
                 processed={call.processed}
+                isProcessed={call.isProcessed}
+                isLostCall={call.isLostCall}
                 wasCallbacked={call.wasCallbacked}
                 wasKpiResolved={call.wasKpiResolved}
                 callbackTime={call.callbackTime}
