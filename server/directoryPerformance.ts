@@ -183,7 +183,7 @@ const parseMetadata = (rows: any[]): Map<string, Record<string, any>> => {
   return result;
 };
 
-const rowToContact = (row: any, metadata: Record<string, any> = {}, includeDetails = false): CompactContact => {
+export const rowToContact = (row: any, metadata: Record<string, any> = {}, includeDetails = false): CompactContact => {
   const extraPhones = Array.isArray(metadata.phones) ? metadata.phones : [];
   const phones = Array.from(new Set([row.phone, row.phone2, ...extraPhones].map(value => text(value, 100)).filter(Boolean)));
   const contact: CompactContact = {
@@ -196,6 +196,8 @@ const rowToContact = (row: any, metadata: Record<string, any> = {}, includeDetai
     email: text(row.email),
     comment: text(row.comment, 10_000),
     position: text(metadata.position),
+    internalExtension: text(metadata.internalExtension, 64),
+    linkedExternalNumber: text(metadata.linkedExternalNumber, 100),
     visibility: row.contact_type === 'personal' || row.visibility === 'private' ? 'private' : 'shared',
     type: text(row.type, 32) || 'client',
     isSpam: Boolean(row.is_spam),

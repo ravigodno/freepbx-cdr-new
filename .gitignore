@@ -11,3 +11,9 @@ data/
 docs/design/
 monitoring-full-audit-report.json
 call-ai-evaluation-report.json
+
+.pbxpuls-runtime
+.pbxpuls-install-state*
+.runtime-result
+.directory-preview
+.bootstrap.log

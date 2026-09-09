@@ -21,7 +21,7 @@ export interface DirectoryRuntimeSnapshot {
   effectiveSource: DirectoryEffectiveSource;
   sqlAvailable: boolean;
   contacts: DirectoryEntry[];
-  writeMode: 'legacy';
+  writeMode: 'legacy' | 'sql';
   fallbackReason?: string;
 }
 
@@ -74,6 +74,7 @@ export async function getDirectoryStorageMode(): Promise<DirectoryStorageMode> {
 
 export async function getDirectoryRuntimeSnapshot(context: DirectoryRuntimeContext = {}): Promise<DirectoryRuntimeSnapshot> {
   const configuredMode = await getDirectoryStorageMode();
+  const writeMode = await getPBXPulsSetting<'legacy'|'sql'>('directory.write_mode','legacy');
   const legacyContacts = Array.isArray(context.legacyDirectory) ? context.legacyDirectory : [];
 
   if (configuredMode !== 'sql') {
@@ -82,7 +83,7 @@ export async function getDirectoryRuntimeSnapshot(context: DirectoryRuntimeConte
       effectiveSource: 'data/db.json',
       sqlAvailable: false,
       contacts: legacyContacts,
-      writeMode: 'legacy'
+      writeMode
     };
   }
 
@@ -94,18 +95,10 @@ export async function getDirectoryRuntimeSnapshot(context: DirectoryRuntimeConte
       effectiveSource: 'pbxpuls_sql',
       sqlAvailable: true,
       contacts,
-      writeMode: 'legacy'
+      writeMode
     };
   } catch (error: any) {
-    console.warn('[PBXPULS_DIRECTORY_RUNTIME] SQL read fallback:', sanitizePBXPulsDbError(error));
-    return {
-      configuredMode,
-      effectiveSource: 'data/db.json',
-      sqlAvailable: false,
-      contacts: legacyContacts,
-      writeMode: 'legacy',
-      fallbackReason: 'sql_read_failed'
-    };
+    throw new Error('Справочник SQL недоступен. Чтение другого хранилища запрещено.');
   }
 }
 
@@ -281,14 +274,8 @@ export async function searchDirectoryInternalExtensions(
         allowExternalDirectoryNumbers
       };
     } catch (error: any) {
-      const fallback = rankLiveTransferTargets(context.legacyDirectory || [], query, excludeExtension, limit, 'data/db.json', allowExternalDirectoryNumbers, favoriteContactIds);
-      return {
-        items: fallback,
-        source: 'data/db.json',
-        directoryAvailable: Array.isArray(context.legacyDirectory) && context.legacyDirectory.length > 0,
-        allowExternalDirectoryNumbers,
-        fallbackReason: sanitizePBXPulsDbError(error)
-      };
+      return {items:[],source:'pbxpuls_sql',directoryAvailable:false,allowExternalDirectoryNumbers,
+        fallbackReason:sanitizePBXPulsDbError(error)};
     }
   }
 

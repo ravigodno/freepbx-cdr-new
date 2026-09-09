@@ -1,3 +1,4 @@
+import { getDirectoryWriteRuntimeDecision } from './pbxpulsDirectoryWriteRouter.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -99,6 +100,7 @@ const normalizeEmail = (value: unknown): string => safeText(value, 255).toLowerC
 const boolValue = (value: unknown): boolean => value === true || ['1', 'true', 'yes', 'да', 'y'].includes(safeText(value, 20).toLowerCase());
 const safeImportErrorMessage = (error: any): string => {
   const code = safeText(error?.code || error?.message || 'IMPORT_FAILED', 64).toUpperCase();
+  if (code === 'DIRECTORY_STORAGE_NOT_READY') return 'Импорт требует SQL для чтения и записи справочника. Администратору: выполните scripts/directory-storage.ts для проверки и восстановления.';
   if (code.includes('CSV_') || code.includes('SOURCE_') || code.includes('PHONE_') || code === 'REQUIRED_FIELDS_MISSING') {
     return 'Структура или данные CSV не прошли проверку.';
   }
@@ -440,7 +442,9 @@ const processJob = async (jobId: string, deps: RegisterDependencies): Promise<vo
     connection = await getConnection();
     let job = await selectJob(connection, jobId);
     if (!job || !['queued', 'failed', 'cancelled'].includes(job.status)) return;
-    await connection.execute(`UPDATE directory_import_jobs SET status='validating',started_at=COALESCE(started_at,?),finished_at=NULL,error_code=NULL,error_row=NULL,error_message=NULL,updated_at=? WHERE id=?`, [nowSql(), nowSql(), jobId]);
+    const storage = await getDirectoryWriteRuntimeDecision('create', 'directory-import');
+      if (!storage.useSql || storage.blocked) throw Object.assign(new Error('Импорт требует согласованных SQL-режимов справочника. Выполните проверку scripts/directory-storage.ts.'), {code:'DIRECTORY_STORAGE_NOT_READY'});
+      await connection.execute(`UPDATE directory_import_jobs SET status='validating',started_at=COALESCE(started_at,?),finished_at=NULL,error_code=NULL,error_row=NULL,error_message=NULL,updated_at=? WHERE id=?`, [nowSql(), nowSql(), jobId]);
     const content = fs.readFileSync(job.source_path, 'utf8');
     if (sha256(content) !== job.source_hash) throw Object.assign(new Error('Import source hash changed'), { code: 'SOURCE_HASH_MISMATCH' });
     const sourceParsed = parseImportRows(content);
@@ -561,6 +565,8 @@ const processJob = async (jobId: string, deps: RegisterDependencies): Promise<vo
       }
     }
     job = (await selectJob(connection, jobId))!;
+    const finalStorage = await getDirectoryWriteRuntimeDecision('create', 'directory-import');
+    if (!finalStorage.useSql || finalStorage.blocked) throw Object.assign(new Error('Directory storage changed during import'), {code:'DIRECTORY_STORAGE_NOT_READY'});
     const finalStatus = job.failed_rows > 0 ? 'completed_with_errors' : 'completed';
     await connection.execute(`UPDATE directory_import_jobs SET status=?,processed_rows=total_rows,current_row=total_rows+1,finished_at=?,updated_at=? WHERE id=?`, [finalStatus, nowSql(), nowSql(), jobId]);
     invalidateDirectoryPerformanceCaches('import_completed');
@@ -633,6 +639,8 @@ export function registerDirectoryImportJobRoutes(app: Express, deps: RegisterDep
   app.post('/api/directory/import-jobs', deps.requireAuth, rawCsv, async (req, res) => {
     if (!(await isAllowed(req, deps, 'import_directory'))) return res.status(403).json({ error: 'Нет прав на массовый импорт' });
     try {
+      const storage = await getDirectoryWriteRuntimeDecision('create', 'directory-import');
+      if (!storage.useSql || storage.blocked) throw Object.assign(new Error('Импорт требует согласованных SQL-режимов справочника. Выполните проверку scripts/directory-storage.ts.'), {code:'DIRECTORY_STORAGE_NOT_READY'});
       const authUser = (req as any).user || {};
       const preparedSource = req.body?.sourceId
         ? getReadyDirectoryImportSource(req.body.sourceId, actorLabel(req), ['su', 'admin'].includes(String(authUser.role || '')))

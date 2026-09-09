@@ -1,3 +1,4 @@
+import { resolveCallAnswerEvidence, historicalMemberStatus } from '../../../../shared/callAnswerEvidence';
 import { buildFollowMeStep } from '../tracers/followMeTracer';
 import { buildAnnouncementStep } from '../tracers/announcementTracer';
 import { buildTimeConditionStep } from '../tracers/timeConditionTracer';
@@ -39,21 +40,23 @@ export function buildCallRouteView(chronologyData: any): RouteView {
     Number(t.billsec || 0) > 0
   );
 
-  const anyAnswered = Boolean(answeredLeg);
+  const evidence = resolveCallAnswerEvidence(timeline, chronologyData?.celEvents || [], steps.filter((s:any)=>['ring_group','queue'].includes(s.type)).map((s:any)=>String(s.number)));
+  const anyAnswered = rawDirection === 'outbound' ? Boolean(answeredLeg) : Boolean(evidence.answeredExt);
 
   const externalNumber = chronologyData?.externalCallerNumber || first.externalCallerNumber || first.src || first.cnum || '—';
   const dialedNumber = first.dst || steps?.[0]?.destination || '—';
   const callerExt = chronologyData?.callerExtension || steps?.[0]?.number || getExtFromChannel(first.channel) || first.src || '—';
   const trunkNumber = chronologyData?.trunkNumber || chronologyData?.inboundDid || first.did || routeAnalysis.did || getTrunkFromChannel(first.channel) || '—';
 
-  const ringGroupStep = steps.find((s: any) => s.type === 'ring_group');
+  const ringGroupSteps = steps.filter((s:any)=>s.type === 'ring_group');
+  const ringGroupStep = ringGroupSteps[0];
   const inboundTrunkStep = steps.find((s: any) => s.type === 'inbound_trunk');
   const ivrRouteStep = steps.find((s: any) => s.type === 'ivr');
   const inboundRouteStep = steps.find((s: any) => s.type === 'inbound_route');
   const outboundRouteStep = steps.find((s: any) => s.type === 'outbound_route');
   const trunksStep = steps.find((s: any) => String(s.type || '').includes('trunk'));
 
-  const groupMembers = ringGroupStep?.members || [];
+  const groupMembers = Array.from(new Map(ringGroupSteps.flatMap((s:any)=>s.members||[]).map((m:any)=>[String(m.extension),m])).values()) as any[];
   const routeDestinationSteps = steps
     .map((step: any) => [
       buildTimeConditionStep(step),
@@ -68,23 +71,20 @@ export function buildCallRouteView(chronologyData: any): RouteView {
     ? `${outboundSelectedTrunk.name}${outboundSelectedTrunk.outcid ? ` (${outboundSelectedTrunk.outcid})` : ''}`
     : (trunksStep?.title || 'Транк исходящего вызова');
 
-  const answeredExt =
-    routeAnalysis.answeredExt ||
-    getExtFromChannel(answeredLeg?.dstchannel) ||
-    getExtFromChannel(answeredLeg?.channel) ||
-    '';
+  const answeredExt = evidence.answeredExt;
 
   const missedMembers = groupMembers
     .map((m: any) => String(m.extension || ''))
     .filter(Boolean)
-    .filter((ext: string) => ext !== String(answeredExt));
+    .filter((ext: string) => evidence.observedExtensions.includes(ext) && !evidence.answeredExtensions.includes(ext));
 
   const queueStep = buildQueueStep(timeline, answeredExt);
+  if (queueStep) queueStep.members = (queueStep.members || []).map((m:any)=>({...m,status:historicalMemberStatus(m.extension,evidence)}));
   const queueMembers = queueStep?.members || [];
   const queueMissedMembers = queueMembers
     .map((m: any) => String(m.extension || ''))
     .filter(Boolean)
-    .filter((ext: string) => ext !== String(answeredExt));
+    .filter((ext: string) => evidence.observedExtensions.includes(ext) && !evidence.answeredExtensions.includes(ext));
 
   const queueWaitSeconds = queueStep ? getQueueWaitSeconds(timeline, answeredExt) : 0;
   const queueWaitText = queueWaitSeconds ? ` Ожидание в очереди: ${queueWaitSeconds} сек.` : '';
@@ -138,24 +138,24 @@ export function buildCallRouteView(chronologyData: any): RouteView {
           number: ivrRouteStep.number || '',
           members: [],
         }] : []),
-        ...(ringGroupStep ? [{
+        ...ringGroupSteps.map((ringGroupStep:any) => ({
           label: 'RING GROUP',
           title: ringGroupStep.title || `Группа ${ringGroupStep.number}`,
           pattern: '',
           destination: ringGroupStep.destination || '',
           number: ringGroupStep.number || '',
-          members: groupMembers,
-        }] : []),
+          members: (ringGroupStep.members||[]).map((m:any)=>({...m,status:historicalMemberStatus(m.extension,evidence)})),
+        })),
         ...(queueStep ? [queueStep] : []),
         ...(groupMembers.length ? [{
           label: 'MEMBERS',
-          title: 'Участники группы',
+          title: 'Участники групп (текущий состав; статусы по событиям звонка)',
           pattern: '',
           destination: '',
           number: '',
           members: groupMembers.map((m: any) => ({
             ...m,
-            status: String(m.extension) === String(answeredExt) ? 'Ответил' : 'Не ответил',
+            status: historicalMemberStatus(m.extension, evidence),
           })),
         }] : []),
       ]
@@ -235,17 +235,18 @@ export function buildCallRouteView(chronologyData: any): RouteView {
   const ivrOnlyNoDigit =
     direction === 'inbound' &&
     Boolean(ivrStepForResult) &&
+    !evidence.answeredExt &&
     !String(ivrStepForResult?.details?.pressedDigit || '').trim() &&
     !routeSteps.some((step: any) => step.label === 'QUEUE' || step.label === 'RING GROUP' || step.label === 'EXTENSION');
 
   const resultText = direction === 'inbound'
     ? (ivrOnlyNoDigit
-        ? `Абонент ${externalNumber} попал в IVR, но не выбрал пункт меню.`
+        ? `Есть события IVR для ${externalNumber}; выбор пункта меню и ответ сотрудника не подтверждены.`
         : (directInboundExt && !anyAnswered
             ? `Вызов на внутренний номер ${directInboundExt}. Абонент не ответил на вызов.`
             : (anyAnswered
                 ? `Абонент ${externalNumber} дозвонился.${queueWaitText} Ответил внутренний номер ${answeredExt || directInboundExt || '—'}.`
-                : `Абонент ${externalNumber} не дозвонился.${queueWaitText} Не ответили: ${missedMembers.length ? missedMembers.join(', ') : (queueMissedMembers.length ? queueMissedMembers.join(', ') : 'участники группы или очереди')}.`)))
+                : `Ответ сотрудника не подтверждён.${queueWaitText} Наблюдавшиеся вызовы: ${missedMembers.length ? missedMembers.join(', ') : (queueMissedMembers.length ? queueMissedMembers.join(', ') : 'участники группы или очереди')}.`)))
     : (isInternalRoute
         ? (anyAnswered
             ? `Внутренний номер ${dialedNumber} ответил на вызов от ${callerExt}.`
@@ -256,7 +257,7 @@ export function buildCallRouteView(chronologyData: any): RouteView {
 
   return {
     routeSteps,
-    resultText,
+    resultText: resultText + (evidence.connectedSeconds !== null ? ` Соединение по CEL: ${evidence.connectedSeconds} сек.` : evidence.source === 'cdr' ? ' Ответ определён по CDR; соединение CEL не подтверждено.' : ''),
     anyAnswered: ivrOnlyNoDigit ? false : anyAnswered,
   };
 }

@@ -1,7 +1,7 @@
 {
   "name": "freepbx-cdr-new",
   "private": true,
-  "version": "5.8.26",
+  "version": "5.8.27",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
@@ -93,7 +93,9 @@
     "test:ai-agent-creation-wizard": "tsx scripts/test-ai-agent-creation-wizard.ts",
     "test:ai-agent-deletion": "tsx scripts/test-ai-agent-deletion.ts",
     "test:call-registry-ai-handoff": "tsx scripts/test-call-registry-ai-handoff.ts",
-    "test:softphone-auto-config": "tsx scripts/test-softphone-auto-config.ts"
+    "test:softphone-auto-config": "tsx scripts/test-softphone-auto-config.ts",
+    "test:sangoma": "tsx scripts/test-sangoma-regressions.ts && bash scripts/test-installer-contract.sh",
+    "directory:storage:preview": "tsx scripts/directory-storage.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

@@ -1,3 +1,4 @@
+import { getDirectoryStorageMode } from './pbxpulsDirectoryRuntime.js';
 import { writePBXPulsSystemEvent } from './pbxpulsEvents.js';
 import {
   canEnableDirectorySqlWrite,
@@ -34,6 +35,8 @@ export async function getDirectoryWriteRuntimeDecision(
   actor: string | { id?: string | number | null; username?: string | null; role?: string | null }
 ): Promise<DirectoryWriteRuntimeDecision> {
   const mode = await getDirectoryWriteMode();
+
+  if (mode !== await getDirectoryStorageMode()) return {operation,mode,useLegacy:false,useSql:false,blocked:true,reason:'directory_storage_modes_mismatch',productionSqlWriteReady:false,productionSqlWriteUnlock:false};
 
   if (mode === 'legacy') {
     return {
@@ -102,6 +105,7 @@ export async function getDirectoryWriteRouterStatus(): Promise<DirectoryWriteRou
 export function buildBlockedDirectoryWriteEndpointResponse(decision: DirectoryWriteRuntimeDecision): Record<string, unknown> {
   return {
     ok: false,
+    error: decision.reason === 'directory_storage_modes_mismatch' ? 'Режимы чтения и записи справочника различаются. Администратору: выполните scripts/directory-storage.ts.' : 'Запись в SQL-справочник пока недоступна: ' + decision.reason,
     reason: decision.reason || getDirectoryWriteModeBlockedReason(),
     productionSqlWriteReady: decision.productionSqlWriteReady,
     productionSqlWriteUnlock: decision.productionSqlWriteUnlock,
@@ -114,6 +118,7 @@ function buildDecisionForMode(
   mode: DirectoryWriteMode,
   sqlEnableDecision: Awaited<ReturnType<typeof canEnableDirectorySqlWrite>>
 ): DirectoryWriteRuntimeDecision {
+  if (mode !== sqlEnableDecision.directoryStorageMode) return {operation,mode,useLegacy:false,useSql:false,blocked:true,reason:'directory_storage_modes_mismatch',productionSqlWriteReady:false,productionSqlWriteUnlock:false};
   if (mode === 'legacy') {
     return {
       operation,
@@ -135,7 +140,7 @@ function buildDecisionForSqlReadiness(
   mode: DirectoryWriteMode,
   sqlEnableDecision: Awaited<ReturnType<typeof canEnableDirectorySqlWrite>>
 ): DirectoryWriteRuntimeDecision {
-  if (mode === 'sql' && sqlEnableDecision.canEnable) {
+  if (mode === 'sql' && sqlEnableDecision.directoryStorageMode === 'sql' && sqlEnableDecision.canEnable) {
     return {
       operation,
       mode,
@@ -154,7 +159,7 @@ function buildDecisionForSqlReadiness(
     useLegacy: false,
     useSql: false,
     blocked: true,
-    reason: sqlEnableDecision.reason || getDirectoryWriteModeBlockedReason(),
+    reason: mode !== sqlEnableDecision.directoryStorageMode ? 'directory_storage_modes_mismatch' : sqlEnableDecision.reason || getDirectoryWriteModeBlockedReason(),
     productionSqlWriteReady: sqlEnableDecision.canEnable,
     productionSqlWriteUnlock: sqlEnableDecision.productionSqlWriteUnlock
   };

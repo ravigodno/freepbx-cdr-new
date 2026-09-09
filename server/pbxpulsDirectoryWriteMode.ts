@@ -88,6 +88,7 @@ export async function canEnableDirectorySqlWrite(): Promise<{
   let reason: string | null = null;
 
   if (!sqlAvailable) reason = 'directory_sql_unavailable';
+  else if (directoryStorageMode !== 'sql') reason = 'directory_storage_modes_mismatch';
   else if (!writeLayerAvailable) reason = 'directory_sql_write_layer_unavailable';
   else if (!ISOLATED_SQL_WRITE_SMOKE_PASSED) reason = 'isolated_sql_write_smoke_not_passed';
   else if (sqlWriteTestEnabled) reason = 'directory_sql_write_test_still_enabled';

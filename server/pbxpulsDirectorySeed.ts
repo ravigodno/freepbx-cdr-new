@@ -260,7 +260,7 @@ const normalizeVisibility = (entry: any): 'shared' | 'private' | null => {
 
 const customFieldId = (fieldKey: string): string => `dir_cf_${crypto.createHash('sha1').update(fieldKey).digest('hex').slice(0, 16)}`;
 
-function buildDirectorySeedRows(legacyDb: any): DirectorySeedRows {
+export function buildDirectorySeedRows(legacyDb: any): DirectorySeedRows {
   const directory = Array.isArray(legacyDb?.directory) ? legacyDb.directory : [];
   const contacts: DirectoryContactSeedRow[] = [];
   const customFieldsByKey = new Map<string, DirectoryCustomFieldSeedRow>();
@@ -630,14 +630,14 @@ async function executeInsertIgnore(connection: Connection, sql: string, params: 
   return Number((result as any)?.affectedRows || 0);
 }
 
-export async function seedLegacyDirectory(connection: Connection): Promise<void> {
+export async function seedLegacyDirectory(connection: Connection, snapshot?: any): Promise<void> {
   const legacyPath = `${process.cwd()}/data/db.json`;
-  if (!fs.existsSync(legacyPath)) {
+  if (snapshot === undefined && !fs.existsSync(legacyPath)) {
     console.warn('[PBXPULS_DB] legacy directory seed skipped: data/db.json not found');
     return;
   }
 
-  const legacyDb = JSON.parse(fs.readFileSync(legacyPath, 'utf8'));
+  const legacyDb = snapshot === undefined ? JSON.parse(fs.readFileSync(legacyPath, 'utf8')) : snapshot;
   const rows = buildDirectorySeedRows(legacyDb);
   let contactsCount = 0;
   let customFieldsCount = 0;

@@ -2655,7 +2655,12 @@ export async function runPBXPulsMigrations(): Promise<void> {
       console.log('[PBXPULS_DB] applying migration:', migration.key);
       await writeMigrationSystemEvent('migration_started', 'info', 'PBXPuls migration started', migration);
       for (const statement of migration.statements) {
-        await connection.query(statement);
+        try { await connection.query(statement); }
+        catch (error:any) {
+          // MySQL DDL commits implicitly. A resumed migration can encounter its own completed ADD.
+          if (!(error.code === 'ER_DUP_FIELDNAME' && /^ALTER TABLE .* ADD COLUMN /i.test(statement.trim())) &&
+              !(error.code === 'ER_DUP_KEYNAME' && /^(ALTER TABLE .* ADD (?:UNIQUE )?(?:KEY|INDEX)|CREATE (?:UNIQUE )?INDEX)/i.test(statement.trim()))) throw error;
+        }
       }
       if (migration.seed) {
         await migration.seed(connection);
@@ -2675,6 +2680,7 @@ export async function runPBXPulsMigrations(): Promise<void> {
       await writeMigrationSystemEvent('migration_failed', 'error', 'PBXPuls migration failed', activeMigration, safeError);
       console.warn('[PBXPULS_DB] migration failed:', safeError);
     }
+    throw new Error(`PBXPuls migrations incomplete: ${safeError}`);
   } finally {
     if (connection) {
       await connection.end();
@@ -2935,21 +2941,18 @@ async function seedLegacyUsersAndRoles(connection: Connection): Promise<void> {
   let legacyDb: any;
   try {
     if (!fs.existsSync(legacyPath)) {
-      console.warn('[PBXPULS_DB] legacy users/roles seed skipped: data/db.json not found');
-      return;
+      throw new Error('Initial users/roles missing; run the bootstrap before migrations');
     }
     legacyDb = JSON.parse(fs.readFileSync(legacyPath, 'utf8'));
   } catch (error: any) {
-    console.warn('[PBXPULS_DB] legacy users/roles seed skipped:', sanitizeMigrationError(error));
-    return;
+    throw new Error(`Initial users/roles unavailable: ${sanitizeMigrationError(error)}`);
   }
 
   const legacyUsers = Array.isArray(legacyDb?.users) ? legacyDb.users : [];
   const legacyRoles = Array.isArray(legacyDb?.roles) ? legacyDb.roles : [];
 
   if (!legacyUsers.length && !legacyRoles.length) {
-    console.warn('[PBXPULS_DB] legacy users/roles seed skipped: no legacy users or roles found');
-    return;
+    throw new Error('Initial users/roles are empty');
   }
 
   const roleIdsByKey = new Map<string, number>();
@@ -3092,4 +3095,13 @@ function sanitizeMigrationError(error: any): string {
     .replace(/(password|passwd|token|secret|api[_-]?key)\s*[:=]\s*[^\s;,)]+/gi, '$1=********')
     .replace(/mysql:\/\/[^@\s]+@/gi, 'mysql://********@')
     .slice(0, 500);
+}
+
+export const expectedMigrationKeys = () => MIGRATIONS.map(migration => migration.key);
+export async function checkMigrationCompletion(connection: Connection) {
+  const [columns] = await connection.query('SHOW COLUMNS FROM schema_migrations');
+  const key = (columns as any[]).some(row=>row.Field==='migration_key') ? 'migration_key' : 'migration_name';
+  const [rows] = await connection.query(`SELECT ${key} AS migration_key FROM schema_migrations`);
+  const applied = new Set((rows as any[]).map(row=>String(row.migration_key)));
+  return expectedMigrationKeys().filter(key=>!applied.has(key));
 }

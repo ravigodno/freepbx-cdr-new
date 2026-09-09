@@ -1,5 +1,16 @@
 # Changelog
 
+## v5.8.27 — 2026-09-09
+
+- Sangoma 7: isolated verified Node.js runtime, resumable installation with durable secrets, and checked PM2/systemd startup.
+- MariaDB 5.5 account compatibility without password resets; shared config, strict complete migrations and auth readiness.
+- Consistent SQL Directory read/write/import guards; reviewed legacy recovery without duplicate contacts or owner/metadata loss.
+- Compact list includes internal/linked numbers; linked number uses the standard accessible call button.
+- Shared historical answer evidence for server/timeline: employee channel over group destination, CEL bridge interval, explicit CDR uncertainty, no inferred calls from current group configuration.
+- Update with preserved local changes, database backup, isolated build and application rollback.
+- Verified on isolated MariaDB 5.5.65/Antelope and dedicated glibc-217 Node 22; see docs/releases/v5.8.27.md for exact checks and limits.
+
+
 ## 5.8.26 - 2026-09-08
 
 - Убраны общие счётчики, которые показывали только данные МТС.

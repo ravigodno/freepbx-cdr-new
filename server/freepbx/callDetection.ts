@@ -1,3 +1,4 @@
+import { resolveCallAnswerEvidence } from '../../shared/callAnswerEvidence.js';
 import type { CallDirection } from './types';
 import { extractExtFromChannel } from './utils';
 
@@ -32,34 +33,7 @@ export function detectCallDirection(
 export function getAnsweredExtFromLegs(
   legs: any[]
 ): string {
-  const answeredLegs = legs.filter(
-    (l: any) =>
-      String(l.disposition || '').toUpperCase() === 'ANSWERED' &&
-      Number(l.billsec || 0) > 0
-  );
-
-  const answeredDialLeg = answeredLegs.find((leg: any) => {
-    const dst = String(leg.dst || '').trim();
-    return String(leg.lastapp || '').toUpperCase() === 'DIAL' && /^\d{2,6}$/.test(dst);
-  });
-
-  if (answeredDialLeg) return String(answeredDialLeg.dst).trim();
-
-  const answered = answeredLegs.find((leg: any) =>
-    extractExtFromChannel(leg.dstchannel || '') || extractExtFromChannel(leg.channel || '')
-  );
-
-  if (!answered) return '';
-
-  const dstChannelExt = extractExtFromChannel(
-    answered.dstchannel || ''
-  );
-
-  if (dstChannelExt) return dstChannelExt;
-
-  return extractExtFromChannel(
-    answered.channel || ''
-  );
+  return resolveCallAnswerEvidence(legs).answeredExt;
 }
 
 export function getQueueWaitSecondsFromLegs(

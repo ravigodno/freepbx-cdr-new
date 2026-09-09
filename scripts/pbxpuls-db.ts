@@ -1,10 +1,13 @@
+import '../server/pbxpulsConfig.js';
+import { ensureMysqlAccount } from '../server/mysqlAccount.js';
+import { checkMigrationCompletion } from '../server/pbxpulsMigrations.js';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
 import mysql, { ConnectionOptions } from 'mysql2/promise';
 
-dotenv.config({ path: path.join(process.cwd(), '.env'), quiet: true });
+// Configuration is loaded by pbxpulsConfig for both CLI and server.
 
 const setup = process.argv.includes('--setup');
 const requiredTables = [
@@ -56,11 +59,14 @@ async function connect(options: ConnectionOptions) {
 
 async function findAdminConnection() {
   const freepbx = parseFreePBXConfig();
-  const candidates: Array<{ source: string; options: ConnectionOptions }> = [
-    { source: 'root_socket', options: { user: 'root', socketPath: '/var/lib/mysql/mysql.sock' } },
-    { source: 'root_socket', options: { user: 'root', socketPath: '/run/mysqld/mysqld.sock' } }
-  ];
-  if (freepbx.AMPDBUSER) candidates.push({
+  const localTarget = ['127.0.0.1','localhost','::1'].includes(process.env.PBXPULS_DB_HOST || '127.0.0.1') && Number(process.env.PBXPULS_DB_PORT || 3306) === 3306;
+  const candidates: Array<{ source: string; options: ConnectionOptions }> = process.env.PBXPULS_DB_ADMIN_SOCKET
+    ? [{source:'explicit_socket',options:{user:'root',socketPath:process.env.PBXPULS_DB_ADMIN_SOCKET}}]
+    : localTarget ? [
+      {source:'root_socket',options:{user:'root',socketPath:'/var/lib/mysql/mysql.sock'}},
+      {source:'root_socket',options:{user:'root',socketPath:'/run/mysqld/mysqld.sock'}}
+    ] : [];
+  if (localTarget && !process.env.PBXPULS_DB_ADMIN_SOCKET && freepbx.AMPDBUSER) candidates.push({
     source: 'freepbx',
     options: { host: freepbx.AMPDBHOST || '127.0.0.1', user: freepbx.AMPDBUSER, password: freepbx.AMPDBPASS || '' }
   });
@@ -73,29 +79,26 @@ async function findAdminConnection() {
 }
 
 function appendEnv(config: ReturnType<typeof runtimeConfig>) {
-  const envPath = path.join(process.cwd(), '.env');
-  const existing = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
-  const additions = [
-    ['PBXPULS_DB_HOST', config.host], ['PBXPULS_DB_PORT', String(config.port)],
-    ['PBXPULS_DB_NAME', config.database], ['PBXPULS_DB_USER', config.user],
-    ['PBXPULS_DB_PASSWORD', config.password]
-  ].filter(([key]) => !new RegExp(`^${key}=`, 'm').test(existing));
-  if (!additions.length) return;
-  fs.appendFileSync(envPath, `${existing.endsWith('\n') || !existing ? '' : '\n'}${additions.map(([key, value]) => `${key}=${value}`).join('\n')}\n`, { mode: 0o600 });
+  const envPath = process.env.PBXPULS_ENV_FILE || path.join(process.cwd(), '.env');
+  let contents = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
+  const existing = dotenv.parse(contents);
+  const values: Record<string,string> = {PBXPULS_DB_HOST:config.host,PBXPULS_DB_PORT:String(config.port),PBXPULS_DB_NAME:config.database,PBXPULS_DB_USER:config.user,PBXPULS_DB_PASSWORD:config.password};
+  for (const [key,value] of Object.entries(values)) {
+    if (existing[key]) continue;
+    const line = `${key}=${JSON.stringify(value)}`;
+    const pattern = new RegExp(`^${key}=.*$`, 'm');
+    contents = pattern.test(contents) ? contents.replace(pattern, line) : contents + (contents.endsWith('\n') ? '' : '\n') + line + '\n';
+  }
+  fs.writeFileSync(envPath+'.tmp',contents,{mode:0o600});
+  fs.chmodSync(envPath+'.tmp',0o600);
+  fs.renameSync(envPath+'.tmp',envPath);
 }
 
 function printManualInstructions() {
   console.error('Automatic bootstrap is unavailable. Run as a MariaDB administrator:');
-  console.error(`read -s PBXPULS_DB_PASSWORD
-sudo mysql <<SQL
-CREATE DATABASE IF NOT EXISTS pbxpuls CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER IF NOT EXISTS 'pbxpuls'@'localhost' IDENTIFIED BY '$PBXPULS_DB_PASSWORD';
-CREATE USER IF NOT EXISTS 'pbxpuls'@'127.0.0.1' IDENTIFIED BY '$PBXPULS_DB_PASSWORD';
-GRANT ALL PRIVILEGES ON pbxpuls.* TO 'pbxpuls'@'localhost';
-GRANT ALL PRIVILEGES ON pbxpuls.* TO 'pbxpuls'@'127.0.0.1';
-FLUSH PRIVILEGES;
-SQL`);
-  console.error('Then set PBXPULS_DB_PASSWORD to the same value in .env and run npm run pbxpuls:db:setup again.');
+  console.error('Check the configured PBXPULS_DB_HOST/PORT/NAME/USER and existing account before granting access.');
+  console.error('For a local database, supply its administrator socket explicitly: PBXPULS_DB_ADMIN_SOCKET=/path/to/mysql.sock npm run pbxpuls:db:setup');
+  console.error('This creates only missing accounts and preserves existing passwords. Existing credentials must match .env.');
 }
 
 async function inspect() {
@@ -106,8 +109,10 @@ async function inspect() {
     migrationsOk: false, qualityCacheAvailable: false
   };
   if (!config.password) return result;
+  let connection: Awaited<ReturnType<typeof connect>> | null = null;
   try {
-    const connection = await connect(config);
+    connection = await connect(config);
+    result.pbxpulsDbConnected = true;
     const [rows] = await connection.query('SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = ?', [config.database]);
     const [grantRows] = await connection.query('SHOW GRANTS FOR CURRENT_USER');
     const [aiSettingRows] = await connection.query("SELECT setting_key,setting_value FROM settings WHERE setting_key IN ('ai.platform_core_enabled','ai.write_tools_enabled','ai.voice_control_plane_enabled','ai.voice_media_transport_enabled','ai.voice_media_transport_mode','ai.realtime_voice_enabled','ai.realtime_voice_provider','ai.voice_live_test_enabled','ai.voice_live_transport','ai.voice_live_test_extension')");
@@ -135,14 +140,23 @@ async function inspect() {
     const [aiRealtimeColumnRows]=await connection.query(`SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME='ai_realtime_voice_sessions'`,[config.database]);
     const [aiRealtimeIndexRows]=await connection.query(`SELECT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=? AND TABLE_NAME='ai_realtime_voice_sessions'`,[config.database]);
     const [aiRealtimeForeignKeyRows]=await connection.query(`SELECT CONSTRAINT_NAME FROM information_schema.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA=? AND TABLE_NAME='ai_realtime_voice_sessions'`,[config.database]);
+    result.pendingMigrations = await checkMigrationCompletion(connection);
+    const [authRows] = await connection.query(`SELECT
+      (SELECT COUNT(*) FROM users) AS users,
+      (SELECT COUNT(*) FROM roles) AS roles,
+      (SELECT COUNT(*) FROM users u LEFT JOIN user_roles ur ON ur.user_id=u.id WHERE ur.user_id IS NULL) AS unassigned,
+      (SELECT COUNT(*) FROM role_permissions) AS rolePermissions`);
+    const auth = (authRows as any[])[0];
+    result.authReady = Number(auth.users)>0 && Number(auth.roles)>0 && Number(auth.unassigned)===0 && Number(auth.rolePermissions)>0;
     await connection.end();
+    connection = null;
     const tables = new Set((rows as any[]).map(row => String(row.TABLE_NAME)));
     result.pbxpulsDbConnected = true;
     result.dbUserPresent = true;
     const grants = (grantRows as any[]).flatMap(row => Object.values(row).map(String)).join('\n').toUpperCase();
     result.privilegesOk = grants.includes('ALL PRIVILEGES') || ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'CREATE', 'ALTER'].every(privilege => grants.includes(privilege));
     result.missingTables = requiredTables.filter(table => !tables.has(table));
-    result.migrationsOk = result.missingTables.length === 0;
+    result.migrationsOk = result.missingTables.length === 0 && result.pendingMigrations.length === 0;
     result.qualityCacheAvailable = tables.has('quality_current') && tables.has('quality_history');
     const aiSettings = new Map((aiSettingRows as any[]).map(row => [String(row.setting_key), String(row.setting_value)]));
     result.aiPlatformCoreEnabled = aiSettings.get('ai.platform_core_enabled') === 'true';
@@ -185,6 +199,7 @@ async function inspect() {
   } catch (error: any) {
     result.reason = String(error?.message || error).replace(/(password|passwd)\s*[:=]\s*\S+/gi, '$1=********').slice(0, 300);
   }
+  if (connection) await connection.end();
   return result;
 }
 
@@ -192,7 +207,7 @@ async function main() {
   let status = await inspect();
   if (!setup) {
     console.log(JSON.stringify(status, null, 2));
-    process.exitCode = status.qualityCacheAvailable ? 0 : 1;
+    process.exitCode = status.pbxpulsDbConnected && status.migrationsOk && status.privilegesOk && status.authReady ? 0 : 1;
     return;
   }
 
@@ -209,12 +224,13 @@ async function main() {
     if (!/^[A-Za-z0-9_$-]+$/.test(config.database) || !/^[A-Za-z0-9_$.-]+$/.test(config.user)) {
       throw new Error('PBXPuls DB name or user contains unsupported characters');
     }
+    appendEnv(config); // Persist before creating an account: retries must use the same secret.
     const db = config.database;
     const user = config.user;
     try {
       await admin.connection.query(`CREATE DATABASE IF NOT EXISTS \`${db}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
       for (const host of ['localhost', '127.0.0.1']) {
-        await admin.connection.query(`CREATE USER IF NOT EXISTS '${user}'@'${host}' IDENTIFIED BY ${admin.connection.escape(config.password)}`);
+        await ensureMysqlAccount(admin.connection, user, host, config.password);
         await admin.connection.query(`GRANT ALL PRIVILEGES ON \`${db}\`.* TO '${user}'@'${host}'`);
       }
       await admin.connection.query('FLUSH PRIVILEGES');
@@ -235,7 +251,7 @@ async function main() {
   await runPBXPulsMigrations();
   status = await inspect();
   console.log(JSON.stringify(status, null, 2));
-  process.exitCode = status.qualityCacheAvailable ? 0 : 1;
+  process.exitCode = status.pbxpulsDbConnected && status.migrationsOk && status.privilegesOk && status.authReady ? 0 : 1;
 }
 
 main().then(() => {

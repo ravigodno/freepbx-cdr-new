@@ -1,3 +1,4 @@
+import { resolveCallAnswerEvidence, historicalMemberStatus } from './shared/callAnswerEvidence.js';
 import fetch from "node-fetch";
 import {
   detectCallDirection,
@@ -4248,6 +4249,7 @@ function bootstrapDatabase() {
 }
 
 bootstrapDatabase();
+if (process.argv.includes('--bootstrap-only')) process.exit(0);
 
 // Atomic local database operations with locking
 const dbLock = {
@@ -15940,7 +15942,9 @@ app.get('/api/calls/:uniqueid/chronology', requireAuth(), async (req, res) => {
       }
 
       return {
-        id: leg.uniqueid,
+        id: `${leg.uniqueid}:${idx}`,
+        uniqueid: leg.uniqueid,
+        linkedid: leg.linkedid,
         calldate: leg.calldate,
         src: leg.src,
         dst: leg.dst,
@@ -15988,7 +15992,19 @@ app.get('/api/calls/:uniqueid/chronology', requireAuth(), async (req, res) => {
       } as any);
     }
 
+    let celEvents: any[] = [];
+    if (!isDemo) {
+      try { celEvents = await queryFreePBXCDR(settings, false,
+        'SELECT id,eventtime,uniqueid,linkedid,eventtype,channame,peer,context,appname FROM cel WHERE linkedid=? ORDER BY eventtime,id', [targetLinkedId]); }
+      catch (_) { /* CEL is optional; the resolver explicitly labels CDR-only evidence. */ }
+    }
     const routeAnalysis = isDemo ? null : await enrichFreePBXRoute(settings, legs);
+    const answerEvidence = resolveCallAnswerEvidence(legs, celEvents, (routeAnalysis?.steps || []).filter((s:any)=>['ring_group','queue'].includes(s.type)).map((s:any)=>String(s.number)));
+    if (routeAnalysis) {
+      routeAnalysis.answeredExt = answerEvidence.answeredExt;
+      for (const step of routeAnalysis.steps) if (Array.isArray(step.members))
+        step.members = step.members.map((member:any)=>({...member,status:historicalMemberStatus(member.extension,answerEvidence)}));
+    }
     let dtmfSequences: ReturnType<typeof buildOutboundDtmfSequences> = [];
     if (!isDemo && routeAnalysis?.direction === 'outbound' && await checkUserPermission(req, 'view_call_dtmf')) {
       const answeredLegs = legs.filter((leg: any) =>
@@ -16021,6 +16037,8 @@ app.get('/api/calls/:uniqueid/chronology', requireAuth(), async (req, res) => {
       uniqueid,
       linkedid: legs[0]?.linkedid || uniqueid,
       legsCount: legs.length,
+      celEvents,
+      answerEvidence,
       blindTransfer: Boolean(chronologyTransferTarget),
       blindTransferTargetExt: chronologyTransferTarget,
       externalCallerNumber: externalCallerResolution.externalCallerNumber,
@@ -23648,5 +23666,6 @@ let phonebookListener: import('node:http').Server | null = null;
 for(const signal of ['SIGTERM','SIGINT'] as const)process.once(signal,()=>{if(aiPlatformShutdownStarted)return;aiPlatformShutdownStarted=true;clearInterval(siteFormsMatcherTimer);notificationRuntime.stop();balanceRuntime.stop();gsmGatewayRuntime.stop();void Promise.all([aiPlatformRuntime.stop(),stopPhonebookListener(phonebookListener)]).finally(()=>process.exit(0))});
 
 startServer().catch((err) => {
-  console.error('Fatal initialization error:', err);
+  console.error('Fatal initialization error:', sanitizePBXPulsDbError(err));
+  process.exit(1);
 });

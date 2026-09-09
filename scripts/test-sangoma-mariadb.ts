@@ -1,0 +1,60 @@
+/** Integration test ONLY against a separately launched, disposable MariaDB instance. */
+import '../server/pbxpulsConfig.js';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import express from 'express';
+import mysql from 'mysql2/promise';
+import {getPBXPulsDbConnectionOptions} from '../server/pbxpulsDbConfig.js';
+import {registerDirectoryImportJobRoutes} from '../server/directoryImportJobs.js';
+import {previewDirectoryStorage,applyDirectoryStorage} from '../server/directoryStorageRecovery.js';
+import {getDirectoryWriteRuntimeDecision} from '../server/pbxpulsDirectoryWriteRouter.js';
+import {listDirectoryContactsSql,getDirectoryContactSql} from '../server/directoryPerformance.js';
+import {createDirectoryContactSql,updateDirectoryContactSql,deleteDirectoryContactSql} from '../server/pbxpulsDirectoryWrite.js';
+import {canEditDirectoryContactByOwner} from '../server/directoryContactAccess.js';
+import {checkMigrationCompletion} from '../server/pbxpulsMigrations.js';
+async function main(){
+ assert.equal(process.env.PBXPULS_DB_NAME,'pbxpuls_release_test');assert.notEqual(process.env.PBXPULS_DB_PORT,'3306');assert.ok(process.env.PBXPULS_DIRECTORY_IMPORT_ROOT?.includes('release-testdb'));
+ const connection=await mysql.createConnection(getPBXPulsDbConnectionOptions());
+ const legacy=JSON.parse(fs.readFileSync('data/db.json','utf8'));
+ assert.deepEqual(await checkMigrationCompletion(connection),[]);
+ const preview=await previewDirectoryStorage(connection,legacy);assert.equal(preview.canApply,true);
+ const app=express();
+ registerDirectoryImportJobRoutes(app,{requireAuth:(req,_res,next)=>{(req as any).user=req.header('x-denied')?{role:'operator',id:'other'}:{role:'admin',id:'fixture-admin'};next();},hasPermission:async()=>false,listDirectoryUsers:async()=>[{id:'fixture-admin',username:'admin',fullName:'Fixture Admin'},{id:'fixture-operator',username:'operator',fullName:'Fixture Operator'}]});
+ const server=app.listen(0,'127.0.0.1');await new Promise<void>(resolve=>server.once('listening',resolve));
+ const base=`http://127.0.0.1:${(server.address() as any).port}`;
+ const csv='fullName;phone;phone2;email;type;visibility;internalExtension;linkedExternalNumber;department;comment\nFixture Contact;781;15550002000;fixture@example.invalid;internal;shared;781;15550003000;Fixture Department;Fixture metadata';
+ const upload=()=>fetch(base+'/api/directory/import-jobs',{method:'POST',headers:{'content-type':'text/csv','x-import-filename':'fixture.csv'},body:csv});
+ assert.equal((await upload()).status,400,'legacy storage must reject invisible SQL imports');
+ assert.equal((await fetch(base+'/api/directory/import-jobs',{method:'POST',headers:{'content-type':'text/csv','x-denied':'1'},body:csv})).status,403);
+ await applyDirectoryStorage(connection,legacy,preview.digest);
+ for(const operation of ['create','update','delete'] as const)assert.equal((await getDirectoryWriteRuntimeDecision(operation,'fixture')).useSql,true);
+ const response=await upload();assert.equal(response.status,202,JSON.stringify(await response.clone().json()));const job=(await response.json() as any).job;
+ let status:any;
+ for(let attempt=0;attempt<150;attempt++){
+  status=(await (await fetch(base+'/api/directory/import-jobs/'+job.id)).json() as any).job;
+  if(['completed','failed','completed_with_errors'].includes(status.status))break;
+  await new Promise(resolve=>setTimeout(resolve,100));
+ }
+ assert.equal(status.status,'completed',JSON.stringify(status));
+ const access={privileged:true,userId:'fixture-admin'};
+ const listing=await listDirectoryContactsSql({search:'Fixture Contact'},access);assert.equal(listing.items.length,1);
+ const id=listing.items[0].id;const card=await getDirectoryContactSql(id,access);assert.ok(card);
+ for(const field of ['internalExtension','linkedExternalNumber','phone2','email','department','comment'])assert.deepEqual((listing.items[0] as any)[field],(card as any)[field]);
+ assert.equal(card.internalExtension,'781');assert.equal(card.linkedExternalNumber,'15550003000');assert.equal(card.phone2,'15550002000');assert.equal(card.department,'Fixture Department');
+ await updateDirectoryContactSql(id,{...card,name:'Fixture Edited'},'fixture-admin');
+ const updated=await getDirectoryContactSql(id,access);assert.equal(updated?.name,'Fixture Edited');assert.equal(updated?.linkedExternalNumber,card.linkedExternalNumber);assert.equal(updated?.department,card.department);
+ const personal=await createDirectoryContactSql({name:'Private Fixture',number:'782',visibility:'private',ownerUserId:'fixture-operator'},'fixture-operator');
+ assert.equal(await getDirectoryContactSql(personal.contactId,{privileged:false,userId:'other'}),null);
+ const own=await getDirectoryContactSql(personal.contactId,{privileged:false,userId:'fixture-operator'});assert.ok(own);
+ const permission={role:'operator',permissions:{edit_own_directory_contacts:true}};
+ assert.equal(canEditDirectoryContactByOwner(own,permission,'other'),false);assert.equal(canEditDirectoryContactByOwner(own,permission,'fixture-operator'),true);
+ await connection.query("UPDATE settings SET setting_value='legacy' WHERE setting_key='directory.write_mode'");
+ assert.equal((await getDirectoryWriteRuntimeDecision('update','fixture')).blocked,true);
+ await connection.query("UPDATE settings SET setting_value='sql' WHERE setting_key='directory.write_mode'");
+ await deleteDirectoryContactSql(id,'fixture-admin');assert.equal(await getDirectoryContactSql(id,access),null);
+ await deleteDirectoryContactSql(personal.contactId,'fixture-operator');
+ assert.deepEqual(JSON.parse(fs.readFileSync('data/db.json','utf8')).directory,legacy.directory,'SQL writes must not leak into JSON');
+ await connection.end();server.close();
+ console.log('PASS MariaDB 5.5: full migrations, import/list/card/edit/read/delete, metadata, shared/private ownership, permissions and mismatch blocking');
+}
+main().then(()=>process.exit(0)).catch(error=>{console.error(error);process.exit(1)});

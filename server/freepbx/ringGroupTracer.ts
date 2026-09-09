@@ -94,7 +94,7 @@ export async function analyzeRingGroups({
           `Группа обзвона ${groupId}`,
         label: 'Ring Group',
         number: groupId,
-        destination: rg.postdest || '',
+        destination: '', // postdest is current configuration, not historical routing evidence
         details: {
           grpnum: rg.grpnum,
           description: rg.description || '',

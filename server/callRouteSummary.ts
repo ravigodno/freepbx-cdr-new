@@ -1,3 +1,4 @@
+import { resolveCallAnswerEvidence } from '../shared/callAnswerEvidence.js';
 export type CallRouteScenario =
   | 'incoming_queue'
   | 'incoming_ring_group'
@@ -121,9 +122,7 @@ export function buildCallRouteSummaryFromTimeline(data: any): CallRouteSummary {
     summary.queue = digits(queueStep?.number || queueStep?.destination || queueLeg?.dst || (clean(queueLeg?.lastapp).toLowerCase() === 'queue' ? clean(queueLeg?.lastdata).split(',')[0] : ''));
     summary.ringGroup = digits(ringGroupStep?.number || ringGroupStep?.destination || ringLeg?.dst);
     summary.ivr = clean(ivrStep?.number || ivrStep?.destination || clean(ivrLeg?.dcontext).replace(/^ivr-/i, ''));
-    summary.answeredBy = digits(routeAnalysis.answeredExt)
-      || timeline.map((row: any) => channelExtension(row?.dstchannel)).find(Boolean)
-      || '';
+    summary.answeredBy = resolveCallAnswerEvidence(timeline, data?.celEvents || [], [summary.ringGroup, summary.queue].filter(Boolean)).answeredExt;
     if (summary.queue) {
       summary.scenario = 'incoming_queue';
       summary.destinationLabel = `Очередь ${summary.queue}`;

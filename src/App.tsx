@@ -1,3 +1,4 @@
+import { DirectoryPhoneCell } from './modules/directory/components/DirectoryPhoneCell';
 import React, { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from 'react';
 import{diagnoseDirectoryExtension,diagnoseDirectoryPhone,normalizeDirectoryPhoneInput,parseDirectoryCsv,validateDirectoryPhone,type DirectoryImportDiagnostic}from'../shared/directoryImportValidation';
 import {
@@ -5349,18 +5350,7 @@ export default function App() {
   };
 
   const renderDirectoryPhone = (phone: string, entry: DirectoryEntry) => (
-    <div className="flex min-w-0 items-center gap-1 whitespace-nowrap font-mono font-semibold tabular-nums text-slate-800">
-      <span className="min-w-0 select-all truncate">{phone}</span>
-      <button
-        type="button"
-        onClick={() => triggerClickToCall(phone, entry.name)}
-        className="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md border border-emerald-150 bg-emerald-50 text-emerald-700 shadow-xs transition-colors hover:bg-emerald-100 active:bg-emerald-200"
-        title={`Позвонить на ${phone} через SIP/AMI`}
-        aria-label={`Позвонить на ${phone}`}
-      >
-        <PhoneCall className="h-3 w-3" />
-      </button>
-    </div>
+    <DirectoryPhoneCell phone={phone} name={entry.name} onCall={triggerClickToCall} />
   );
 
   const renderDirectoryCell = (entry: DirectoryEntry, columnKey: DirectoryColumnKey) => {
@@ -5494,7 +5484,7 @@ export default function App() {
       case 'internalExtension':
         return renderDirectoryTextCell(entry.internalExtension, 'max-w-[140px]');
       case 'linkedExternalNumber':
-        return renderDirectoryTextCell(entry.linkedExternalNumber, 'max-w-[170px]');
+        return entry.linkedExternalNumber ? renderDirectoryPhone(entry.linkedExternalNumber, entry) : renderDirectoryDash();
       case 'responsibleUserId':
         return renderDirectoryTextCell(entry.responsibleUserLabel || entry.responsibleUserId, 'max-w-[220px]');
       case 'actions':

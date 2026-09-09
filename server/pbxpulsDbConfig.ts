@@ -1,3 +1,4 @@
+import './pbxpulsConfig.js';
 export type PBXPulsDbConfigSource = 'env' | 'default';
 
 export interface PBXPulsDbConfig {

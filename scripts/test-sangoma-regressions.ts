@@ -1,0 +1,44 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import React from 'react';
+import {renderToStaticMarkup} from 'react-dom/server';
+import {resolveCallAnswerEvidence,historicalMemberStatus} from '../shared/callAnswerEvidence.js';
+import {getAnsweredExtFromLegs} from '../server/freepbx/callDetection.js';
+import {buildCallRouteView} from '../src/modules/cdr/utils/buildCallRouteView.js';
+import {rowToContact} from '../server/directoryPerformance.js';
+import {DirectoryPhoneCell} from '../src/modules/directory/components/DirectoryPhoneCell.js';
+const legs=[{uniqueid:'fixture.1',linkedid:'fixture.1',calldate:'2026-01-01 12:00:00',src:'15550001000',dst:'7000',dcontext:'ext-group',lastapp:'Dial',dstchannel:'SIP/781-fixture',disposition:'ANSWERED',billsec:293},
+ ...['779','780','749','777','782','853'].map(ext=>({uniqueid:'fixture.1',linkedid:'fixture.1',dst:'7000',dcontext:'ext-group',dstchannel:`SIP/${ext}-fixture`,disposition:'NO ANSWER',billsec:293}))];
+const e=(eventtype:string,channame:string,eventtime:string,extra:any={})=>({linkedid:'fixture.1',eventtype,channame,eventtime:`2026-01-01 ${eventtime}`,...extra});
+const cel=[e('ANSWER','SIP/trunk-fixture','12:00:08',{context:'app-announcement-3'}),
+ e('ANSWER','SIP/781-fixture','12:00:25',{appname:'AppDial'}),
+ e('BRIDGE_ENTER','SIP/781-fixture','12:00:25'),e('BRIDGE_ENTER','SIP/trunk-fixture','12:00:25',{peer:'SIP/781-fixture'}),e('BRIDGE_EXIT','SIP/781-fixture','12:05:13')];
+const evidence=resolveCallAnswerEvidence(legs,cel);
+assert.equal(evidence.answeredExt,'781');assert.equal(evidence.connectedSeconds,288);assert.equal(getAnsweredExtFromLegs(legs),'781');
+assert.equal(historicalMemberStatus('750',evidence),'Нет данных о вызове');assert.match(historicalMemberStatus('779',evidence),/другой/);
+assert.equal(resolveCallAnswerEvidence(legs.slice(1)).answeredExt,'');
+assert.equal(resolveCallAnswerEvidence([{...legs[0],dstchannel:'',lastapp:'Playback'}],[cel[0]]).answeredExt,'');
+assert.equal(resolveCallAnswerEvidence([{...legs[0],dstchannel:'Local/781@from-internal;1'}]).answeredExt,'');
+assert.equal(resolveCallAnswerEvidence([{...legs[0],dstchannel:'PJSIP/781-fixture',dcontext:'ext-queues',lastapp:'Queue'}]).answeredExt,'781');
+assert.equal(resolveCallAnswerEvidence([{...legs[0],dstchannel:'SIP/7000-fixture'}]).answeredExt,'');
+assert.equal(resolveCallAnswerEvidence(legs,[...cel.map(e=>({...e,linkedid:'unrelated'}))]).source,'cdr');
+const transfers=resolveCallAnswerEvidence([...legs,{...legs[0],dst:'7100'},{...legs[0],dst:'7100',dstchannel:'PJSIP/790-fixture'}],[...cel,e('BRIDGE_ENTER','PJSIP/790-fixture','12:06:00',{peer:'SIP/trunk-fixture'})]);
+assert.deepEqual(transfers.answeredExtensions,['781','790']);
+const view=buildCallRouteView({timeline:legs,celEvents:cel,routeAnalysis:{direction:'inbound',answeredExt:'7000',steps:[{type:'ring_group',number:'7000',members:[{extension:'781'},{extension:'750'},{extension:'779'}]}]}});
+assert.match(view.resultText,/781/);assert.doesNotMatch(view.resultText,/Ответил внутренний номер 7000/);
+const sequential=buildCallRouteView({timeline:legs,celEvents:cel,routeAnalysis:{direction:'inbound',steps:[{type:'ring_group',number:'7000',members:[{extension:'781'}]},{type:'ring_group',number:'7100',members:[{extension:'790'}]}]}});
+assert.equal(sequential.routeSteps.filter((step:any)=>step.label==='RING GROUP').length,2);
+const ivrAndEmployee=buildCallRouteView({timeline:legs,celEvents:cel,routeAnalysis:{direction:'inbound',steps:[{type:'ivr',number:'1'}]}});
+assert.match(ivrAndEmployee.resultText,/Ответил внутренний номер 781/);
+const dated=cel.map(row=>({...row,eventtime:new Date(row.eventtime.replace(' ','T'))}));assert.equal(resolveCallAnswerEvidence(legs,dated).connectedSeconds,288);
+const localLegs=[{...legs[0],dstchannel:'Local/781@from-internal;1'}];assert.equal(resolveCallAnswerEvidence(localLegs,cel).answeredExt,'781');
+const row={id:'fixture',phone:'781',phone2:'15550002000',email:'fixture@example.invalid',type:'internal'};
+const metadata={internalExtension:'781',linkedExternalNumber:'15550003000',department:'Fixture',phones:['781','15550002000']};
+const compact=rowToContact(row,metadata),detail=rowToContact(row,metadata,true);
+for(const key of ['internalExtension','linkedExternalNumber','phones','email','department'])assert.deepEqual((compact as any)[key],(detail as any)[key]);
+const calls:any[]=[];const props={phone:metadata.linkedExternalNumber,name:'Fixture',onCall:(...args:any[])=>calls.push(args)};
+const element=DirectoryPhoneCell(props);const button=React.Children.toArray(element.props.children).find((x:any)=>x.type==='button') as any;
+assert.equal(calls.length,0);assert.equal(button.props.type,'button');assert.match(button.props.title,/15550003000/);button.props.onClick();assert.deepEqual(calls,[[metadata.linkedExternalNumber,'Fixture']]);
+assert.match(renderToStaticMarkup(React.createElement(DirectoryPhoneCell,props)),/aria-label="Позвонить на 15550003000"/);
+assert.match(fs.readFileSync('src/App.tsx','utf8'),/entry.linkedExternalNumber \? renderDirectoryPhone\(entry.linkedExternalNumber, entry\)/);
+console.log('PASS historical group/queue/SIP/PJSIP/Local/transfer evidence, CDR duplicates, IVR, list/card parity and accessible linked-number handler (no calls)');
