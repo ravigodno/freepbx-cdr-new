@@ -41,18 +41,18 @@ export default function DirectoryCsvColumnsHelp() {
   return (
     <details className="mt-4 overflow-hidden rounded-xl border border-blue-200 bg-blue-50/40">
       <summary className="cursor-pointer px-4 py-3 text-xs font-black text-blue-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500">
-        Описание CSV-столбцов
+        Описание столбцов CSV и Excel
       </summary>
       <div className="border-t border-blue-100 bg-white p-4">
         <p className="mb-3 text-xs leading-relaxed text-slate-600">
-          Названия заголовков регистронезависимы. CSV может использовать запятую, точку с запятой или TAB. Для каждой строки требуется организация или ФИО, а также телефон или email.
+          В Excel заголовки должны быть в первой строке первого листа. Телефоны и реквизиты лучше хранить как текст, чтобы сохранить все цифры и начальные нули. Названия заголовков регистронезависимы. CSV может использовать запятую, точку с запятой или TAB. Для каждой строки требуется организация или ФИО, а также телефон или email.
         </p>
         <div className="overflow-x-auto rounded-lg border border-slate-200">
           <table className="w-full min-w-[760px] text-left text-xs text-slate-600">
             <thead className="border-b border-slate-200 bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500">
               <tr>
                 <th className="px-3 py-2">Поле</th>
-                <th className="px-3 py-2">CSV header</th>
+                <th className="px-3 py-2">Заголовок столбца</th>
                 <th className="px-3 py-2">Обязательность</th>
                 <th className="px-3 py-2">Пример</th>
               </tr>

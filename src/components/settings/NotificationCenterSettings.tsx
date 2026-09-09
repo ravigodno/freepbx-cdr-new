@@ -1,3 +1,4 @@
+import { draftFingerprint, useUnsavedSource } from "./UnsavedChanges";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Bell, CheckCircle, Loader2, Send, Trash2 } from "lucide-react";
 
@@ -56,6 +57,7 @@ export default function NotificationCenterSettings({
       from: "",
       to: "",
     });
+  const [savedData, setSavedData] = useState<any>(null);
   const headers = useMemo(
     () => ({
       Authorization: `Bearer ${token}`,
@@ -80,6 +82,7 @@ export default function NotificationCenterSettings({
     try {
       const body = await request("/api/notifications/settings");
       setData(body);
+      setSavedData(body);
     } catch (error: any) {
       setMessage({ error: true, text: error.message });
     } finally {
@@ -151,17 +154,22 @@ export default function NotificationCenterSettings({
         }),
       });
       setData(body);
+      setSavedData(body);
       setSecret("");
       setReplace(false);
       setBitrixWebhook("");
       setReplaceBitrixWebhook(false);
       setMessage({ text: "Настройки сохранены" });
+      return true;
     } catch (error: any) {
       setMessage({ error: true, text: error.message });
+      return false;
     } finally {
       setBusy("");
     }
   };
+  useUnsavedSource({ label: 'центр уведомлений', dirty: !!savedData && canManage && (draftFingerprint(data) !== draftFingerprint(savedData) || !!secret || replace || !!bitrixWebhook || replaceBitrixWebhook), busy: busy === 'save', save,
+    discard: () => { setData(savedData); setSecret(''); setReplace(false); setBitrixWebhook(''); setReplaceBitrixWebhook(false); } });
   const bitrixAction = async (kind: "test" | "check" | "clear") => {
     setBusy(`bitrix-${kind}`);
     setMessage(null);
@@ -169,6 +177,7 @@ export default function NotificationCenterSettings({
       if (kind === "clear") {
         const body = await request("/api/notifications/bitrix24/webhook", { method: "DELETE" });
         setData((old: any) => ({ ...old, bitrix24: body.bitrix24 }));
+        setSavedData((old: any) => ({ ...old, bitrix24: body.bitrix24 }));
         setBitrixWebhook("");
         setMessage({ text: "Webhook удалён, канал Битрикс24 выключен" });
       } else {
@@ -197,6 +206,7 @@ export default function NotificationCenterSettings({
           method: "DELETE",
         });
         setData((old: any) => ({ ...old, channel: body.channel }));
+        setSavedData((old: any) => ({ ...old, channel: body.channel }));
         setSecret("");
         setMessage({ text: "Токен удалён, Telegram выключен" });
       }

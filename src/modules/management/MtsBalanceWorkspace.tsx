@@ -2,7 +2,7 @@ import BalancePackageCells from './BalancePackageCells';
 import React, { useEffect, useState } from 'react';
 import {
   AlertCircle, Check, CircleDollarSign, Copy,
-  FileText, Globe, Layers, PhoneCall, RefreshCw, Settings
+  FileText, Globe, Layers, PhoneCall, RefreshCw, Settings, Wallet
 } from 'lucide-react';
 import {
   Line, LineChart, Legend, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis
@@ -173,13 +173,27 @@ export default function MtsBalanceWorkspace({ token, canManage, canViewAnalytics
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-lg font-black text-slate-900 dark:text-white">Баланс операторов IP-телефонии</h1>
-          <p className="mt-0.5 text-xs text-slate-500">Остаток средств, пакеты минут и детализация начислений из реальных источников</p>
+      <div className="flex min-w-0 items-center gap-3 pl-4">
+        <h1 className="flex shrink-0 items-center gap-2 text-lg font-black text-slate-900 dark:text-white"><Wallet className="h-5 w-5 shrink-0 text-blue-600 dark:text-blue-400" aria-hidden="true" />Баланс</h1>
+        <div className="flex min-w-0 gap-1 overflow-x-auto rounded-xl bg-slate-100 p-1 dark:bg-slate-800">
+          {([
+            ['overview', 'Обзор', CircleDollarSign],
+            ['calls', 'Звонки', PhoneCall],
+            ['charges', 'МАВ и маркировка', FileText],
+            ['packages', 'Пакеты', Layers],
+            ['branches', 'Филиалы', Globe],
+            ['settings', 'Настройки', Settings]
+          ] as const).map(([id, label, Icon]) => (
+            <button key={id} type="button" onClick={() => {
+              setActiveTab(id);
+              localStorage.setItem('pbxpuls_balance_workspace_tab', id);
+            }} className={`flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-bold ${
+              activeTab === id ? 'bg-white text-blue-700 shadow-sm dark:bg-slate-700 dark:text-blue-300' : 'text-slate-500'
+            }`}><Icon className="h-3.5 w-3.5" />{label}</button>
+          ))}
         </div>
         <button type="button" onClick={() => void sync()} disabled={!canManage || syncing}
-          className="btn bg-blue-600 px-3 text-white disabled:cursor-not-allowed disabled:opacity-50">
+          className="btn ml-auto shrink-0 whitespace-nowrap bg-blue-600 px-3 text-white disabled:cursor-not-allowed disabled:opacity-50">
           <RefreshCw className={`h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
           {syncing ? 'Обновление…' : 'Обновить данные'}
         </button>
@@ -191,24 +205,6 @@ export default function MtsBalanceWorkspace({ token, canManage, canViewAnalytics
       {notice && <div className="fixed right-5 top-5 z-50 flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-xs font-bold text-white shadow-xl">
         <Check className="h-4 w-4 text-emerald-400" />{notice}
       </div>}
-
-      <div className="flex w-fit max-w-full gap-1 overflow-x-auto rounded-xl bg-slate-100 p-1 dark:bg-slate-800">
-        {([
-          ['overview', 'Обзор', CircleDollarSign],
-          ['calls', 'Звонки', PhoneCall],
-          ['charges', 'МАВ и маркировка', FileText],
-          ['packages', 'Пакеты', Layers],
-          ['branches', 'Филиалы', Globe],
-          ['settings', 'Настройки', Settings]
-        ] as const).map(([id, label, Icon]) => (
-          <button key={id} type="button" onClick={() => {
-            setActiveTab(id);
-            localStorage.setItem('pbxpuls_balance_workspace_tab', id);
-          }} className={`flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-bold ${
-            activeTab === id ? 'bg-white text-blue-700 shadow-sm dark:bg-slate-700 dark:text-blue-300' : 'text-slate-500'
-          }`}><Icon className="h-3.5 w-3.5" />{label}</button>
-        ))}
-      </div>
 
       {activeTab === 'overview' && <div className="space-y-3">
         <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">

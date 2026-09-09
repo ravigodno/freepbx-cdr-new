@@ -1,8 +1,8 @@
+import { createInterfaceDateTimeFormatter } from '../../../utils/formatInterfaceDateTime';
 import { useEffect, useMemo, useState } from 'react';
 import { Eye, Phone, ShieldAlert, Trash2 } from 'lucide-react';
 
 const sessionToken=()=>{try{return JSON.parse(localStorage.getItem('asterisk_cdr_session')||'{}').token||''}catch{return''}};
-const fmt=(value:any)=>value?new Date(String(value).replace(' ','T')).toLocaleString('ru-RU'):'—';
 const statusLabels:Record<string,string>={new:'Новая',in_progress:'В работе',call_scheduled:'Запланирована',contact_attempted:'Попытка связи',contacted:'Связались',completed:'Обработана',rejected:'Отклонена',spam:'Спам',duplicate:'Дубль'};
 const statusTone:Record<string,string>={new:'bg-blue-50 text-blue-700 border-blue-200',in_progress:'bg-violet-50 text-violet-700 border-violet-200',call_scheduled:'bg-amber-50 text-amber-700 border-amber-200',contact_attempted:'bg-orange-50 text-orange-700 border-orange-200',contacted:'bg-emerald-50 text-emerald-700 border-emerald-200',completed:'bg-emerald-50 text-emerald-700 border-emerald-200',rejected:'bg-rose-50 text-rose-700 border-rose-200',spam:'bg-slate-100 text-slate-600 border-slate-200',duplicate:'bg-slate-100 text-slate-600 border-slate-200'};
 const callBadge=(row:any)=>row.first_answered_call_at?{label:'Дозвонились',tone:'bg-emerald-50 text-emerald-700 border-emerald-200'}:row.first_call_at?{label:'Нет ответа',tone:'bg-amber-50 text-amber-700 border-amber-200'}:{label:'Не звонили',tone:'bg-slate-50 text-slate-600 border-slate-200'};
@@ -11,6 +11,7 @@ const badge=(label:string,tone:string)=><span className={`inline-flex rounded-lg
 type Props={items:any[];loading:boolean;canManage:boolean;onOpen:(row:any)=>void;onCall:(row:any)=>void;onChanged:()=>Promise<void>;onError:(message:string)=>void};
 
 export default function SiteFormsLeadTable({items,loading,canManage,onOpen,onCall,onChanged,onError}:Props){
+ const fmt = createInterfaceDateTimeFormatter();
  const [selected,setSelected]=useState<number[]>([]),[busy,setBusy]=useState(false);
  useEffect(()=>setSelected(current=>current.filter(id=>items.some(row=>Number(row.id)===id))),[items]);
  const pageIds=useMemo(()=>items.map(row=>Number(row.id)),[items]),allSelected=pageIds.length>0&&pageIds.every(id=>selected.includes(id));

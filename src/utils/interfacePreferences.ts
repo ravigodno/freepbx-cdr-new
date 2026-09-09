@@ -1,5 +1,14 @@
 export type ThemePreference = 'light' | 'dark' | 'system';
-export type CdrDateTimeFormat = 'dmy-dash' | 'dmy-short-dash' | 'dmy-dot' | 'dmy-slash' | 'ymd-dash';
+export type CdrDateFormat = 'dmy-dash' | 'dmy-short-dash' | 'dmy-dot' | 'dmy-slash' | 'ymd-dash';
+export type CdrDateTimeFormat = CdrDateFormat | `time-first:${CdrDateFormat}`;
+export const CDR_DATE_FORMAT_OPTIONS = [
+  ['dmy-dash', 'ДД-ММ-ГГГГ'],
+  ['dmy-short-dash', 'ДД-ММ-ГГ'],
+  ['dmy-dot', 'ДД.ММ.ГГГГ'],
+  ['dmy-slash', 'ДД/ММ/ГГГГ'],
+  ['ymd-dash', 'ГГГГ-ММ-ДД'],
+] as const;
+export const getCdrDateFormat = (format: CdrDateTimeFormat): CdrDateFormat => format.replace(/^time-first:/, '') as CdrDateFormat;
 export type SearchEnginePreference = 'yandex' | 'google';
 export type CallDeviceMode = 'desk_phone' | 'browser_headset';
 

@@ -1,3 +1,4 @@
+import type { ModuleVisibility } from '../shared/accessCatalog';
 export type UserRole = 'su' | 'admin' | 'manager' | 'operator' | 'directory_only' | 'custom';
 
 export interface User {
@@ -119,15 +120,7 @@ export interface MissedCallStatus {
 }
 
 export interface AppSettings {
-  moduleVisibility?: {
-    marketing?: boolean;
-    monitoring?: boolean;
-    management?: boolean;
-    balance?: boolean;
-    scripts?: boolean;
-    ai_assistant?: boolean;
-    ai_pbx_admin?: boolean;
-  };
+  moduleVisibility?: Partial<ModuleVisibility>;
   showSuRoleToAdmin?: boolean;
   showSuPermissionsToAdmin?: boolean;
   allowAdminEditSuPermissions?: boolean;

@@ -2,6 +2,9 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, Plus, Trash2, ShieldCheck, Crown, UserCog, UserRound, BookUser, UsersRound } from 'lucide-react';
 import { AccessRole } from '../types';
 import { PermissionKey } from '../permissions';
+import { PERMISSION_GROUPS, SYSTEM_SECTIONS, DEFAULT_MODULE_VISIBILITY, normalizeModuleVisibilitySettings, isSystemSectionVisible, type ModuleVisibility, type PermissionGroup, type PermissionRow, type PermissionKind } from '../../../../shared/accessCatalog';
+import { filterPermissionGroups, groupPermissionState, toggleGroupPermissions } from '../permissionMatrixModel';
+const GROUPS: PermissionGroup[] = PERMISSION_GROUPS.map(group=>({...group,rows:[...group.rows]}));
 
 interface PermissionsMatrixTabProps {
   roles: AccessRole[];
@@ -9,228 +12,12 @@ interface PermissionsMatrixTabProps {
   isSavingRoles: boolean;
   onRolesChange: (roles: AccessRole[]) => void;
   onSaveRoles: () => void;
+  onModuleVisibilityChange?: (visibility:ModuleVisibility) => void;
+  suPrivilegesPanel?: React.ReactNode;
   isSu?: boolean;
   showSuPermissionsToAdmin?: boolean;
   allowAdminEditSuPermissions?: boolean;
 }
-
-type PermissionKind = 'tab' | 'feature' | 'su';
-
-type OptionalModuleKey = 'marketing' | 'monitoring' | 'management' | 'balance' | 'scripts' | 'ai_assistant' | 'ai_pbx_admin';
-
-const DEFAULT_MODULE_VISIBILITY: Record<OptionalModuleKey, boolean> = {
-  marketing: true,
-  monitoring: true,
-  management: true,
-  balance: true,
-  scripts: false,
-  ai_assistant: false,
-  ai_pbx_admin: false
-};
-
-interface PermissionRow {
-  key: PermissionKey;
-  label: string;
-  kind: PermissionKind;
-  hint: string;
-}
-
-interface PermissionGroup {
-  id: string;
-  title: string;
-  description: string;
-  color: 'blue' | 'emerald' | 'sky' | 'slate' | 'red';
-  moduleKey?: OptionalModuleKey;
-  rows: PermissionRow[];
-}
-
-const GROUPS: PermissionGroup[] = [
-  {
-    id: 'calls',
-    title: 'Звонки',
-    description: 'Реестр звонков, обработка, записи и Click2Call.',
-    color: 'blue',
-    rows: [
-      { key: 'view_calls', label: 'Открыть вкладку звонков', kind: 'tab', hint: 'Показывает раздел Реестр звонков' },
-      { key: 'own_calls_only', label: 'Только мои звонки', kind: 'feature', hint: 'Ограничивает журнал и отчеты добавочным номером пользователя' },
-      { key: 'department_calls_only', label: 'Только звонки подчинённых отделов', kind: 'feature', hint: 'Ограничивает звонки отделами, назначенными руководителю в настройках пользователя' },
-      { key: 'view_call_dtmf', label: 'Введённые добавочные номера', kind: 'feature', hint: 'Показывает DTMF-цифры, введённые сотрудником после ответа на исходящий звонок' },
-      { key: 'process_calls', label: 'Обработка звонков', kind: 'feature', hint: 'Разрешает менять статус/обработку звонка' },
-      { key: 'listen_recordings', label: 'Прослушивание записей', kind: 'feature', hint: 'Разрешает слушать записи разговоров' },
-      { key: 'make_calls', label: 'Click2Call', kind: 'feature', hint: 'Разрешает звонить из интерфейса' },
-      { key: 'show_call_modal', label: 'Окно Click2Call', kind: 'feature', hint: 'Показывает модальное окно с логом инициации звонка' }
-    ]
-  },
-  {
-    id: 'directory',
-    title: 'Справочник',
-    description: 'Телефонный справочник, импорт и черный список.',
-    color: 'blue',
-    rows: [
-      { key: 'view_directory', label: 'Открыть вкладку справочника', kind: 'tab', hint: 'Показывает телефонный справочник' },
-      { key: 'edit_directory', label: 'Редактирование справочника', kind: 'feature', hint: 'Создание, изменение и удаление контактов' },
-      { key: 'edit_own_directory_contacts', label: 'Только свои контакты', kind: 'feature', hint: 'Создание личных и изменение/удаление только собственных личных контактов' },
-      { key: 'directory_import_contacts', label: 'Личный импорт контактов', kind: 'feature', hint: 'Google/CSV/vCard импорт только в личный справочник пользователя' },
-      { key: 'directory_manage_import_settings', label: 'Настройки импорта контактов', kind: 'feature', hint: 'Глобальные переключатели источников личного импорта' },
-      { key: 'manage_directory_import', label: 'Импорт и синхронизация', kind: 'feature', hint: 'Админский импорт CSV/JSON, экспорт, нормализация и sync-url' },
-      { key: 'manage_blacklist', label: 'Черный список', kind: 'feature', hint: 'Разрешает добавлять и удалять номера из ЧС' }
-    ]
-  },
-  {
-    id: 'reports',
-    title: 'Отчеты',
-    description: 'Отчеты, аналитика и выгрузки.',
-    color: 'blue',
-    rows: [
-      { key: 'view_reports', label: 'Открыть вкладку отчетов', kind: 'tab', hint: 'Показывает отчеты и аналитику' },
-      { key: 'export_excel', label: 'Экспорт Excel', kind: 'feature', hint: 'Разрешает выгрузку таблиц и отчетов' }
-    ]
-  },
-  {
-    id: 'marketing',
-    title: 'Маркетинг',
-    moduleKey: 'marketing',
-    description: 'CallTracking, Яндекс Метрика, Яндекс Директ и рекламная аналитика.',
-    color: 'blue',
-    rows: [
-      { key: 'view_marketing', label: 'Открыть вкладку маркетинга', kind: 'tab', hint: 'Показывает раздел Маркетинг' },
-      { key: 'manage_marketing', label: 'Управление маркетингом', kind: 'feature', hint: 'Разрешает изменять маркетинговые настройки' },
-      { key: 'manage_calltracking', label: 'CallTracking', kind: 'feature', hint: 'Разрешает управлять сайтами, номерами и правилами подмены' },
-      { key: 'manage_yandex_metrika', label: 'Яндекс Метрика', kind: 'feature', hint: 'Разрешает подключать счетчики, цели и интеграции Метрики' },
-      { key: 'manage_yandex_direct', label: 'Яндекс Директ', kind: 'feature', hint: 'Разрешает управлять настройками расходов и отчетами Директа' }
-      ,{ key: 'view_site_form_leads', label: 'Заявки с сайта', kind: 'tab', hint: 'Просмотр доступных заявок с форм сайта' }
-      ,{ key: 'manage_site_form_leads', label: 'Обработка заявок', kind: 'feature', hint: 'Статусы, комментарии и завершение заявок' }
-      ,{ key: 'call_site_form_leads', label: 'Звонки по заявкам', kind: 'feature', hint: 'Click-to-call из заявки' }
-      ,{ key: 'assign_site_form_leads', label: 'Назначение заявок', kind: 'feature', hint: 'Назначение ответственного и подразделения' }
-      ,{ key: 'export_site_form_leads', label: 'Экспорт заявок', kind: 'feature', hint: 'CSV/XLSX-выгрузка заявок' }
-      ,{ key: 'view_site_form_reports', label: 'Отчёты по заявкам', kind: 'feature', hint: 'KPI, SLA и конверсии заявок' }
-      ,{ key: 'manage_site_form_integrations', label: 'Интеграции форм', kind: 'feature', hint: 'Webhook, токены и настройки сайтов' }
-      ,{ key: 'view_site_form_webhook_logs', label: 'Журнал webhook', kind: 'feature', hint: 'Безопасный журнал приёма заявок' }
-    ]
-  },
-  {
-    id: 'monitoring',
-    title: 'Мониторинг',
-    moduleKey: 'monitoring',
-    description: 'Активные звонки, tcpdump, sngrep, CLI и DB Explorer.',
-    color: 'blue',
-    rows: [
-      { key: 'view_monitoring', label: 'Открыть раздел мониторинга', kind: 'tab', hint: 'Показывает общий раздел мониторинга' },
-      { key: 'view_active_calls', label: 'Активные звонки', kind: 'tab', hint: 'Показывает live-сессии Asterisk' },
-      { key: 'view_quality', label: 'Качество связи', kind: 'tab', hint: 'Показывает IP/RTP-телеметрию, MOS, джиттер, RTT и потери пакетов' },
-      { key: 'view_tcpdump', label: 'TCPDUMP / SIP-RTP', kind: 'tab', hint: 'Показывает tcpdump и SIP/RTP диагностику' },
-      { key: 'view_sngrep', label: 'SIP-диалоги', kind: 'tab', hint: 'Реальный SIP flow из ограниченного PCAP; ключ сохранён для совместимости' },
-      { key: 'view_cli', label: 'Командный центр', kind: 'tab', hint: 'Диагностика, Asterisk CLI и справочная информация' },
-      { key: 'view_db_explorer', label: 'DB Explorer', kind: 'tab', hint: 'Показывает read-only просмотр CDR/CEL и таблиц' },
-      { key: 'view_health', label: 'Состояние АТС', kind: 'tab', hint: 'Показывает Health Report сервера и служб' },
-      { key: 'view_sip_devices_map', label: 'Карта IP / SIP устройств', kind: 'tab', hint: 'Показывает SIP/PJSIP регистрации, IP-адреса, User-Agent и конфликтующие устройства' },
-      { key: 'view_log_analysis', label: 'Анализ логов', kind: 'tab', hint: 'Открывает централизованный анализ журналов и трассировку звонка' },
-      { key: 'view_call_intelligence', label: 'Карточка звонка', kind: 'tab', hint: 'Объединяет CDR, CEL, SIP, RTCP, логи, записи и события безопасности' },
-      { key: 'view_security', label: 'Безопасность', kind: 'tab', hint: 'Открывает центр мониторинга безопасности' },
-      { key: 'view_security_events', label: 'События безопасности', kind: 'feature', hint: 'Просмотр событий и внешних IP' },
-      { key: 'view_firewall', label: 'Firewall и порты', kind: 'feature', hint: 'Просмотр Firewall и сетевых сервисов' },
-      { key: 'view_fail2ban', label: 'Fail2Ban', kind: 'feature', hint: 'Просмотр jail и блокировок' },
-      { key: 'manage_fail2ban', label: 'Управление Fail2Ban', kind: 'su', hint: 'Ручные действия только при включенном feature flag' },
-      { key: 'manage_security_whitelist', label: 'Белый список безопасности', kind: 'feature', hint: 'Управление доверенными IP PBXPuls' },
-      { key: 'view_security_config_audit', label: 'Аудит конфигурации', kind: 'feature', hint: 'Просмотр проверок и изменений файлов' },
-      { key: 'manage_security_settings', label: 'Настройки безопасности', kind: 'su', hint: 'Управление мониторингом и уведомлениями' },
-      { key: 'export_security_report', label: 'Экспорт security-отчетов', kind: 'feature', hint: 'Экспорт отчетов безопасности' }
-    ]
-  },
-  {
-    id: 'management',
-    title: 'Управление АТС',
-    moduleKey: 'management',
-    description: 'Управленческие функции PBX и номерная емкость.',
-    color: 'blue',
-    rows: [
-      { key: 'view_management', label: 'Открыть вкладку управления', kind: 'tab', hint: 'Показывает раздел Управление АТС' },
-      { key: 'bulk_extensions', label: 'Массовые EXT', kind: 'su', hint: 'Массовые операции с внутренними номерами' },
-      { key: 'manage_trunks', label: 'Транки', kind: 'su', hint: 'Управление SIP-транками' },
-      { key: 'manage_outbound_routes', label: 'Исходящие правила', kind: 'su', hint: 'Управление исходящими маршрутами' },
-      { key: 'manage_numbering_capacity', label: 'Номерная емкость', kind: 'su', hint: 'Управление номерной емкостью' }
-      ,{ key: 'view_gsm_gateways', label: 'GSM-шлюзы', kind: 'tab', hint: 'Состояние GSM-портов и SIP endpoints' }
-      ,{ key: 'view_gsm_sms', label: 'История GSM SMS', kind: 'feature', hint: 'Просмотр входящих и исходящих SMS' }
-      ,{ key: 'send_gsm_sms', label: 'Отправка GSM SMS', kind: 'su', hint: 'Preview и отправка SMS' }
-      ,{ key: 'view_gsm_balances', label: 'Балансы GSM SIM', kind: 'feature', hint: 'Текущий баланс, история и графики расходов' }
-      ,{ key: 'manage_gsm_balances', label: 'Управление балансами GSM', kind: 'su', hint: 'USSD-проверка и расписание автообновления' }
-      ,{ key: 'manage_gsm_services', label: 'USSD и услуги GSM', kind: 'su', hint: 'Шаблоны, Preview и выполнение USSD-команд' }
-      ,{ key: 'manage_gsm_gateways', label: 'Настройки GSM-шлюзов', kind: 'su', hint: 'Подключение OpenVox и AMI' }
-    ]
-  },
-  {
-    id: 'balance',
-    title: 'Баланс',
-    moduleKey: 'balance',
-    description: 'Баланс операторов и провайдеры проверки.',
-    color: 'blue',
-    rows: [
-      { key: 'view_balance', label: 'Открыть вкладку баланса', kind: 'tab', hint: 'Показывает раздел Баланс операторов' },
-      { key: 'manage_balance_providers', label: 'Провайдеры баланса', kind: 'su', hint: 'Управление провайдерами проверки баланса' }
-    ]
-  },
-  {
-    id: 'scripts',
-    title: 'Скрипты разговоров',
-    moduleKey: 'scripts',
-    description: 'Управление интерактивными сценариями и скриптами разговоров для операторов.',
-    color: 'blue',
-    rows: [
-      { key: 'view_scripts', label: 'Открыть Скрипты', kind: 'tab', hint: 'Разрешает доступ к разделу "Скрипты разговоров"' },
-      { key: 'manage_scripts', label: 'Управление скриптами', kind: 'feature', hint: 'Разрешает создавать, редактировать и удалять скрипты разговоров' }
-    ]
-  },
-  {
-    id: 'ai_assistant',
-    title: 'Умный автоответчик',
-    moduleKey: 'ai_assistant',
-    description: 'Настройка AI-автоответчика, сценариев обработки звонков роботом и интеграции с LLM.',
-    color: 'blue',
-    rows: [
-      { key: 'view_ai_assistant', label: 'Открыть AI-автоответчик', kind: 'tab', hint: 'Разрешает доступ к разделу "AI-автоответчик"' },
-      { key: 'manage_ai_assistant', label: 'Управление автоответчиком', kind: 'feature', hint: 'Разрешает редактировать промпты и правила AI-автоответчика' }
-    ]
-  },
-  {
-    id: 'ai_pbx_admin',
-    title: 'AI администратор',
-    moduleKey: 'ai_pbx_admin',
-    description: 'AI-ассистент администратора для диагностики, анализа логов и настройки АТС.',
-    color: 'blue',
-    rows: [
-      { key: 'view_ai_pbx_admin', label: 'Открыть AI-администратор', kind: 'tab', hint: 'Разрешает доступ к разделу "AI администратор АТС"' },
-      { key: 'manage_ai_pbx_admin', label: 'Управление AI-администратором', kind: 'feature', hint: 'Разрешает изменять системные настройки и промпты AI-администратора АТС' }
-    ]
-  },
-  {
-    id: 'settings',
-    title: 'Настройки',
-    description: 'Доступ к системным настройкам.',
-    color: 'blue',
-    rows: [
-      { key: 'view_settings', label: 'Открыть настройки', kind: 'tab', hint: 'Показывает страницу Настройки системы' }
-    ]
-  },
-  {
-    id: 'users_roles',
-    title: 'Пользователи и роли',
-    description: 'Управление пользователями и матрицей ролей.',
-    color: 'blue',
-    rows: [
-      { key: 'manage_users', label: 'Пользователи', kind: 'su', hint: 'Создание, редактирование и отключение пользователей' },
-      { key: 'manage_roles', label: 'Роли', kind: 'su', hint: 'Редактирование матрицы прав доступа' }
-    ]
-  },
-  {
-    id: 'system',
-    title: 'SU / системные права',
-    description: 'Опасные системные действия. По умолчанию видит только SU.',
-    color: 'red',
-    rows: [
-      { key: 'dangerous_pbx_write', label: 'Опасные изменения АТС', kind: 'su', hint: 'Разрешает потенциально опасные изменения FreePBX/Asterisk' }
-    ]
-  }
-];
 
 const colorClasses = {
   blue: {
@@ -290,12 +77,18 @@ export default function PermissionsMatrixTab({
   isSavingRoles,
   onRolesChange,
   onSaveRoles,
+  onModuleVisibilityChange,
+  suPrivilegesPanel,
   isSu = false,
   showSuPermissionsToAdmin = false,
   allowAdminEditSuPermissions = false
 }: PermissionsMatrixTabProps) {
+  const [search, setSearch] = useState('');
+  const [isSavingVisibility, setIsSavingVisibility] = useState(false);
+  const [visibilityLoaded, setVisibilityLoaded] = useState(false);
+  const [isLoadingVisibility, setIsLoadingVisibility] = useState(true);
   const [newRoleName, setNewRoleName] = useState('');
-  const [moduleVisibility, setModuleVisibility] = useState<Record<OptionalModuleKey, boolean>>(DEFAULT_MODULE_VISIBILITY);
+  const [moduleVisibility, setModuleVisibility] = useState<ModuleVisibility>(DEFAULT_MODULE_VISIBILITY);
   const [moduleVisibilityStatus, setModuleVisibilityStatus] = useState('');
   const [selectedRoleId, setSelectedRoleId] = useState<string>('');
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
@@ -326,7 +119,7 @@ export default function PermissionsMatrixTab({
 
   const loadModuleVisibility = async () => {
     const token = getAuthToken();
-    if (!token) return;
+    if (!token) { setIsLoadingVisibility(false); return; }
 
     try {
       const response = await fetch('/api/settings/module-visibility', {
@@ -335,17 +128,21 @@ export default function PermissionsMatrixTab({
 
       const data = await response.json().catch(() => ({}));
 
+      if (!response.ok || !data.moduleVisibility) throw new Error('Visibility unavailable');
       if (response.ok && data.moduleVisibility) {
-        setModuleVisibility({ ...DEFAULT_MODULE_VISIBILITY, ...data.moduleVisibility });
+        setVisibilityLoaded(true);
+        setModuleVisibility(normalizeModuleVisibilitySettings(data.moduleVisibility));
       }
     } catch {
-      // Не блокируем матрицу прав, если настройка временно недоступна.
-    }
+      setModuleVisibilityStatus('Не удалось загрузить видимость разделов. Обновите страницу перед изменением.');
+    } finally { setIsLoadingVisibility(false); }
   };
 
-  const saveModuleVisibility = async (nextVisibility: Record<OptionalModuleKey, boolean>) => {
+  const saveModuleVisibility = async (nextVisibility: ModuleVisibility) => {
     const token = getAuthToken();
-    if (!token || !isSu) return;
+    if (!token || !isSu || isSavingVisibility || isLoadingVisibility || !visibilityLoaded) return;
+    const previousVisibility = moduleVisibility;
+    setIsSavingVisibility(true);
 
     setModuleVisibility(nextVisibility);
     setModuleVisibilityStatus('Сохраняем видимость разделов...');
@@ -366,11 +163,17 @@ export default function PermissionsMatrixTab({
         throw new Error(data.error || 'Не удалось сохранить видимость разделов');
       }
 
-      setModuleVisibility({ ...DEFAULT_MODULE_VISIBILITY, ...data.moduleVisibility });
+      if (!SYSTEM_SECTIONS.every(({ key }) => data.moduleVisibility?.[key] === nextVisibility[key])) {
+        throw new Error('Сервер не применил изменение. Обновите страницу; если ошибка повторится, требуется обновление серверной части.');
+      }
+
+      setModuleVisibility(normalizeModuleVisibilitySettings(data.moduleVisibility));
+      onModuleVisibilityChange?.(normalizeModuleVisibilitySettings(data.moduleVisibility));
       setModuleVisibilityStatus('Видимость разделов сохранена.');
     } catch (error: any) {
+      setModuleVisibility(previousVisibility);
       setModuleVisibilityStatus(error?.message || 'Не удалось сохранить видимость разделов');
-    }
+    } finally { setIsSavingVisibility(false); }
   };
 
   useEffect(() => {
@@ -383,12 +186,14 @@ export default function PermissionsMatrixTab({
   }, [roles, selectedRoleId]);
 
   const visibleGroups = GROUPS
-    .filter(group => isSu || !group.moduleKey || moduleVisibility[group.moduleKey] !== false)
+    .filter(group => isSystemSectionVisible(isSu ? 'su' : 'admin', moduleVisibility, group.moduleKey))
     .map(group => ({
       ...group,
-      rows: group.rows.filter(row => row.kind !== 'su' || isSu || showSuPermissionsToAdmin)
+      rows: group.rows.filter(row => (row.kind !== 'su' || isSu || showSuPermissionsToAdmin) && (!row.moduleKey || isSystemSectionVisible(isSu ? 'su' : 'admin', moduleVisibility, row.moduleKey)))
     }))
     .filter(group => group.rows.length > 0);
+
+  const filteredGroups = filterPermissionGroups(visibleGroups, search);
 
   const allGroupsOpen = visibleGroups.length > 0 && visibleGroups.every(group => openGroups[group.id] !== false);
 
@@ -404,32 +209,23 @@ export default function PermissionsMatrixTab({
   const renderModuleVisibilityPanel = () => {
     if (!isSu) return null;
 
-    const labels: Record<OptionalModuleKey, string> = {
-      marketing: 'Маркетинг',
-      monitoring: 'Мониторинг',
-      management: 'Управление АТС',
-      balance: 'Баланс',
-      scripts: 'Скрипты разговоров',
-      ai_assistant: 'Умный автоответчик',
-      ai_pbx_admin: 'AI администратор'
-    };
-
     return (
-      <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4">
+      <div className="min-w-0">
         <div className="text-sm font-black text-red-900">SU: видимость разделов системы</div>
         <p className="mt-1 text-xs text-red-700">
-          Реестр звонков, Справочник и Отчеты всегда включены. Отключенные ниже разделы будут скрыты от всех, кроме SU.
+          Отключенные разделы скрыты от всех, кроме SU. Права ролей сохраняются. Подразделы AI Platform также зависят от переключателя всей платформы. Изменения сохраняются сразу.
         </p>
-        <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
-          {(Object.keys(labels) as OptionalModuleKey[]).map(moduleKey => (
+        <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          {SYSTEM_SECTIONS.map(({key: moduleKey, label}) => (
             <label key={moduleKey} className="flex items-center gap-2 rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-bold text-slate-700">
               <input
                 type="checkbox"
                 checked={moduleVisibility[moduleKey] !== false}
+                disabled={isSavingVisibility || isLoadingVisibility || !visibilityLoaded}
                 onChange={(event) => saveModuleVisibility({ ...moduleVisibility, [moduleKey]: event.target.checked })}
                 className="h-3.5 w-3.5 rounded border-slate-300 text-red-600 focus:ring-red-500"
               />
-              <span>{labels[moduleKey]}</span>
+              <span>{label}</span>
             </label>
           ))}
         </div>
@@ -446,7 +242,7 @@ export default function PermissionsMatrixTab({
   };
 
   const toggleGroup = (groupId: string) => {
-    setOpenGroups(prev => ({ ...prev, [groupId]: !prev[groupId] }));
+    setOpenGroups(prev => ({ ...prev, [groupId]: prev[groupId] === false }));
   };
 
   const updateRolePermission = (roleId: string, key: PermissionKey, checked: boolean) => {
@@ -466,6 +262,11 @@ export default function PermissionsMatrixTab({
           : role
       )
     );
+  };
+
+  const updateRoleGroup = (group:PermissionGroup,checked:boolean) => {
+    if (!selectedRole) return;
+    onRolesChange(roles.map(role=>role.id===selectedRole.id ? {...role,permissions:toggleGroupPermissions(group.rows,role.permissions || {},checked,canEditPermission)} : role));
   };
 
   const updateRoleName = (roleId: string, name: string) => {
@@ -531,9 +332,18 @@ export default function PermissionsMatrixTab({
   }
 
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
+    <div className="rounded-2xl border border-slate-200 bg-white overflow-clip">
+      {isSu && (
+        <div className={`m-4 grid gap-4 rounded-xl border border-slate-200 bg-slate-50 p-4 ${suPrivilegesPanel ? 'lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]' : ''}`}>
+          {suPrivilegesPanel && (
+            <div className="min-w-0 border-b border-slate-200 pb-4 lg:border-b-0 lg:border-r lg:pb-0 lg:pr-4">
+              {suPrivilegesPanel}
+            </div>
+          )}
+          {renderModuleVisibilityPanel()}
+        </div>
+      )}
       <div className="p-4 bg-slate-50 border-b border-slate-200 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        {renderModuleVisibilityPanel()}
         <div>
           <h4 className="text-sm font-black text-slate-900">Матрица доступа</h4>
           <p className="text-xs text-slate-500 mt-1">
@@ -552,8 +362,8 @@ export default function PermissionsMatrixTab({
       </div>
 
       <div className="p-4 border-b border-slate-100 bg-white">
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-wrap gap-2">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+          <div className="flex min-w-0 flex-wrap gap-2 lg:flex-1 lg:flex-nowrap lg:overflow-x-auto">
             {roles.map(role => {
               const active = selectedRole?.id === role.id;
               return (
@@ -563,8 +373,8 @@ export default function PermissionsMatrixTab({
                   onClick={() => setSelectedRoleId(role.id)}
                   className={
                     active
-                      ? 'px-4 py-2 rounded-xl bg-blue-600 text-white text-xs font-black shadow-sm'
-                      : 'px-4 py-2 rounded-xl bg-slate-50 text-slate-700 border border-slate-200 text-xs font-bold hover:bg-blue-50 hover:text-blue-700'
+                      ? 'shrink-0 whitespace-nowrap px-4 py-2 rounded-xl bg-blue-600 text-white text-xs font-black shadow-sm'
+                      : 'shrink-0 whitespace-nowrap px-4 py-2 rounded-xl bg-slate-50 text-slate-700 border border-slate-200 text-xs font-bold hover:bg-blue-50 hover:text-blue-700'
                   }
                 >
                   <span className="inline-flex items-center gap-2">
@@ -576,18 +386,18 @@ export default function PermissionsMatrixTab({
             })}
           </div>
 
-          <div className="flex flex-col gap-2 lg:flex-row">
+          <div className="flex flex-wrap items-center gap-2 lg:shrink-0 lg:flex-nowrap">
             <input
               type="text"
               value={newRoleName}
               onChange={(e) => setNewRoleName(e.target.value)}
               placeholder="Название новой роли"
-              className="flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs"
+              className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs lg:w-48 lg:flex-none"
             />
             <button
               type="button"
               onClick={addRole}
-              className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-100"
+              className="inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-slate-200 bg-slate-50 px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-100"
             >
               <Plus className="h-4 w-4" />
               Добавить роль
@@ -600,24 +410,28 @@ export default function PermissionsMatrixTab({
         <div className="p-8 text-center text-sm text-slate-500">Роли пока не загружены.</div>
       ) : (
         <div className="p-4 space-y-3">
-          <div className="rounded-xl border border-blue-200 bg-blue-50 p-3">
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex items-center gap-2 text-sm font-black text-blue-900">
+          <div className="sticky top-0 z-20 rounded-xl border border-blue-200 bg-blue-50 p-3 shadow-sm">
+            <div className="flex flex-wrap items-center gap-3 lg:flex-nowrap">
+              <div className="flex min-w-0 items-center gap-2 text-sm font-black text-blue-900 lg:max-w-[30%]">
                 {getRoleIcon(selectedRole.id, selectedRole.system)}
-                <span>Выбрана роль: {selectedRole.name}</span>
+                <span className="truncate" title={selectedRole.name}>Выбрана роль: {selectedRole.name}</span>
               </div>
 
+              <input type="search" aria-label="Поиск прав" title="Список фильтруется при вводе" placeholder="Поиск прав…" value={search} onChange={event=>setSearch(event.target.value)} className="min-w-[160px] flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm" />
+              <div className="flex shrink-0 items-center gap-3 border-l border-blue-200 pl-3">
               <button
                 type="button"
                 onClick={toggleAllGroups}
-                className="inline-flex items-center justify-center gap-1 rounded-lg border border-blue-200 bg-white px-3 py-1.5 text-[11px] font-black text-blue-700 hover:bg-blue-50"
+                className="inline-flex items-center justify-center gap-1 whitespace-nowrap rounded-lg border border-blue-200 bg-white px-3 py-2 text-[11px] font-black text-blue-700 hover:bg-blue-50"
               >
                 {allGroupsOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
                 {allGroupsOpen ? 'Свернуть всё' : 'Развернуть всё'}
               </button>
+              <button type="button" disabled={isSavingRoles} onClick={onSaveRoles} className="shrink-0 whitespace-nowrap rounded-lg bg-blue-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">{isSavingRoles ? 'Сохранение…' : 'Сохранить права'}</button>
+              </div>
             </div>
-
-            <div className="mt-2 flex flex-wrap items-center gap-2">
+          </div>
+            <div className="flex flex-wrap items-center gap-2">
               {selectedRole.system ? null : (
                 <>
                   <input
@@ -637,17 +451,21 @@ export default function PermissionsMatrixTab({
                 </>
               )}
             </div>
-          </div>
-
-          {visibleGroups.map(group => {
+          <p className="text-xs text-slate-500">Галочка раздела меняет все доступные права этого раздела, даже при поиске. Ограничения «только свои» и «только подчинённых отделов» настраиваются отдельно.</p>
+          {filteredGroups.length===0 && <p role="status" className="p-4 text-sm text-slate-500">Права не найдены. Измените поисковый запрос.</p>}
+          {filteredGroups.map(group => {
             const colors = colorClasses[group.color];
-            const isOpen = openGroups[group.id] !== false;
+            const isOpen = Boolean(search.trim()) || openGroups[group.id] !== false;
+            const fullGroup = visibleGroups.find(item=>item.id===group.id)!;
+            const groupState = groupPermissionState(fullGroup.rows,selectedRole.permissions || {},canEditPermission);
             const enabledCount = groupEnabledCount(group);
 
             return (
               <section key={group.id} className={`rounded-xl border overflow-hidden border-l-4 ${colors.accent}`}>
+                <div className={`flex items-center gap-3 border-b pr-3 ${colors.header}`}>
                 <button
                   type="button"
+                  aria-expanded={isOpen}
                   onClick={() => toggleGroup(group.id)}
                   className={`w-full flex items-center justify-between gap-3 p-3 border-b text-left ${colors.header}`}
                 >
@@ -662,6 +480,14 @@ export default function PermissionsMatrixTab({
                     <div className="mt-1 text-xs opacity-80">{group.description}</div>
                   </div>
                 </button>
+                <label className="flex shrink-0 items-center gap-2 text-xs font-bold">
+                  <input type="checkbox" checked={groupState.checked} disabled={groupState.disabled || isSavingRoles}
+                    ref={node=>{ if(node)node.indeterminate=groupState.mixed; }}
+                    aria-label={`Все права раздела ${group.title}`} aria-checked={groupState.mixed ? 'mixed' : groupState.checked}
+                    onChange={event=>updateRoleGroup(fullGroup,event.target.checked)} />
+                  Весь раздел
+                </label>
+                </div>
 
                 {isOpen && (
                   <div className="bg-white divide-y divide-slate-100">

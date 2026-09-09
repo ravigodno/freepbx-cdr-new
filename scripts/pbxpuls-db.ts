@@ -45,6 +45,7 @@ function parseFreePBXConfig(): Record<string, string> {
 function runtimeConfig(passwordOverride?: string) {
   const password = passwordOverride ?? process.env.PBXPULS_DB_PASSWORD ?? process.env.PBXPULS_DB_PASS ?? '';
   return {
+    ...(process.env.PBXPULS_DB_SOCKET_PATH ? { socketPath: process.env.PBXPULS_DB_SOCKET_PATH } : {}),
     host: process.env.PBXPULS_DB_HOST || '127.0.0.1',
     port: Number(process.env.PBXPULS_DB_PORT || 3306),
     database: process.env.PBXPULS_DB_NAME || 'pbxpuls',

@@ -15,7 +15,8 @@ export async function fetchAccessRoles(token: string): Promise<AccessRole[]> {
 
 export async function saveAccessRoles(
   token: string,
-  roles: AccessRole[]
+  roles: AccessRole[],
+  onEffectivePermissions?: (permissions:AccessRole['permissions']) => void
 ): Promise<AccessRole[]> {
   const resp = await fetch('/api/roles', {
     method: 'PUT',
@@ -32,5 +33,6 @@ export async function saveAccessRoles(
     throw new Error(data.error || 'Не удалось сохранить роли.');
   }
 
+  if (data.effectivePermissions) onEffectivePermissions?.(data.effectivePermissions);
   return data.roles || roles;
 }

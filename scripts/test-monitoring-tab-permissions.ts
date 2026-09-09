@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { PERMISSION_GROUPS } from '../shared/accessCatalog.js';
 import { hasUserPermission, type PermissionKey } from '../src/modules/access/permissions.js';
 
 const monitoringPermissions: PermissionKey[] = [
@@ -31,7 +32,7 @@ assert.equal(hasUserPermission({ role: 'admin' }, settings, 'view_health'), true
 assert.equal(hasUserPermission({ role: 'manager' }, settings, 'view_db_explorer'), false);
 assert.equal(hasUserPermission({ role: 'manager' }, settings, 'view_health'), false);
 
-const matrix = fs.readFileSync('src/modules/access/components/PermissionsMatrixTab.tsx', 'utf8');
+const matrixKeys = new Set<string>(PERMISSION_GROUPS.flatMap(group=>group.rows.map(row=>row.key)));
 const app = fs.readFileSync('src/App.tsx', 'utf8');
 const server = fs.readFileSync('server.ts', 'utf8');
 const ai = fs.readFileSync('server/aiPbxAdmin.ts', 'utf8');
@@ -40,7 +41,7 @@ const logs = fs.readFileSync('server/logAnalysis/router.ts', 'utf8');
 const migration = fs.readFileSync('server/pbxpulsMigrations.ts', 'utf8');
 
 for (const permission of monitoringPermissions) {
-  assert.match(matrix, new RegExp(`key: '${permission}'`), `${permission} missing from permissions matrix`);
+  assert.ok(matrixKeys.has(permission), `${permission} missing from permissions matrix`);
   assert.match(app, new RegExp(`hasPermission\\('${permission}'\\)`), `${permission} missing from frontend guard`);
 }
 assert.match(server, /\/api\/db-explorer\/live-snapshot'[\s\S]{0,100}requirePermission\('view_db_explorer'\)/);

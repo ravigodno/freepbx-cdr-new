@@ -15,8 +15,8 @@ import SiteFormsWorkspace from './siteForms/SiteFormsWorkspace';
 type MarketingTabId = 'site-forms' | 'overview' | 'phone-clicks' | 'sources' | 'campaigns' | 'pages' | 'utm' | 'lost-leads' | 'analytics' | 'integrations' | 'numbers';
 
 const tabs: Array<{ id: MarketingTabId; label: string }> = [
-  { id: 'site-forms', label: 'Заявки с сайта' },
   { id: 'overview', label: 'Обзор' },
+  { id: 'site-forms', label: 'Заявки с сайта' },
   { id: 'phone-clicks', label: 'Клики по телефонам' },
   { id: 'sources', label: 'Источники' },
   { id: 'campaigns', label: 'Кампании' },
@@ -323,12 +323,22 @@ export default function MarketingTab({ siteFormsEnabled = true }: { siteFormsEna
   ], [summary, summaryData, callbackSlaMinutes, directSummary, useMetrikaVisits, isDirectConnected, isDirectLimited, directLimitedWarning]);
 
   const renderTab = () => {
-    if (siteFormsEnabled && activeTab === 'site-forms') return <SiteFormsWorkspace />;
+    if (siteFormsEnabled && activeTab === 'site-forms') return <SiteFormsWorkspace showNavigation={false} />;
     if (activeTab === 'phone-clicks') return <PhoneClicksTable events={phoneClicks} metrikaGoalSummary={metrikaGoalSummary} metrikaGoalRows={metrikaGoalRows} metrikaGoalError={metrikaGoalWarning} />;
     if (activeTab === 'sources') return <TrafficSourcesTable sources={mergedSources} />;
     if (activeTab === 'campaigns') return <CampaignsReportTable />;
     if (activeTab === 'lost-leads') return <LostLeadsTable events={phoneClicks.filter(event => event.leadStatus === 'lost')} />;
-    if (activeTab === 'integrations') return <MarketingIntegrationsPanel sites={sites} metrikaIntegrations={metrikaIntegrations} loadingIntegrations={loading} integrationsError={error} onMetrikaChanged={() => setRefreshKey(value => value + 1)} />;
+    if (activeTab === 'integrations') return (
+      <div className="space-y-4">
+        {siteFormsEnabled && (
+          <div className="space-y-3">
+            <h2 className="text-sm font-black text-slate-900 dark:text-white">Интеграции заявок с сайта</h2>
+            <SiteFormsWorkspace initialTab="integrations" showNavigation={false} />
+          </div>
+        )}
+        <MarketingIntegrationsPanel sites={sites} metrikaIntegrations={metrikaIntegrations} loadingIntegrations={loading} integrationsError={error} onMetrikaChanged={() => setRefreshKey(value => value + 1)} />
+      </div>
+    );
     if (activeTab === 'numbers') return <CalltrackingNumbersPanel sites={sites} numbers={calltrackingNumbers} rules={calltrackingRules} loading={loading} error={error} onChanged={() => setRefreshKey(value => value + 1)} />;
     if (activeTab === 'pages') {
       return <MetrikaPagesTable pages={metrikaPages} connected={metrikaStatus === 'connected'} />;
@@ -342,12 +352,14 @@ export default function MarketingTab({ siteFormsEnabled = true }: { siteFormsEna
 
     return (
       <div className="space-y-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+          {kpis.map(item => <MarketingKpiCard key={item.label} {...item} />)}
+        </div>
         <MarketingFunnelChain />
         <div className="grid gap-4 xl:grid-cols-2">
           <PhoneClicksTable events={phoneClicks} metrikaGoalSummary={metrikaGoalSummary} metrikaGoalRows={metrikaGoalRows} metrikaGoalError={metrikaGoalWarning} />
           <TrafficSourcesTable sources={mergedSources} />
         </div>
-        <MarketingIntegrationsPanel sites={sites} metrikaIntegrations={metrikaIntegrations} loadingIntegrations={loading} integrationsError={error} onMetrikaChanged={() => setRefreshKey(value => value + 1)} />
       </div>
     );
   };
@@ -356,15 +368,12 @@ export default function MarketingTab({ siteFormsEnabled = true }: { siteFormsEna
     <section className="w-full space-y-4" id="marketing-tab-container">
       {error && <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs font-bold text-amber-800 shadow-sm dark:border-amber-900/40 dark:bg-amber-950/20 dark:text-amber-300">{error}</div>}
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
-        {kpis.map(item => <MarketingKpiCard key={item.label} {...item} />)}
-      </div>
-
       <div className="overflow-x-auto rounded-2xl border border-slate-200/70 bg-white p-1.5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <div className="flex min-w-max gap-1">
           {visibleTabs.map(tab => (
             <button
               key={tab.id}
+              data-unsaved-navigation={activeTab !== tab.id ? true : undefined}
               onClick={() => setActiveTab(tab.id)}
               className={[
                 'whitespace-nowrap rounded-xl px-4 py-2 text-xs font-black transition',

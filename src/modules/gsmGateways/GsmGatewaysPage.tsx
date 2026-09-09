@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   CircleHelp,
   MessageSquare,
+  Network,
   RefreshCw,
   Send,
   Settings,
@@ -575,28 +576,12 @@ export default function GsmGatewaysPage({
   return (
     <section className="gsm-gateways-page space-y-5">
       <style>{`.gsm-gateways-page table th,.gsm-gateways-page table td{text-align:center;vertical-align:middle}.gsm-gateways-page table td>div{margin-left:auto;margin-right:auto}.gsm-gateways-page table td .flex{justify-content:center}`}</style>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-xl font-black">GSM-шлюзы</h2>
-          <p className="text-xs text-slate-500">
-            OpenVox: GSM, SIP endpoints, баланс SIM и SMS
-          </p>
-        </div>
-        <button
-          className="btn"
-          disabled={!!busy || !selected}
-          onClick={() => void refresh()}
-        >
-          <RefreshCw className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} />
-          Обновить
-        </button>
-      </div>
-      {message && (
-        <div className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">
-          {message}
-        </div>
-      )}
-      <div className="flex gap-2 overflow-x-auto border-b dark:border-slate-700">
+      <div className="flex min-w-0 items-center gap-3 pl-4">
+        <h2 className="flex shrink-0 items-center gap-2 text-lg font-black text-slate-900 dark:text-white">
+          <Network className="h-5 w-5 shrink-0 text-blue-600 dark:text-blue-400" aria-hidden="true" />
+          GSM-шлюзы
+        </h2>
+      <div className="flex min-w-0 gap-1 overflow-x-auto rounded-xl bg-slate-100 p-1 dark:bg-slate-800">
         {(
           [
             ["overview", "Обзор", true],
@@ -611,12 +596,26 @@ export default function GsmGatewaysPage({
             <button
               key={id}
               onClick={() => setTab(id)}
-              className={`whitespace-nowrap px-4 py-3 text-sm font-bold ${tab === id ? "border-b-2 border-blue-600 text-blue-600" : "text-slate-500"}`}
+              className={`shrink-0 whitespace-nowrap rounded-lg px-3 py-2 text-xs font-bold ${tab === id ? "bg-white text-blue-700 shadow-sm dark:bg-slate-700 dark:text-blue-300" : "text-slate-500"}`}
             >
               {label}
             </button>
           ))}
       </div>
+        <button
+          className="btn ml-auto shrink-0 whitespace-nowrap bg-blue-600 px-3 text-white"
+          disabled={!!busy || !selected}
+          onClick={() => void refresh()}
+        >
+          <RefreshCw className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} />
+          Обновить
+        </button>
+      </div>
+      {message && (
+        <div className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">
+          {message}
+        </div>
+      )}
       {tab === "balance" && status && (
         <div className="rounded-2xl border bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">

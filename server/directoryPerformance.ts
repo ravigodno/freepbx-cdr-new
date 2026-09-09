@@ -14,6 +14,8 @@ export type DirectoryListInput = {
   type?: unknown;
   visibility?: unknown;
   isSpam?: unknown;
+  isBlacklisted?: unknown;
+  spamOrBlacklisted?: unknown;
   organization?: unknown;
   responsibleUserId?: unknown;
   department?: unknown;
@@ -274,6 +276,14 @@ const buildFilters = (input: DirectoryListInput, access: DirectoryAccessContext)
     where.push(`COALESCE(c.visibility, IF(c.contact_type='personal','private','shared')) = ?`); params.push(visibility);
   }
   if (isSpam !== null) { where.push('c.is_spam = ?'); params.push(isSpam ? 1 : 0); }
+  const isBlacklisted = boolParam(input.isBlacklisted);
+  if (isBlacklisted !== null) { where.push('c.is_blacklisted = ?'); params.push(isBlacklisted ? 1 : 0); }
+  const spamOrBlacklisted = boolParam(input.spamOrBlacklisted);
+  if (spamOrBlacklisted !== null) {
+    where.push(spamOrBlacklisted
+      ? '(c.is_spam = 1 OR c.is_blacklisted = 1)'
+      : '(c.is_spam = 0 AND c.is_blacklisted = 0)');
+  }
   if (organization) { where.push('c.company = ?'); params.push(organization); }
   if (responsible) {
     where.push(`EXISTS (SELECT 1 FROM directory_contact_metadata rm WHERE rm.contact_id=c.id AND rm.metadata_key='responsibleUserId' AND COALESCE(NULLIF(rm.metadata_value,''),NULLIF(rm.value,''),TRIM(BOTH '"' FROM rm.metadata_json),'')=?)`);

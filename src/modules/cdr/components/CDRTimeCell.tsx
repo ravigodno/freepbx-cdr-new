@@ -1,46 +1,29 @@
+import { formatCdrDateTime } from '../../../utils/formatInterfaceDateTime';
+export { formatCdrDateTime } from '../../../utils/formatInterfaceDateTime';
 import React from 'react';
-import {
-  PhoneIncoming,
-  PhoneOutgoing,
-  PhoneCall,
-} from 'lucide-react';
-import { serverLocalDateTimeToBrowser } from '../../../utils/serverClock';
+import CDRRegistryIcon, { type RegistryIconKind } from './CDRRegistryIcon';
+import { type CdrDateTimeFormat } from '../../../utils/interfacePreferences';
 
 interface CDRTimeCellProps {
   calldate: string;
   uniqueid: string;
   isIncoming: boolean;
   isOutgoing: boolean;
+  iconKind?: RegistryIconKind;
   fetchChronology: (uniqueid: string) => void;
-  dateTimeFormat?: 'dmy-dash' | 'dmy-short-dash' | 'dmy-dot' | 'dmy-slash' | 'ymd-dash';
+  dateTimeFormat?: CdrDateTimeFormat;
   showSeconds?: boolean;
   useBrowserTimezone?: boolean;
   hourCycle?: 12 | 24;
 }
 
-function formatCdrDateTime(value: string, format: NonNullable<CDRTimeCellProps['dateTimeFormat']>, showSeconds: boolean, useBrowserTimezone: boolean, hourCycle: 12 | 24): string {
-  if (useBrowserTimezone) {
-    const browserDate = serverLocalDateTimeToBrowser(value);
-    if (browserDate) value = `${browserDate.getFullYear()}-${String(browserDate.getMonth()+1).padStart(2,'0')}-${String(browserDate.getDate()).padStart(2,'0')} ${String(browserDate.getHours()).padStart(2,'0')}:${String(browserDate.getMinutes()).padStart(2,'0')}:${String(browserDate.getSeconds()).padStart(2,'0')}`;
-  }
-  const match = String(value || '').trim().match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
-  if (!match) return value;
-  const [, year, month, day, hour, minute, second] = match;
-  const numericHour = Number(hour);
-  const displayHour = hourCycle === 12 ? String(numericHour % 12 || 12).padStart(2, '0') : hour;
-  const suffix = hourCycle === 12 ? (numericHour >= 12 ? ' PM' : ' AM') : '';
-  const time = `${displayHour}:${minute}${showSeconds ? `:${second}` : ''}${suffix}`;
-  if (format === 'ymd-dash') return `${year}-${month}-${day} ${time}`;
-  if (format === 'dmy-short-dash') return `${day}-${month}-${year.slice(-2)} ${time}`;
-  const separator = format === 'dmy-dot' ? '.' : format === 'dmy-slash' ? '/' : '-';
-  return `${day}${separator}${month}${separator}${year} ${time}`;
-}
 
 export function CDRTimeCell({
   calldate,
   uniqueid,
   isIncoming,
   isOutgoing,
+  iconKind,
   fetchChronology,
   dateTimeFormat = 'dmy-dash',
   showSeconds = true,
@@ -53,15 +36,7 @@ export function CDRTimeCell({
   return (
     <td className="py-4 px-4 font-normal text-slate-705 dark:text-slate-350">
       <div className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 border shadow-3xs">
-          {isIncoming ? (
-            <PhoneIncoming className="h-4.5 w-4.5" />
-          ) : isOutgoing ? (
-            <PhoneOutgoing className="h-4.5 w-4.5" />
-          ) : (
-            <PhoneCall className="h-4.5 w-4.5" />
-          )}
-        </div>
+        <CDRRegistryIcon kind={iconKind || (isIncoming ? 'incoming' : isOutgoing ? 'outgoing' : 'internal')} />
 
         <div className="flex flex-col">
           <span className="font-bold text-slate-800 dark:text-slate-200 text-[13px] tracking-tight">

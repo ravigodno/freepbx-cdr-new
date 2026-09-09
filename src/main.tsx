@@ -2,15 +2,15 @@ import './polyfill.ts';
 import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
+import { UnsavedChangesProvider } from './components/settings/UnsavedChanges';
 import ErrorBoundary from './components/ErrorBoundary.tsx';
 import './index.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ErrorBoundary>
-      <App />
+      <UnsavedChangesProvider><App /></UnsavedChangesProvider>
     </ErrorBoundary>
   </StrictMode>,
 );
-
 

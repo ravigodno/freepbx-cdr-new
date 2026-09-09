@@ -1,3 +1,4 @@
+import { draftFingerprint, useUnsavedSource, useUnsavedChanges } from '../../../components/settings/UnsavedChanges';
 import React, { useCallback, useEffect, useState } from 'react';
 import { BookOpen, Copy, KeyRound, Pencil, Plus, Power, RefreshCw, Save, Trash2, X } from 'lucide-react';
 
@@ -59,6 +60,8 @@ export function PhonebookProfilesPanel({ token }: { token: string }) {
   const [items, setItems] = useState<Profile[]>([]);
   const [owners, setOwners] = useState<Owner[]>([]);
   const [draft, setDraft] = useState<Draft>(initialDraft);
+  const [savedDraft, setSavedDraft] = useState<Draft>(initialDraft);
+  const { requestNavigation } = useUnsavedChanges();
   const [editingId, setEditingId] = useState<number | null>(null);
   const [credentials, setCredentials] = useState<Credentials | null>(null);
   const [status, setStatus] = useState('');
@@ -94,6 +97,7 @@ export function PhonebookProfilesPanel({ token }: { token: string }) {
   const resetForm = () => {
     setEditingId(null);
     setDraft(initialDraft());
+    setSavedDraft(initialDraft());
   };
 
   const payload = () => ({
@@ -119,18 +123,32 @@ export function PhonebookProfilesPanel({ token }: { token: string }) {
       }
       resetForm();
       await load();
+      return true;
     } catch (error: any) {
       setStatus(error.message);
+      return false;
     } finally {
       setIsBusy(false);
     }
   };
+
+  useUnsavedSource({ label: 'телефонная книга', dirty: draftFingerprint(draft) !== draftFingerprint(savedDraft), busy: isBusy,
+    save: async () => { const creating = !editingId; const result = await save(); return result && creating ? 'stay' : result; }, discard: () => setDraft(savedDraft) });
 
   const beginEdit = (item: Profile) => {
     setEditingId(item.id);
     setCredentials(null);
     setStatus('');
     setDraft({
+      name: item.name,
+      format: item.format,
+      scope: item.scope,
+      ownerUserId: item.ownerUserId || '',
+      username: item.username,
+      filters: { ...emptyFilters(), ...item.filters },
+      maxEntries: item.maxEntries
+    });
+    setSavedDraft({
       name: item.name,
       format: item.format,
       scope: item.scope,
@@ -231,7 +249,7 @@ export function PhonebookProfilesPanel({ token }: { token: string }) {
       <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
         <div className="mb-3 flex items-center justify-between gap-3">
           <b className="text-xs text-slate-800">{editingId ? 'Редактирование профиля' : 'Новый профиль'}</b>
-          {editingId && <button type="button" onClick={resetForm} className="inline-flex items-center gap-1 text-xs font-bold text-slate-500 hover:text-slate-800"><X className="h-3.5 w-3.5" />Отмена</button>}
+          {editingId && <button type="button" onClick={() => requestNavigation(resetForm)} className="inline-flex items-center gap-1 text-xs font-bold text-slate-500 hover:text-slate-800"><X className="h-3.5 w-3.5" />Отмена</button>}
         </div>
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <label className="text-[11px] font-bold text-slate-600">Название<input value={draft.name} onChange={event => setDraft(current => ({ ...current, name: event.target.value }))} className="mt-1 block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-normal" /></label>
@@ -262,7 +280,7 @@ export function PhonebookProfilesPanel({ token }: { token: string }) {
                 <span className="mt-1 block text-[10px] text-slate-400">{item.lastAccessAt ? `Последнее обращение: ${new Date(item.lastAccessAt).toLocaleString('ru-RU')}` : 'Аппараты ещё не обращались'}</span>
               </div>
               <div className="flex flex-wrap gap-1.5">
-                <button type="button" disabled={isBusy} onClick={() => beginEdit(item)} className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-2.5 py-1.5 font-bold text-slate-600 hover:bg-slate-50"><Pencil className="h-3.5 w-3.5" />Изменить</button>
+                <button type="button" disabled={isBusy} onClick={() => requestNavigation(() => beginEdit(item))} className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-2.5 py-1.5 font-bold text-slate-600 hover:bg-slate-50"><Pencil className="h-3.5 w-3.5" />Изменить</button>
                 <button type="button" disabled={isBusy} onClick={() => rotateSecret(item)} className="inline-flex items-center gap-1 rounded-md border border-amber-200 px-2.5 py-1.5 font-bold text-amber-700 hover:bg-amber-50"><RefreshCw className="h-3.5 w-3.5" />Пароль</button>
                 <button type="button" disabled={isBusy} onClick={() => toggleActive(item)} className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-2.5 py-1.5 font-bold text-slate-600 hover:bg-slate-50"><Power className="h-3.5 w-3.5" />{item.active ? 'Отключить' : 'Включить'}</button>
                 <button type="button" disabled={isBusy} onClick={() => remove(item)} className="inline-flex items-center gap-1 rounded-md border border-rose-200 px-2.5 py-1.5 font-bold text-rose-700 hover:bg-rose-50"><Trash2 className="h-3.5 w-3.5" />Удалить</button>

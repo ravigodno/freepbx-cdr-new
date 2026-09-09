@@ -1,4 +1,6 @@
 import { DirectoryPhoneCell } from './modules/directory/components/DirectoryPhoneCell';
+import { draftFingerprint, useUnsavedSource, useUnsavedChanges } from './components/settings/UnsavedChanges';
+import { SECTION_LABELS, isSystemSectionVisible } from '../shared/accessCatalog';
 import React, { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from 'react';
 import{diagnoseDirectoryExtension,diagnoseDirectoryPhone,normalizeDirectoryPhoneInput,parseDirectoryCsv,validateDirectoryPhone,type DirectoryImportDiagnostic}from'../shared/directoryImportValidation';
 import {
@@ -70,14 +72,14 @@ import {
 import { CallEntry, DashboardStats, AppSettings, UserRole, DirectoryEntry } from './types';
 import DirectoryCsvColumnsHelp from './modules/directory/components/DirectoryCsvColumnsHelp';
 import DirectoryContactFormLayout from './modules/directory/components/DirectoryContactFormLayout';
-import AiAgentBuilderPage from './modules/aiPlatform/AiAgentBuilderPage';
-import AIPBXAdminTab from './components/AIPBXAdminTab';
+const AiAgentBuilderPage = lazy(() => import('./modules/aiPlatform/AiAgentBuilderPage'));
+const AIPBXAdminTab = lazy(() => import('./components/AIPBXAdminTab'));
 import packageJson from '../package.json';
-import SipDialogsTab from './modules/monitoring/tabs/monitoring/SipDialogsTab';
-import TcpdumpTab from './modules/monitoring/tabs/monitoring/TcpdumpTab';
-import ReportsTab from './components/reports/ReportsTab';
-import MarketingTab from './components/marketing/MarketingTab';
-import SiteFormsWorkspace from './components/marketing/siteForms/SiteFormsWorkspace';
+const SipDialogsTab = lazy(() => import('./modules/monitoring/tabs/monitoring/SipDialogsTab'));
+const TcpdumpTab = lazy(() => import('./modules/monitoring/tabs/monitoring/TcpdumpTab'));
+const ReportsTab = lazy(() => import('./components/reports/ReportsTab'));
+const MarketingTab = lazy(() => import('./components/marketing/MarketingTab'));
+const SiteFormsWorkspace = lazy(() => import('./components/marketing/siteForms/SiteFormsWorkspace'));
 import SiteFormLeadNotifier from './components/marketing/siteForms/SiteFormLeadNotifier';
 import { AboutSystemTab } from './components/AboutSystemTab';
 import NotificationCenterSettings from './components/settings/NotificationCenterSettings';
@@ -88,26 +90,26 @@ import { getLiveCallPopupTitle, normalizeLiveCallBannerPayload, stabilizeLiveCal
 import { canBlacklistLiveIncomingCall, getLiveCallBlacklistNumber } from './utils/liveCallBlacklist';
 import { useServerClock } from './hooks/useServerClock';
 import { getServerNow } from './utils/serverClock';
-import { loadInterfacePreferences, saveInterfacePreferences, type InterfacePreferences } from './utils/interfacePreferences';
+import { CDR_DATE_FORMAT_OPTIONS, getCdrDateFormat, loadInterfacePreferences, saveInterfacePreferences, type InterfacePreferences } from './utils/interfacePreferences';
 import UnifiedDialer from './modules/softphone/components/UnifiedDialer';
 import AudioDeviceSettings from './modules/softphone/components/AudioDeviceSettings';
 import SoftphoneCallPanel from './modules/softphone/components/SoftphoneCallPanel';
 import SoftphoneAutoConfig from './modules/softphone/components/SoftphoneAutoConfig';
 import { PbxPulsSipClient, type SoftphoneSnapshot } from './modules/softphone/sip/sipClient';
 import { loadAudioDevicePreferences } from './modules/softphone/audio/audioDevicePreferences';
-import CommandCenterTab from './modules/monitoring/tabs/monitoring/CommandCenterTab';
+const CommandCenterTab = lazy(() => import('./modules/monitoring/tabs/monitoring/CommandCenterTab'));
 const DbExplorerTab = lazy(() => import('./modules/monitoring/tabs/monitoring/DbExplorerTab'));
 const SecurityTab = lazy(() => import('./modules/monitoring/tabs/monitoring/SecurityTab'));
 const LogAnalysisTab = lazy(() => import('./modules/monitoring/tabs/monitoring/LogAnalysisTab'));
 const CallIntelligencePanel = lazy(() => import('./modules/monitoring/tabs/monitoring/CallIntelligencePanel'));
-import QualityTab from './modules/monitoring/tabs/monitoring/QualityTab';
-import DevicesMapTab from './modules/monitoring/tabs/monitoring/DevicesMapTab';
-import HealthReportTab from './modules/monitoring/tabs/monitoring/HealthReportTab';
+const QualityTab = lazy(() => import('./modules/monitoring/tabs/monitoring/QualityTab'));
+const DevicesMapTab = lazy(() => import('./modules/monitoring/tabs/monitoring/DevicesMapTab'));
+const HealthReportTab = lazy(() => import('./modules/monitoring/tabs/monitoring/HealthReportTab'));
 import { DirectoryStatusIcon } from './modules/directory/components/DirectoryStatusIcon';
 import { DirectoryTextTooltip } from './modules/directory/components/DirectoryTextTooltip';
 import { PhonebookProfilesPanel } from './modules/directory/components/PhonebookProfilesPanel';
 import { fetchDirectory, fetchDirectoryAll, fetchDirectoryContact, saveDirectoryEntry, deleteDirectoryEntry, toggleDirectoryBlacklist, toggleDirectorySpam, previewDirectoryImport, previewDirectoryImportOwnership, previewDirectoryBulkDelete, applyDirectoryBulkDelete, createDirectoryImportJob, prepareDirectoryImportSource, deleteDirectoryImportSource, getDirectoryImportJob, cancelDirectoryImportJob, resumeDirectoryImportJob, previewDirectoryImportRollback, getDirectoryImportJobErrors, fetchDirectoryColumnSettings, saveMyDirectoryColumnSettings, resetMyDirectoryColumnSettings, saveGlobalDirectoryColumnSettings, resetGlobalDirectoryColumnSettings, fetchDirectoryCustomFields, createDirectoryCustomField, previewDirectoryCustomFieldUpdate, applyDirectoryCustomFieldUpdate, previewDirectoryCustomFieldDelete, applyDirectoryCustomFieldDelete, setDirectoryFavorite, type DirectoryImportPreparedSource, type DirectoryCustomFieldDefinition } from './modules/directory/services/directoryApi';
-import { calculateDirectoryImportDigest, getDirectoryImportDigestCapability, DIRECTORY_IMPORT_MAX_BYTES, isSupportedDirectoryImportFile, summarizeDirectoryImportSource, type DirectoryImportDigestStatus, type DirectoryImportSourceKind, type DirectoryImportSourceSummary } from './modules/directory/utils/directoryImportSource';
+import { convertDirectoryExcelToCsv, calculateDirectoryImportDigest, getDirectoryImportDigestCapability, DIRECTORY_IMPORT_MAX_BYTES, isSupportedDirectoryImportFile, summarizeDirectoryImportSource, type DirectoryImportDigestStatus, type DirectoryImportSourceKind, type DirectoryImportSourceSummary } from './modules/directory/utils/directoryImportSource';
 import { applyDirectoryOwnershipPreview, buildDirectoryEffectiveRows, directoryImportPipelineSteps, getDirectoryImportActiveStep, getDirectoryImportDisabledReason, normalizeDirectoryEntriesForOwnership } from './modules/directory/utils/directoryImportPipeline';
 import { downloadDirectoryCsv, downloadDirectoryExcel } from './modules/directory/utils/directoryExport';
 import CDRPage from './modules/cdr/pages/CDRPage';
@@ -137,7 +139,7 @@ import {
 } from './modules/access/services/rolesApi';
 import { fetchCdrStats, fetchCdrCalls } from './modules/cdr/services/cdrApi';
 import { processCallSubmit } from './modules/cdr/utils/processCallSubmit';
-import ProvisioningCenter from './modules/management/ProvisioningCenter';
+const ProvisioningCenter = lazy(() => import('./modules/management/ProvisioningCenter'));
 import {
   AUTH_EXPIRED_LOGIN_MESSAGE,
   addAuthExpiredListener,
@@ -507,8 +509,13 @@ const Logo3D = ({
           alt="PBXPULS"
         />
         <img
-          src="/brand/pbx_text.svg"
-          className="h-[30px] w-auto shrink-0 block"
+          src="/brand/pbx_full_lightV.svg"
+          className="h-[30px] w-auto shrink-0 block dark:hidden"
+          alt="PBXPULS"
+        />
+        <img
+          src="/brand/pbx_full_darkV.svg"
+          className="h-[30px] w-auto shrink-0 hidden dark:block"
           alt="PBXPULS"
         />
       </div>
@@ -718,6 +725,16 @@ export default function App() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const siteFormsEnabled = settings?.siteFormLeadsEnabled !== false;
   const [draftSettings, setDraftSettings] = useState<AppSettings | null>(null);
+  const [savedSettingsDraft, setSavedSettingsDraft] = useState<AppSettings | null>(null);
+  const settingsFingerprint = (value: AppSettings | null) => {
+    if (!value) return '';
+    const { moduleVisibility: _visibility, ...editable } = value;
+    return draftFingerprint(editable);
+  };
+  const settingsDraftDirty = !!savedSettingsDraft && settingsFingerprint(draftSettings) !== settingsFingerprint(savedSettingsDraft);
+  const settingsDirtyRef = useRef(false);
+  settingsDirtyRef.current = settingsDraftDirty;
+  const { requestNavigation: requestSettingsNavigation, saveChanges: saveSettingsChanges } = useUnsavedChanges();
   const [isTestingDb, setIsTestingDb] = useState(false);
   const [dbTestResult, setDbTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [isTestingAmi, setIsTestingAmi] = useState(false);
@@ -725,6 +742,13 @@ export default function App() {
   const [isTestingFreePBXApi, setIsTestingFreePBXApi] = useState(false);
   const [freepbxApiTestResult, setFreePBXApiTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [isSubmittingSettings, setIsSubmittingSettings] = useState(false);
+  const [settingsSaveNotice, setSettingsSaveNotice] = useState<{ success: boolean; message: string } | null>(null);
+  useEffect(() => {
+    if (!settingsSaveNotice) return;
+    const timer = window.setTimeout(() => setSettingsSaveNotice(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [settingsSaveNotice]);
   const [isDownloadingBrowserExtension, setIsDownloadingBrowserExtension] = useState(false);
   const [browserExtensionMessage, setBrowserExtensionMessage] = useState('');
   const [settingsTab, setSettingsTab] = useState<'pbx' | 'integrations' | 'directory' | 'access' | 'permissions' | 'notifications' | 'appearance'>('pbx');
@@ -844,6 +868,10 @@ export default function App() {
   const [accessError, setAccessError] = useState('');
 
   const [roles, setRoles] = useState<AccessRole[]>([]);
+  const [savedRolesDraft, setSavedRolesDraft] = useState<AccessRole[] | null>(null);
+  const rolesDraftDirty = !!savedRolesDraft && draftFingerprint(roles) !== draftFingerprint(savedRolesDraft);
+  const rolesDirtyRef = useRef(false);
+  rolesDirtyRef.current = rolesDraftDirty;
   const [isLoadingRoles, setIsLoadingRoles] = useState(false);
   const [isSavingRoles, setIsSavingRoles] = useState(false);
   const [userForm, setUserForm] = useState({
@@ -856,6 +884,8 @@ export default function App() {
     permissions: {},
     managedDepartments: [] as string[]
   });
+  const [savedUserDraft, setSavedUserDraft] = useState(userForm);
+  const userDraftDirty = draftFingerprint(userForm) !== draftFingerprint(savedUserDraft);
   const [isDemoClearing, setIsDemoClearing] = useState(false);
   const [isDemoGenerating, setIsDemoGenerating] = useState(false);
   const [demoStatusResult, setDemoStatusResult] = useState<{ success: boolean; message: string } | null>(null);
@@ -870,9 +900,9 @@ export default function App() {
   const [timeToNextRefresh, setTimeToNextRefresh] = useState<number>(30);
 
   // --- TELEPHONE DIRECTORY STATE & HANDLERS ---
-  const [activeView, setActiveView] = useState<'calls' | 'directory' | 'reports' | 'marketing' | 'monitoring' | 'management' | 'balance' | 'gsm-gateways' | 'settings' | 'about' | 'scripts' | 'ai-assistant' | 'ai-pbx-admin' | 'ai-platform'>(() => {
+  const [activeView, setActiveView] = useState<'calls' | 'directory' | 'reports' | 'marketing' | 'monitoring' | 'management' | 'balance' | 'gsm-gateways' | 'settings' | 'about' | 'scripts' | 'ai-assistant' | 'ai-pbx-admin' | 'ai-platform' | 'no-access'>(() => {
     const params = new URLSearchParams(window.location.search);
-    const saved = localStorage.getItem('asterisk_cdr_active_view') as 'calls' | 'directory' | 'reports' | 'marketing' | 'monitoring' | 'management' | 'balance' | 'gsm-gateways' | 'about' | 'scripts' | 'ai-assistant' | 'ai-pbx-admin' | 'ai-platform' | null;
+    const saved = localStorage.getItem('asterisk_cdr_active_view') as 'calls' | 'directory' | 'reports' | 'marketing' | 'monitoring' | 'management' | 'balance' | 'gsm-gateways' | 'about' | 'scripts' | 'ai-assistant' | 'ai-pbx-admin' | 'ai-platform' | 'no-access' | null;
     if (params.get('directorySearch')) return 'directory';
     if (/^\/ai-platform(?:\/(?:agents(?:\/\d+(?:\/(?:knowledge|voice|diagnostics))?)?|scripts|assistant|skills|knowledge|conversations|settings|diagnostics))?$/.test(window.location.pathname)) return 'ai-platform';
     if (window.location.pathname === '/management/directory/import') return 'directory';
@@ -993,7 +1023,7 @@ export default function App() {
   const [isSavingDir, setIsSavingDir] = useState(false);
   const [dirSearchQuery, setDirSearchQuery] = useState(() => new URLSearchParams(window.location.search).get('directorySearch') || '');
   const [dirTypeFilter, setDirTypeFilter] = useState<'all' | 'client' | 'supplier' | 'government' | 'internal'>('all');
-  const [dirSpamMode, setDirSpamMode] = useState<'all' | 'exclude_spam' | 'only_spam'>('exclude_spam');
+  const [dirSpamMode, setDirSpamMode] = useState<'all' | 'exclude_spam' | 'only_spam' | 'only_blacklisted' | 'exclude_blacklisted' | 'only_spam_or_blacklisted' | 'exclude_spam_and_blacklisted'>('exclude_spam');
   const [dirVisibilityMode, setDirVisibilityMode] = useState<'all' | 'shared_only' | 'private_only' | 'my_private_only' | 'exclude_private' | 'exclude_shared'>('all');
   const [dirPage, setDirPage] = useState(1);
   const [dirPageSize, setDirPageSize] = useState(DIRECTORY_PAGE_SIZE);
@@ -1355,6 +1385,7 @@ export default function App() {
   };
 
   const prepareImportSource = async (kind: DirectoryImportSourceKind, source: Blob, filename: string) => {
+    filename = filename.replace(/\.(xlsx|xls)$/i, '.csv');
     if (!session?.token) return;
     const requestId = ++directoryImportDigestRequestRef.current;
     setDirectoryImportDigestStatus('calculating');
@@ -1436,7 +1467,7 @@ export default function App() {
     setImportProgress({ stage: 'idle', processed: 0, total: 0, message: '' });
   };
 
-  const handleDirectoryImportFile = (file: File) => {
+  const handleDirectoryImportFile = (file: File, displayName = file.name) => {
     directoryImportDigestRequestRef.current++;
     setDirectoryImportPreparedSources(current => {
       const next = { ...current };
@@ -1445,7 +1476,7 @@ export default function App() {
     });
     setDirectoryImportSourceError('');
     if (!isSupportedDirectoryImportFile(file.name)) {
-      setDirectoryImportSourceError('Поддерживаются только файлы CSV и TXT.');
+      setDirectoryImportSourceError('Поддерживаются файлы CSV, TXT и Excel (XLSX, XLS).');
       return;
     }
     if (file.size > DIRECTORY_IMPORT_MAX_BYTES) {
@@ -1456,8 +1487,30 @@ export default function App() {
       setDirectoryImportSourceError('Выбранный файл пуст.');
       return;
     }
+    if (/\.(xlsx|xls)$/i.test(file.name)) {
+      const requestId = directoryImportDigestRequestRef.current;
+      setDirectoryImportSourceKind('file');
+      setImportFileName(displayName);
+      setImportSourceFile(null);
+      setImportFileText('');
+      setDirectoryImportSourceSummary(null);
+      setDirectoryImportDigestStatus('calculating');
+      setDirectoryImportSourceDigest('');
+      resetPreparedDirectoryImport();
+      setImportProgress({ stage: 'reading', processed: 0, total: file.size, message: 'Чтение Excel…' });
+      void convertDirectoryExcelToCsv(file).then(text => {
+        if (requestId !== directoryImportDigestRequestRef.current) return;
+        handleDirectoryImportFile(new File([text], file.name.replace(/\.(xlsx|xls)$/i, '.csv'), { type: 'text/csv' }), displayName);
+      }).catch(error => {
+        if (requestId !== directoryImportDigestRequestRef.current) return;
+        setDirectoryImportDigestStatus('error');
+        setDirectoryImportSourceError(error.message || 'Не удалось прочитать Excel.');
+        setImportProgress({ stage: 'error', processed: 0, total: file.size, message: 'Ошибка чтения Excel' });
+      });
+      return;
+    }
     setDirectoryImportSourceKind('file');
-    setImportFileName(file.name);
+    setImportFileName(displayName);
     setImportSourceFile(file);
     setImportFileText('');
     resetPreparedDirectoryImport();
@@ -1476,7 +1529,7 @@ export default function App() {
       }
       try {
         setImportFileText(text);
-        setDirectoryImportSourceSummary(summarizeDirectoryImportSource(text, 'file', file.name, file.size));
+        setDirectoryImportSourceSummary(summarizeDirectoryImportSource(text, 'file', displayName, file.size));
         if (directoryImportDigestRequestRef.current === 0) setImportProgress({ stage: 'reading', processed: file.size, total: file.size, message: 'Расчёт контрольной суммы…' });
       } catch (_error) {
         setDirectoryImportSourceError('Не удалось разобрать структуру файла.');
@@ -1587,7 +1640,7 @@ export default function App() {
   const openDirectoryImportPreview = () => {
     const text = directoryImportSourceKind === 'file' ? importFileText : importText;
     if (!text.trim()) {
-      setDirectoryImportSourceError(directoryImportSourceKind === 'file' ? 'Сначала выберите непустой CSV или TXT файл.' : 'Вставьте CSV из буфера обмена.');
+      setDirectoryImportSourceError(directoryImportSourceKind === 'file' ? 'Сначала выберите непустой CSV, TXT или Excel файл.' : 'Вставьте CSV из буфера обмена.');
       return;
     }
     const prepared = directoryImportPreparedSources[directoryImportSourceKind];
@@ -1743,7 +1796,9 @@ export default function App() {
       return false;
     }
     if (!resp.ok) return false;
-    setSettings(draftSettings);
+    setSettings(previous => ({ ...draftSettings, moduleVisibility: previous?.moduleVisibility || draftSettings.moduleVisibility }));
+    setSavedSettingsDraft(draftSettings);
+    settingsDirtyRef.current = false;
     return true;
   };
 
@@ -3633,7 +3688,11 @@ export default function App() {
       if (resp.ok) {
         const data = await resp.json();
         setSettings(data);
-        setDraftSettings(JSON.parse(JSON.stringify(data)));
+        if (!settingsDirtyRef.current) {
+          const draft = JSON.parse(JSON.stringify(data));
+          setDraftSettings(draft);
+          setSavedSettingsDraft(draft);
+        }
         if (isAdminRole(session.role)) {
           await Promise.all([
             loadAccessUsers(),
@@ -3671,7 +3730,7 @@ export default function App() {
 
     try {
       const data = await fetchAccessRoles(session.token);
-      setRoles(data);
+      if (!rolesDirtyRef.current) { setRoles(data); setSavedRolesDraft(data); }
 
     } catch (e) {
       console.error('Error loading roles:', e);
@@ -3681,29 +3740,23 @@ export default function App() {
   };
 
   const saveRoles = async () => {
-    if (!session || !isAdminRole(session.role)) return;
+    if (!session || !isAdminRole(session.role)) return false;
 
     setIsSavingRoles(true);
 
     try {
-      const savedRoles = await saveAccessRoles(session.token, roles);
-      setRoles(savedRoles);
-
-      // Dynamically update the current user's active session permissions on save
-      const myRole = savedRoles.find((r: any) => r.id === session.role);
-      if (myRole) {
-        const nextSession = {
-          ...session,
-          permissions: {
-            ...(myRole.permissions || {}),
-            ...(session.permissions || {})
-          }
-        };
+      const savedRoles = await saveAccessRoles(session.token, roles, permissions => {
+        const nextSession = {...session,permissions};
         setSession(nextSession);
-        localStorage.setItem('asterisk_cdr_session', JSON.stringify(nextSession));
-      }
+        localStorage.setItem('asterisk_cdr_session',JSON.stringify(nextSession));
+      });
+      setRoles(savedRoles);
+      setSavedRolesDraft(savedRoles);
+      rolesDirtyRef.current = false;
+      return true;
     } catch (e: any) {
       alert(e.message || 'Не удалось сохранить роли.');
+      return false;
     } finally {
       setIsSavingRoles(false);
     }
@@ -3711,27 +3764,30 @@ export default function App() {
 
   const resetUserForm = () => {
     setEditingUserId(null);
-    setUserForm({ fullName: '', username: '', password: '', role: 'operator', extension: '', disabled: false, permissions: {}, managedDepartments: [] });
+    const empty = { fullName: '', username: '', password: '', role: 'operator' as UserRole, extension: '', disabled: false, permissions: {}, managedDepartments: [] as string[] };
+    setUserForm(empty);
+    setSavedUserDraft(empty);
     setAccessError('');
   };
 
   const openEditUser = (user: AccessUser) => {
     setEditingUserId(user.id);
     setUserForm({ fullName: user.fullName || '', username: user.username, password: '', role: user.role as UserRole, extension: user.extension || '', disabled: !!user.disabled, permissions: user.permissions || {}, managedDepartments: user.managedDepartments || [] });
+    setSavedUserDraft({ fullName: user.fullName || '', username: user.username, password: '', role: user.role as UserRole, extension: user.extension || '', disabled: !!user.disabled, permissions: user.permissions || {}, managedDepartments: user.managedDepartments || [] });
     setAccessError('');
     setSettingsTab('access');
   };
 
   const saveAccessUser = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!session || !isAdminRole(session.role)) return;
+    if (!session || !isAdminRole(session.role)) return false;
     if (!userForm.username.trim()) {
       setAccessError('Укажите логин пользователя.');
-      return;
+      return false;
     }
     if (!editingUserId && !userForm.password.trim()) {
       setAccessError('Для нового пользователя нужен пароль.');
-      return;
+      return false;
     }
     setIsSavingUser(true);
     setAccessError('');
@@ -3739,8 +3795,10 @@ export default function App() {
       await saveAccessUserApi(session.token, userForm, editingUserId);
       await loadAccessUsers();
       resetUserForm();
+      return true;
     } catch (e: any) {
       setAccessError(e.message || 'Ошибка соединения с сервером.');
+      return false;
     } finally {
       setIsSavingUser(false);
     }
@@ -3758,16 +3816,8 @@ export default function App() {
     }
   };
 
-  // Admin Settings Submitter
-  const handleSaveSettings = async (e: React.FormEvent) => {
-    e.preventDefault();
-
-    if (settingsTab === 'permissions') {
-      await saveRoles();
-      return;
-    }
-
-    if (!draftSettings || !session || !isAdminRole(session.role)) return;
+  const saveGeneralSettings = async (): Promise<boolean> => {
+    if (!draftSettings || !session || !isAdminRole(session.role)) return false;
 
     setIsSavingSettings(true);
     try {
@@ -3782,28 +3832,58 @@ export default function App() {
 
       if (resp.status === 401) {
         handleAuthError(resp);
-        return;
+        return false;
       }
 
       if (resp.ok) {
         setIsSettingsOpen(false);
         setDbTestResult(null);
-        setSettings(draftSettings);
+        setSettings(previous => ({ ...draftSettings, moduleVisibility: previous?.moduleVisibility || draftSettings.moduleVisibility }));
+        setSavedSettingsDraft(draftSettings);
+        settingsDirtyRef.current = false;
         setPublicSettings({
           customLogoUrl: draftSettings.customLogoUrl,
           customCopyright: draftSettings.customCopyright
         });
         setDbTestResult({ success: true, message: 'Настройки успешно применены.' });
         reloadData();
+        return true;
       } else {
         alert('Ошибка при сохранении конфигурационного файла.');
+        return false;
       }
     } catch (e) {
       alert('Произошла ошибка сетевого соединения.');
+      return false;
     } finally {
       setIsSavingSettings(false);
     }
   };
+
+  const handleSaveSettings = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const submitter = (event.nativeEvent as SubmitEvent).submitter;
+    if (submitter && !submitter.hasAttribute('data-settings-submit')) return;
+    if (isSubmittingSettings) return;
+    setIsSubmittingSettings(true);
+    setSettingsSaveNotice(null);
+    try {
+      saveInterfacePreferences(interfacePreferences);
+      const saved = await saveSettingsChanges();
+      setSettingsSaveNotice({ success: saved, message: saved ? 'Настройки сохранены' : 'Не удалось сохранить настройки. Проверьте ошибки.' });
+    } catch {
+      setSettingsSaveNotice({ success: false, message: 'Не удалось сохранить настройки. Повторите попытку.' });
+    } finally {
+      setIsSubmittingSettings(false);
+    }
+  };
+
+  useUnsavedSource({ label: 'настройки системы', dirty: settingsDraftDirty, busy: isSavingSettings,
+    save: saveGeneralSettings, discard: () => { setDraftSettings(savedSettingsDraft); settingsDirtyRef.current = false; } });
+  useUnsavedSource({ label: 'права доступа', dirty: rolesDraftDirty, busy: isSavingRoles,
+    save: saveRoles, discard: () => { if (savedRolesDraft) setRoles(savedRolesDraft); rolesDirtyRef.current = false; } });
+  useUnsavedSource({ label: 'карточка пользователя', dirty: userDraftDirty, busy: isSavingUser,
+    save: () => saveAccessUser(), discard: () => setUserForm(savedUserDraft) });
 
   const handleSaveDirectoryUrlSettings = async () => {
     if (!draftSettings || !session || !isAdminRole(session.role)) return;
@@ -4235,12 +4315,15 @@ export default function App() {
     if (hasPermission('view_ai_platform')) return 'ai-platform';
     if (hasPermission('view_settings') || hasPermission('manage_users') || hasPermission('manage_roles')) return 'settings';
 
-    return 'reports';
+    if (isSystemSectionVisible(session.role,settings?.moduleVisibility,'settings')) return 'settings';
+    if (isSystemSectionVisible(session.role,settings?.moduleVisibility,'about')) return 'about';
+    return 'no-access';
   }, [session, settings]);
 
   const isActiveViewAllowed = useCallback((view: typeof activeView): boolean => {
     if (!session) return false;
 
+    if (view === 'no-access') return true;
     if (view === 'calls') return hasPermission('view_calls');
     if (view === 'directory') return hasPermission('view_directory');
     if (view === 'reports') return hasPermission('view_reports');
@@ -4252,9 +4335,9 @@ export default function App() {
     if (view === 'scripts') return hasPermission('view_scripts');
     if (view === 'ai-assistant') return hasPermission('view_ai_assistant');
     if (view === 'ai-pbx-admin') return hasPermission('view_ai_pbx_admin');
-    if (view === 'ai-platform') return hasPermission('view_ai_platform');
-    if (view === 'settings') return hasPermission('view_settings') || hasPermission('manage_users') || hasPermission('manage_roles');
-    if (view === 'about') return true;
+    if (view === 'ai-platform') return hasPermission('view_ai_platform') || hasPermission('view_scripts') || hasPermission('view_ai_assistant');
+    if (view === 'settings') return isSystemSectionVisible(session.role,settings?.moduleVisibility,'settings');
+    if (view === 'about') return isSystemSectionVisible(session.role,settings?.moduleVisibility,'about');
 
     return false;
   }, [session, settings]);
@@ -5065,10 +5148,10 @@ export default function App() {
       const match = String(value ?? '').trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
       if (match) {
         const [, year, month, day] = match;
-        if (cdrDateTimeFormat === 'dmy-short-dash') return `${day}-${month}-${year.slice(-2)}`;
-        if (cdrDateTimeFormat === 'dmy-dot') return `${day}.${month}.${year}`;
-        if (cdrDateTimeFormat === 'dmy-slash') return `${day}/${month}/${year}`;
-        if (cdrDateTimeFormat === 'ymd-dash') return `${year}-${month}-${day}`;
+        if (getCdrDateFormat(cdrDateTimeFormat) === 'dmy-short-dash') return `${day}-${month}-${year.slice(-2)}`;
+        if (getCdrDateFormat(cdrDateTimeFormat) === 'dmy-dot') return `${day}.${month}.${year}`;
+        if (getCdrDateFormat(cdrDateTimeFormat) === 'dmy-slash') return `${day}/${month}/${year}`;
+        if (getCdrDateFormat(cdrDateTimeFormat) === 'ymd-dash') return `${year}-${month}-${day}`;
         return `${day}-${month}-${year}`;
       }
     }
@@ -6108,7 +6191,7 @@ export default function App() {
       <audio ref={audioRef} className="hidden" />
 
       {/* LEFT SIDEBAR VIEW PLATFORM */}
-      <aside className={`${isSidebarExpanded ? 'w-64' : 'w-16 md:w-20'} bg-white dark:bg-[#1e293b] border-r border-slate-200 dark:border-[#334155] flex flex-col items-center justify-between py-5 shrink-0 sticky top-0 h-screen select-none z-30 transition-all duration-300 shadow-xs`}>
+      <aside data-unsaved-navigation className={`${isSidebarExpanded ? 'w-64' : 'w-16 md:w-20'} bg-white dark:bg-[#1e293b] border-r border-slate-200 dark:border-[#334155] flex flex-col items-center justify-between py-5 shrink-0 sticky top-0 h-screen select-none z-30 transition-all duration-300 shadow-xs`}>
         <div className={`flex min-h-0 flex-1 flex-col ${isSidebarExpanded ? 'items-start px-4' : 'items-center'} gap-6 w-full overflow-y-auto overflow-x-hidden pb-3`}>
           {/* Logo Element resembling high-end layers icon */}
           <div className={`flex items-center ${isSidebarExpanded ? 'gap-2 w-full' : 'justify-center w-full'}`}>
@@ -6133,17 +6216,17 @@ export default function App() {
                     ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-900/30 shadow-inner'
                     : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent'
                 }`}
-                title={isSidebarExpanded ? "" : "Реестр звонков"}
+                title={isSidebarExpanded ? "" : SECTION_LABELS.calls}
               >
                 <Phone className="h-5 w-5 shrink-0" />
                 {isSidebarExpanded && (
                   <span className="text-xs font-semibold truncate animate-fade-in text-slate-705 dark:text-slate-200">
-                    Реестр звонков
+                    {SECTION_LABELS.calls}
                   </span>
                 )}
                 {!isSidebarExpanded && (
                   <span className="absolute left-full ml-3 px-2 py-1 rounded bg-slate-950 text-white text-[10px] font-bold opacity-0 group-hover:opacity-100 transition-opacity z-50 whitespace-nowrap shadow-md pointer-events-none">
-                    Реестр звонков
+                    {SECTION_LABELS.calls}
                   </span>
                 )}
               </button>
@@ -6168,7 +6251,7 @@ export default function App() {
                 <BookOpen className="h-5 w-5 shrink-0" />
                 {isSidebarExpanded && (
                   <span className="text-xs font-semibold truncate animate-fade-in text-slate-705 dark:text-slate-200">
-                    Справочник
+                    {SECTION_LABELS.directory}
                   </span>
                 )}
                 {!isSidebarExpanded && (
@@ -6188,17 +6271,17 @@ export default function App() {
                     ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-900/30 shadow-inner'
                     : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent'
                 }`}
-                title={isSidebarExpanded ? "" : "Отчеты и аналитика"}
+                title={isSidebarExpanded ? "" : SECTION_LABELS.reports}
               >
                 <BarChart3 className="h-5 w-5 shrink-0" />
                 {isSidebarExpanded && (
                   <span className="text-xs font-semibold truncate animate-fade-in text-slate-705 dark:text-slate-200">
-                    Отчеты и аналитика
+                    {SECTION_LABELS.reports}
                   </span>
                 )}
                 {!isSidebarExpanded && (
                   <span className="absolute left-full ml-3 px-2 py-1 rounded bg-slate-950 text-white text-[10px] font-bold opacity-0 group-hover:opacity-100 transition-opacity z-50 whitespace-nowrap shadow-md pointer-events-none">
-                    Отчеты и аналитика
+                    {SECTION_LABELS.reports}
                   </span>
                 )}
               </button>
@@ -6212,17 +6295,17 @@ export default function App() {
                     ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-900/30 shadow-inner'
                     : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent'
                 }`}
-                title={isSidebarExpanded ? "" : "Маркетинг"}
+                title={isSidebarExpanded ? "" : SECTION_LABELS.marketing}
               >
                 <Target className="h-5 w-5 shrink-0" />
                 {isSidebarExpanded && (
                   <span className="text-xs font-semibold truncate animate-fade-in text-slate-705 dark:text-slate-200">
-                    Маркетинг
+                    {SECTION_LABELS.marketing}
                   </span>
                 )}
                 {!isSidebarExpanded && (
                   <span className="absolute left-full ml-3 px-2 py-1 rounded bg-slate-950 text-white text-[10px] font-bold opacity-0 group-hover:opacity-100 transition-opacity z-50 whitespace-nowrap shadow-md pointer-events-none">
-                    Маркетинг
+                    {SECTION_LABELS.marketing}
                   </span>
                 )}
               </button>
@@ -6237,17 +6320,17 @@ export default function App() {
                       ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-900/30 shadow-inner'
                       : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent'
                   }`}
-                  title={isSidebarExpanded ? "" : "Мониторинг"}
+                  title={isSidebarExpanded ? "" : SECTION_LABELS.monitoring}
                 >
                   <Activity className="h-5 w-5 shrink-0" />
                   {isSidebarExpanded && (
                     <span className="text-xs font-semibold truncate animate-fade-in text-slate-705 dark:text-slate-200">
-                      Мониторинг
+                      {SECTION_LABELS.monitoring}
                     </span>
                   )}
                   {!isSidebarExpanded && (
                     <span className="absolute left-full ml-3 px-2 py-1 rounded bg-slate-950 text-white text-[10px] font-bold opacity-0 group-hover:opacity-100 transition-opacity z-50 whitespace-nowrap shadow-md pointer-events-none">
-                      Мониторинг
+                      {SECTION_LABELS.monitoring}
                     </span>
                   )}
                 </button>
@@ -6261,12 +6344,12 @@ export default function App() {
                       ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-900/30 shadow-inner'
                       : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent'
                   }`}
-                  title={isSidebarExpanded ? "" : "Управление"}
+                  title={isSidebarExpanded ? "" : SECTION_LABELS.management}
                 >
                   <Wrench className="h-5 w-5 shrink-0" />
                   {isSidebarExpanded && (
                     <span className="text-xs font-semibold truncate animate-fade-in text-slate-705 dark:text-slate-200">
-                      Управление
+                      {SECTION_LABELS.management}
                     </span>
                   )}
                 </button>
@@ -6280,12 +6363,12 @@ export default function App() {
                       ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-900/30 shadow-inner'
                       : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent'
                   }`}
-                  title={isSidebarExpanded ? "" : "Баланс"}
+                  title={isSidebarExpanded ? "" : SECTION_LABELS.balance}
                 >
                   <Wallet className="h-5 w-5 shrink-0" />
                   {isSidebarExpanded && (
                     <span className="text-xs font-semibold truncate animate-fade-in text-slate-705 dark:text-slate-200">
-                      Баланс
+                      {SECTION_LABELS.balance}
                     </span>
                   )}
                 </button>
@@ -6295,16 +6378,16 @@ export default function App() {
                 <button
                   onClick={() => setActiveView('gsm-gateways')}
                   className={`flex items-center ${isSidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl transition-all relative group cursor-pointer ${activeView === 'gsm-gateways' ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-900/30 shadow-inner' : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent'}`}
-                  title={isSidebarExpanded ? '' : 'GSM-шлюзы'}
+                  title={isSidebarExpanded ? '' : SECTION_LABELS.gsm_gateways}
                 >
                   <Network className="h-5 w-5 shrink-0" />
-                  {isSidebarExpanded && <span className="text-xs font-semibold truncate">GSM-шлюзы</span>}
+                  {isSidebarExpanded && <span className="text-xs font-semibold truncate">{SECTION_LABELS.gsm_gateways}</span>}
                 </button>
               )}
 
               {(hasPermission('view_ai_platform') || hasPermission('view_scripts') || hasPermission('view_ai_assistant')) && (
-                <button onClick={() => { setActiveView('ai-platform'); window.history.replaceState({}, '', hasPermission('view_ai_platform') ? '/ai-platform/agents' : hasPermission('view_scripts') ? '/ai-platform/scripts' : '/ai-platform/assistant'); }} className={`flex items-center ${isSidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl transition-all relative group cursor-pointer ${activeView === 'ai-platform' ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-900/30 shadow-inner' : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent'}`} title={isSidebarExpanded ? '' : 'AI Platform'}>
-                  <Bot className="h-5 w-5 shrink-0" />{isSidebarExpanded && <span className="text-xs font-semibold truncate">AI Platform</span>}
+                <button onClick={() => { setActiveView('ai-platform'); window.history.replaceState({}, '', hasPermission('view_ai_platform') ? '/ai-platform/agents' : hasPermission('view_scripts') ? '/ai-platform/scripts' : '/ai-platform/assistant'); }} className={`flex items-center ${isSidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl transition-all relative group cursor-pointer ${activeView === 'ai-platform' ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-900/30 shadow-inner' : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent'}`} title={isSidebarExpanded ? '' : SECTION_LABELS.ai_platform}>
+                  <Bot className="h-5 w-5 shrink-0" />{isSidebarExpanded && <span className="text-xs font-semibold truncate">{SECTION_LABELS.ai_platform}</span>}
                 </button>
               )}
 
@@ -6313,8 +6396,88 @@ export default function App() {
 
         {/* Bottom controls */}
         <div className={`flex flex-col ${isSidebarExpanded ? 'items-stretch px-4' : 'items-center'} gap-2 w-full ${isSidebarExpanded ? '' : 'px-2'}`}>
+          {hasPermission('make_calls') && (
+            <UnifiedDialer
+              sidebarExpanded={isSidebarExpanded}
+              extension={effectiveMySip}
+              mode={interfacePreferences.callDeviceMode}
+              canCall={hasPermission('make_calls')}
+              isCalling={isC2CLoading}
+              headsetReady={softphoneSnapshot.registration === 'registered'}
+              onDeskPhoneCall={number => triggerClickToCall(number)}
+              onHeadsetCall={number => softphoneClientRef.current?.call(number)}
+            />
+          )}
+
+          {/* Settings icon */}
+          {isSystemSectionVisible(session?.role,settings?.moduleVisibility,'settings') && <button
+            onClick={() => {
+              if (isAdminRole(session?.role)) {
+                loadAdminSettings();
+                setSettingsTab('pbx');
+              } else {
+                setSettingsTab('appearance');
+              }
+              setActiveView('settings');
+            }}
+            className={`flex items-center ${isSidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent transition-all relative group cursor-pointer`}
+            title={isSidebarExpanded ? "" : SECTION_LABELS.settings}
+          >
+            <Settings className="h-5 w-5 shrink-0" />
+            {isSidebarExpanded && (
+              <span className="text-xs font-semibold truncate animate-fade-in text-slate-755 dark:text-slate-200">{SECTION_LABELS.settings}</span>
+            )}
+            {!isSidebarExpanded && (
+              <span className="absolute left-full ml-3 px-2 py-1 rounded bg-slate-950 text-white text-[10px] font-bold opacity-0 group-hover:opacity-100 transition-opacity z-50 whitespace-nowrap shadow-md pointer-events-none">
+                Настройки системы
+              </span>
+            )}
+          </button>}
+
+          {/* Help panel triggers general guidelines */}
+          {isSystemSectionVisible(session?.role,settings?.moduleVisibility,'about') && <button
+            onClick={() => setActiveView('about')}
+            className={`flex items-center ${isSidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl transition-all relative group cursor-pointer ${
+              activeView === 'about'
+                ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-900/30 shadow-inner'
+                : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent'
+            }`}
+            title={isSidebarExpanded ? "" : SECTION_LABELS.about}
+          >
+            <HelpCircle className="h-5 w-5 shrink-0" />
+            {isSidebarExpanded && (
+              <span className="text-xs font-semibold truncate animate-fade-in text-slate-755 dark:text-slate-200">{SECTION_LABELS.about}</span>
+            )}
+            {!isSidebarExpanded && (
+              <span className="absolute left-full ml-3 px-2 py-1 rounded bg-slate-950 text-white text-[10px] font-bold opacity-0 group-hover:opacity-100 transition-opacity z-50 whitespace-nowrap shadow-md pointer-events-none">
+                {SECTION_LABELS.about}
+              </span>
+            )}
+          </button>}
+
+          {/* Theme switcher toggle inside Sidebar */}
+          <button
+            data-unsaved-ignore
+            onClick={() => setDarkMode(prev => !prev)}
+            className={`flex items-center ${isSidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent transition-all relative group cursor-pointer`}
+            title={isSidebarExpanded ? "" : (darkMode ? "Включить светлую тему" : "Включить тёмную тему")}
+          >
+            {darkMode ? <Sun className="h-5 w-5 shrink-0 text-amber-500 animate-pulse" /> : <Moon className="h-5 w-5 shrink-0" />}
+            {isSidebarExpanded && (
+              <span className="text-xs font-semibold truncate animate-fade-in text-slate-755 dark:text-slate-200">
+                {darkMode ? "Светлая тема" : "Тёмная тема"}
+              </span>
+            )}
+            {!isSidebarExpanded && (
+              <span className="absolute left-full ml-3 px-2 py-1 rounded bg-slate-950 text-white text-[10px] font-bold opacity-0 group-hover:opacity-100 transition-opacity z-50 whitespace-nowrap shadow-md pointer-events-none">
+                {darkMode ? "Светлая тема" : "Тёмная тема"}
+              </span>
+            )}
+          </button>
+
           {/* Collapse/Expand Sidebar Trigger Button */}
           <button
+            data-unsaved-ignore
             onClick={() => setIsSidebarExpanded(!isSidebarExpanded)}
             className={`flex items-center ${isSidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent transition-all relative group cursor-pointer`}
             title={isSidebarExpanded ? "Свернуть меню" : "Развернуть меню"}
@@ -6331,71 +6494,6 @@ export default function App() {
                   Развернуть меню
                 </span>
               </>
-            )}
-          </button>
-
-          {/* Settings icon */}
-          <button
-            onClick={() => {
-              if (isAdminRole(session?.role)) {
-                loadAdminSettings();
-                setSettingsTab('pbx');
-              } else {
-                setSettingsTab('appearance');
-              }
-              setActiveView('settings');
-            }}
-            className={`flex items-center ${isSidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent transition-all relative group cursor-pointer`}
-            title={isSidebarExpanded ? "" : "Настройки"}
-          >
-            <Settings className="h-5 w-5 shrink-0" />
-            {isSidebarExpanded && (
-              <span className="text-xs font-semibold truncate animate-fade-in text-slate-755 dark:text-slate-200">Настройки</span>
-            )}
-            {!isSidebarExpanded && (
-              <span className="absolute left-full ml-3 px-2 py-1 rounded bg-slate-950 text-white text-[10px] font-bold opacity-0 group-hover:opacity-100 transition-opacity z-50 whitespace-nowrap shadow-md pointer-events-none">
-                Настройки системы
-              </span>
-            )}
-          </button>
-
-          {/* Help panel triggers general guidelines */}
-          <button
-            onClick={() => setActiveView('about')}
-            className={`flex items-center ${isSidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl transition-all relative group cursor-pointer ${
-              activeView === 'about'
-                ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-900/30 shadow-inner'
-                : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent'
-            }`}
-            title={isSidebarExpanded ? "" : "О системе"}
-          >
-            <HelpCircle className="h-5 w-5 shrink-0" />
-            {isSidebarExpanded && (
-              <span className="text-xs font-semibold truncate animate-fade-in text-slate-755 dark:text-slate-200">О системе</span>
-            )}
-            {!isSidebarExpanded && (
-              <span className="absolute left-full ml-3 px-2 py-1 rounded bg-slate-950 text-white text-[10px] font-bold opacity-0 group-hover:opacity-100 transition-opacity z-50 whitespace-nowrap shadow-md pointer-events-none">
-                О системе
-              </span>
-            )}
-          </button>
-
-          {/* Theme switcher toggle inside Sidebar */}
-          <button
-            onClick={() => setDarkMode(prev => !prev)}
-            className={`flex items-center ${isSidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent transition-all relative group cursor-pointer`}
-            title={isSidebarExpanded ? "" : (darkMode ? "Включить светлую тему" : "Включить тёмную тему")}
-          >
-            {darkMode ? <Sun className="h-5 w-5 shrink-0 text-amber-500 animate-pulse" /> : <Moon className="h-5 w-5 shrink-0" />}
-            {isSidebarExpanded && (
-              <span className="text-xs font-semibold truncate animate-fade-in text-slate-755 dark:text-slate-200">
-                {darkMode ? "Светлая тема" : "Тёмная тема"}
-              </span>
-            )}
-            {!isSidebarExpanded && (
-              <span className="absolute left-full ml-3 px-2 py-1 rounded bg-slate-950 text-white text-[10px] font-bold opacity-0 group-hover:opacity-100 transition-opacity z-50 whitespace-nowrap shadow-md pointer-events-none">
-                {darkMode ? "Светлая тема" : "Тёмная тема"}
-              </span>
             )}
           </button>
 
@@ -6475,15 +6573,6 @@ export default function App() {
                   title={session.extension ? 'SIP-номер закреплён администратором' : 'Введите ваш внутренний добавочный номер. С этого телефона Asterisk начнет дозвон.'}
                 /></div>
 
-              <UnifiedDialer
-                extension={effectiveMySip}
-                mode={interfacePreferences.callDeviceMode}
-                canCall={hasPermission('make_calls')}
-                isCalling={isC2CLoading}
-                headsetReady={softphoneSnapshot.registration === 'registered'}
-                onDeskPhoneCall={number => triggerClickToCall(number)}
-                onHeadsetCall={number => softphoneClientRef.current?.call(number)}
-              />
 
               <label className="flex items-center gap-1.5 cursor-pointer select-none">
                 <input
@@ -6855,6 +6944,7 @@ export default function App() {
 
       {/* Main UI body section */}
       <main className="flex-1 overflow-y-auto w-full pl-[8px] pr-2 py-4 space-y-4">
+      <Suspense fallback={<div role="status" className="p-8 text-center text-slate-500">Загрузка раздела…</div>}>
         {dbWarning && (
           <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 text-amber-900 p-4 rounded-xl flex items-start sm:items-center justify-between shadow-xs gap-3 animate-fade-in relative z-10">
             <div className="flex items-center gap-3">
@@ -7091,15 +7181,6 @@ export default function App() {
                   <span className="text-[11px] font-bold text-slate-705 dark:text-slate-300">Мои звонки</span>
                 </label></div>
 
-              <UnifiedDialer
-                extension={effectiveMySip}
-                mode={interfacePreferences.callDeviceMode}
-                canCall={hasPermission('make_calls')}
-                isCalling={isC2CLoading}
-                headsetReady={softphoneSnapshot.registration === 'registered'}
-                onDeskPhoneCall={number => triggerClickToCall(number)}
-                onHeadsetCall={number => softphoneClientRef.current?.call(number)}
-              />
 
 
               <div className="flex flex-wrap items-center gap-1.5 bg-slate-50 dark:bg-[#0f172a]/60 border border-slate-200 dark:border-[#334155]/80 p-1 rounded-lg">
@@ -7448,7 +7529,7 @@ export default function App() {
                       ? 'Настройте регулярную загрузку CSV/JSON по защищённой ссылке.'
                       : directoryPageMode === 'directory_admin'
                         ? 'Экспорт, шаблоны и административное обслуживание телефонного справочника.'
-                      : 'Корпоративный CSV проходит проверку, настройку владения и подтверждение перед созданием import job.'}
+                      : 'CSV и Excel проходят проверку, настройку владения и подтверждение перед созданием import job.'}
                 </p>
               </div>
               <button type="button" onClick={closeDirectoryImportPage} className="shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50">
@@ -7466,7 +7547,7 @@ export default function App() {
             )}
             {canOpenCompanyDirectoryImport() && (
               <button type="button" role="tab" aria-selected={directoryPageMode === 'import'} onClick={openDirectoryImportPage} className={`rounded-lg px-4 py-3 text-left transition ${directoryPageMode === 'import' ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-50 text-slate-700 hover:bg-blue-50'}`}>
-                <span className="block text-sm font-black">Корпоративный CSV</span>
+                <span className="block text-sm font-black">Корпоративный импорт</span>
                 <span className={`mt-1 block text-[11px] ${directoryPageMode === 'import' ? 'text-blue-100' : 'text-slate-500'}`}>Digest, ownership preview, import jobs и rollback</span>
               </button>
             )}
@@ -7772,12 +7853,12 @@ export default function App() {
 
               <div className="mt-4">
                 {directoryImportSourceKind==='file'?<div>
-                  <input ref={directoryImportFileInputRef} id="directory-import-file-input" type="file" accept=".csv,.txt,text/csv,text/plain" onChange={handleFileUpload} className="sr-only"/>
+                  <input ref={directoryImportFileInputRef} id="directory-import-file-input" type="file" accept=".csv,.txt,.xlsx,.xls,text/csv,text/plain,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={handleFileUpload} className="sr-only"/>
                   <label htmlFor="directory-import-file-input" onDragEnter={event=>{event.preventDefault();setIsDirectoryImportDragging(true)}} onDragOver={event=>{event.preventDefault();event.dataTransfer.dropEffect='copy';setIsDirectoryImportDragging(true)}} onDragLeave={event=>{event.preventDefault();if(!event.currentTarget.contains(event.relatedTarget as Node))setIsDirectoryImportDragging(false)}} onDrop={event=>{event.preventDefault();setIsDirectoryImportDragging(false);const file=event.dataTransfer.files?.[0];if(file)handleDirectoryImportFile(file)}} className={`flex min-h-52 cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed p-6 text-center transition focus-within:ring-2 focus-within:ring-blue-500 sm:min-h-56 ${isDirectoryImportDragging?'border-blue-600 bg-blue-100 ring-2 ring-blue-300':'border-blue-200 bg-blue-50/40 hover:border-blue-400 hover:bg-blue-50'}`}>
                     <Upload className="mb-3 h-9 w-9 text-blue-600"/>
-                    <span className="text-sm font-black text-slate-800">{isDirectoryImportDragging?'Отпустите файл для выбора':'Перетащите CSV или TXT сюда'}</span>
+                    <span className="text-sm font-black text-slate-800">{isDirectoryImportDragging?'Отпустите файл для выбора':'Перетащите CSV, TXT или Excel сюда'}</span>
                     <span className="mt-1 text-xs text-slate-500">или выберите файл на компьютере</span>
-                    <span className="mt-2 text-[11px] text-slate-400">UTF-8 · до 100 МБ · большие файлы обрабатываются пакетами</span>
+                    <span className="mt-2 text-[11px] text-slate-400">CSV/TXT: UTF-8 · Excel: XLSX/XLS, первый лист · до 100 МБ</span>
                   </label>
                 </div>:<div>
                   <div className="flex flex-wrap items-center justify-between gap-2"><label htmlFor="directory-import-textarea" className="text-xs font-bold text-slate-700">Вставьте CSV из буфера обмена</label><button type="button" onClick={()=>void handlePasteDirectoryImportClipboard()} className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">Вставить из буфера</button></div>
@@ -7890,6 +7971,10 @@ export default function App() {
                   <option value="all">Спам: Все</option>
                   <option value="exclude_spam">Спам: Без спама</option>
                   <option value="only_spam">Спам: Только спам</option>
+                  <option value="only_blacklisted">Чёрный список</option>
+                  <option value="exclude_blacklisted">Без чёрного списка</option>
+                  <option value="only_spam_or_blacklisted">Спам и ЧС</option>
+                  <option value="exclude_spam_and_blacklisted">Без спама и ЧС</option>
                 </select>
 
                 <label className="sr-only" htmlFor="directory-visibility-filter">Видимость</label>
@@ -8283,6 +8368,7 @@ export default function App() {
 
     {activeView === 'reports' && renderReportsView()}
 
+    {activeView === 'no-access' && <div role="status" className="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-600">Доступные разделы отключены. Обратитесь к администратору.</div>}
     {activeView === 'marketing' && hasPermission('view_marketing') && <MarketingTab siteFormsEnabled={siteFormsEnabled} />}
 
     {activeView === 'monitoring' && hasAnyMonitoringTabPermission() && renderMonitoringView()}
@@ -8311,13 +8397,14 @@ export default function App() {
       {/* SYSTEM SETTINGS FULL PAGE */}
       {activeView === 'settings' && (
         <section className="min-w-0 max-w-full space-y-4">
-          <div className="w-full min-w-0 max-w-full bg-white border border-slate-200 rounded-2xl shadow-sm relative min-h-[calc(100vh-150px)] flex flex-col overflow-hidden font-sans">
+          <div className={`w-full min-w-0 max-w-full bg-white border border-slate-200 rounded-2xl shadow-sm relative min-h-[calc(100vh-150px)] flex flex-col ${settingsTab === 'permissions' ? 'overflow-clip' : 'overflow-hidden'} font-sans`}>
             <div className="flex min-w-0 flex-wrap items-center justify-between gap-3 border-b border-slate-200 p-6 pb-4 shrink-0 bg-slate-50">
               <div className="flex min-w-0 items-center gap-2">
                 <Settings className="h-6 w-6 shrink-0 text-blue-600 animate-spin-slow" />
                 <h3 className="min-w-0 break-words text-base font-black text-slate-905">Настройки системы</h3></div>
               <button
                 type="button"
+                data-unsaved-navigation
                 onClick={() => { setActiveView('management'); setDbTestResult(null); resetUserForm(); }}
                 className="shrink-0 px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-bold text-slate-600 hover:bg-slate-50"
               >
@@ -8341,6 +8428,7 @@ export default function App() {
                   <button
                     key={tab}
                     type="button"
+                    data-unsaved-navigation={settingsTab !== tab ? true : undefined}
                     onClick={() => setSettingsTab(tab as any)}
                     className={`min-w-0 flex-1 break-words py-1.5 text-center text-xs font-bold rounded-lg transition-all cursor-pointer ${
                       settingsTab === tab
@@ -8695,10 +8783,10 @@ export default function App() {
                       userForm={userForm}
                       isSavingUser={isSavingUser}
                       setUserForm={setUserForm}
-                      openEditUser={openEditUser}
+                      openEditUser={user => requestSettingsNavigation(() => openEditUser(user))}
                       deleteAccessUser={deleteAccessUser}
                       saveAccessUser={saveAccessUser}
-                      resetUserForm={resetUserForm}
+                      resetUserForm={() => requestSettingsNavigation(resetUserForm)}
                       roles={roles}
                       token={session.token}
                       onBulkCreated={loadAccessUsers}
@@ -8706,11 +8794,13 @@ export default function App() {
                     />
                   )}
                   
-                  {settingsTab === 'permissions' && session?.role === 'su' && draftSettings && (
-                    <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 p-4">
+                  {settingsTab === 'permissions' && (
+                    <PermissionsMatrixTab
+                      suPrivilegesPanel={session?.role === 'su' && draftSettings ? (
+                    <div className="min-w-0">
                       <div className="text-sm font-black text-blue-800">Управление привилегиями SU</div>
                       <p className="mt-1 text-xs text-blue-700">
-                        Эти параметры управляют тем, что администратор видит и может менять в матрице доступа.
+                        Эти параметры управляют тем, что администратор видит и может менять в матрице доступа. Применяются кнопкой «Сохранить настройки» внизу страницы.
                       </p>
 
                       <div className="mt-3 grid gap-2 text-xs font-bold text-blue-900">
@@ -8745,15 +8835,13 @@ export default function App() {
                           Разрешить администраторам изменять служебные SU-права
                         </label></div>
                     </div>
-                  )}
-
-{settingsTab === 'permissions' && (
-                    <PermissionsMatrixTab
+                      ) : null}
                       roles={roles}
                       isLoadingRoles={isLoadingRoles}
                       isSavingRoles={isSavingRoles}
                       onRolesChange={setRoles}
                       onSaveRoles={saveRoles}
+                      onModuleVisibilityChange={visibility=>setSettings(previous=>previous ? {...previous,moduleVisibility:visibility} : previous)}
                       isSu={session?.role === 'su'}
                       showSuPermissionsToAdmin={settings?.showSuPermissionsToAdmin === true}
                       allowAdminEditSuPermissions={settings?.allowAdminEditSuPermissions === true}
@@ -8787,7 +8875,7 @@ export default function App() {
                       <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
                         <div>
                           <h5 className="flex items-center gap-2 text-xs font-black text-slate-900"><Headphones className="h-4 w-4 text-blue-600" />Устройство для звонков</h5>
-                          <p className="mt-1 text-[11px] text-slate-500">Номеронабиратель доступен в верхней панели. Режим гарнитуры начнёт совершать звонки после настройки WebRTC на АТС.</p>
+                          <p className="mt-1 text-[11px] text-slate-500">Телефон доступен в левом меню. Режим гарнитуры начнёт совершать звонки после настройки WebRTC на АТС.</p>
                         </div>
                         <select value={interfacePreferences.callDeviceMode} onChange={event => updateInterfacePreferences({callDeviceMode:event.target.value as InterfacePreferences['callDeviceMode']})} className="w-full max-w-sm rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs font-bold text-slate-800">
                           <option value="desk_phone">Телефонный аппарат</option>
@@ -8841,7 +8929,7 @@ export default function App() {
                           <label className="text-xs font-semibold text-slate-700">Плотность<select value={interfacePreferences.cdrDensity} onChange={e=>updateInterfacePreferences({cdrDensity:e.target.value as InterfacePreferences['cdrDensity']})} className="mt-1 w-full rounded-lg border p-2"><option value="compact">Компактная</option><option value="standard">Стандартная</option><option value="comfortable">Крупная</option></select></label>
                           <label className="text-xs font-semibold text-slate-700">Размер текста<select value={interfacePreferences.cdrTextScale} onChange={e=>updateInterfacePreferences({cdrTextScale:Number(e.target.value) as 90|100|110})} className="mt-1 w-full rounded-lg border p-2"><option value="90">90%</option><option value="100">100%</option><option value="110">110%</option></select></label>
                           <label className="text-xs font-semibold text-slate-700">Строк на странице<select value={interfacePreferences.cdrPageSize} onChange={e=>{updateInterfacePreferences({cdrPageSize:Number(e.target.value) as 25|50|100});setPage(1)}} className="mt-1 w-full rounded-lg border p-2"><option value="25">25</option><option value="50">50</option><option value="100">100</option></select></label>
-                          <label className="text-xs font-semibold text-slate-700">Формат даты<select value={cdrDateTimeFormat} onChange={e=>updateInterfacePreferences({cdrDateTimeFormat:e.target.value as InterfacePreferences['cdrDateTimeFormat']})} className="mt-1 w-full rounded-lg border p-2"><option value="dmy-dash">ДД-ММ-ГГГГ</option><option value="dmy-short-dash">ДД-ММ-ГГ</option><option value="dmy-dot">ДД.ММ.ГГГГ</option><option value="dmy-slash">ДД/ММ/ГГГГ</option><option value="ymd-dash">ГГГГ-ММ-ДД</option></select></label>
+                          <label className="text-xs font-semibold text-slate-700">Формат даты<select value={cdrDateTimeFormat} onChange={e=>updateInterfacePreferences({cdrDateTimeFormat:e.target.value as InterfacePreferences['cdrDateTimeFormat']})} className="mt-1 w-full rounded-lg border p-2">{CDR_DATE_FORMAT_OPTIONS.map(([value, label]) => <optgroup key={value} label={label}><option value={value}>{label} чч:мм:сс</option><option value={`time-first:${value}`}>чч:мм:сс {label}</option></optgroup>)}</select></label>
                           <label className="text-xs font-semibold text-slate-700">Формат времени<select value={interfacePreferences.cdrHourCycle} onChange={e=>updateInterfacePreferences({cdrHourCycle:Number(e.target.value) as 12|24})} className="mt-1 w-full rounded-lg border p-2"><option value="24">24 часа</option><option value="12">12 часов (AM/PM)</option></select></label>
                         </div>
                         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3"><InterfaceToggle label="Закреплять заголовок" checked={interfacePreferences.cdrStickyHeader} onChange={cdrStickyHeader=>updateInterfacePreferences({cdrStickyHeader})}/><InterfaceToggle label="Чередовать фон строк" checked={interfacePreferences.cdrStripedRows} onChange={cdrStripedRows=>updateInterfacePreferences({cdrStripedRows})}/><InterfaceToggle label="Показывать секунды" checked={interfacePreferences.cdrShowSeconds} onChange={cdrShowSeconds=>updateInterfacePreferences({cdrShowSeconds})}/><InterfaceToggle label="Клик по номеру фильтрует историю" checked={interfacePreferences.cdrNumberClickFilter} onChange={cdrNumberClickFilter=>updateInterfacePreferences({cdrNumberClickFilter})}/><InterfaceToggle label="Часовой пояс браузера" description="Иначе отображается время сервера" checked={interfacePreferences.cdrUseBrowserTimezone} onChange={cdrUseBrowserTimezone=>updateInterfacePreferences({cdrUseBrowserTimezone})}/></div>
@@ -8870,12 +8958,15 @@ export default function App() {
                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 p-6 pt-4 border-t border-slate-200 bg-slate-50 shrink-0">
                   {isAdminRole(session?.role) ? (
                     <>
-                      <div className="flex gap-2 justify-end">
-                        <button type="button" onClick={() => { setIsSettingsOpen(false); setDbTestResult(null); resetUserForm(); }} className="text-xs text-slate-600 hover:text-slate-900 bg-white hover:bg-slate-100 border border-slate-200 px-4 py-2 rounded-lg cursor-pointer transition-colors">
+                      <div className="flex flex-wrap items-center gap-2 justify-end">
+                        {settingsSaveNotice && <span role="status" className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-bold ${settingsSaveNotice.success ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300' : 'bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300'}`}>
+                          {settingsSaveNotice.success ? <CheckCircle className="h-4 w-4" /> : <AlertCircle className="h-4 w-4" />}{settingsSaveNotice.message}
+                        </span>}
+                        <button type="button" data-unsaved-navigation onClick={() => { setIsSettingsOpen(false); setActiveView('management'); setDbTestResult(null); resetUserForm(); }} className="text-xs text-slate-600 hover:text-slate-900 bg-white hover:bg-slate-100 border border-slate-200 px-4 py-2 rounded-lg cursor-pointer transition-colors">
                           Отмена
                         </button>
-                        <button type="submit" disabled={isSavingSettings} className="bg-blue-600 hover:bg-blue-700 text-xs font-bold text-white px-4 py-2 rounded-lg cursor-pointer transition-colors disabled:opacity-50">
-                          Сохранить настройки
+                        <button type="submit" data-settings-submit disabled={isSubmittingSettings || isSavingSettings || isSavingRoles || isSavingUser} className="bg-blue-600 hover:bg-blue-700 text-xs font-bold text-white px-4 py-2 rounded-lg cursor-pointer transition-colors disabled:opacity-50">
+                          {isSubmittingSettings ? 'Сохранение…' : 'Сохранить настройки'}
                         </button>
           </div>
                     </>
@@ -8897,6 +8988,7 @@ export default function App() {
         <AboutSystemTab currentVersion={packageJson.version} onNavigate={setActiveView} />
       )}
 
+      </Suspense>
   </main>
 
       <footer className="border-t border-slate-200 bg-white py-3 text-center text-[11px] text-slate-500">

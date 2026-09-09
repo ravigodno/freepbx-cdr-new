@@ -1,9 +1,11 @@
-import React, { useState } from 'react';
-import { Delete, Headphones, Loader2, Phone, PhoneCall, X } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { Delete, Headphones, Loader2, Phone, X } from 'lucide-react';
 
 export type CallDeviceMode = 'desk_phone' | 'browser_headset';
 
 interface UnifiedDialerProps {
+  sidebarExpanded?: boolean;
   extension: string;
   mode: CallDeviceMode;
   canCall: boolean;
@@ -21,9 +23,16 @@ const normalizeDialInput = (value: string) => {
   return prefix + trimmed.replace(/\D/g, '');
 };
 
-export default function UnifiedDialer({ extension, mode, canCall, isCalling, headsetReady, onDeskPhoneCall, onHeadsetCall }: UnifiedDialerProps) {
+export default function UnifiedDialer({ sidebarExpanded, extension, mode, canCall, isCalling, headsetReady, onDeskPhoneCall, onHeadsetCall }: UnifiedDialerProps) {
   const [open, setOpen] = useState(false);
   const [number, setNumber] = useState('');
+  useEffect(() => {
+    if (!open) return;
+    const previousFocus = document.activeElement as HTMLElement | null;
+    const onKeyDown = (event:KeyboardEvent) => { if (event.key === 'Escape') setOpen(false); };
+    document.addEventListener('keydown', onKeyDown);
+    return () => { document.removeEventListener('keydown', onKeyDown); previousFocus?.focus(); };
+  }, [open]);
 
   const cleaned = normalizeDialInput(number);
   const headsetSelected = mode === 'browser_headset';
@@ -39,18 +48,26 @@ export default function UnifiedDialer({ extension, mode, canCall, isCalling, hea
       type="button"
       onClick={() => setOpen(true)}
       disabled={!canCall}
-      className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
-      title="Открыть ручной номеронабиратель"
+      className={typeof sidebarExpanded === 'boolean'
+        ? `flex items-center ${sidebarExpanded ? 'gap-3 px-4 py-3 justify-start w-full' : 'h-11 w-11 justify-center'} rounded-xl text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50`
+        : 'inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50'}
+      aria-label="Телефон"
+      data-unsaved-ignore
+      title="Открыть телефон"
     >
-      <PhoneCall className="h-4 w-4" />
-      Набрать
+      <svg className="h-5 w-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <rect x="3" y="3" width="5" height="18" rx="2" />
+        <path d="M8 5h11a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6" />
+        <path d="M12 8h5v3h-5zM12 15h.01M17 15h.01M12 18h.01M17 18h.01" />
+      </svg>
+      {sidebarExpanded !== false && <span className="text-xs font-semibold truncate">{sidebarExpanded === undefined ? 'Набрать' : 'Телефон'}</span>}
     </button>
 
-    {open && <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/70 p-4" role="dialog" aria-modal="true" aria-label="Номеронабиратель">
+    {open && createPortal(<div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/70 p-4" role="dialog" aria-modal="true" aria-label="Телефон">
       <div className="w-full max-w-sm overflow-hidden rounded-2xl border border-slate-700 bg-white shadow-2xl dark:bg-slate-900">
         <div className="flex items-start justify-between border-b border-slate-200 p-4 dark:border-slate-700">
           <div>
-            <h3 className="text-sm font-black text-slate-900 dark:text-white">Номеронабиратель</h3>
+            <h3 className="text-sm font-black text-slate-900 dark:text-white">Телефон</h3>
             <p className="mt-1 text-[11px] text-slate-500">Внутренний номер: <span className="font-mono font-bold">{extension || 'не задан'}</span></p>
           </div>
           <button type="button" onClick={() => setOpen(false)} className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800" aria-label="Закрыть"><X className="h-4 w-4" /></button>
@@ -85,6 +102,6 @@ export default function UnifiedDialer({ extension, mode, canCall, isCalling, hea
           </button>
         </div>
       </div>
-    </div>}
+    </div>, document.body)}
   </>;
 }

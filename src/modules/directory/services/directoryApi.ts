@@ -9,7 +9,7 @@ export interface DirectoryFetchFilters {
   company?: string;
   status?: string;
   responsible?: string;
-  spamMode?: 'all' | 'exclude_spam' | 'only_spam';
+  spamMode?: 'all' | 'exclude_spam' | 'only_spam' | 'only_blacklisted' | 'exclude_blacklisted' | 'only_spam_or_blacklisted' | 'exclude_spam_and_blacklisted';
   visibilityMode?: 'all' | 'shared_only' | 'private_only' | 'my_private_only' | 'exclude_private' | 'exclude_shared';
   page?: number;
   pageSize?: number;

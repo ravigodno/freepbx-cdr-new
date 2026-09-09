@@ -1,4 +1,6 @@
 import { resolveCallAnswerEvidence, historicalMemberStatus } from './shared/callAnswerEvidence.js';
+import { SYSTEM_SECTIONS, SU_PERMISSION_KEYS, normalizeModuleVisibilitySettings, isPermissionModuleVisible } from './shared/accessCatalog.js';
+import { loadModuleVisibility, saveModuleVisibility } from './server/moduleVisibility.js';
 import fetch from "node-fetch";
 import {
   detectCallDirection,
@@ -3421,6 +3423,10 @@ const applyDirectoryAccessAndFilters = (entries: any[], req: Request, localDb: a
       if (['client', 'supplier', 'government', 'internal'].includes(type) && entry.type !== type) return false;
       if (spamMode === 'exclude_spam' && entry.isSpam) return false;
       if (spamMode === 'only_spam' && !entry.isSpam) return false;
+      if (spamMode === 'only_blacklisted' && !entry.isBlacklisted) return false;
+      if (spamMode === 'exclude_blacklisted' && entry.isBlacklisted) return false;
+      if (spamMode === 'only_spam_or_blacklisted' && !entry.isSpam && !entry.isBlacklisted) return false;
+      if (spamMode === 'exclude_spam_and_blacklisted' && (entry.isSpam || entry.isBlacklisted)) return false;
       if (department !== 'all' && String(entry.department || '').trim().toLowerCase() !== department) return false;
       if (company !== 'all' && String(entry.company || '').trim().toLowerCase() !== company) return false;
       if (responsible !== 'all' && String(entry.responsibleUserId || '').trim().toLowerCase() !== responsible) return false;
@@ -4291,99 +4297,8 @@ function createDefaultCalltrackingSite() {
   };
 }
 
-type OptionalModuleKey = 'marketing' | 'monitoring' | 'management' | 'balance' | 'scripts' | 'ai_assistant' | 'ai_pbx_admin';
-
-const OPTIONAL_MODULE_KEYS: OptionalModuleKey[] = ['marketing', 'monitoring', 'management', 'balance', 'scripts', 'ai_assistant', 'ai_pbx_admin'];
-const getOptionalModuleKeys = (): OptionalModuleKey[] => ['marketing', 'monitoring', 'management', 'balance', 'scripts', 'ai_assistant', 'ai_pbx_admin'];
-
-
-const DEFAULT_MODULE_VISIBILITY: Record<OptionalModuleKey, boolean> = {
-  marketing: true,
-  monitoring: true,
-  management: true,
-  balance: true,
-  scripts: false,
-  ai_assistant: false,
-  ai_pbx_admin: false
-};
-
-const PERMISSION_MODULE_MAP: Record<string, OptionalModuleKey> = {
-  view_marketing: 'marketing',
-  manage_marketing: 'marketing',
-  manage_calltracking: 'marketing',
-  manage_yandex_metrika: 'marketing',
-  manage_yandex_direct: 'marketing',
-
-  view_monitoring: 'monitoring',
-  view_active_calls: 'monitoring',
-  view_quality: 'monitoring',
-  view_tcpdump: 'monitoring',
-  view_sngrep: 'monitoring',
-  view_cli: 'monitoring',
-  view_db_explorer: 'monitoring',
-  view_health: 'monitoring',
-  view_sip_devices_map: 'monitoring',
-  view_security: 'monitoring',
-  view_log_analysis: 'monitoring',
-  view_call_intelligence: 'monitoring',
-
-  view_management: 'management',
-  dangerous_pbx_write: 'management',
-  bulk_extensions: 'management',
-  manage_trunks: 'management',
-  manage_outbound_routes: 'management',
-  manage_numbering_capacity: 'management',
-
-  view_balance: 'balance',
-  view_balance_analytics: 'balance',
-  manage_balance_sources: 'balance',
-  view_balance_alerts: 'balance',
-  manage_balance_providers: 'balance',
-
-  view_scripts: 'scripts',
-  manage_scripts: 'scripts',
-
-  view_ai_assistant: 'ai_assistant',
-  manage_ai_assistant: 'ai_assistant',
-
-  view_ai_pbx_admin: 'ai_pbx_admin',
-  manage_ai_pbx_admin: 'ai_pbx_admin'
-};
-
-function normalizeModuleVisibilitySettings(value: any): Record<OptionalModuleKey, boolean> {
-  const next: Record<OptionalModuleKey, boolean> = {
-    marketing: true,
-    monitoring: true,
-    management: true,
-    balance: true,
-    scripts: false,
-    ai_assistant: false,
-    ai_pbx_admin: false
-  };
-
-  const source = value && typeof value === 'object' ? value : {};
-
-  if (typeof source.marketing === 'boolean') next.marketing = source.marketing;
-  if (typeof source.monitoring === 'boolean') next.monitoring = source.monitoring;
-  if (typeof source.management === 'boolean') next.management = source.management;
-  if (typeof source.balance === 'boolean') next.balance = source.balance;
-  if (typeof source.scripts === 'boolean') next.scripts = source.scripts;
-  if (typeof source.ai_assistant === 'boolean') next.ai_assistant = source.ai_assistant;
-  if (typeof source.ai_pbx_admin === 'boolean') next.ai_pbx_admin = source.ai_pbx_admin;
-
-  return next;
-}
-function isModuleVisibleForAuthUser(authUser: any, localDb: any, moduleKey: OptionalModuleKey): boolean {
-  if (authUser?.role === 'su') return true;
-  const visibility = normalizeModuleVisibilitySettings(localDb?.settings?.moduleVisibility);
-  return visibility[moduleKey] !== false;
-}
-
-function isPermissionAllowedByModuleVisibility(authUser: any, localDb: any, permission: string): boolean {
-  if (authUser?.role === 'su') return true;
-  const moduleKey = PERMISSION_MODULE_MAP[permission];
-  if (!moduleKey) return true;
-  return isModuleVisibleForAuthUser(authUser, localDb, moduleKey);
+function isPermissionAllowedByModuleVisibility(authUser:any,localDb:any,permission:string):boolean {
+  return isPermissionModuleVisible(authUser?.role,localDb?.settings?.moduleVisibility,permission);
 }
 
 function normalizeLocalDbSchema(db: any): any {
@@ -4807,13 +4722,6 @@ async function readLocalDb(): Promise<LocalDb> {
       changed = true;
     }
 
-    const normalizedModuleVisibility = normalizeModuleVisibilitySettings(data.settings?.moduleVisibility);
-    if (JSON.stringify(data.settings?.moduleVisibility || {}) !== JSON.stringify(normalizedModuleVisibility)) {
-      if (!data.settings || typeof data.settings !== 'object') data.settings = {};
-      data.settings.moduleVisibility = normalizedModuleVisibility;
-      changed = true;
-    }
-
     if (!Array.isArray((data as any).yandexOAuthStates)) {
       (data as any).yandexOAuthStates = [];
       changed = true;
@@ -5121,6 +5029,8 @@ async function readLocalDb(): Promise<LocalDb> {
     if (changed) {
       fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf8');
     }
+    data.settings = data.settings || {};
+    data.settings.moduleVisibility = await loadModuleVisibility(data.settings.moduleVisibility);
     return data;
   } finally {
     dbLock.release();
@@ -10891,20 +10801,6 @@ app.post('/api/auth/browser-extension/logout',async(req,res)=>{await revokeBrows
 
 
 
-const SU_PERMISSION_KEYS = [
-  'manage_users',
-  'manage_roles',
-  'dangerous_pbx_write',
-  'bulk_extensions',
-  'manage_trunks',
-  'manage_outbound_routes',
-  'manage_numbering_capacity',
-  'manage_balance_providers',
-  'manage_fail2ban',
-  'manage_security_whitelist',
-  'manage_security_settings'
-];
-
 // --- ACCESS ROLES MANAGEMENT ENDPOINTS ---
 app.get('/api/settings/module-visibility', requireAuth(), async (req, res) => {
   try {
@@ -10933,14 +10829,13 @@ app.put('/api/settings/module-visibility', requireAuth(), async (req, res) => {
 
     const next = { ...current };
 
-    for (const key of getOptionalModuleKeys()) {
+    for (const {key} of SYSTEM_SECTIONS) {
       if (typeof incoming?.[key] === 'boolean') {
         next[key] = incoming[key];
       }
     }
 
-    localDb.settings.moduleVisibility = next;
-    await writeLocalDb(localDb);
+    await saveModuleVisibility(next);
 
     res.json({ moduleVisibility: next });
   } catch (error: any) {
@@ -10950,7 +10845,7 @@ app.put('/api/settings/module-visibility', requireAuth(), async (req, res) => {
 
 app.get('/api/roles', requireAuth(), async (req, res) => {
   const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.permissions?.manage_roles !== true) {
+  if (!(await checkUserPermission(req, 'manage_roles'))) {
     return res.status(403).json({ error: 'Access denied: manage_roles permission required' });
   }
 
@@ -10985,7 +10880,7 @@ app.get('/api/roles', requireAuth(), async (req, res) => {
 
 app.put('/api/roles', requireAuth(), async (req, res) => {
   const authUser = (req as any).user;
-  if (authUser?.role !== 'su' && authUser?.permissions?.manage_roles !== true) {
+  if (!(await checkUserPermission(req, 'manage_roles'))) {
     return res.status(403).json({ error: 'Access denied: manage_roles permission required' });
   }
 
@@ -11060,7 +10955,9 @@ app.put('/api/roles', requireAuth(), async (req, res) => {
     localDb.roles = safeRoles;
     await writeLocalDb(localDb);
 
-    res.json({ success: true, roles: safeRoles });
+    const currentDbUser = getAuthenticatedDbUser(localDb, req);
+    const currentRole = safeRoles.find((role:any)=>role.id===currentDbUser?.role);
+    res.json({ success: true, roles: safeRoles, effectivePermissions: {...(currentRole?.permissions || {}),...(currentDbUser?.permissions || {})} });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -11406,6 +11303,7 @@ app.get('/api/settings', requireAuth(), async (req, res) => {
     });
   }
 
+  runtimeSettings.moduleVisibility = localDb.settings.moduleVisibility;
   const sanitizedRuntime = sanitizeSettingsForClient(runtimeSettings);
   const clientSettings = sanitizedRuntime.settings;
   await writeSettingsSecretSanitizedAuditEvent(sanitizedRuntime.sanitizedCount);
@@ -11442,6 +11340,8 @@ app.post('/api/settings', requireAuth(), async (req, res) => {
     return res.status(403).json({ error: 'Access denied: view_settings permission required' });
   }
   const settingsUpdate = { ...(req.body || {}) };
+  // Module visibility is saved only through the SU-only SQL endpoint.
+  delete settingsUpdate.moduleVisibility;
   if (authUser?.role !== 'su') {
     delete settingsUpdate.showSuRoleToAdmin;
     delete settingsUpdate.showSuPermissionsToAdmin;
@@ -12051,6 +11951,8 @@ const directorySqlListResponse = async (req: Request, res: any) => {
         ? 'private'
         : req.query.visibility,
     isSpam: spamMode === 'exclude_spam' ? false : spamMode === 'only_spam' ? true : req.query.isSpam,
+    isBlacklisted: spamMode === 'only_blacklisted' ? true : spamMode === 'exclude_blacklisted' ? false : undefined,
+    spamOrBlacklisted: spamMode === 'only_spam_or_blacklisted' ? true : spamMode === 'exclude_spam_and_blacklisted' ? false : undefined,
     organization: req.query.organization || req.query.company,
     responsibleUserId: req.query.responsibleUserId || req.query.responsible,
     department: req.query.department,
@@ -23641,9 +23543,9 @@ async function startServer() {
     });
   }
 
-  const startupDb = await readLocalDb();
   console.log('[PBXPULS_DB] runtime configuration:', getPBXPulsDbConfigLogFields());
   await runPBXPulsMigrations();
+  const startupDb = await readLocalDb();
   await aiPlatformRuntime.start();
   startMonitoringRetentionRunner();
   startSecurityCollector();

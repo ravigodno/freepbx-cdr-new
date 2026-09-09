@@ -120,13 +120,15 @@ export function SiteFormLeadsDashboard({ startDate, endDate, refreshKey = 0 }: {
   if (!loading && !hasData) return <div className="rounded-2xl border border-slate-200 bg-white p-14 text-center shadow-sm dark:border-slate-800 dark:bg-slate-900"><Target className="mx-auto h-10 w-10 text-slate-300" /><h3 className="mt-3 font-black">За выбранный период заявок нет</h3><p className="mt-1 text-xs text-slate-500">Измените период или проверьте подключённые формы.</p></div>;
 
   return <div className="space-y-4">
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
       <StatsKpiCard label="Всего заявок" value={number(summary.total).toLocaleString('ru-RU')} hint="Без тестов, дублей и спама" icon={Target} tone="blue" loading={loading} />
       <StatsKpiCard label="Уникальные заявители" value={number(summary.unique_applicants).toLocaleString('ru-RU')} hint="По нормализованному телефону" icon={Users} tone="purple" loading={loading} />
       <StatsKpiCard label="Без звонка" value={number(summary.without_call).toLocaleString('ru-RU')} hint="Нет попытки связаться" icon={PhoneCall} tone={number(summary.without_call) ? 'orange' : 'green'} loading={loading} />
       <StatsKpiCard label="Успешный контакт" value={percent(conversion.contact)} hint="Есть отвеченный звонок" icon={CheckCircle2} tone="green" loading={loading} />
       <StatsKpiCard label="Просрочено SLA" value={number(summary.overdue).toLocaleString('ru-RU')} hint="Не позвонили в срок" icon={AlertTriangle} tone={number(summary.overdue) ? 'red' : 'green'} loading={loading} />
       <StatsKpiCard label="SLA заявок" value={percent(conversion.sla)} hint={`Первый звонок: ${duration(summary.avg_first_call_seconds)}`} icon={Clock3} tone="purple" loading={loading} />
+      <StatsKpiCard label="Конверсия в звонок" value={percent(conversion.attempt)} hint="Есть попытка связаться" icon={PhoneCall} tone="blue" loading={loading} />
+      <StatsKpiCard label="Обработано" value={percent(conversion.completed)} hint="Доля завершённых заявок" icon={CheckCircle2} tone="green" loading={loading} />
     </div>
 
     <div className="grid gap-4 xl:grid-cols-2">
@@ -162,6 +164,26 @@ export function SiteFormLeadsDashboard({ startDate, endDate, refreshKey = 0 }: {
         <ResponsiveContainer width="100%" height="100%"><BarChart data={rows(data.site, 8)} margin={{ left: -12 }}><CartesianGrid stroke="#e2e8f0" strokeDasharray="3 7" vertical={false} /><XAxis dataKey="name" tick={{ fontSize: 9, fill: '#64748b' }} interval={0} angle={-20} textAnchor="end" height={62} /><YAxis allowDecimals={false} /><Tooltip /><Bar dataKey="leads" name="Заявки" fill="#8b5cf6" radius={[7, 7, 0, 0]} /></BarChart></ResponsiveContainer>
       </ChartCard>
     </div>
+
+    <section className="rounded-2xl border border-slate-200/70 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <h3 className="text-base font-black text-slate-950 dark:text-white">Детализация по источникам</h3>
+      <div className="mt-4 overflow-x-auto">
+        <table className="w-full text-left text-xs">
+          <thead className="text-slate-500 dark:text-slate-400">
+            <tr><th className="py-2 pr-4">Источник</th><th className="px-3 py-2 text-right">Заявки</th><th className="px-3 py-2 text-right">Попытки</th><th className="px-3 py-2 text-right">Контакты</th><th className="px-3 py-2 text-right">В SLA</th></tr>
+          </thead>
+          <tbody>
+            {data.source.map(item => <tr key={item.group_key ?? ''} className="border-t border-slate-100 dark:border-slate-800">
+              <td className="py-3 pr-4">{label(item.group_key)}</td>
+              <td className="px-3 py-3 text-right">{number(item.leads).toLocaleString('ru-RU')}</td>
+              <td className="px-3 py-3 text-right">{number(item.attempted).toLocaleString('ru-RU')}</td>
+              <td className="px-3 py-3 text-right">{number(item.contacted).toLocaleString('ru-RU')}</td>
+              <td className="px-3 py-3 text-right">{number(item.in_sla).toLocaleString('ru-RU')}</td>
+            </tr>)}
+          </tbody>
+        </table>
+      </div>
+    </section>
 
     <ChartCard title="Формы" hint="Какие формы дают больше заявок и успешных контактов">
       <ResponsiveContainer width="100%" height="100%"><BarChart data={rows(data.form, 12)} margin={{ left: -12 }}><CartesianGrid stroke="#e2e8f0" strokeDasharray="3 7" vertical={false} /><XAxis dataKey="name" tick={{ fontSize: 9, fill: '#64748b' }} interval={0} angle={-18} textAnchor="end" height={68} /><YAxis allowDecimals={false} /><Tooltip /><Legend wrapperStyle={{ fontSize: 11 }} /><Bar dataKey="leads" name="Заявки" fill="#2563eb" radius={[6, 6, 0, 0]} /><Bar dataKey="contacted" name="Контакты" fill="#10b981" radius={[6, 6, 0, 0]} /></BarChart></ResponsiveContainer>

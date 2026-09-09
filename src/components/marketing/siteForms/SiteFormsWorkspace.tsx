@@ -1,3 +1,5 @@
+import { createInterfaceDateTimeFormatter } from '../../../utils/formatInterfaceDateTime';
+import { draftFingerprint, useUnsavedSource, useUnsavedChanges } from "../../settings/UnsavedChanges";
 import { useEffect, useMemo, useState } from "react";
 import {
   BarChart3,
@@ -20,6 +22,7 @@ import BitrixPullEditor from "./BitrixPullEditor";
 import SiteFormsLeadTable from "./SiteFormsLeadTable";
 import SiteFormsSetupGuide from "./SiteFormsSetupGuide";
 import SiteFormLeadTranscript from './SiteFormLeadTranscript';
+import RussianDatePicker from '../../common/RussianDatePicker';
 
 type Tab = "leads" | "reports" | "integrations";
 const statusLabels: Record<string, string> = {
@@ -87,15 +90,15 @@ async function copyText(value: string) {
   window.prompt("Скопируйте значение вручную:", value);
   return false;
 }
-const fmt = (v: any) =>
-  v ? new Date(String(v).replace(" ", "T")).toLocaleString("ru-RU") : "—";
 const pct = (v: any) =>
   `${Number(v || 0).toLocaleString("ru-RU", { maximumFractionDigits: 1 })}%`;
 
 export default function SiteFormsWorkspace({
   initialTab = "leads",
   showNavigation = true,
-}: { initialTab?: Tab; showNavigation?: boolean } = {}) {
+  showIntegrationsTab = true,
+}: { initialTab?: Tab; showNavigation?: boolean; showIntegrationsTab?: boolean } = {}) {
+  const fmt = createInterfaceDateTimeFormatter();
   const emptyIntegrationForm = {
     name: "",
     provider: "bitrix_site",
@@ -116,6 +119,8 @@ export default function SiteFormsWorkspace({
     [page, setPage] = useState(1),
     [search, setSearch] = useState(""),
     [status, setStatus] = useState(""),
+    [startDate, setStartDate] = useState(""),
+    [endDate, setEndDate] = useState(""),
     [loading, setLoading] = useState(false),
     [error, setError] = useState(""),
     [selected, setSelected] = useState<any>(null),
@@ -130,6 +135,9 @@ export default function SiteFormsWorkspace({
     [oneTimeToken, setOneTimeToken] = useState(""),
     [createdWebhookPath, setCreatedWebhookPath] = useState(""),
     [updatingIntegrationId, setUpdatingIntegrationId] = useState("");
+  const [savingIntegration, setSavingIntegration] = useState(false);
+  const [savedForm, setSavedForm] = useState<any>(emptyIntegrationForm);
+  const { requestNavigation } = useUnsavedChanges();
   const [form, setForm] = useState<any>(emptyIntegrationForm),
     [assignableUsers, setAssignableUsers] = useState<any[]>([]),
     [newComment, setNewComment] = useState("");
@@ -140,8 +148,10 @@ export default function SiteFormsWorkspace({
         limit: "25",
         ...(search ? { search } : {}),
         ...(status ? { status } : {}),
+        ...(startDate ? { startDate } : {}),
+        ...(endDate ? { endDate } : {}),
       }),
-    [page, search, status],
+    [page, search, status, startDate, endDate],
   );
   const load = async () => {
     setLoading(true);
@@ -280,6 +290,7 @@ export default function SiteFormsWorkspace({
   const openCreate = () => {
     setEditingIntegrationId("");
     setForm({ ...emptyIntegrationForm });
+    setSavedForm({ ...emptyIntegrationForm });
     setShowCreate(true);
   };
   const openEdit = (integration: any) => {
@@ -293,9 +304,16 @@ export default function SiteFormsWorkspace({
       allowedIps: (integration.allowedIps || []).join(", "),
       allowedFormIds: (integration.allowedFormIds || []).join(", "),
     });
+    setSavedForm({
+      ...integration,
+      allowedIps: (integration.allowedIps || []).join(", "),
+      allowedFormIds: (integration.allowedFormIds || []).join(", "),
+    });
     setShowCreate(true);
   };
   const saveIntegration = async () => {
+    if (savingIntegration) return false;
+    setSavingIntegration(true);
     setError("");
     try {
       if (editingIntegrationId) {
@@ -314,10 +332,15 @@ export default function SiteFormsWorkspace({
       setShowCreate(false);
       setEditingIntegrationId("");
       await load();
+      return true;
     } catch (e: any) {
       setError(e.message);
-    }
+      return false;
+    } finally { setSavingIntegration(false); }
   };
+  useUnsavedSource({ label: 'интеграция с сайтом', dirty: showCreate && draftFingerprint(form) !== draftFingerprint(savedForm), busy: savingIntegration,
+    save: async () => { const creating = !editingIntegrationId; const result = await saveIntegration(); return result && creating ? 'stay' : result; },
+    discard: () => { setForm(savedForm); setShowCreate(false); } });
   const toggleIntegration = async (integration: any) => {
     const next = !integration.isEnabled;
     setUpdatingIntegrationId(integration.id);
@@ -398,7 +421,7 @@ export default function SiteFormsWorkspace({
     conversion = overview?.conversion || {};
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap gap-2 rounded-2xl border bg-white p-2 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      {(showNavigation || tab !== "leads") && <div className="flex flex-wrap gap-2 rounded-2xl border bg-white p-2 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         {showNavigation &&
           (
             [
@@ -406,22 +429,22 @@ export default function SiteFormsWorkspace({
               ["reports", "Отчёты"],
               ["integrations", "Интеграции"],
             ] as const
-          ).map(([id, label]) => (
+          ).filter(([id]) => showIntegrationsTab || id !== 'integrations').map(([id, label]) => (
             <button
               key={id}
-              onClick={() => setTab(id)}
+              onClick={() => requestNavigation(() => setTab(id))}
               className={`rounded-xl px-4 py-2 text-xs font-black ${tab === id ? "bg-blue-600 text-white" : "text-slate-600 hover:bg-slate-100 dark:text-slate-300"}`}
             >
               {label}
             </button>
           ))}
-        <button
+        {tab !== "leads" && <button
           onClick={() => void load()}
           className="ml-auto rounded-xl p-2 text-slate-500 hover:bg-slate-100"
         >
           <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-        </button>
-      </div>
+        </button>}
+      </div>}
       {error && (
         <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
           {error}
@@ -461,6 +484,34 @@ export default function SiteFormsWorkspace({
                 </option>
               ))}
             </select>
+            <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+              <span>С</span>
+              <RussianDatePicker
+                value={startDate}
+                onChange={value => {
+                  setStartDate(value);
+                  if (value && endDate && value > endDate) setEndDate(value);
+                  setPage(1);
+                }}
+                ariaLabel="Заявки: дата начала периода"
+                accent="blue"
+                showClear
+                buttonClassName="flex h-9 items-center gap-2 rounded-xl border bg-white px-3 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+              />
+              <span>по</span>
+              <RussianDatePicker
+                value={endDate}
+                onChange={value => {
+                  setEndDate(value);
+                  if (value && startDate && value < startDate) setStartDate(value);
+                  setPage(1);
+                }}
+                ariaLabel="Заявки: дата окончания периода"
+                accent="blue"
+                showClear
+                buttonClassName="flex h-9 items-center gap-2 rounded-xl border bg-white px-3 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+              />
+            </div>
             {can("export_site_form_leads") && (
               <>
                 <button
@@ -481,6 +532,15 @@ export default function SiteFormsWorkspace({
                 </button>
               </>
             )}
+            <button
+              type="button"
+              onClick={() => void load()}
+              disabled={loading}
+              className="inline-flex h-9 items-center gap-2 rounded-xl bg-blue-600 px-4 text-xs font-black text-white hover:bg-blue-700 disabled:opacity-50"
+            >
+              <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+              Обновить
+            </button>
           </div>
           <SiteFormsLeadTable
             items={items}
@@ -686,7 +746,7 @@ export default function SiteFormsWorkspace({
           <div className="flex justify-end">
             {can("manage_site_form_integrations") && (
               <button
-                onClick={openCreate}
+                onClick={() => requestNavigation(openCreate)}
                 className="flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-xs font-black text-white"
               >
                 <Plus className="h-4 w-4" />
@@ -742,7 +802,7 @@ export default function SiteFormsWorkspace({
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2">
                   <button
-                    onClick={() => openEdit(i)}
+                    onClick={() => requestNavigation(() => openEdit(i))}
                     className="flex items-center gap-1 rounded-lg border px-3 py-2 text-xs font-bold"
                   >
                     <Pencil className="h-3.5 w-3.5" />
@@ -833,8 +893,7 @@ export default function SiteFormsWorkspace({
               </h2>
               <button
                 onClick={() => {
-                  setShowCreate(false);
-                  setEditingIntegrationId("");
+                  requestNavigation(() => { setShowCreate(false); setEditingIntegrationId(""); });
                 }}
               >
                 <X />
@@ -912,7 +971,7 @@ export default function SiteFormsWorkspace({
       {editingPullIntegration && (
         <BitrixPullEditor
           integration={editingPullIntegration}
-          onClose={() => setEditingPullIntegration(null)}
+          onClose={() => requestNavigation(() => setEditingPullIntegration(null))}
           onChanged={async () => {
             setEditingPullIntegration(null);
             await load();

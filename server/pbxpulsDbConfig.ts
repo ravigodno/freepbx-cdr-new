@@ -2,6 +2,7 @@ import './pbxpulsConfig.js';
 export type PBXPulsDbConfigSource = 'env' | 'default';
 
 export interface PBXPulsDbConfig {
+  socketPath?: string;
   host: string;
   port: number;
   database: string;
@@ -15,6 +16,7 @@ export interface PBXPulsDbConfig {
 export function getPBXPulsDbConfig(): PBXPulsDbConfig {
   const password = process.env.PBXPULS_DB_PASSWORD ?? process.env.PBXPULS_DB_PASS ?? '';
   const explicit = [
+    process.env.PBXPULS_DB_SOCKET_PATH,
     process.env.PBXPULS_DB_HOST,
     process.env.PBXPULS_DB_PORT,
     process.env.PBXPULS_DB_NAME,
@@ -24,6 +26,7 @@ export function getPBXPulsDbConfig(): PBXPulsDbConfig {
   ].some(value => value !== undefined && value !== '');
 
   return {
+    socketPath: process.env.PBXPULS_DB_SOCKET_PATH || undefined,
     host: process.env.PBXPULS_DB_HOST || '127.0.0.1',
     port: Number(process.env.PBXPULS_DB_PORT || 3306),
     database: process.env.PBXPULS_DB_NAME || 'pbxpuls',
@@ -38,6 +41,7 @@ export function getPBXPulsDbConfig(): PBXPulsDbConfig {
 export function getPBXPulsDbConnectionOptions() {
   const config = getPBXPulsDbConfig();
   return {
+    ...(config.socketPath ? { socketPath: config.socketPath } : {}),
     host: config.host,
     port: config.port,
     user: config.user,
