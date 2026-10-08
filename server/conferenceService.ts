@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import { runAsteriskCliCommand } from './asteriskCli.js';
 import type { LiveTransferSearchTarget } from './liveTransferSearch.js';
 import type { AppSettings } from '../src/types.js';
+import { CONFERENCE_CONTEXTS, hasLoadedConferenceContext } from './conferenceReadiness.js';
 
 export type ConferenceMechanism = 'confbridge' | 'meetme' | 'ami-originate' | 'unavailable';
 
@@ -33,12 +34,10 @@ export async function getConferenceBackendStatus(executor = { amiConfigured: fal
   const confBridgeAvailable = confBridge.success && /ConfBridge/i.test(confBridge.message);
   const meetMeAvailable = meetMe.success && /MeetMe/i.test(meetMe.message);
   const freePbxModule = fs.existsSync('/var/www/html/admin/modules/conferences');
-  let conferenceContext = false;
-  try {
-    conferenceContext = /\[pbxpuls-conference\][\s\S]*?\bConfBridge\s*\(/i.test(fs.readFileSync('/etc/asterisk/extensions_custom.conf', 'utf8'));
-  } catch {
-    conferenceContext = false;
-  }
+  const contextResults = await Promise.all(CONFERENCE_CONTEXTS.map(context =>
+    runAsteriskCliCommand(`dialplan show ${context}`, 3000)));
+  const missingContexts = CONFERENCE_CONTEXTS.filter((context, index) => !hasLoadedConferenceContext(context, contextResults[index]));
+  const conferenceContext = missingContexts.length === 0;
   const mechanism: ConferenceMechanism = confBridgeAvailable
     ? 'confbridge'
     : meetMeAvailable ? 'meetme' : 'unavailable';
@@ -52,7 +51,9 @@ export async function getConferenceBackendStatus(executor = { amiConfigured: fal
     mechanism,
     reason: mechanism === 'unavailable'
       ? 'В Asterisk не найден доступный backend конференций'
-      : activeCallAvailable ? 'Конференция из активного звонка доступна через AMI Redirect + ConfBridge' : 'Конференция из активного звонка недоступна: нужны AMI Redirect, Originate и context pbxpuls-conference',
+      : activeCallAvailable ? 'Конференция из активного звонка доступна через AMI Redirect + ConfBridge'
+      : !conferenceContext ? `Не загружены контексты конференции: ${missingContexts.join(', ')}. Администратору нужно выполнить scripts/enable-conferences.sh --apply на АТС.`
+      : 'Конференция из активного звонка недоступна: проверьте настройки AMI, Originate и Redirect',
     meetingReason: meetingAvailable
       ? 'Динамические телефонные совещания доступны через AMI Originate + ConfBridge'
       : 'Телефонные совещания недоступны: нужны ConfBridge и AMI Originate',
@@ -60,7 +61,7 @@ export async function getConferenceBackendStatus(executor = { amiConfigured: fal
       { name: 'asterisk_confbridge', available: confBridgeAvailable, detail: confBridgeAvailable ? 'Приложение ConfBridge доступно' : 'Приложение ConfBridge не найдено' },
       { name: 'asterisk_meetme', available: meetMeAvailable, detail: meetMeAvailable ? 'Приложение MeetMe доступно' : 'Приложение MeetMe не найдено' },
       { name: 'freepbx_conferences_module', available: freePbxModule, detail: freePbxModule ? 'Модуль Conferences установлен' : 'Модуль Conferences не найден' },
-      { name: 'conference_context', available: conferenceContext, detail: conferenceContext ? 'В dialplan найден существующий ConfBridge context' : 'ConfBridge context не найден' },
+      { name: 'conference_context', available: conferenceContext, detail: conferenceContext ? 'Все три контекста ConfBridge загружены в Asterisk' : `Не загружены: ${missingContexts.join(', ')}` },
       { name: 'ami_originate', available: executor.originateAvailable, detail: executor.originateAvailable ? 'AMI Originate доступен' : 'AMI Originate не подтверждён' },
       { name: 'ami_redirect', available: executor.redirectAvailable, detail: executor.redirectAvailable ? 'AMI Redirect доступен' : 'AMI Redirect не подтверждён' },
       { name: 'pbxpuls_meeting_executor', available: meetingAvailable, detail: meetingAvailable ? 'Executor динамических совещаний включён' : 'Executor динамических совещаний недоступен' },

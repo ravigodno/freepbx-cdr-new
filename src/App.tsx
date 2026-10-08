@@ -8414,9 +8414,11 @@ export default function App() {
         <section className="min-w-0 max-w-full space-y-4">
           <div className={`w-full min-w-0 max-w-full bg-white border border-slate-200 rounded-2xl shadow-sm relative min-h-[calc(100vh-150px)] flex flex-col ${settingsTab === 'permissions' ? 'overflow-clip' : 'overflow-hidden'} font-sans`}>
             <div className="flex min-w-0 flex-wrap items-center justify-between gap-3 border-b border-slate-200 p-6 pb-4 shrink-0 bg-slate-50">
-              <div className="flex min-w-0 items-center gap-2">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
                 <Settings className="h-6 w-6 shrink-0 text-blue-600 animate-spin-slow" />
-                <h3 className="min-w-0 break-words text-base font-black text-slate-905">Настройки системы</h3></div>
+                <h3 className="min-w-0 break-words text-base font-black text-slate-905">Настройки системы</h3>
+                <span className="shrink-0 rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700" title="Версия установленной сборки PBXPuls">PBXPuls v{packageJson.version}</span>
+              </div>
               <button
                 type="button"
                 data-unsaved-navigation
