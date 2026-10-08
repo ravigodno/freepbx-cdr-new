@@ -1,9 +1,13 @@
 {
   "name": "freepbx-cdr-new",
   "private": true,
-  "version": "5.8.33",
+  "version": "5.8.34",
   "type": "module",
   "scripts": {
+    "test:cdr-greetings": "tsx scripts/test-cdr-greetings.ts",
+    "test:headset-setup": "tsx scripts/test-headset-setup.ts",
+    "test:softphone-websocket-proxy": "tsx scripts/test-softphone-websocket-proxy.ts",
+    "test:audio-device-access": "tsx scripts/test-audio-device-access.ts",
     "test:cdr-sla-status": "tsx scripts/test-cdr-sla-status.ts",
     "test:conference-readiness": "tsx scripts/test-conference-readiness.ts",
     "test:department-report-access": "tsx scripts/test-department-report-access.ts",

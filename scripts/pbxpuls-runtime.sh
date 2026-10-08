@@ -55,3 +55,14 @@ pbxpuls_http() {
  done
  [[ "$ready" == 1 ]]
 }
+
+pbxpuls_web() {
+ local scheme port ready=0
+ read -r scheme port < <(node -e 'require("dotenv").config({quiet:true});const e=process.env;console.log(e.PBXPULS_HTTPS_MODE==="native"?"https "+(e.PBXPULS_HTTPS_PORT||3000):"http "+(e.PORT||3000))')
+ for _ in $(seq 1 45); do
+  # Loopback health probe only. Client certificate trust is configured separately.
+  if curl -kfs --max-time 3 "$scheme://127.0.0.1:$port/" >/dev/null; then ready=1; break; fi
+  sleep 2
+ done
+ [[ "$ready" == 1 ]]
+}

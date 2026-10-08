@@ -1,4 +1,6 @@
 import crypto from 'crypto';
+import { runtimeWebsocketUrl } from './websocketProxy.js';
+import { registerHeadsetSetupRoutes } from './headsetSetup.js';
 import type { Express, NextFunction, Request, Response } from 'express';
 import { queryPBXPulsDb } from '../pbxpulsDb.js';
 import { buildSoftphoneAutoConfig, type SoftphoneAutoConfigSource } from './autoConfig.js';
@@ -60,6 +62,7 @@ async function canManage(req: Request, dependencies: Dependencies): Promise<bool
 }
 
 export function registerSoftphoneRoutes(app: Express, dependencies: Dependencies): void {
+  registerHeadsetSetupRoutes(app, dependencies);
   const auth = dependencies.requireAuth();
   const encryption = new SoftphoneCredentialCrypto();
 
@@ -87,7 +90,7 @@ export function registerSoftphoneRoutes(app: Express, dependencies: Dependencies
       res.setHeader('Cache-Control', 'no-store, private');
       res.setHeader('Pragma', 'no-cache');
       return res.json({
-        websocketUrl: row.websocket_url,
+        websocketUrl: runtimeWebsocketUrl(row.websocket_url, req, res),
         sipUri: row.sip_uri,
         authorizationUsername: row.authorization_username,
         authorizationPassword,

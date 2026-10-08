@@ -2,6 +2,7 @@ import React from 'react';
 import DirectoryTypeIcon from './DirectoryTypeIcon';
 import {
   PhoneCall,
+  Volume2,
   PhoneForwarded,
   UserPlus,
   UserRoundCheck,
@@ -72,6 +73,14 @@ export default function CDRCalleeCell({
       <UserPlus className="h-3 w-3" />
     </button>
   );
+
+  if (calleeType === 'greeting') {
+    const did = String(call.inboundDid || call.trunkNumber || call.did || '').split('→')[0].trim();
+    return <td className="py-4 px-4"><div className="flex max-w-xs flex-col gap-1.5 select-text">
+      <div className="flex items-center gap-1.5 text-xs font-bold"><Volume2 className="h-4 w-4 shrink-0 text-blue-600" /><span>{calleeName}</span></div>
+      {did && <span className="text-xs text-slate-500">Номер: {did}</span>}
+    </div></td>;
+  }
 
   if (call?.phoneMeeting) {
     return (

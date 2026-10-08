@@ -1,3 +1,5 @@
+import { announcementId, greetingTitle } from '../../../../shared/automatedCallDestination';
+
 export function extractExternalFromLastdata(lastdata: string): string {
   if (!lastdata) return '';
 
@@ -178,6 +180,7 @@ export function buildCdrRowViewModel(call: any, directory: any[], relatedLegs: a
       dctxLower === 'ext-group' ||
       dctxLower === 'ext-local' ||
       dctxLower.startsWith('ivr-') ||
+      Boolean(announcementId(dctxLower)) ||
       dstVal === '600' ||
       isInternalExt(dstVal);
 
@@ -303,7 +306,9 @@ export function buildCdrRowViewModel(call: any, directory: any[], relatedLegs: a
     return dstVal;
   };
 
-  const displayedDst = getCalleeNumber() || call.dst || 'Неизвестно';
+  const greetingId = announcementId(dctx);
+  const greetingDestination = greetingId && /^(?:s|h|t|i)?$/i.test(dstVal) && !call.answeredExts?.length;
+  const displayedDst = greetingDestination ? (call.greetingTitle || greetingTitle(greetingId)) : getCalleeNumber() || call.dst || 'Неизвестно';
 
   const callerExtensionMatch = callerExtension
     ? (call.callerDirectoryContact || directory.find(e => directoryEntryMatchesNumber(e, callerExtension)))
@@ -356,6 +361,12 @@ export function buildCdrRowViewModel(call: any, directory: any[], relatedLegs: a
     calleeName = displayedDst.includes(',')
       ? 'Внутренние номера'
       : (isDstInternal ? `Внутренний ${displayedDst}` : 'Внешний номер');
+  }
+
+  if (greetingDestination) {
+    calleeName = displayedDst;
+    calleeType = 'greeting';
+    isFoundDst = false;
   }
 
   return {

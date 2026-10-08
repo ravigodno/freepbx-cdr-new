@@ -74,6 +74,7 @@ if [[ -d "$backup/node_modules" ]]; then if [[ -d node_modules ]]; then mv node_
 if [[ -d dist ]]; then mv dist "$stage/failed-dist"; fi
 cp -a "$backup/dist" dist
 cp -p "$backup/env" .env
+if [[ -f "$backup/https/rollback.sh" ]]; then bash "$backup/https/rollback.sh"; fi
 if [[ -f "$backup/runtime" ]]; then cp -p "$backup/runtime" .pbxpuls-runtime; else rm -f .pbxpuls-runtime; fi
 pm2 delete asterisk-cdr-panel || true
 # Restore the original process definition (without starting a second PM2 home).
@@ -100,6 +101,7 @@ mv "$stage/node_modules" node_modules
 mv dist "$backup/dist-at-switch"
 mv "$stage/dist" dist
 pbxpuls_save_runtime "$app"
+PBXPULS_HTTPS_BACKUP_DIR="$backup/https" node scripts/configure-https.mjs --apply
 npm run pbxpuls:db:setup
 if ! node node_modules/tsx/dist/cli.mjs scripts/directory-storage.ts --verify-active > "$backup/directory-active.json"; then
 node node_modules/tsx/dist/cli.mjs scripts/directory-storage.ts > "$backup/directory-preview.json"
@@ -110,8 +112,7 @@ pm2 delete asterisk-cdr-panel
 pm2 start scripts/start-pbxpuls.sh --name asterisk-cdr-panel --interpreter bash --cwd "$app"
 pm2 save
 pbxpuls_service "$app"
-port=$(node -e 'require("dotenv").config({quiet:true});console.log(process.env.PORT||3000)')
-pbxpuls_http "$port"
+pbxpuls_web
 npm run pbxpuls:db:check
 trap - ERR
 echo "Updated to $ref. Backup: $backup"

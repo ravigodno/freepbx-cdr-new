@@ -1,18 +1,17 @@
 import type { RouteStep } from '../types/callRoute';
+import { announcementId, greetingTitle } from '../../../../shared/automatedCallDestination';
 
 export function buildAnnouncementStep(step: any): RouteStep | null {
   const destination = String(step?.destination || '').trim();
 
-  if (!destination.toLowerCase().startsWith('app-announcement,')) {
+  const id = announcementId(destination);
+  if (!id) {
     return null;
   }
 
-  const parts = destination.split(',');
-  const id = parts[1] || '';
-
   return {
-    label: 'ANNOUNCEMENT',
-    title: id ? `Анонс ${id}` : 'Анонс',
+    label: 'Приветствие',
+    title: step.type === 'announcement' ? step.title || greetingTitle(id) : greetingTitle(id),
     number: id,
     pattern: 'Воспроизведение сообщения',
     destination,

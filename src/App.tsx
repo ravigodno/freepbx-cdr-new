@@ -95,6 +95,7 @@ import UnifiedDialer from './modules/softphone/components/UnifiedDialer';
 import AudioDeviceSettings from './modules/softphone/components/AudioDeviceSettings';
 import SoftphoneCallPanel from './modules/softphone/components/SoftphoneCallPanel';
 import SoftphoneAutoConfig from './modules/softphone/components/SoftphoneAutoConfig';
+import HeadsetSetupWizard from './modules/softphone/components/HeadsetSetupWizard';
 import { PbxPulsSipClient, type SoftphoneSnapshot } from './modules/softphone/sip/sipClient';
 import { loadAudioDevicePreferences } from './modules/softphone/audio/audioDevicePreferences';
 const CommandCenterTab = lazy(() => import('./modules/monitoring/tabs/monitoring/CommandCenterTab'));
@@ -8901,9 +8902,10 @@ export default function App() {
                         {interfacePreferences.callDeviceMode === 'browser_headset' && softphoneSnapshot.registration !== 'registered' && <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[10px] leading-relaxed text-amber-800">WebRTC-профиль пока не подключён. Проверьте настройки АТС ниже.</div>}
                       </div>
 
+                      {session?.token && <HeadsetSetupWizard token={session.token} onConfigured={connectBrowserHeadset} />}
                       <AudioDeviceSettings />
 
-                      {session?.token && <SoftphoneAutoConfig token={session.token} onConfigured={connectBrowserHeadset} />}
+                      {session?.token && <details className="rounded-xl border border-slate-200 p-3"><summary className="cursor-pointer text-xs font-bold text-slate-600">Проверка основного SIP-номера (дополнительно)</summary><div className="mt-3"><SoftphoneAutoConfig token={session.token} onConfigured={connectBrowserHeadset} /></div></details>}
 
                       <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
                         <div className="flex flex-wrap items-center justify-between gap-3">

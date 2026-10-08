@@ -2276,6 +2276,11 @@ const MIGRATIONS: Migration[] = [
        VALUES('mcn_telecom','mcn_telecom','MCN Telecom',0,'{}',15,'disabled')`
     ]
   }
+  ,{
+    key:'20261008_097_softphone_setup_previews',description:'Persist headset setup previews and apply state',statements:[
+      `CREATE TABLE IF NOT EXISTS softphone_setup_previews(id CHAR(48) PRIMARY KEY,username VARCHAR(100) NOT NULL,extension VARCHAR(32) NOT NULL,plan_json LONGTEXT NOT NULL,status VARCHAR(24) NOT NULL DEFAULT 'pending',expires_at DATETIME NOT NULL,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,INDEX idx_headset_preview_user(username,status,expires_at)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+    ]
+  }
 ];
 
 async function seedLegacyDtmfEvents(connection: Connection): Promise<void> {

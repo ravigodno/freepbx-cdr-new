@@ -268,6 +268,8 @@ expected=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(".director
 PBXPULS_MAINTENANCE=1 node node_modules/tsx/dist/cli.mjs scripts/directory-storage.ts --apply --expect "$expected"
 log "Запуск PBXPuls через PM2"
 [[ -x "$PBXPULS_NODE_HOME/bin/pm2" ]] || npm install -g pm2@7.0.3
+if pm2 describe "$PROCESS_NAME" >/dev/null 2>&1; then pm2 stop "$PROCESS_NAME"; fi
+PBXPULS_HTTPS_PORT="${PBXPULS_HTTPS_PORT:-$PORT}" node scripts/configure-https.mjs --apply
 if pm2 describe "$PROCESS_NAME" >/dev/null 2>&1; then
   pm2 restart "$PROCESS_NAME" --update-env
 else
@@ -275,7 +277,7 @@ else
 fi
 pm2 save
 pbxpuls_service "$APP_DIR"
-pbxpuls_http "$PORT" || fail 'PBXPuls HTTP check failed'
+pbxpuls_web || fail 'PBXPuls web check failed'
 
 HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 HOST_IP="${HOST_IP:-127.0.0.1}"
@@ -283,7 +285,7 @@ cat > "$CREDENTIALS_FILE" <<EOF
 PBXPuls installation credentials
 Generated: $(date -Is)
 FreePBX detected: ${FREEPBX_VERSION}
-URL: http://${HOST_IP}:${PORT}
+URL: https://${HOST_IP}:${PBXPULS_HTTPS_PORT:-$PORT}
 
 Web users:
   su / ${SU_PASSWORD}
@@ -302,6 +304,7 @@ EOF
 chmod 600 "$CREDENTIALS_FILE"
 
 log "Установка завершена"
-printf 'PBXPuls: http://%s:%s\n' "$HOST_IP" "$PORT"
+printf 'PBXPuls: https://%s:%s\n' "$HOST_IP" "${PBXPULS_HTTPS_PORT:-$PORT}"
+printf 'Для доступа к микрофону установите доверие к сертификату CA на компьютерах: /etc/pbxpuls/tls/pbxpuls-ca.crt\n'
 printf 'Учётные данные сохранены только для root: %s\n' "$CREDENTIALS_FILE"
 printf 'FreePBX: %s; Node.js: %s\n' "$FREEPBX_VERSION" "$(node -v)"

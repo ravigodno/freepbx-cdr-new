@@ -60,11 +60,12 @@ export function buildCallRouteView(chronologyData: any): RouteView {
   const routeDestinationSteps = steps
     .map((step: any) => [
       buildTimeConditionStep(step),
-      buildAnnouncementStep(step),
+      buildAnnouncementStep(steps.find((observed: any) => observed.type === 'announcement' && buildAnnouncementStep(observed)?.number === buildAnnouncementStep(step)?.number) || step),
       buildFollowMeStep(step),
     ])
     .flat()
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter((step, index, all) => step?.label !== 'Приветствие' || all.findIndex(other => other?.label === 'Приветствие' && other.number === step.number) === index);
 
   const outboundSelectedTrunk = outboundRouteStep?.details?.trunks?.[0] || null;
   const outboundTrunkTitle = outboundSelectedTrunk?.name
@@ -239,7 +240,8 @@ export function buildCallRouteView(chronologyData: any): RouteView {
     !String(ivrStepForResult?.details?.pressedDigit || '').trim() &&
     !routeSteps.some((step: any) => step.label === 'QUEUE' || step.label === 'RING GROUP' || step.label === 'EXTENSION');
 
-  const resultText = direction === 'inbound'
+  const greetingOnly = direction === 'inbound' && !anyAnswered && routeSteps.some(step => step.label === 'Приветствие');
+  const resultText = greetingOnly ? 'Воспроизведено приветствие. Соединение с сотрудником не состоялось.' : direction === 'inbound'
     ? (ivrOnlyNoDigit
         ? `Есть события IVR для ${externalNumber}; выбор пункта меню и ответ сотрудника не подтверждены.`
         : (directInboundExt && !anyAnswered

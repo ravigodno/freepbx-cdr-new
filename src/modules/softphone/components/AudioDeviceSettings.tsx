@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Headphones, Loader2, Mic, Play, RefreshCw, ShieldAlert, Volume2 } from 'lucide-react';
 import { loadAudioDevicePreferences, saveAudioDevicePreferences, type AudioDevicePreferences } from '../audio/audioDevicePreferences';
+import { requestAudioDevices, audioDeviceError } from '../audio/audioDeviceAccess';
 
 type DeviceLists = { inputs: MediaDeviceInfo[]; outputs: MediaDeviceInfo[] };
 
@@ -19,6 +20,41 @@ export default function AudioDeviceSettings() {
   const streamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const animationRef = useRef<number | null>(null);
+  const mountedRef = useRef(true);
+  const canSelectOutput = typeof HTMLMediaElement !== 'undefined' && 'setSinkId' in HTMLMediaElement.prototype;
+
+  const showDevices = (list: MediaDeviceInfo[]) => {
+    if (!mountedRef.current) return;
+    setDevices({ inputs: list.filter(item => item.kind === 'audioinput' && item.deviceId), outputs: list.filter(item => item.kind === 'audiooutput' && item.deviceId) });
+  };
+
+  const requestAccess = async () => {
+    setLoading(true);
+    setMessage('');
+    try {
+      if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) throw new Error('Откройте PBXPuls по HTTPS с доверенным сертификатом.');
+      const list = await requestAudioDevices(navigator.mediaDevices);
+      if (!mountedRef.current) return;
+      showDevices(list);
+      setPermission('granted');
+      setMessage('Доступ разрешён. Выберите микрофон и устройства воспроизведения.');
+    } catch (error: any) {
+      if (!mountedRef.current) return;
+      setPermission(error?.name === 'NotAllowedError' ? 'denied' : 'unknown');
+      setMessage(audioDeviceError(error));
+    } finally { if (mountedRef.current) setLoading(false); }
+  };
+
+  const chooseOutput = async (field: 'speakerId' | 'ringtoneId') => {
+    const media = navigator.mediaDevices as MediaDevices & { selectAudioOutput?: () => Promise<MediaDeviceInfo> };
+    try {
+      if (!media?.selectAudioOutput) return;
+      const device = await media.selectAudioOutput();
+      await refreshDevices();
+      setDevices(current => ({ ...current, outputs: [...current.outputs.filter(item => item.deviceId !== device.deviceId), device] }));
+      update({ [field]: device.deviceId });
+    } catch (error: any) { setMessage(audioDeviceError(error)); }
+  };
 
   const update = (patch: Partial<AudioDevicePreferences>) => {
     setPreferences(current => {
@@ -34,7 +70,8 @@ export default function AudioDeviceSettings() {
       return;
     }
     const list = await navigator.mediaDevices.enumerateDevices();
-    setDevices({ inputs: list.filter(item => item.kind === 'audioinput'), outputs: list.filter(item => item.kind === 'audiooutput') });
+    showDevices(list);
+    if (list.some(item => item.kind === 'audioinput' && item.label)) setPermission('granted');
   };
 
   const stopMicrophoneTest = () => {
@@ -59,6 +96,7 @@ export default function AudioDeviceSettings() {
         noiseSuppression: preferences.noiseSuppression,
         autoGainControl: preferences.autoGainControl
       }, video: false });
+      if (!mountedRef.current) { stream.getTracks().forEach(track => track.stop()); return; }
       streamRef.current = stream;
       setPermission('granted');
       await refreshDevices();
@@ -77,8 +115,9 @@ export default function AudioDeviceSettings() {
       measure();
       setMessage('Микрофон активен. Скажите несколько слов и проверьте индикатор.');
     } catch (error: any) {
+      stopMicrophoneTest();
       setPermission(error?.name === 'NotAllowedError' ? 'denied' : 'unknown');
-      setMessage(error?.message || 'Не удалось получить доступ к микрофону.');
+      setMessage(audioDeviceError(error));
     } finally {
       setLoading(false);
     }
@@ -119,10 +158,12 @@ export default function AudioDeviceSettings() {
   };
 
   useEffect(() => {
+    mountedRef.current = true;
     void refreshDevices().catch(() => undefined);
     const handleChange = () => void refreshDevices().catch(() => undefined);
     navigator.mediaDevices?.addEventListener?.('devicechange', handleChange);
     return () => {
+      mountedRef.current = false;
       navigator.mediaDevices?.removeEventListener?.('devicechange', handleChange);
       stopMicrophoneTest();
     };
@@ -138,15 +179,18 @@ export default function AudioDeviceSettings() {
         <h5 className="flex items-center gap-2 text-xs font-black text-slate-900"><Headphones className="h-4 w-4 text-blue-600" />Гарнитура и звук</h5>
         <p className="mt-1 text-[11px] text-slate-500">Устройства сохраняются только для этого браузера и компьютера.</p>
       </div>
-      <button type="button" onClick={() => void refreshDevices()} className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-3 py-2 text-[10px] font-bold text-slate-600 hover:bg-slate-50"><RefreshCw className="h-3.5 w-3.5" />Обновить</button>
+      <button type="button" disabled={loading} onClick={() => void requestAccess()} className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-3 py-2 text-[10px] font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-50"><RefreshCw className="h-3.5 w-3.5" />{permission === 'granted' ? 'Обновить устройства' : 'Разрешить доступ к устройствам'}</button>
     </div>
 
     {!window.isSecureContext && <div className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-[10px] leading-relaxed text-amber-800"><ShieldAlert className="h-4 w-4 shrink-0" />Настройка микрофона доступна только при открытии PBXPuls по HTTPS.</div>}
+    {permission !== 'granted' && <p className="text-xs text-slate-600">Нажмите «Разрешить доступ к устройствам» и разрешите микрофон в браузере. До этого названия и список устройств могут быть скрыты.</p>}
+    {!canSelectOutput && <p className="text-xs text-amber-700">Браузер не поддерживает выбор колонок на сайте. Используется системное устройство вывода; изменить его можно в настройках звука компьютера.</p>}
+    {typeof (navigator.mediaDevices as any)?.selectAudioOutput === 'function' && <div className="flex gap-3 text-xs"><button type="button" onClick={() => void chooseOutput('speakerId')}>Разрешить устройство для разговора</button><button type="button" onClick={() => void chooseOutput('ringtoneId')}>Разрешить устройство для звонка</button></div>}
 
     <div className="grid gap-3 md:grid-cols-2">
       <label className="text-xs font-semibold text-slate-700"><span className="flex items-center gap-1"><Mic className="h-3.5 w-3.5" />Микрофон</span><select value={preferences.microphoneId} onChange={event => update({microphoneId:event.target.value})} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 p-2"><option value="default">Системный по умолчанию</option>{devices.inputs.filter(item => item.deviceId !== 'default').map((item, index) => <option key={item.deviceId} value={item.deviceId}>{deviceLabel(item, index, 'Микрофон')}</option>)}</select></label>
-      <label className="text-xs font-semibold text-slate-700"><span className="flex items-center gap-1"><Volume2 className="h-3.5 w-3.5" />Звук разговора</span><select value={preferences.speakerId} onChange={event => update({speakerId:event.target.value})} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 p-2"><option value="default">Системный по умолчанию</option>{devices.outputs.filter(item => item.deviceId !== 'default').map((item, index) => <option key={item.deviceId} value={item.deviceId}>{deviceLabel(item, index, 'Устройство')}</option>)}</select></label>
-      <label className="text-xs font-semibold text-slate-700"><span className="flex items-center gap-1"><Volume2 className="h-3.5 w-3.5" />Сигнал входящего звонка</span><select value={preferences.ringtoneId} onChange={event => update({ringtoneId:event.target.value})} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 p-2"><option value="default">Системный по умолчанию</option>{devices.outputs.filter(item => item.deviceId !== 'default').map((item, index) => <option key={item.deviceId} value={item.deviceId}>{deviceLabel(item, index, 'Устройство')}</option>)}</select></label>
+      <label className="text-xs font-semibold text-slate-700"><span className="flex items-center gap-1"><Volume2 className="h-3.5 w-3.5" />Звук разговора</span><select disabled={!canSelectOutput} value={preferences.speakerId} onChange={event => update({speakerId:event.target.value})} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 p-2"><option value="default">Системный по умолчанию</option>{devices.outputs.filter(item => item.deviceId !== 'default').map((item, index) => <option key={item.deviceId} value={item.deviceId}>{deviceLabel(item, index, 'Устройство')}</option>)}</select></label>
+      <label className="text-xs font-semibold text-slate-700"><span className="flex items-center gap-1"><Volume2 className="h-3.5 w-3.5" />Сигнал входящего звонка</span><select disabled={!canSelectOutput} value={preferences.ringtoneId} onChange={event => update({ringtoneId:event.target.value})} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 p-2"><option value="default">Системный по умолчанию</option>{devices.outputs.filter(item => item.deviceId !== 'default').map((item, index) => <option key={item.deviceId} value={item.deviceId}>{deviceLabel(item, index, 'Устройство')}</option>)}</select></label>
     </div>
 
     <div className="grid gap-2 sm:grid-cols-3">

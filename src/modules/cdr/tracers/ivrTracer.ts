@@ -1,4 +1,5 @@
 import type { RouteStep } from '../types/callRoute';
+import { isIvrLeg } from '../../../../shared/automatedCallDestination';
 
 function normalize(value: any): string {
   return String(value || '').trim();
@@ -15,12 +16,7 @@ function getIvrIdFromLeg(leg: any): string {
 }
 
 export function findIvrLeg(timeline: any[]): any | null {
-  return (timeline || []).find((leg: any) => {
-    const dcontext = normalize(leg?.dcontext).toLowerCase();
-    const lastapp = normalize(leg?.lastapp).toLowerCase();
-
-    return dcontext.startsWith('ivr-') || lastapp === 'background';
-  }) || null;
+  return (timeline || []).find(isIvrLeg) || null;
 }
 
 export function buildIvrStep(timeline: any[]): RouteStep | null {

@@ -49,7 +49,7 @@ export class PbxPulsSipClient {
 
   setAudioPreferences(preferences: AudioDevicePreferences): void {
     this.audioPreferences = preferences;
-    void this.applyOutputDevice();
+    void this.applyOutputDevice().catch(() => this.update({ error: 'Не удалось переключить звук. Проверьте выбранное устройство вывода и разрешения браузера.' }));
   }
 
   async connect(configuration: SipRuntimeConfiguration): Promise<void> {
@@ -75,7 +75,21 @@ export class PbxPulsSipClient {
     });
     try {
       await this.userAgent.start();
-      await this.registerer.register();
+      const registerer = this.registerer;
+      await new Promise<void>((resolve, reject) => {
+        const finish = (error?: Error) => {
+          clearTimeout(timer);
+          registerer.stateChange.removeListener(onState);
+          error ? reject(error) : resolve();
+        };
+        const onState = (state: RegistererState) => {
+          if (state === RegistererState.Registered) finish();
+          else if (state === RegistererState.Terminated) finish(new Error('Регистрация гарнитуры отменена'));
+        };
+        const timer = setTimeout(() => finish(new Error('АТС не подтвердила регистрацию гарнитуры за 20 секунд')), 20000);
+        registerer.stateChange.addListener(onState);
+        void registerer.register({ requestDelegate: { onReject: () => finish(new Error('АТС отклонила регистрацию гарнитуры. Проверьте WebRTC-профиль.')) } }).catch(finish);
+      });
     } catch (error: any) {
       this.update({ registration: 'failed', error: error?.message || 'Не удалось зарегистрировать гарнитуру' });
       throw error;
@@ -183,7 +197,7 @@ export class PbxPulsSipClient {
   }
 
   private async applyOutputDevice(): Promise<void> {
-    if (!this.remoteAudio || !this.audioPreferences?.speakerId || this.audioPreferences.speakerId === 'default') return;
+    if (!this.remoteAudio || !this.audioPreferences?.speakerId) return;
     const audio = this.remoteAudio as HTMLAudioElement & { setSinkId?: (id: string) => Promise<void> };
     if (audio.setSinkId) await audio.setSinkId(this.audioPreferences.speakerId);
   }

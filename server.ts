@@ -1,4 +1,8 @@
+import { startWebListeners } from './server/webListeners.js';
+import { proxiedWebsocketUrl } from './server/softphone/websocketProxy.js';
 import { resolveCallAnswerEvidence, historicalMemberStatus } from './shared/callAnswerEvidence.js';
+import { announcementId, greetingTitle, isIvrLeg, normalizeAutomatedAnswer } from './shared/automatedCallDestination.js';
+import { enrichGreetingDestinations, loadGreetingDescriptions } from './server/calls/greetingDescriptions.js';
 import { SYSTEM_SECTIONS, SU_PERMISSION_KEYS, normalizeModuleVisibilitySettings, isPermissionModuleVisible } from './shared/accessCatalog.js';
 import { loadModuleVisibility, saveModuleVisibility } from './server/moduleVisibility.js';
 import fetch from "node-fetch";
@@ -253,7 +257,6 @@ if (typeof __filename !== 'undefined') {
 const __filename = myFilename;
 const __dirname = myDirname;
 
-const PORT = '3000';
 const NODE_ENV = process.env.NODE_ENV || 'production';
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
@@ -2064,7 +2067,7 @@ const isIncomingRouteContext = (c: any): boolean => {
     dctx === 'ext-queues' ||
     dctx === 'ext-group' ||
     dctx === 'ext-local' ||
-    dctx.startsWith('ivr-')
+    dctx.startsWith('ivr-') || Boolean(announcementId(dctx))
   );
 };
 
@@ -2285,6 +2288,7 @@ const buildDidWithAnsweredAndMissed = (baseDid: any, answeredExts: string[], mis
 };
 
 const normalizeClickToCallForDisplay = (c: any): any => {
+  c = normalizeAutomatedAnswer(c);
   const dctx = String(c.dcontext || '').toLowerCase();
   const lastapp = String(c.lastapp || '').toLowerCase();
   const lastdata = String(c.lastdata || '').toLowerCase();
@@ -3605,6 +3609,7 @@ const findDirectoryContactByNumber = (directory: any[], num: any): any | null =>
 };
 
 const enrichCallsWithDirectoryBulk = async (calls: any[], localDb: any, req: Request): Promise<{ lookupMs: number; sqlQueryCount: number }> => {
+  await enrichGreetingDestinations(calls, (sql, params) => queryFreePBXCDR(localDb.settings, isDemoMode(localDb.settings), sql, params));
   const phones = Array.from(new Set((calls || []).flatMap(call => [call?.src, call?.dst, call?.callerExtension, call?.externalCallerNumber]).map(value => String(value || '').trim()).filter(Boolean)));
   const result = { matches: {} as Record<string, any>, matched: 0, lookupMs: 0, sqlQueryCount: 0 };
   for (let offset = 0; offset < phones.length; offset += 500) {
@@ -15565,10 +15570,16 @@ async function enrichFreePBXRoute(settings: any, legs: any[]) {
     }
   }
 
-  const ivrLeg = legs.find((l: any) =>
-    String(l.dcontext || '').toLowerCase().startsWith('ivr-') ||
-    String(l.lastapp || '').toLowerCase() === 'background'
-  );
+  const greetingNames = await loadGreetingDescriptions(legs, (sql, params) => queryFreePBXCDR(settings, false, sql, params));
+  const greetingIds = new Set<string>();
+  for (const leg of legs) {
+    const id = announcementId(leg.dcontext);
+    if (!id || greetingIds.has(id)) continue;
+    greetingIds.add(id);
+    routeSteps.push({ type: 'announcement', label: 'Приветствие', number: id,
+      title: greetingTitle(id, greetingNames.get(id)), pattern: 'Воспроизведение сообщения', destination: leg.dcontext });
+  }
+  const ivrLeg = legs.find(isIvrLeg);
 
   if (ivrLeg) {
     const ivrContext = String(ivrLeg.dcontext || '').trim();
@@ -15799,6 +15810,7 @@ app.get('/api/calls/:uniqueid/chronology', requireAuth(), async (req, res) => {
     const chronologyHandoff = (await loadAiHandoffMetadata([targetLinkedId])).get(targetLinkedId) || null;
     const handoffTimeline = chronologyHandoff ? buildAiHandoffTimeline(legs, chronologyHandoff) : null;
 
+    const timelineGreetingNames = await loadGreetingDescriptions(legs, (sql, params) => queryFreePBXCDR(settings, isDemo, sql, params));
     // Format the timeline steps into beautiful human-readable explanations
     const timeline = legs.map((leg, idx) => {
       // Analyze this leg to explain what happened in human terms
@@ -15811,7 +15823,11 @@ app.get('/api/calls/:uniqueid/chronology', requireAuth(), async (req, res) => {
       const dcontext = leg.dcontext || '';
       const disposition = leg.disposition?.toUpperCase();
       
-      if (dcontext.startsWith('ivr-') || lastapp === 'BACKGROUND') {
+      if (announcementId(dcontext)) {
+        actionType = 'system';
+        title = greetingTitle(announcementId(dcontext), timelineGreetingNames.get(announcementId(dcontext)));
+        description = 'Воспроизведение приветствия; само по себе не является ответом сотрудника.';
+      } else if (isIvrLeg(leg)) {
         actionType = 'ivr';
         title = `IVR-меню: ${dcontext.replace('ivr-', '')}`;
         description = `Вызов зашёл в интерактивное голосовое меню. Воспроизведение файла/выбор пути.`;
@@ -16104,24 +16120,7 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
         (req as any).dbError = `База данных CDR недоступна.`;
       }
     }
-    // Normalize single IVR calls where FreePBX stores dst as "s".
-    // IVR answered by PBX is not a real operator answer.
-    calls = calls.map(c => {
-      if ((c.dcontext || "").startsWith("ivr-") && (c.dst === "s" || !c.dst)) {
-        const ivrName = `IVR ${String(c.dcontext).replace("ivr-", "")}`;
-        return {
-          ...c,
-          dst: ivrName,
-          dstchannel: "",
-          disposition: "NO ANSWER",
-          billsec: 0,
-          did: c.did || "",
-        };
-      }
-      return c;
-    });
-
-    // Normalize click-to-call CDR legs where FreePBX stores outbound caller as trunk/outbound_cnum.
+    // Shared normalization also handles technical IVR/greeting answers in stats and reports.
     calls = calls.map(c => normalizeClickToCallForDisplay(c));
 
     // Exact direction filter for from:EXT / to:EXT.
@@ -23396,7 +23395,7 @@ async function resolveSoftphoneAutoConfigSource(req: Request) {
     extension,
     displayName: String(identity.name || identity.description || username),
     pbxHost,
-    websocketUrl: String(process.env.PBXPULS_SOFTPHONE_WSS_URL || '').trim(),
+    websocketUrl: proxiedWebsocketUrl(String(process.env.PBXPULS_SOFTPHONE_WSS_URL || '').trim() || `wss://${pbxHost}:8089/ws`, req.hostname),
     deviceTech: String(identity.tech || ''),
     pjsip
   };
@@ -23579,11 +23578,7 @@ async function startServer() {
   notificationRuntime.start();
   startDtmfAmiListener(startupDb.settings).catch((e: any) => console.error('[DTMF] listener start failed:', e.message));
 
-  app.listen(parseInt(PORT, 10), '0.0.0.0', () => {
-    console.log(`VOIP CDR Missed Calls Service is operational on port ${PORT}`);
-    console.log(`Environment context: ${NODE_ENV}`);
-    console.log(`Simulated Asterisk Sandbox status: DISABLED`);
-  });
+  await startWebListeners(app);
   phonebookListener = startPhonebookListener(app);
 }
 
