@@ -62,6 +62,9 @@ export function CDRRow({
         isMissed={call.disposition !== 'ANSWERED'}
         callDisp={call.disposition}
         processed={call.processed}
+        callbackStatus={call.callbackStatus}
+        isProcessed={call.isProcessed}
+        isLostCall={call.isLostCall}
         wasCallbacked={call.wasCallbacked}
         wasKpiResolved={call.wasKpiResolved}
         callbackTime={call.callbackTime}

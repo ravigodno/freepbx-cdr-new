@@ -16476,9 +16476,9 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
             const resTime = new Date(resolution.calldate).getTime();
             const diffMs = resTime - callTime;
             const diffMin = Math.floor(diffMs / 60000);
-            const kpiMinutes = settings && settings.callbackKpiMinutes !== undefined ? Number(settings.callbackKpiMinutes) : 60;
+            const kpiMinutes = callbackWindowMinutes;
 
-            if (diffMin <= kpiMinutes) {
+            if (diffMs >= 0 && diffMs <= kpiMinutes * 60000) {
               originalCall.wasKpiResolved = true;
               // If not already manually commented or processed, auto-resolve
               if (!originalCall.processed) {
@@ -16570,6 +16570,7 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
       call.slaExceededSeconds = item.slaExceededSeconds;
       call.isProcessed = item.isProcessed;
       call.isProcessedInSla = item.isProcessedInSla;
+      call.wasKpiResolved = item.isProcessedInSla;
       call.isProcessedLate = item.isProcessedLate;
       call.callbackDeadlineExpired = item.callbackDeadlineExpired;
       call.isPendingCallback = item.isPending;
@@ -16903,9 +16904,9 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
             const resTime = new Date(resolution.calldate).getTime();
             const diffMs = resTime - callTime;
             const diffMin = Math.floor(diffMs / 60000);
-            const kpiMinutes = settings && settings.callbackKpiMinutes !== undefined ? Number(settings.callbackKpiMinutes) : 60;
+            const kpiMinutes = callbackWindowMinutes;
 
-            if (diffMin <= kpiMinutes) {
+            if (diffMs >= 0 && diffMs <= kpiMinutes * 60000) {
               originalCall.wasKpiResolved = true;
               if (!originalCall.processed) {
                 originalCall.processed = true;
@@ -17220,9 +17221,9 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
             const resTime = new Date(resolution.calldate).getTime();
             const diffMs = resTime - callTime;
             const diffMin = Math.floor(diffMs / 60000);
-            const kpiMinutes = settings && settings.callbackKpiMinutes !== undefined ? Number(settings.callbackKpiMinutes) : 60;
+            const kpiMinutes = callbackWindowMinutes;
 
-            if (diffMin <= kpiMinutes) {
+            if (diffMs >= 0 && diffMs <= kpiMinutes * 60000) {
               originalCall.wasKpiResolved = true;
               if (!originalCall.processed) {
                 originalCall.processed = true;
