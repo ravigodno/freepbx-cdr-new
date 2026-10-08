@@ -281,6 +281,7 @@ export default function ReportsTab({
   const [departmentSummary, setDepartmentSummary] = useState<DepartmentSummaryRow[]>([]);
   const [departmentOptions, setDepartmentOptions] = useState<string[]>([]);
   const [employeeSummary, setEmployeeSummary] = useState<EmployeeSummaryRow[]>([]);
+  const [visibilityExtensions, setVisibilityExtensions] = useState<string[] | null>([]);
   const [inboundCallDetails, setInboundCallDetails] = useState<InboundCallDetail[]>([]);
   const [trunkSummary, setTrunkSummary] = useState<TrunkSummaryRow[]>([]);
   const [heatmap, setHeatmap] = useState<HeatmapData | null>(null);
@@ -338,6 +339,7 @@ export default function ReportsTab({
         setDepartmentOptions(nextDepartmentOptions);
         if (department !== 'all' && !nextDepartmentOptions.includes(department)) setDepartment('all');
         setEmployeeSummary(Array.isArray(json.employeeSummary) ? json.employeeSummary : []);
+        setVisibilityExtensions(json.visibilityExtensions === null ? null : (Array.isArray(json.visibilityExtensions) ? json.visibilityExtensions : []));
         setInboundCallDetails(Array.isArray(json.inboundCallDetails) ? json.inboundCallDetails : []);
         setTrunkSummary(Array.isArray(json.trunkSummary) ? json.trunkSummary : []);
         setHeatmap(json.heatmap || null);
@@ -410,8 +412,8 @@ export default function ReportsTab({
       })
       .filter(item => internalExtensionPattern.test(item.value));
     const seen = new Set<string>();
-    return [...fromSummary, ...fromAccess, ...fromDirectory].filter(item => { if (seen.has(item.value)) return false; seen.add(item.value); return true; }).slice(0, 80);
-  }, [accessUsers, directory, employeeSummary]);
+    return [...fromSummary, ...fromAccess, ...fromDirectory].filter(item => { if (visibilityExtensions !== null && !visibilityExtensions.includes(item.value)) return false; if (seen.has(item.value)) return false; seen.add(item.value); return true; }).slice(0, 80);
+  }, [accessUsers, directory, employeeSummary, visibilityExtensions]);
   const outgoingExtensions = useMemo(() => {
     const explicitExtension = internalExt.trim();
     if (explicitExtension) return [explicitExtension];

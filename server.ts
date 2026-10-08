@@ -214,6 +214,8 @@ import {
   callMatchesExtensions,
   deleteUserDepartmentScopes,
   getDepartmentExtensions,
+  includeOwnExtension,
+  employeeVisibility,
   getUserDepartmentScopes,
   renameUserDepartmentScopes,
   setUserDepartmentScopes
@@ -5466,7 +5468,7 @@ async function getCallVisibilityExtensions(localDb: any, req: Request, directory
   if (permissions.department_calls_only !== true) return null;
   const departments = await getUserDepartmentScopes(dbUser.username);
   const contacts = directory || (await getDirectoryRuntimeSnapshotForRequest(localDb, req)).contacts;
-  return getDepartmentExtensions(contacts, departments);
+  return includeOwnExtension(getDepartmentExtensions(contacts, departments), dbUser.extension);
 }
 
 async function canAccessCallRows(localDb: any, req: Request, rows: any[]): Promise<boolean> {
@@ -17368,9 +17370,12 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
 
     const directoryRuntime = await getDirectoryRuntimeSnapshotForRequest(localDb, req);
     const directory = directoryRuntime.contacts;
-    const departmentOptions = getDirectoryEmployeeDepartments(directory);
     const ownerMap = buildExtensionOwnerMap(directory, localDb.users || []);
     const visibilityExtensions = await getCallVisibilityExtensions(localDb, req, directory);
+    const canSeeEmployee = employeeVisibility(visibilityExtensions);
+    const visibleDirectory = visibilityExtensions === null ? directory : directory.filter(entry =>
+      canSeeEmployee(String(entry.internalExtension || entry.number || '').replace(/\D/g, '')));
+    const departmentOptions = getDirectoryEmployeeDepartments(visibleDirectory);
     if (visibilityExtensions !== null) calls = calls.filter(call => callMatchesExtensions(call, visibilityExtensions));
 
     const checkCallDepartmentMatch = (c: any, dept: string, directory: any[]): boolean => {
@@ -17433,6 +17438,8 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
       if (onlyMyCalls && operatorExt && !callHasExactNumber(c, operatorExt)) return false;
       const extensionFilter = onlyDigits(requestedExtensionFilter);
       const employeeFilter = onlyDigits(employee);
+      if (extensionFilter && !canSeeEmployee(extensionFilter)) return false;
+      if (employee !== 'all' && employeeFilter && !canSeeEmployee(employeeFilter)) return false;
       const responsibleExt = getResponsibleExtensionForCall(c);
       if (extensionFilter && ![responsibleExt, getCallerInternalExt(c), getCalleeInternalExt(c)].some(ext => onlyDigits(ext) === extensionFilter)) return false;
       if (employee && employee !== 'all' && employeeFilter && ![responsibleExt, getCallerInternalExt(c), getCalleeInternalExt(c)].some(ext => onlyDigits(ext) === employeeFilter)) return false;
@@ -17615,7 +17622,7 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
         if (c.recordingfile) entry.recordingCount++;
       };
 
-      if (responsibleExt) {
+      if (responsibleExt && canSeeEmployee(responsibleExt)) {
         const employeeEntry = touchSummary(employeeSummaryMap, responsibleExt, {
           extension: responsibleExt,
           employeeName: owner?.employeeName || null,
@@ -17624,7 +17631,7 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
         updateSummary(employeeEntry);
       }
 
-      if (owner?.department) {
+      if (owner?.department && canSeeEmployee(responsibleExt)) {
         const departmentEntry = touchSummary(departmentSummaryMap, owner.department, {
           department: owner.department,
           managerName: owner.managerName || null
@@ -17646,6 +17653,7 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
       dialedOthers.forEach(ext => involvedExts.add(ext));
 
       involvedExts.forEach(ext => {
+        if (!canSeeEmployee(ext)) return;
         if (!bin.extCalls) bin.extCalls = {};
         bin.extCalls[ext] = (bin.extCalls[ext] || 0) + 1;
 
@@ -17824,6 +17832,7 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
       slaSummary,
       departmentSummary,
       departmentOptions,
+      visibilityExtensions,
       employeeSummary,
       trunkSummary,
       heatmap,

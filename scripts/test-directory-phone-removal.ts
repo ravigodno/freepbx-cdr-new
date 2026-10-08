@@ -1,0 +1,33 @@
+import assert from 'node:assert/strict';
+import { normalizeDirectoryContactForSql, validateDirectoryContactInput } from '../server/pbxpulsDirectoryWrite.js';
+
+const primary = '79991111111';
+const secondary = '79992222222';
+const third = '79993333333';
+const existing = { id: 'phone-removal-test', name: 'Test', phone: primary, phone2: secondary, email: 'test@example.com' };
+// Reproduce the SQL update's merge of stored columns with the contact form payload.
+const save = (phones: string[]) => normalizeDirectoryContactForSql({ ...existing, number: phones[0] || '', phones });
+const removed = save([primary]);
+assert.equal(removed.phone, primary);
+assert.equal(removed.phone2, '', 'Removed extra phone must not return from the stored phone2 column');
+assert.deepEqual(removed.metadata.phones, [primary]);
+const replaced = save([primary, third]);
+assert.equal(replaced.phone2, third);
+assert.deepEqual(replaced.metadata.phones, [primary, third]);
+const cleared = save([]);
+assert.equal(cleared.phone, '');
+assert.equal(cleared.phone2, '');
+assert.deepEqual(cleared.metadata.phones, []);
+assert.equal(validateDirectoryContactInput(cleared).ok, true, 'Email-only contacts remain valid');
+const changedPrimary = save([third]);
+assert.equal(changedPrimary.phone, third);
+assert.equal(changedPrimary.phone2, '');
+const untouched = normalizeDirectoryContactForSql({ ...existing, name: 'Renamed' });
+assert.equal(untouched.phone, primary);
+assert.equal(untouched.phone2, secondary);
+const scalarInput = normalizeDirectoryContactForSql({ ...existing, phone2: '' });
+assert.equal(scalarInput.phone2, '');
+const several = save([primary, secondary, third]);
+assert.deepEqual(several.metadata.phones, [primary, secondary, third]);
+assert.deepEqual(save([primary, third]).metadata.phones, [primary, third]);
+console.log('Directory phone removal: passed');

@@ -1,9 +1,11 @@
 {
   "name": "freepbx-cdr-new",
   "private": true,
-  "version": "5.8.30",
+  "version": "5.8.31",
   "type": "module",
   "scripts": {
+    "test:department-report-access": "tsx scripts/test-department-report-access.ts",
+    "test:directory-phone-removal": "tsx scripts/test-directory-phone-removal.ts",
     "dev": "tsx server.ts",
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --log-override:empty-import-meta=silent --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",

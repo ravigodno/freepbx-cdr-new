@@ -63,6 +63,16 @@ export function getDepartmentExtensions(directory: any[], departments: unknown):
     .filter(Boolean)));
 }
 
+export function includeOwnExtension(extensions: string[], ownExtension: unknown): string[] {
+  const own = String(ownExtension || '').replace(/\D/g, '');
+  return Array.from(new Set([...extensions, ...(/^\d{2,6}$/.test(own) ? [own] : [])]));
+}
+
+export function employeeVisibility(extensions: string[] | null): (extension: unknown) => boolean {
+  const allowed = extensions === null ? null : new Set(extensions);
+  return extension => allowed === null || allowed.has(String(extension || '').trim());
+}
+
 export function callMatchesExtensions(call: any, extensions: string[]): boolean {
   if (!extensions.length) return false;
   const allowed = new Set(extensions);

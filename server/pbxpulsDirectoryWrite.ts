@@ -381,7 +381,7 @@ export function normalizeDirectoryContactForSql(
 ): NormalizedDirectorySqlContact {
   const contactType = normalizeContactType(input);
   const phones = getDirectoryPhones(input);
-  const primaryPhone = safeText(phones[0] || input.phone || input.number, 64);
+  const primaryPhone = safeText(phones[0], 64);
   const ownerUserId = contactType === 'personal'
     ? safeNullableText(input.owner_user_id || input.ownerUserId || getActorOwnerId(actor), 64)
     : null;
@@ -393,7 +393,7 @@ export function normalizeDirectoryContactForSql(
     company: safeText(input.company, 255),
     phone: primaryPhone,
     phone_normalized: normalizePhoneForSql(primaryPhone),
-    phone2: safeText(phones[1] || input.phone2, 255),
+    phone2: safeText(phones[1], 255),
     email: safeText(input.email, 255),
     comment: nullableText(input.comment, 65535),
     contact_type: contactType,
@@ -582,12 +582,11 @@ function normalizeMetadataInput(input: DirectorySqlContactInput): Record<string,
 }
 
 function getDirectoryPhones(input: DirectorySqlContactInput): string[] {
-  const values = [
-    ...(Array.isArray(input.phones) ? input.phones : []),
-    input.number,
-    input.phone,
-    input.phone2
-  ];
+  // The contact form sends the complete replacement list, including [] to clear it.
+  // Stored scalar columns merged during updates must not resurrect deleted numbers.
+  const values = Array.isArray(input.phones)
+    ? input.phones
+    : [input.number, input.phone, input.phone2];
   const out: string[] = [];
   for (const value of values) {
     const raw = String(value || '').trim();
