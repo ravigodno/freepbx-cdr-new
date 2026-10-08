@@ -10,6 +10,7 @@ interface CDRStatusCellProps {
   isMissed: boolean;
   callDisp: string;
   processed?: boolean;
+  callbackScheduleUnknown?: boolean;
   isProcessed?: boolean;
   isLostCall?: boolean;
   wasCallbacked?: boolean;
@@ -24,6 +25,7 @@ export function CDRStatusCell({
   isMissed,
   callDisp,
   processed,
+  callbackScheduleUnknown,
   isProcessed,
   isLostCall,
   wasCallbacked,
@@ -76,11 +78,11 @@ export function CDRStatusCell({
       type="button"
       onClick={onShowProcessingEvent}
       className={`inline-flex items-center gap-1.5 border px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
-        processedInSla
+        callbackScheduleUnknown ? 'bg-slate-50 text-slate-500 border-slate-200' : processedInSla
           ? 'bg-emerald-50/40 dark:bg-emerald-950/10 text-emerald-500 dark:text-emerald-400 border-emerald-250/30 dark:border-emerald-800/40 hover:bg-emerald-50'
           : 'bg-rose-50/40 dark:bg-rose-950/10 text-rose-500 dark:text-rose-400 border-rose-250/30 dark:border-rose-905/30 hover:bg-rose-50'
       }`}
-      title={`${wasCallbacked ? `Клиенту успешно перезвонили в ${callbackTime}.` : 'Звонок обработан вручную или автоматически.'} SLA перезвона: ${processedInSla ? 'соблюден' : 'превышен!'}`}
+      title={callbackScheduleUnknown ? 'Звонок обработан. SLA не оценён: расписание или ручное переключение FreePBX требует проверки.' : `${wasCallbacked ? `Клиенту успешно перезвонили в ${callbackTime}.` : 'Звонок обработан вручную или автоматически.'} SLA перезвона: ${processedInSla ? 'соблюден' : 'превышен!'}`}
     >
       <CheckCircle className="h-3.5 w-3.5" />
       Обработан

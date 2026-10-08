@@ -75,10 +75,10 @@ export default function CDRCalleeCell({
   );
 
   if (calleeType === 'greeting') {
-    const did = String(call.inboundDid || call.trunkNumber || call.did || '').split('→')[0].trim();
+    const responsibleNumbers = [...new Set<string>((call.routeResponsiblePeople || []).map((person: any) => String(person.extension || '').trim()).filter(Boolean))];
     return <td className="py-4 px-4"><div className="flex max-w-xs flex-col gap-1.5 select-text">
       <div className="flex items-center gap-1.5 text-xs font-bold"><Volume2 className="h-4 w-4 shrink-0 text-blue-600" /><span>{calleeName}</span></div>
-      {did && <span className="text-xs text-slate-500">Номер: {did}</span>}
+      {responsibleNumbers.length > 0 && <span className="text-xs text-slate-500">{responsibleNumbers.length === 1 ? 'Ответственный' : 'Ответственные'}: {responsibleNumbers.join(', ')}</span>}
     </div></td>;
   }
 

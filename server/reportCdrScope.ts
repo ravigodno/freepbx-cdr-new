@@ -13,7 +13,10 @@ export function buildCdrLogicalNumberScope(baseWhereSql: string, baseParams: unk
 
   const exactSql = exactNumberColumns.map(column => `${column} = ?`);
   const tokenSql = tokenNumberColumns.map(column => `${column} LIKE ?`);
-  const numberSql = [...exactSql, ...tokenSql].join(' OR ');
+  // Route responsibility is resolved after loading CDR. Include automated callers
+  // as candidates for extension searches; the final exact-number filter still applies.
+  const routeCandidate = /^\d{2,6}$/.test(number) ? ["dcontext LIKE 'app-announcement-%'", "dcontext LIKE 'ivr-%'"] : [];
+  const numberSql = [...exactSql, ...tokenSql, ...routeCandidate].join(' OR ');
   const numberParams = [
     ...exactNumberColumns.map(() => number),
     ...tokenNumberColumns.map(() => `%${number}%`)

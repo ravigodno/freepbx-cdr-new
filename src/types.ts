@@ -17,6 +17,12 @@ export interface WebUser extends User {
 }
 
 export interface CallEntry {
+  routeResponsibleExts?: string[];
+  callbackScheduleUnknown?: boolean;
+  callbackWorkingSchedule?: Array<Array<{ times: string[]; timezone: string; match: boolean; conditionId?: string }>>;
+  routeResponsiblePeople?: Array<{ extension: string; name: string }>;
+  routeResponsibilitySource?: 'current_route';
+  routeResponsibilityDestination?: string;
   uniqueid: string;
   calldate: string; // YYYY-MM-DD HH:mm:ss
   clid: string;     // Caller ID string

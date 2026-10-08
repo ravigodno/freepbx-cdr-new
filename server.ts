@@ -3,6 +3,7 @@ import { proxiedWebsocketUrl } from './server/softphone/websocketProxy.js';
 import { resolveCallAnswerEvidence, historicalMemberStatus } from './shared/callAnswerEvidence.js';
 import { announcementId, greetingTitle, isIvrLeg, normalizeAutomatedAnswer } from './shared/automatedCallDestination.js';
 import { enrichGreetingDestinations, loadGreetingDescriptions } from './server/calls/greetingDescriptions.js';
+import { enrichMissedRouteResponsibility } from './server/calls/missedRouteResponsibility.js';
 import { SYSTEM_SECTIONS, SU_PERMISSION_KEYS, normalizeModuleVisibilitySettings, isPermissionModuleVisible } from './shared/accessCatalog.js';
 import { loadModuleVisibility, saveModuleVisibility } from './server/moduleVisibility.js';
 import fetch from "node-fetch";
@@ -158,6 +159,8 @@ import { buildReportHourlyTimeline, formatReportHourBucket } from './server/repo
 import { isWithinCompanyWorkingHours, normalizeCompanyWorkingHours } from './shared/companyWorkingHours.js';
 import { calculateCpuPercent, parseProcStatCpuSample, type ProcStatCpuSample } from './server/healthCpu.js';
 import { classifyMissedCallResolution, type MissedCallResolutionStatus } from './server/missedCallResolution.js';
+import { workingDeadline, workingElapsed, isWorkingTime } from './server/calls/freepbxWorkingSchedule.js';
+import { readTimeConditionOverrides } from './server/calls/timeConditionOverrides.js';
 import {
   mergeLiveSessionAmiEvidence,
   normalizeLiveSessionCallers,
@@ -2034,6 +2037,7 @@ const callHasExactNumber = (c: any, number: string): boolean => {
     c.cnum,
     c.outbound_cnum,
     c.phoneMeetingInitiator,
+    ...(Array.isArray(c.routeResponsibleExts) ? c.routeResponsibleExts : []),
     ...(Array.isArray(c.phoneMeetingParticipants) ? c.phoneMeetingParticipants : [])
   );
 
@@ -2366,7 +2370,7 @@ type LostCallAnalyticsItem = {
   processingStatus: LostCallCallbackStatus;
   processingStatusLabel: string;
   slaStatus: 'in_sla' | 'late' | 'pending' | 'lost';
-  deadline: string;
+  deadline: string | null;
   processedAt: string | null;
   callbackAt: string | null;
   repeatedInboundAt: string | null;
@@ -2596,7 +2600,7 @@ const isMissedDisposition = (disposition: any): boolean => {
 const getResponsibleExtension = (call: any): string | null => {
   const answered = Array.isArray(call.answeredExts) ? call.answeredExts : [];
   const missed = Array.isArray(call.missedExts) ? call.missedExts : [];
-  const candidates = [...answered, ...missed, getCalleeInternalExt(call), getCallerInternalExt(call)]
+  const candidates = [...answered, ...missed, ...(call.routeResponsibleExts || []), getCalleeInternalExt(call), getCallerInternalExt(call)]
     .map(value => onlyDigits(value))
     .filter(value => isInternalExt(value));
   return candidates[0] || null;
@@ -2923,7 +2927,19 @@ const buildLostCallAnalytics = (calls: any[], options: { startMs: number; endMs:
   let processedLate = 0;
   let pendingCallback = 0;
   const items: LostCallAnalyticsItem[] = missedCalls.map(({ call, normalizedNumber, missedMs }) => {
-    const deadline = missedMs + callbackWindowMs;
+    let deadline = missedMs + callbackWindowMs;
+    let elapsedMs: ((start: number, end: number) => number) | undefined;
+    if (call.callbackScheduleUnknown) deadline = Infinity;
+    else if (call.callbackWorkingSchedule) {
+      try {
+        deadline = workingDeadline(call.callbackWorkingSchedule, missedMs, callbackWindowMs);
+        if (!Number.isFinite(deadline)) call.callbackScheduleUnknown = true;
+        elapsedMs = (start, end) => workingElapsed(call.callbackWorkingSchedule, start, end);
+      } catch {
+        deadline = Infinity;
+        call.callbackScheduleUnknown = true;
+      }
+    }
     const outbound = outboundByNumber.get(normalizedNumber) || [];
     const repeatedInbound = inboundByNumber.get(normalizedNumber) || [];
     const outboundIndex = firstCallIndexAfter(outbound, missedMs);
@@ -2943,6 +2959,8 @@ const buildLostCallAnalytics = (calls: any[], options: { startMs: number; endMs:
       missedMs,
       nowMs,
       callbackWindowMs,
+      deadlineMs: deadline,
+      elapsedMs,
       processedAtMs: effectiveProcessedAtMs
     });
     const callbackStatus = resolution.status;
@@ -2968,13 +2986,14 @@ const buildLostCallAnalytics = (calls: any[], options: { startMs: number; endMs:
       direction: 'inbound',
       department: owner?.department || null,
       responsibleExtension,
-      responsibleName: owner?.employeeName || getDirectoryNameByExtension(directory, responsibleExtension),
+      responsibleName: owner?.employeeName || getDirectoryNameByExtension(directory, responsibleExtension)
+        || call.routeResponsiblePeople?.find((person: any) => person.extension === responsibleExtension)?.name || null,
       attempts: Math.max(0, outbound.length - outboundIndex),
       callbackStatus,
       processingStatus: callbackStatus,
       processingStatusLabel: resolution.processingStatusLabel,
       slaStatus: resolution.slaStatus,
-      deadline: new Date(resolution.deadline).toISOString(),
+      deadline: Number.isFinite(resolution.deadline) ? new Date(resolution.deadline).toISOString() : null,
       processedAt: resolution.processedAt === null ? null : new Date(resolution.processedAt).toISOString(),
       callbackAt: firstOutbound?.calldate || null,
       repeatedInboundAt: firstInboundContact?.calldate || null,
@@ -5477,8 +5496,27 @@ async function getCallVisibilityExtensions(localDb: any, req: Request, directory
 }
 
 async function canAccessCallRows(localDb: any, req: Request, rows: any[]): Promise<boolean> {
+  await enrichRouteResponsibility(rows, localDb);
   const extensions = await getCallVisibilityExtensions(localDb, req);
   return extensions === null || rows.some(row => callMatchesExtensions(row, extensions));
+}
+
+async function enrichRouteResponsibility(calls: any[], localDb: any): Promise<void> {
+  if (isDemoMode(localDb.settings)) return;
+  await enrichMissedRouteResponsibility(calls, (sql, params) => queryFreePBXCDR(localDb.settings, false, sql, params));
+  const scheduled = calls.filter(call => call.callbackWorkingSchedule?.some((path: any[]) => path.some(rule => rule.conditionId)));
+  if (scheduled.length) {
+    const overrides = await readTimeConditionOverrides();
+    for (const call of scheduled) if (overrides === null || call.callbackWorkingSchedule.some((path: any[]) => path.some(rule => overrides.has(rule.conditionId)))) {
+      call.callbackScheduleUnknown = true;
+    }
+  }
+  const hours = normalizeCompanyWorkingHours(localDb.settings);
+  const [h, m] = hours.end.split(':').map(Number);
+  const endMinute = h * 60 + m - 1;
+  const end = `${String(Math.floor(endMinute / 60)).padStart(2, '0')}:${String(endMinute % 60).padStart(2, '0')}`;
+  const fallback = [[{ times: [`${hours.start}-${end}|*|*|*`], timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, match: true }]];
+  for (const call of calls) if (!call.callbackWorkingSchedule && !call.callbackScheduleUnknown) call.callbackWorkingSchedule = fallback;
 }
 
 const CALLTRACKING_ALLOWED_EVENT_TYPES = new Set([
@@ -15317,7 +15355,7 @@ app.post('/api/calls/:uniqueid/process', requireAuth(), async (req, res) => {
   const scopedRows = isDemoMode(localDb.settings)
     ? mockCDRData.filter(call => call.uniqueid === uniqueid || call.linkedid === uniqueid)
     : await queryFreePBXCDR(localDb.settings, false,
-      'SELECT uniqueid,linkedid,src,dst,cnum,outbound_cnum,channel,dstchannel,lastdata,did FROM cdr WHERE uniqueid=? OR linkedid=?',
+      'SELECT uniqueid,linkedid,src,dst,cnum,outbound_cnum,channel,dstchannel,lastdata,did,dcontext,disposition,lastapp FROM cdr WHERE uniqueid=? OR linkedid=?',
       [uniqueid, uniqueid]);
   if (!(await canAccessCallRows(localDb, req, scopedRows))) return res.status(403).json({ error: 'Звонок не входит в доступные отделы' });
   let statusIdx = localDb.missedCallStatuses.findIndex(s => s.uniqueid === uniqueid);
@@ -15970,6 +16008,8 @@ app.get('/api/calls/:uniqueid/chronology', requireAuth(), async (req, res) => {
       legsCount: legs.length,
       celEvents,
       answerEvidence,
+      routeResponsiblePeople: legs.find((leg: any) => leg.routeResponsiblePeople?.length)?.routeResponsiblePeople || [],
+      routeResponsibilitySource: legs.find((leg: any) => leg.routeResponsibilitySource)?.routeResponsibilitySource || null,
       blindTransfer: Boolean(chronologyTransferTarget),
       blindTransferTargetExt: chronologyTransferTarget,
       externalCallerNumber: externalCallerResolution.externalCallerNumber,
@@ -16122,6 +16162,7 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
     }
     // Shared normalization also handles technical IVR/greeting answers in stats and reports.
     calls = calls.map(c => normalizeClickToCallForDisplay(c));
+    await enrichRouteResponsibility(calls, localDb);
 
     // Exact direction filter for from:EXT / to:EXT.
     // Must run before linkedid collapse, because after aggregation src/dst may be rewritten.
@@ -16154,6 +16195,7 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
             c.dstchannel,
             c.lastdata,
             (c as any).answeredExts,
+            (c as any).routeResponsibleExts,
             (c as any).missedExts
           ], toExtFilter);
         }
@@ -16400,6 +16442,7 @@ app.get('/api/calls', requireAuth(), async (req, res) => {
       };
     });
 
+    await enrichRouteResponsibility(calls, localDb);
     const visibilityExtensions = await getCallVisibilityExtensions(localDb, req);
     if (visibilityExtensions !== null) calls = calls.filter(call => callMatchesExtensions(call, visibilityExtensions));
 
@@ -16856,6 +16899,7 @@ app.get('/api/stats', requireAuth(), async (req, res) => {
       };
     });
 
+    await enrichRouteResponsibility(calls, localDb);
     const visibilityExtensions = await getCallVisibilityExtensions(localDb, req);
     if (visibilityExtensions !== null) calls = calls.filter(call => callMatchesExtensions(call, visibilityExtensions));
 
@@ -17371,6 +17415,7 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
     const directoryRuntime = await getDirectoryRuntimeSnapshotForRequest(localDb, req);
     const directory = directoryRuntime.contacts;
     const ownerMap = buildExtensionOwnerMap(directory, localDb.users || []);
+    await enrichRouteResponsibility(calls, localDb);
     const visibilityExtensions = await getCallVisibilityExtensions(localDb, req, directory);
     const canSeeEmployee = employeeVisibility(visibilityExtensions);
     const visibleDirectory = visibilityExtensions === null ? directory : directory.filter(entry =>
@@ -17450,6 +17495,10 @@ app.get('/api/reports/dynamics', requireAuth(), async (req, res) => {
     const outOfHoursMissedCalls = reportFilteredCalls.filter(call => {
       if (!isIncoming(call) || !isMissedDisposition(String(call?.disposition || '').toUpperCase())) return false;
       const date = new Date(String(call?.calldate || '').replace(' ', 'T'));
+      if (call.callbackScheduleUnknown) return false;
+      if (call.callbackWorkingSchedule) {
+        try { return !isWorkingTime(call.callbackWorkingSchedule, date.getTime()); } catch { return false; }
+      }
       return !isWithinCompanyWorkingHours(date, companyWorkingHours);
     }).length;
     const slaSummary = calculateSlaMetrics(reportFilteredCalls, slaThresholdSeconds);
@@ -17869,7 +17918,7 @@ app.get('/api/recordings/:filename', (req, _res, next) => {
 
   if (!isDemo) {
     const rows = await queryFreePBXCDR(localDb.settings, false,
-      'SELECT uniqueid,linkedid,src,dst,cnum,outbound_cnum,channel,dstchannel,lastdata,did FROM cdr WHERE recordingfile=?',
+      'SELECT uniqueid,linkedid,src,dst,cnum,outbound_cnum,channel,dstchannel,lastdata,did,dcontext,disposition,lastapp FROM cdr WHERE recordingfile=?',
       [path.basename(filename)]);
     if (!(await canAccessCallRows(localDb, req, rows))) return res.status(403).json({ error: 'Запись не входит в доступные отделы' });
   }

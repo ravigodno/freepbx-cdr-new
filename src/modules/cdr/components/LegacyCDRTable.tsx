@@ -233,6 +233,7 @@ export default function LegacyCDRTable({
                 wasKpiResolved={call.wasKpiResolved}
                 callbackTime={call.callbackTime}
                 callbackStatus={call.callbackStatus}
+                callbackScheduleUnknown={call.callbackScheduleUnknown}
                 logicalStatus={call.logicalStatus}
                 onShowProcessingEvent={() => showProcessingEvent(call)}
               />

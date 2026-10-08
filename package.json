@@ -1,9 +1,11 @@
 {
   "name": "freepbx-cdr-new",
   "private": true,
-  "version": "5.8.34",
+  "version": "5.8.35",
   "type": "module",
   "scripts": {
+    "test:freepbx-working-sla": "tsx scripts/test-freepbx-working-sla.ts",
+    "test:missed-route-responsibility": "tsx scripts/test-missed-route-responsibility.ts",
     "test:cdr-greetings": "tsx scripts/test-cdr-greetings.ts",
     "test:headset-setup": "tsx scripts/test-headset-setup.ts",
     "test:softphone-websocket-proxy": "tsx scripts/test-softphone-websocket-proxy.ts",

@@ -24,30 +24,34 @@ export function classifyMissedCallResolution(options: {
   nowMs: number;
   callbackWindowMs: number;
   processedAtMs?: number | null;
+  deadlineMs?: number;
+  elapsedMs?: (start: number, end: number) => number;
 }): MissedCallResolution {
-  const deadline = options.missedMs + Math.max(0, options.callbackWindowMs);
+  const deadline = options.deadlineMs ?? (options.missedMs + Math.max(0, options.callbackWindowMs));
+  const elapsed = options.elapsedMs || ((start: number, end: number) => Math.max(0, end - start));
   const deadlineExpired = options.nowMs >= deadline;
   const processedAt = options.processedAtMs !== null
     && options.processedAtMs !== undefined
     && Number.isFinite(Number(options.processedAtMs))
     ? Number(options.processedAtMs)
     : null;
-  const callbackDelaySeconds = processedAt === null ? null : Math.max(0, Math.round((processedAt - options.missedMs) / 1000));
+  const callbackDelaySeconds = processedAt === null ? null : Math.round(elapsed(options.missedMs, processedAt) / 1000);
 
   if (processedAt !== null) {
-    const isProcessedInSla = processedAt <= deadline;
+    const isProcessedInSla = Number.isFinite(deadline) && processedAt <= deadline;
+    const unknown = !Number.isFinite(deadline);
     return {
-      status: isProcessedInSla ? 'processed_in_sla' : 'processed_late',
+      status: isProcessedInSla || unknown ? 'processed_in_sla' : 'processed_late',
       processingStatusLabel: 'Обработано',
-      slaStatus: isProcessedInSla ? 'in_sla' : 'late',
+      slaStatus: unknown ? 'pending' : isProcessedInSla ? 'in_sla' : 'late',
       deadline,
       deadlineExpired,
       processedAt,
       callbackDelaySeconds,
-      slaExceededSeconds: Math.max(0, Math.round((processedAt - deadline) / 1000)),
+      slaExceededSeconds: Math.round(elapsed(deadline, processedAt) / 1000),
       isProcessed: true,
       isProcessedInSla,
-      isProcessedLate: !isProcessedInSla,
+      isProcessedLate: !unknown && !isProcessedInSla,
       isPending: false,
       isLost: false,
       reasonCategory: isProcessedInSla ? 'processed_within_sla' : 'processed_after_sla'
@@ -65,7 +69,7 @@ export function classifyMissedCallResolution(options: {
 
   return {
     status: 'not_called_back', processingStatusLabel: 'Потерян', slaStatus: 'lost', deadline, deadlineExpired,
-    processedAt: null, callbackDelaySeconds: null, slaExceededSeconds: Math.max(0, Math.round((options.nowMs - deadline) / 1000)),
+    processedAt: null, callbackDelaySeconds: null, slaExceededSeconds: Math.round(elapsed(deadline, options.nowMs) / 1000),
     isProcessed: false, isProcessedInSla: false, isProcessedLate: false, isPending: false, isLost: true,
     reasonCategory: 'no_callback_after_sla'
   };

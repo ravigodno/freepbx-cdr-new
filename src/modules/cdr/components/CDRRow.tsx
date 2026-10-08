@@ -63,6 +63,7 @@ export function CDRRow({
         callDisp={call.disposition}
         processed={call.processed}
         callbackStatus={call.callbackStatus}
+        callbackScheduleUnknown={call.callbackScheduleUnknown}
         isProcessed={call.isProcessed}
         isLostCall={call.isLostCall}
         wasCallbacked={call.wasCallbacked}

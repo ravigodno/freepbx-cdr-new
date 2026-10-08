@@ -79,6 +79,7 @@ export function callMatchesExtensions(call: any, extensions: string[]): boolean 
   const values = [call?.src, call?.dst, call?.cnum, call?.outbound_cnum, call?.channel, call?.dstchannel,
     call?.lastdata, call?.did, call?.internalCaller, call?.destinationNumber,
     ...(Array.isArray(call?.answeredExts) ? call.answeredExts : []),
+    ...(Array.isArray(call?.routeResponsibleExts) ? call.routeResponsibleExts : []),
     ...(Array.isArray(call?.missedExts) ? call.missedExts : [])];
   return values.some(value => (String(value || '').match(/\d+/g) || []).some(token => allowed.has(token)));
 }

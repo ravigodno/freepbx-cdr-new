@@ -259,7 +259,9 @@ export function buildCallRouteView(chronologyData: any): RouteView {
 
   return {
     routeSteps,
-    resultText: resultText + (evidence.connectedSeconds !== null ? ` Соединение по CEL: ${evidence.connectedSeconds} сек.` : evidence.source === 'cdr' ? ' Ответ определён по CDR; соединение CEL не подтверждено.' : ''),
+    resultText: (!anyAnswered && chronologyData?.routeResponsiblePeople?.length
+      ? `Пропущен. Ответственные по текущему маршруту: ${chronologyData.routeResponsiblePeople.map((person: any) => `${person.name || 'Внутренний номер'} (${person.extension})`).join(', ')}. Клиент завершил вызов до соединения; вызов сотруднику не подтверждён. ` : '')
+      + resultText + (evidence.connectedSeconds !== null ? ` Соединение по CEL: ${evidence.connectedSeconds} сек.` : evidence.source === 'cdr' ? ' Ответ определён по CDR; соединение CEL не подтверждено.' : ''),
     anyAnswered: ivrOnlyNoDigit ? false : anyAnswered,
   };
 }

@@ -35,7 +35,7 @@ export default function RouteResultCard({
     ? 'Не выбрал IVR'
     : anyAnswered
       ? 'Ответил'
-      : 'Не ответил';
+      : resultText.startsWith('Пропущен.') ? 'Пропущен' : 'Не ответил';
 
   return (
     <div
