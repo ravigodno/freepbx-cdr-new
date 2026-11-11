@@ -2600,7 +2600,11 @@ const isMissedDisposition = (disposition: any): boolean => {
 const getResponsibleExtension = (call: any): string | null => {
   const answered = Array.isArray(call.answeredExts) ? call.answeredExts : [];
   const missed = Array.isArray(call.missedExts) ? call.missedExts : [];
-  const candidates = [...answered, ...missed, ...(call.routeResponsibleExts || []), getCalleeInternalExt(call), getCallerInternalExt(call)]
+  // A single group CDR keeps the route number in dst and the employee in Dial.
+  const isGroup = /^ext-(group|queues)$/i.test(String(call.dcontext || ''));
+  const groupAnswer = isGroup ? resolveCallAnswerEvidence([call]).answeredExt : '';
+  const dialed = isGroup ? getDialedExtsFromLastData(call.lastdata) : [];
+  const candidates = [...answered, groupAnswer, ...missed, ...(call.routeResponsibleExts || []), ...dialed, getCalleeInternalExt(call), getCallerInternalExt(call)]
     .map(value => onlyDigits(value))
     .filter(value => isInternalExt(value));
   return candidates[0] || null;

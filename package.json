@@ -1,9 +1,10 @@
 {
   "name": "freepbx-cdr-new",
   "private": true,
-  "version": "5.8.35",
+  "version": "5.8.36",
   "type": "module",
   "scripts": {
+    "test:group-call-responsibility": "tsx scripts/test-group-call-responsibility.ts",
     "test:freepbx-working-sla": "tsx scripts/test-freepbx-working-sla.ts",
     "test:missed-route-responsibility": "tsx scripts/test-missed-route-responsibility.ts",
     "test:cdr-greetings": "tsx scripts/test-cdr-greetings.ts",
